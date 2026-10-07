@@ -215,9 +215,11 @@ keeps blocking. The record's `pending_work` (and `pending` on wait results,
 the roster, and `/api/v1`) counts what it waits on, e.g. `1 shell · 1 monitor`.
 When that work wakes the session (a task notification or the wakeup's
 prompt), the same turn continues, and its next Stop with nothing pending
-finishes it with that final message. A `waiting` run is never reported
-stalled or idle-closed, and a send to it is rejected like a send to a running
-one; cancel works as usual.
+finishes it with that final message. A `waiting` run is never idle-closed;
+it reads stalled only after two hours without hook activity (background work
+can end without waking the session), and is not finished on its own then. A
+pane that dies while waiting loses the turn, as a busy one does. A send to a
+waiting run is rejected like a send to a running one; cancel works as usual.
 
 An interactive dispatch is bound to its caller's tmux session. It closes on
 cancel, TUI exit, one hour of empty-composer idle time, or the session timeout.

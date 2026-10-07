@@ -243,3 +243,89 @@ func TestInteractiveBridgedTurnCompleteWithPendingWorkWaits(t *testing.T) {
 		t.Fatalf("record=%+v pending=%+v", rec, rec.PendingWork)
 	}
 }
+
+// A waiting run's pending work can end with nothing to wake the session (a
+// Monitor that expired, a shell killed outright): after waitingStalledAfter
+// with no hook activity it reads stalled, like a quiet busy run, but is not
+// finished on its own.
+func TestInteractiveWaitingRunReadsStalledAfterLongQuiet(t *testing.T) {
+	now := time.Date(2026, time.October, 7, 12, 0, 0, 0, time.UTC)
+	d, _, id := startClaudeInteractive(t, &now)
+	if err := d.Report(id, claudeStop(t, "stop-1", "waiting", shellAndMonitor)); err != nil {
+		t.Fatal(err)
+	}
+	now = now.Add(waitingStalledAfter - time.Second)
+	if entry := d.Wait(context.Background(), []string{id + "#1"}, time.Millisecond)[0]; entry.Stalled {
+		t.Fatalf("stalled before waitingStalledAfter: %+v", entry)
+	}
+	now = now.Add(time.Second)
+	d.Sweep(now)
+	entry := d.Wait(context.Background(), []string{id + "#1"}, time.Millisecond)[0]
+	if !entry.Stalled || entry.Status != StatusWaiting || entry.Outcome != "" {
+		t.Fatalf("after waitingStalledAfter: %+v", entry)
+	}
+	rec, _ := d.Get(id)
+	if !isStalled(rec, now) || !observedDispatch(rec, now).Stalled {
+		t.Fatal("bridge/observe state does not flag a long-quiet waiting run stalled")
+	}
+}
+
+// A pane that dies while its run waits ends the open turn as lost, as it
+// does a busy run's.
+func TestInteractiveWaitingRunPaneDeathLosesTurn(t *testing.T) {
+	now := time.Date(2026, time.October, 7, 12, 0, 0, 0, time.UTC)
+	d, rt, id := startClaudeInteractive(t, &now)
+	if err := d.Report(id, claudeStop(t, "stop-1", "waiting", shellAndMonitor)); err != nil {
+		t.Fatal(err)
+	}
+	rt.setAlive(false)
+	d.Sweep(now)
+	now = now.Add(finalReportGrace)
+	d.Sweep(now)
+	rec, _ := d.Get(id)
+	if !rec.Status.Terminal() || rec.Turns[0].Outcome != TurnLost || rec.PendingWork != nil {
+		t.Fatalf("dead pane while waiting: status=%s turns=%+v pending=%+v", rec.Status, rec.Turns, rec.PendingWork)
+	}
+}
+
+// startClaudeArmed launches a claude dispatch whose opening is armed but
+// whose UserPromptSubmit has not arrived yet.
+func startClaudeArmed(t *testing.T, now *time.Time) (*Dispatcher, string) {
+	t.Helper()
+	d := NewDispatcher(newFakeRecorder())
+	d.now = func() time.Time { return *now }
+	rt := &fakeInteractiveRuntime{arm: true, empty: true}
+	d.SetInteractiveRuntime(rt)
+	started, err := d.Start(context.Background(), testConfig(), Request{Template: "claude", Prompt: "hello", Cwd: t.TempDir(), Mode: ModeInteractive})
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitForArmed(t, d, started.ID)
+	return d, started.ID
+}
+
+// A Stop can overtake its turn's UserPromptSubmit: it confirms the armed
+// opening's delivery, and then pending work keeps that turn open.
+func TestInteractiveStopBeforeOpeningSubmitWithPendingWorkWaits(t *testing.T) {
+	now := time.Date(2026, time.October, 7, 12, 0, 0, 0, time.UTC)
+	d, id := startClaudeArmed(t, &now)
+	if err := d.Report(id, claudeStop(t, "stop-1", "waiting", shellAndMonitor)); err != nil {
+		t.Fatal(err)
+	}
+	rec, _ := d.Get(id)
+	if rec.Status != StatusWaiting || len(rec.Turns) != 1 || !rec.Turns[0].Delivered || rec.Turns[0].Outcome != "" {
+		t.Fatalf("stop before submit: status=%s turns=%+v", rec.Status, rec.Turns)
+	}
+}
+
+func TestInteractiveStopBeforeOpeningSubmitConfirmsDelivery(t *testing.T) {
+	now := time.Date(2026, time.October, 7, 12, 0, 0, 0, time.UTC)
+	d, id := startClaudeArmed(t, &now)
+	if err := d.Report(id, claudeStop(t, "stop-1", "done", nil)); err != nil {
+		t.Fatal(err)
+	}
+	rec, _ := d.Get(id)
+	if rec.Status != StatusIdle || !rec.Turns[0].Delivered || rec.Turns[0].Outcome != TurnFinished || rec.Turns[0].Text != "done" {
+		t.Fatalf("stop before submit: status=%s turns=%+v", rec.Status, rec.Turns)
+	}
+}

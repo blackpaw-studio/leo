@@ -61,8 +61,7 @@ func bridgeDispatchState(rec Record, now time.Time) bridge.DispatchState {
 // isStalled reports whether rec's latest turn is still open with no sign of
 // life for stalledAfter, as leo_wait reports it.
 func isStalled(rec Record, now time.Time) bool {
-	// A waiting run is quiet by design: its background work wakes it.
-	if rec.Status.Terminal() || rec.Status == StatusWaiting || len(rec.Turns) == 0 {
+	if rec.Status.Terminal() || len(rec.Turns) == 0 {
 		return false
 	}
 	t := rec.Turns[len(rec.Turns)-1]
@@ -70,7 +69,17 @@ func isStalled(rec Record, now time.Time) bool {
 	if activity.IsZero() {
 		activity = t.StartedAt
 	}
-	return t.Outcome == "" && !activity.IsZero() && now.Sub(activity) >= stalledAfter
+	return t.Outcome == "" && !activity.IsZero() && now.Sub(activity) >= stalledAfterFor(rec.Status)
+}
+
+// stalledAfterFor is how long a run in status may go without hook activity
+// before it reads stalled. A waiting run is quiet by design until its
+// background work wakes it, so it gets the longer waitingStalledAfter.
+func stalledAfterFor(status Status) time.Duration {
+	if status == StatusWaiting {
+		return waitingStalledAfter
+	}
+	return stalledAfter
 }
 
 // StateHub is the part of the bridge hub a StatePusher drives.

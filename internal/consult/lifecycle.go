@@ -110,8 +110,7 @@ func interactiveEntry(rec Record, turnID string, now time.Time) Entry {
 	if activity.IsZero() {
 		activity = t.StartedAt
 	}
-	// A waiting run is quiet by design: its background work wakes it.
-	if t.Outcome == "" && rec.Status != StatusWaiting && !activity.IsZero() && now.Sub(activity) >= stalledAfter {
+	if t.Outcome == "" && !activity.IsZero() && now.Sub(activity) >= stalledAfterFor(rec.Status) {
 		e.Stalled = true
 	}
 	return e

@@ -77,7 +77,7 @@ func sanitizeTaskType(kind string) string {
 		}
 	}
 	if b.Len() == 0 {
-		return "task"
+		return "other"
 	}
 	return b.String()
 }

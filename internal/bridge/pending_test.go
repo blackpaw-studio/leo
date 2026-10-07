@@ -33,7 +33,6 @@ func TestParseReportRejectsBadPending(t *testing.T) {
 		"negative count":   `{"type":"event","name":"turn.complete","pending":{"tasks":{"shell":-1}}}`,
 		"huge count":       `{"type":"event","name":"turn.complete","pending":{"tasks":{"shell":100000}}}`,
 		"negative wakeups": `{"type":"event","name":"turn.complete","pending":{"wakeups":-1}}`,
-		"bad type name":    `{"type":"event","name":"turn.complete","pending":{"tasks":{"she ll\n":1}}}`,
 		"unknown key":      `{"type":"event","name":"turn.complete","pending":{"crons":1}}`,
 	}
 	for name, body := range cases {
@@ -63,5 +62,30 @@ func TestHookPayloadCarriesPendingWorkInStopShape(t *testing.T) {
 	}
 	if len(got.Tasks) != 2 || got.Tasks[0]["type"] != "shell" || got.Tasks[0]["status"] != "running" || len(got.Crons) != 1 {
 		t.Fatalf("payload = %s", raw)
+	}
+}
+
+func TestParseReportPendingRejectsNullCounts(t *testing.T) {
+	for name, body := range map[string]string{
+		"null count":   `{"type":"event","name":"turn.complete","pending":{"tasks":{"constructor":null}}}`,
+		"null wakeups": `{"type":"event","name":"turn.complete","pending":{"wakeups":null}}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := ParseReport([]byte(body)); !errors.Is(err, ErrInvalidReport) {
+				t.Fatalf("err = %v, want ErrInvalidReport", err)
+			}
+		})
+	}
+}
+
+// A type name the daemon would not store still counts, as "other": dropping
+// it would finish a turn that still has work in flight.
+func TestParseReportPendingCountsUnknownTypesAsOther(t *testing.T) {
+	got, err := ParseReport([]byte(`{"type":"event","name":"turn.complete","pending":{"tasks":{"she ll\n":2,"x/y":1,"shell":1}}}`))
+	if err != nil {
+		t.Fatalf("ParseReport: %v", err)
+	}
+	if got.Pending == nil || got.Pending.Tasks["other"] != 3 || got.Pending.Tasks["shell"] != 1 || len(got.Pending.Tasks) != 2 {
+		t.Fatalf("Pending = %+v", got.Pending)
 	}
 }

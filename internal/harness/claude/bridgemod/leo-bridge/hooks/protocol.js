@@ -341,22 +341,23 @@ const MAX_PENDING_COUNT = 1000
  */
 export function stopHookPending(stop) {
   const s = isRecord(stop) ? stop : {}
-  const tasks = (Array.isArray(s.background_tasks) ? s.background_tasks : [])
+  // A Map, not an object: a type may name an Object.prototype key.
+  const counts = (Array.isArray(s.background_tasks) ? s.background_tasks : [])
     .filter((t) => isRecord(t) && !SETTLED_TASK_STATUSES.includes(String(t.status).toLowerCase()))
     .map((t) => pendingTaskType(t.type))
-    .reduce((counts, type) => {
-      if (!(type in counts) && Object.keys(counts).length >= MAX_PENDING_TYPES) return counts
-      return { ...counts, [type]: Math.min(MAX_PENDING_COUNT, (counts[type] ?? 0) + 1) }
-    }, {})
+    .reduce((acc, type) => {
+      if (!acc.has(type) && acc.size >= MAX_PENDING_TYPES) return acc
+      return new Map([...acc, [type, Math.min(MAX_PENDING_COUNT, (acc.get(type) ?? 0) + 1)]])
+    }, new Map())
   const wakeups = Math.min(MAX_PENDING_COUNT, (Array.isArray(s.session_crons) ? s.session_crons : []).filter(isRecord).length)
-  if (Object.keys(tasks).length === 0 && wakeups === 0) return undefined
-  return { tasks, wakeups }
+  if (counts.size === 0 && wakeups === 0) return undefined
+  return { tasks: Object.fromEntries(counts), wakeups }
 }
 
 // A task type as the daemon accepts it: [a-z0-9_-], at most 32 long.
 function pendingTaskType(type) {
   const clean = (typeof type === 'string' ? type : '').trim().toLowerCase().replace(/ /g, '_').replace(/[^a-z0-9_-]/g, '').slice(0, MAX_PENDING_TYPE_LEN)
-  return clean === '' ? 'task' : clean
+  return clean === '' ? 'other' : clean
 }
 
 /**

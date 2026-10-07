@@ -158,3 +158,17 @@ test('pending work from an earlier turn\'s Stop never rides on a later turn', as
   await h.settle()
   expect(events(h).find((e) => e.name === 'turn.complete')?.pending).toBeUndefined()
 })
+
+// A task type naming an Object.prototype key must count like any other,
+// never as NaN (which would serialize to null).
+test('task types that name prototype keys are counted', async ($, on) => {
+  const h = setup(on)
+  await start($, h)
+  await $.turn.start({ text: 'go', turnId: 't1' })
+  const task = (id: string, type: string) => ({ id, type, status: 'running', description: '' })
+  await $.classic.Stop(stopInput({ background_tasks: [task('a', 'constructor'), task('b', 'constructor'), task('c', '__proto__'), task('d', 'toString')] }))
+  await $.turn.complete({ turnId: 't1', answer: 'waiting', durationMs: 5, isAborted: false, reason: 'answer' })
+  await h.settle()
+  const pending = events(h).find((e) => e.name === 'turn.complete')?.pending
+  expect(JSON.stringify(pending)).toBe('{"tasks":{"constructor":2,"__proto__":1,"tostring":1},"wakeups":0}')
+})

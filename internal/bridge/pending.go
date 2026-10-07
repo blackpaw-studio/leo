@@ -21,9 +21,16 @@ const (
 	maxPendingPerCount = 1000
 )
 
+// otherPendingType is what a task type the daemon would not store counts
+// as: dropping it would finish a turn that still has work in flight.
+const otherPendingType = "other"
+
+// wirePending is PendingWork as the mod sends it. The task counts are
+// pointers and wakeups stays raw, so a null (a JS NaN serialized) is
+// refused rather than read as zero.
 type wirePending struct {
-	Tasks   map[string]int `json:"tasks"`
-	Wakeups int            `json:"wakeups"`
+	Tasks   map[string]*int `json:"tasks"`
+	Wakeups json.RawMessage `json:"wakeups"`
 }
 
 // parsePending strictly decodes a turn.complete's pending: an object with
@@ -43,15 +50,24 @@ func parsePending(fields map[string]json.RawMessage) (*PendingWork, error) {
 	if len(w.Tasks) > maxPendingTypes {
 		return nil, invalidReport("pending lists more than %d task types", maxPendingTypes)
 	}
+	var tasks map[string]int
 	for kind, n := range w.Tasks {
-		if !validPendingType(kind) || n < 0 || n > maxPendingPerCount {
-			return nil, invalidReport("pending tasks must map a type of [a-z0-9_-] to a count of 0..%d", maxPendingPerCount)
+		if n == nil || *n < 0 || *n > maxPendingPerCount {
+			return nil, invalidReport("pending task counts must be 0..%d", maxPendingPerCount)
 		}
+		if !validPendingType(kind) {
+			kind = otherPendingType
+		}
+		if tasks == nil {
+			tasks = map[string]int{}
+		}
+		tasks[kind] = min(maxPendingPerCount, tasks[kind]+*n)
 	}
-	if w.Wakeups < 0 || w.Wakeups > maxPendingPerCount {
+	wakeups := 0
+	if w.Wakeups != nil && (isNull(w.Wakeups) || json.Unmarshal(w.Wakeups, &wakeups) != nil || wakeups < 0 || wakeups > maxPendingPerCount) {
 		return nil, invalidReport("pending wakeups must be a count of 0..%d", maxPendingPerCount)
 	}
-	return &PendingWork{Tasks: w.Tasks, Wakeups: w.Wakeups}, nil
+	return &PendingWork{Tasks: tasks, Wakeups: wakeups}, nil
 }
 
 func validPendingType(kind string) bool {

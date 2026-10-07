@@ -20,6 +20,11 @@ const (
 	finalReportGrace = 30 * time.Second
 	idleCloseAfter   = time.Hour
 	stalledAfter     = 10 * time.Minute
+	// waitingStalledAfter is how long a waiting run may go without hook
+	// activity before it reads stalled: background work can end without
+	// waking the session (a Monitor that expired, a shell killed outright),
+	// and nothing else would say so.
+	waitingStalledAfter = 2 * time.Hour
 )
 
 // LaunchRequest contains the already validated dispatch details needed by an
@@ -813,6 +818,11 @@ func (d *Dispatcher) Report(id string, r HookReport) error {
 			return nil
 		}
 		text := str(p, "last_assistant_message")
+		if event == "stop" && hid == "" && !hasWorkingTurnLocked(s) {
+			// The Stop overtook its turn's submit: it confirms the armed
+			// turn ran before anything else reads the turn as working.
+			d.confirmArmedLocked(s)
+		}
 		if event == "stop" && hid == "" && hasWorkingTurnLocked(s) {
 			if w := pendingWorkFromStop(p); w != nil {
 				d.waitOnBackgroundLocked(s, w)
@@ -979,6 +989,24 @@ func (d *Dispatcher) waitOnBackgroundLocked(s *runState, w *PendingWork) {
 		d.persistLocked(s, "status")
 	} else {
 		d.persistLocked(s, "")
+	}
+}
+
+// confirmArmedLocked marks the oldest open turn delivered when it is a sent
+// turn that was armed (its submit expected) within lateAckWindow: a Stop
+// can reach the dispatcher before that turn's UserPromptSubmit.
+func (d *Dispatcher) confirmArmedLocked(s *runState) {
+	now := d.now()
+	for _, t := range s.record.Turns {
+		if t.Outcome != "" {
+			continue
+		}
+		if t.Source == TurnSourceOrchestrator && !t.Delivered && !t.armedAt.IsZero() && !now.After(t.armedAt.Add(lateAckWindow)) {
+			if delivered := d.deliverTurnLocked(s, t.TurnID, ""); delivered != nil {
+				d.persistTurnLocked(s, *delivered)
+			}
+		}
+		return
 	}
 }
 
