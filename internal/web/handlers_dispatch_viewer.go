@@ -8,7 +8,7 @@ import (
 )
 
 func (s *Server) viewerOperatorOnly(r *http.Request) bool {
-	return matchesAnyToken(extractBearer(r.Header.Get("Authorization")), []string{s.apiToken}) || proxyAuthenticated(r, s.trustedProxies)
+	return s.isOperator(r)
 }
 
 func (s *Server) handleDispatchViewerCloseFinished(w http.ResponseWriter, r *http.Request) {

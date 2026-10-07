@@ -1,14 +1,9 @@
 package web
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
-	"log"
 	"net/http"
-	"sort"
-	"strconv"
-	"strings"
 	"time"
 
 	"github.com/blackpaw-studio/leo/internal/agent"
@@ -29,52 +24,16 @@ var (
 	interruptDelayedPoll     = 500 * time.Millisecond
 )
 
-// handleWebAgentInterrupt sends a burst of Escape keys into an agent's tmux
-// session to interrupt whatever it's currently doing. Escapes are sent
-// immediately (to catch the common case) and then repeated in the
-// background for a few seconds to catch state transitions (e.g. a tool call
-// that completes mid-interrupt and re-arms the input prompt).
+// handleWebAgentInterrupt interrupts whatever an agent is currently doing
+// (see interruptAgent) and answers with a flash.
 //
 // POST /web/agent/{name}/interrupt
 func (s *Server) handleWebAgentInterrupt(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")
-	if target, ok := s.bridgeRoute(name, "interrupt"); ok {
-		// The mod interrupts the running turn itself: no Escape burst, and
-		// a failure is reported rather than retried through tmux.
-		ctx, cancel := context.WithTimeout(r.Context(), bridgeInterruptTimeout)
-		defer cancel()
-		if err := s.bridgeRouter.Hub.SendTo(ctx, target, bridge.Interrupt()); err != nil {
-			s.renderFlashStatus(w, http.StatusBadGateway, "error", fmt.Sprintf("Interrupting %s failed: %v", name, err))
-			return
-		}
-		s.renderFlash(w, "success", fmt.Sprintf("Interrupted %s", name))
+	if out := s.interruptAgent(r.Context(), name); out.err != "" {
+		s.renderFlashStatus(w, out.status, "error", out.err)
 		return
 	}
-	sessionName := agent.SessionName(name)
-
-	tmuxPath := findTmuxPath()
-	pane := s.resolvePaneTarget(tmuxPath, sessionName)
-	escArgs := tmux.Args("send-keys", "-t", pane, "Escape")
-	// Send Escape immediately, then keep sending to catch state transitions.
-	s.execCommand(tmuxPath, escArgs...).Run() //nolint:errcheck
-	s.execCommand(tmuxPath, escArgs...).Run() //nolint:errcheck
-	s.execCommand(tmuxPath, escArgs...).Run() //nolint:errcheck
-	// Also send delayed Escapes in background to catch tool completions. This
-	// spans up to ~2.5s, long enough for a crash-restart to tear down and
-	// recreate the session mid-burst — re-resolve the pane before each
-	// delayed send rather than reusing the request-entry resolution, or a
-	// dead pane ID silently no-ops for the rest of the burst.
-	go func() {
-		for i := 0; i < interruptDelayedAttempts; i++ {
-			time.Sleep(interruptDelayedPoll)
-			delayedPane := s.resolvePaneTarget(tmuxPath, sessionName)
-			delayedArgs := tmux.Args("send-keys", "-t", delayedPane, "Escape")
-			s.execCommand(tmuxPath, delayedArgs...).Run() //nolint:errcheck
-		}
-		if s.afterInterruptBurst != nil {
-			s.afterInterruptBurst()
-		}
-	}()
 	s.renderFlash(w, "success", fmt.Sprintf("Interrupted %s", name))
 }
 
@@ -133,38 +92,28 @@ func (s *Server) typeKeys(sessionName string, keys []string) error {
 // handleWebAgentCompact compacts an agent's conversation.
 // POST /web/agent/{name}/compact
 func (s *Server) handleWebAgentCompact(w http.ResponseWriter, r *http.Request) {
-	s.agentSlashCommand(w, r, "compact", bridge.Compact(""))
+	writeWebControl(w, s.slashCommandAgent(r.PathValue("name"), "compact", "", bridge.Compact("")))
 }
 
 // handleWebAgentClear clears an agent's conversation.
 // POST /web/agent/{name}/clear
 func (s *Server) handleWebAgentClear(w http.ResponseWriter, r *http.Request) {
-	s.agentSlashCommand(w, r, "clear", bridge.Clear())
+	writeWebControl(w, s.slashCommandAgent(r.PathValue("name"), "clear", "", bridge.Clear()))
 }
 
-// agentSlashCommand runs /<verb> in an agent's claude. Over a live bridge
-// the mod runs it once the current turn ends, so it is queued and answered
-// 202 (an agent asks for this on itself, mid-turn); otherwise the command
-// is typed into the pane, which interrupts the turn.
-func (s *Server) agentSlashCommand(w http.ResponseWriter, r *http.Request, verb string, cmd bridge.Command) {
-	name := r.PathValue("name")
-	if target, ok := s.bridgeRoute(name, verb); ok {
-		accepted, err := s.bridgeSend(target, verb+" of "+name, cmd, bridgeControlWait, nil)
-		switch {
-		case err != nil:
-			writeJSON(w, http.StatusInternalServerError, apiResponse{Error: fmt.Sprintf("%s: %v", verb, err)})
-		case !accepted:
-			writeJSON(w, http.StatusAccepted, apiResponse{OK: true, Data: map[string]bool{"queued": true}})
-		default:
-			writeJSON(w, http.StatusOK, apiResponse{OK: true})
-		}
+// writeWebControl renders a control outcome in the /web/agent JSON shape:
+// the envelope alone, plus {queued: true} on a 202 that is the bridge
+// holding the command.
+func writeWebControl(w http.ResponseWriter, out controlOutcome) {
+	if out.err != "" {
+		writeJSON(w, out.status, apiResponse{Error: out.err})
 		return
 	}
-	if err := s.typeKeys(agent.SessionName(name), []string{"/" + verb, "Enter"}); err != nil {
-		writeJSON(w, http.StatusInternalServerError, apiResponse{Error: err.Error()})
-		return
+	resp := apiResponse{OK: true}
+	if out.bridgeQueued {
+		resp.Data = map[string]bool{"queued": true}
 	}
-	writeJSON(w, http.StatusOK, apiResponse{OK: true})
+	writeJSON(w, out.status, resp)
 }
 
 // publishAgentMessage announces that from messaged to, as a pair of names and
@@ -218,147 +167,7 @@ func (s *Server) handleWebAgentMessage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Resolve the target's harness FIRST, before any tmux-touching logic.
-	// Claude targets (harnessName == "" from an unresolved/claude target)
-	// fall straight through to the existing fast-path / dormant-wake-then-
-	// deliver logic below, byte-identical to before this change. A resolved
-	// non-claude target is routed to its SessionDriver and returns
-	// immediately — it never touches tmux, and never goes dormant (sweep
-	// skips non-claude records), so there is no wake-then-deliver branch to
-	// consider for it.
-	if harnessName, handle, ok := s.resolveMessageTarget(name); ok && harnessName != "" && harnessName != "claude" {
-		if s.dispatchNonClaudeMessage(w, harnessName, handle, req.Text) {
-			s.publishAgentMessage(req.From, name)
-		}
-		return
-	}
-
-	// Validate the target against running sessions (agents). If the agent is
-	// not live but is dormant with WakeOnMessage=true (idle-swept), start it
-	// first and deliver via the readiness-probing path (InjectPrompt) — a
-	// just-started claude takes tens of seconds to boot before its input box
-	// accepts input, so the 2s
-	// fast-path below would silently drop the message. A dormant agent with
-	// WakeOnMessage=false (a plain operator-initiated stop) must NOT be woken
-	// this way — that is the whole point of the flag — so it falls through to
-	// the same "no such agent" response an unknown name gets.
-	//
-	// NOTE: a concurrent idle sweep can race here and make the live send-keys
-	// path 500; the sender retries and auto-wakes again.
-	states := s.processes.States()
-	if _, ok := states[name]; !ok {
-		if s.agentSvc != nil && s.agentSvc.Wakeable(name) {
-			if err := s.agentSvc.Start(name); err != nil {
-				writeJSON(w, http.StatusInternalServerError, apiResponse{Error: fmt.Sprintf("starting agent: %v", err)})
-				return
-			}
-			// Started successfully. A cold-booting claude can take ~60s to load
-			// plugins/MCP before its input box accepts input — longer than the
-			// server's WriteTimeout — and the readiness-probing injector blocks
-			// for that whole window. Deliver asynchronously on a detached context
-			// (r.Context() is cancelled once this handler returns) and respond
-			// now, so the caller isn't held on the connection and won't
-			// false-timeout and retry into a duplicate message.
-			const wakeDeliverTimeout = 3 * time.Minute
-			sessionName := agent.SessionName(name)
-			body := req.Text
-			from := req.From
-			go func() {
-				ctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), wakeDeliverTimeout)
-				defer cancel()
-				if err := s.injectPrompt(ctx, sessionName, body); err != nil {
-					// #nosec G706 -- name matched an existing agentstore record
-					// (Wakeable returned true), so it is a validated identifier,
-					// not raw request input; no control chars can reach the log.
-					log.Printf("web: async message delivery after start of %q failed: %v", sessionName, err)
-					return
-				}
-				// Announced from inside the goroutine, once delivery actually
-				// succeeded — not at 202-accept time. The 202 only means the
-				// message was queued; this cold-boot path can still fail
-				// minutes later, and announcing early would tell a consumer
-				// two agents were talking when nothing was ever delivered.
-				// Every delivery path therefore announces on delivery, never
-				// on acceptance.
-				s.publishAgentMessage(from, name)
-			}()
-			writeJSON(w, http.StatusAccepted, apiResponse{OK: true})
-			return
-		}
-		names := make([]string, 0, len(states))
-		for n := range states {
-			names = append(names, n)
-		}
-		sort.Strings(names)
-		writeJSON(w, http.StatusNotFound, apiResponse{
-			Error: fmt.Sprintf("no such agent %q; running: %s", name, strings.Join(names, ", ")),
-		})
-		return
-	}
-
-	if target, ok := s.bridgeRoute(name, "message"); ok {
-		s.deliverAgentMessageOverBridge(w, target, name, req.From, req.Text)
-		return
-	}
-
-	// Live (already-running) fast path: literal paste + readiness confirmation + Enter.
-	sessionName := agent.SessionName(name)
-	if socketPath, err := s.resolvePeerSocket(r.Context(), sessionName); err == nil {
-		if err := s.deliverPeer(r.Context(), socketPath, req.Text); err == nil {
-			s.publishAgentMessage(req.From, name)
-			writeJSON(w, http.StatusOK, apiResponse{OK: true})
-			return
-		} else {
-			log.Printf("web: peer inbox delivery to %s failed: %s; falling back to tmux", strconv.Quote(sessionName), strconv.Quote(err.Error()))
-		}
-	} else {
-		log.Printf("web: peer inbox socket resolution for %s failed: %s; falling back to tmux", strconv.Quote(sessionName), strconv.Quote(err.Error()))
-	}
-
-	// Hold the session's input as every paste into it does, so no other
-	// delivery's text or probe interleaves with this one's; but wait no
-	// longer than sessionInputWait, and type nothing once the client is
-	// gone (the lock's wait may win a race with its leaving): it would
-	// arrive after the client gave up, beside the retry it sends.
-	lockCtx, cancelLock := context.WithTimeout(r.Context(), sessionInputWait)
-	unlock, err := tmux.LockSessionInput(lockCtx, sessionName)
-	cancelLock()
-	if err != nil {
-		writeJSON(w, http.StatusServiceUnavailable, apiResponse{Error: fmt.Sprintf("agent %s is busy: another delivery into it has not finished (%v); try again", name, err)})
-		return
-	}
-	defer unlock()
-	if err := r.Context().Err(); err != nil {
-		writeJSON(w, http.StatusServiceUnavailable, apiResponse{Error: fmt.Sprintf("the request ended before agent %s was free: %v", name, err)})
-		return
-	}
-
-	tmuxPath := findTmuxPath()
-	pane := s.resolvePaneTarget(tmuxPath, sessionName)
-
-	// Literal paste of the message body.
-	if err := s.execCommand(tmuxPath, tmux.Args("send-keys", "-t", pane, "-l", req.Text)...).Run(); err != nil {
-		writeJSON(w, http.StatusInternalServerError, apiResponse{Error: fmt.Sprintf("send message failed: %v", err)})
-		return
-	}
-
-	// Wait until the input box reflects the typed text before submitting.
-	// Claude's Ink REPL batches stdin; an Enter that lands in the same input
-	// burst as the literal text is treated as a newline, not a submit, leaving
-	// the message unsent (the intermittent "Enter not registered" bug).
-	// Confirming the text rendered forces Enter to arrive as a discrete
-	// keypress. Bounded, and falls open if the pane never confirms (busy
-	// mid-turn or unreadable) so a message is never silently dropped.
-	s.waitForInputContent(tmuxPath, pane)
-
-	// Separate Enter to submit.
-	if err := s.execCommand(tmuxPath, tmux.Args("send-keys", "-t", pane, "Enter")...).Run(); err != nil {
-		writeJSON(w, http.StatusInternalServerError, apiResponse{Error: fmt.Sprintf("submit message failed: %v", err)})
-		return
-	}
-
-	s.publishAgentMessage(req.From, name)
-	writeJSON(w, http.StatusOK, apiResponse{OK: true})
+	writeWebControl(w, s.messageAgent(r.Context(), name, req.From, req.Text))
 }
 
 // resolveMessageTarget resolves name to its harness name and SessionHandle,
@@ -386,34 +195,6 @@ func (s *Server) resolveMessageTarget(name string) (harnessName string, h harnes
 // can't block the web handler indefinitely. Generous because the readiness
 // probe itself may need to wait out a busy TUI before it can paste.
 const nonClaudeInjectTimeout = 5 * time.Minute
-
-// dispatchNonClaudeMessage delivers text to a non-claude session via its
-// SessionDriver's Inject and never touches tmux. Used by
-// handleWebAgentMessage once the target's harness has been resolved to
-// something other than claude.
-// dispatchNonClaudeMessage delivers via the target's SessionDriver, writing
-// the HTTP response itself. It reports whether the message was delivered, so
-// the caller can announce it — a failed send must announce nothing.
-func (s *Server) dispatchNonClaudeMessage(w http.ResponseWriter, harnessName string, h harness.SessionHandle, text string) bool {
-	hd, err := harness.Get(harnessName)
-	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, apiResponse{Error: fmt.Sprintf("resolving harness %q: %v", harnessName, err)})
-		return false
-	}
-	drv := hd.Driver()
-	if drv == nil {
-		writeJSON(w, http.StatusInternalServerError, apiResponse{Error: fmt.Sprintf("harness %q has no session driver", harnessName)})
-		return false
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), nonClaudeInjectTimeout)
-	defer cancel()
-	if _, err := drv.Inject(ctx, h, text); err != nil {
-		writeJSON(w, http.StatusInternalServerError, apiResponse{Error: fmt.Sprintf("delivering message: %v", err)})
-		return false
-	}
-	writeJSON(w, http.StatusOK, apiResponse{OK: true})
-	return true
-}
 
 // messageInputAttempts / messageInputPoll bound how long
 // handleWebAgentMessage waits for typed text to surface in claude's input
