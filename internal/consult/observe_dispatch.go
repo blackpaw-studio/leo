@@ -201,7 +201,7 @@ func observedDispatch(rec Record, now time.Time) observe.Dispatch {
 	d := observe.Dispatch{
 		ID: rec.ID, Name: rec.Name, Role: rec.Role, Template: rec.Template, Model: rec.Model,
 		Effort: rec.Effort, ObservedEffort: rec.ObservedEffort,
-		Status: string(rec.Status), Stalled: isStalled(rec, now),
+		Status: string(rec.Status), Stalled: isStalled(rec, now), Pending: rec.PendingWork.Summary(),
 		CallerAgent: rec.Caller, ParentDispatchID: parentDispatchID(rec), StartedAt: rec.StartedAt,
 		TokensIn: valueOr(rec.InputTokens), TokensOut: valueOr(rec.OutputTokens), CostUSD: valueOr(rec.CostUSD),
 	}

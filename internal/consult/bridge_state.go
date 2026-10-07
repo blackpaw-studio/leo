@@ -54,6 +54,7 @@ func bridgeDispatchState(rec Record, now time.Time) bridge.DispatchState {
 		ID: rec.ID, Name: rec.Name, Role: rec.Role, Template: rec.Template, Model: rec.Model, Effort: rec.Effort, ObservedEffort: rec.ObservedEffort,
 		Status: string(rec.Status), Stalled: isStalled(rec, now), ActiveSeconds: rec.LiveActiveSeconds(now),
 		TokensIn: clonePtr(rec.InputTokens), TokensOut: clonePtr(rec.OutputTokens), CostUSD: clonePtr(rec.CostUSD),
+		Pending: rec.PendingWork.Summary(),
 	}
 }
 
@@ -68,7 +69,17 @@ func isStalled(rec Record, now time.Time) bool {
 	if activity.IsZero() {
 		activity = t.StartedAt
 	}
-	return t.Outcome == "" && !activity.IsZero() && now.Sub(activity) >= stalledAfter
+	return t.Outcome == "" && !activity.IsZero() && now.Sub(activity) >= stalledAfterFor(rec.Status)
+}
+
+// stalledAfterFor is how long a run in status may go without hook activity
+// before it reads stalled. A waiting run is quiet by design until its
+// background work wakes it, so it gets the longer waitingStalledAfter.
+func stalledAfterFor(status Status) time.Duration {
+	if status == StatusWaiting {
+		return waitingStalledAfter
+	}
+	return stalledAfter
 }
 
 // StateHub is the part of the bridge hub a StatePusher drives.
