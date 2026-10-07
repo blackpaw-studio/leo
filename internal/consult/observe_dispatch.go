@@ -17,6 +17,7 @@ type DispatchObserver struct {
 	now           func() time.Time
 	onOutstanding func(agent string, outstanding int)
 	owner         func(key string) (agent string, ok bool)
+	sessionOwners func() map[string]string
 
 	mu     sync.Mutex
 	last   map[string]observe.Dispatch
@@ -48,6 +49,15 @@ func WithOutstandingListener(fn func(agent string, outstanding int)) DispatchObs
 // caller. Records whose key does not resolve count under Record.Caller.
 func WithDispatchOwner(fn func(key string) (agent string, ok bool)) DispatchObserverOption {
 	return func(o *DispatchObserver) { o.owner = fn }
+}
+
+// WithCallerSessionOwners resolves callers without a bridge key by their
+// tmux session id (Record.CallerSessionID): fn returns each live session
+// id's agent. A live rename keeps the session, a recreated agent gets a
+// new one, so the id follows the caller where its recorded name cannot.
+// fn runs at most once per count, and only when some record needs it.
+func WithCallerSessionOwners(fn func() map[string]string) DispatchObserverOption {
+	return func(o *DispatchObserver) { o.sessionOwners = fn }
 }
 
 // NewDispatchObserver observes the records records returns, publishing
@@ -140,26 +150,37 @@ func (o *DispatchObserver) notifyCountsLocked(counts map[string]int) {
 
 func (o *DispatchObserver) outstandingCounts(records []Record) map[string]int {
 	counts := map[string]int{}
+	var sessions map[string]string
+	sessionsRead := false
 	for _, rec := range records {
 		if rec.Kind != "dispatch" || rec.Status.Terminal() || parentDispatchID(rec) != "" {
 			continue
 		}
-		if caller := o.callerAgent(rec); caller != "" {
+		caller, resolved := o.keyOwner(rec)
+		if !resolved && rec.CallerSessionID != "" && o.sessionOwners != nil {
+			if !sessionsRead {
+				sessions, sessionsRead = o.sessionOwners(), true
+			}
+			if agent := sessions[rec.CallerSessionID]; agent != "" {
+				caller = agent
+			}
+		}
+		if caller != "" {
 			counts[caller]++
 		}
 	}
 	return counts
 }
 
-// callerAgent is the agent rec's dispatch counts toward: whoever holds its
-// caller's bridge key now, else the caller's recorded name.
-func (o *DispatchObserver) callerAgent(rec Record) string {
+// keyOwner is the agent holding rec's caller bridge key now (resolved),
+// else the caller's recorded name.
+func (o *DispatchObserver) keyOwner(rec Record) (agent string, resolved bool) {
 	if o.owner != nil && rec.CallerBridgeKey != "" {
 		if agent, ok := o.owner(rec.CallerBridgeKey); ok && agent != "" {
-			return agent
+			return agent, true
 		}
 	}
-	return rec.Caller
+	return rec.Caller, false
 }
 
 func withinLinger(rec Record, now time.Time) bool {

@@ -2,6 +2,7 @@ package web
 
 import (
 	"encoding/json"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -223,3 +224,12 @@ func TestBridgeConnectedActionIsAuthoritativeEvenWhenNil(t *testing.T) {
 type staticActivityProvider map[string]observe.AgentActivity
 
 func (s staticActivityProvider) Activities() map[string]observe.AgentActivity { return s }
+
+func TestParseSessionOwnersMapsTmuxSessionIDsToAgents(t *testing.T) {
+	out := "$3 leo-new\n$9 leo-old\n$4 scratch\n$5 leo-gone\nmalformed\n"
+	got := parseSessionOwners(out, []string{"new", "old", "leo-explicit"})
+	want := map[string]string{"$3": "new", "$9": "old"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("parseSessionOwners = %v, want %v", got, want)
+	}
+}

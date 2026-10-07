@@ -278,3 +278,39 @@ func TestDispatchSnapshotGenerationsFollowReadOrder(t *testing.T) {
 		t.Fatalf("generation %d did not increase past %d", gen, b)
 	}
 }
+
+// A caller without a bridge key is identified by its tmux session id,
+// which a live rename keeps and a recreated agent does not share.
+func TestOutstandingDispatchesFollowTheCallersTmuxSessionAcrossARename(t *testing.T) {
+	renamed := agentDispatch("d1", "old", StatusRunning)
+	renamed.CallerSessionID = "$3"
+	newcomer := agentDispatch("d2", "old", StatusRunning)
+	newcomer.CallerSessionID = "$9"
+	noSession := agentDispatch("d3", "solo", StatusRunning)
+	lookups := 0
+	obs := NewDispatchObserver(func() []Record { return []Record{renamed, newcomer, noSession} }, nil,
+		WithCallerSessionOwners(func() map[string]string {
+			lookups++
+			return map[string]string{"$3": "new", "$9": "old"}
+		}))
+
+	got := obs.OutstandingDispatches()
+
+	if want := map[string]int{"new": 1, "old": 1, "solo": 1}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("OutstandingDispatches = %v, want %v", got, want)
+	}
+	if lookups != 1 {
+		t.Fatalf("session owners looked up %d times; want once per snapshot", lookups)
+	}
+}
+
+func TestOutstandingDispatchesSkipTheSessionLookupWhenEveryCallerHasAKey(t *testing.T) {
+	rec := agentDispatch("d1", "alpha", StatusRunning)
+	rec.CallerBridgeKey, rec.CallerSessionID = "k", "$1"
+	obs := NewDispatchObserver(func() []Record { return []Record{rec} }, nil,
+		WithDispatchOwner(func(string) (string, bool) { return "alpha", true }),
+		WithCallerSessionOwners(func() map[string]string { t.Fatal("looked up sessions"); return nil }))
+	if got := obs.OutstandingDispatches(); got["alpha"] != 1 {
+		t.Fatalf("counts = %v", got)
+	}
+}

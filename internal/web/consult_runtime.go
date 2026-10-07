@@ -4,11 +4,14 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
+	"github.com/blackpaw-studio/leo/internal/agent"
 	"github.com/blackpaw-studio/leo/internal/bridge"
 	"github.com/blackpaw-studio/leo/internal/consult"
 	"github.com/blackpaw-studio/leo/internal/observe"
+	"github.com/blackpaw-studio/leo/internal/tmux"
 )
 
 // consultLoopIntervals are the consult runtime loop's tick periods. rosterIdle
@@ -90,7 +93,8 @@ func (s *Server) setupConsultRuntime(opts Options, resolveCallerSession func(str
 	// reconciled every state tick (so one that ended between ticks is
 	// released). Counting by the caller's bridge key follows a rename.
 	dispatchObserver := consult.NewDispatchObserver(s.consults.RunRecords, s.publisher,
-		consult.WithDispatchOwner(s.dispatchCallerOwner))
+		consult.WithDispatchOwner(s.dispatchCallerOwner),
+		consult.WithCallerSessionOwners(s.callerSessionOwners))
 	s.attention.SetDispatchCounter(dispatchObserver)
 	if s.dispatches == nil {
 		s.dispatches = dispatchObserver
@@ -190,4 +194,43 @@ func (s *Server) dispatchCallerOwner(key string) (string, bool) {
 		return "", false
 	}
 	return s.bridgeKeyOwner(key)
+}
+
+// callerSessionOwners maps each live tmux session id to the supervised
+// agent running in it, for dispatch callers without a bridge key.
+func (s *Server) callerSessionOwners() map[string]string {
+	if s.processes == nil {
+		return nil
+	}
+	out, err := s.execCommand(findTmuxPath(), tmux.Args("list-sessions", "-F", "#{session_id} #{session_name}")...).Output()
+	if err != nil {
+		return nil
+	}
+	names := make([]string, 0)
+	for name := range s.processes.States() {
+		names = append(names, name)
+	}
+	return parseSessionOwners(string(out), names)
+}
+
+// parseSessionOwners reads `list-sessions -F "#{session_id} #{session_name}"`
+// output into session id -> agent, for the sessions that are one of
+// agents' (agent.SessionName); other sessions and malformed lines are
+// skipped.
+func parseSessionOwners(out string, agents []string) map[string]string {
+	bySession := make(map[string]string, len(agents))
+	for _, name := range agents {
+		bySession[agent.SessionName(name)] = name
+	}
+	owners := map[string]string{}
+	for _, line := range strings.Split(out, "\n") {
+		id, session, ok := strings.Cut(strings.TrimSpace(line), " ")
+		if !ok || !strings.HasPrefix(id, "$") {
+			continue
+		}
+		if name, ok := bySession[session]; ok {
+			owners[id] = name
+		}
+	}
+	return owners
 }
