@@ -150,6 +150,8 @@ func TestViewerRosterAppliesChangesAndOwnershipAwareCleanup(t *testing.T) {
 				return exec.Command("printf", "%s", inventory)
 			case containsArg(args, "list-sessions"):
 				return exec.Command("printf", "leo-worker\t$1\t\n")
+			case containsArg(args, "show-options") && containsArg(args, "status-format[1]"):
+				return exec.Command("printf", "%s\n", rosterFormat)
 			case containsArg(args, "show-options") && containsArg(args, "status-interval") && !containsArg(args, "-A"):
 				return exec.Command("printf", "")
 			case containsArg(args, "show-options"):
@@ -598,6 +600,8 @@ func TestViewerRosterRestartDiscoversTextAndCleansOwnedStatus(t *testing.T) {
 			return exec.Command("printf", "")
 		case containsArg(args, "list-sessions"):
 			return exec.Command("printf", "%s", "leo-worker\t$1\t1\t1\t\t1\told roster\n")
+		case containsArg(args, "show-options") && containsArg(args, "status-format[1]"):
+			return exec.Command("printf", "%s\n", rosterFormat)
 		case containsArg(args, "show-options") && containsArg(args, rosterFormat0ValueMarker):
 			return exec.Command("printf", "%s", format0Output)
 		case containsArg(args, "show-options") && containsArg(args, "status-format[0]"):
@@ -693,6 +697,8 @@ func restartCleanupViewer(calls *[][]string, sessions string, action func([]stri
 			return exec.Command("printf", "")
 		case containsArg(args, "list-sessions"):
 			return exec.Command("printf", "%s", sessions)
+		case containsArg(args, "show-options") && containsArg(args, "status-format[1]"):
+			return exec.Command("printf", "%s\n", rosterFormat)
 		case containsArg(args, "show-options") && containsArg(args, "status-interval") && !containsArg(args, "-A"):
 			return exec.Command("printf", "1\n")
 		case containsArg(args, "show-options"):
@@ -711,6 +717,8 @@ func rosterCleanupFormatViewer(calls *[][]string, statusFormat, format0Owned, fo
 			return exec.Command("printf", "")
 		case containsArg(args, "list-sessions"):
 			return exec.Command("printf", "%s", "leo-worker\t$1\t1\t\t\t"+format0Owned+"\told roster\n")
+		case containsArg(args, "show-options") && containsArg(args, "status-format[1]"):
+			return exec.Command("printf", "%s\n", rosterFormat)
 		case containsArg(args, "show-options") && containsArg(args, rosterFormat0ValueMarker):
 			return exec.Command("printf", "%s %s\n", rosterFormat0ValueMarker, format0Value)
 		case containsArg(args, "show-options") && containsArg(args, "status-format[0]"):

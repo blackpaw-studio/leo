@@ -433,11 +433,21 @@ func (v *Viewer) clearRosterState(session string, state rosterSessionState) rost
 		}
 		*pending = false
 	}
+	// status-format[1] is Leo's only while it still holds the roster format:
+	// a value the person set since is theirs to keep.
 	if state.clearFormat {
-		if err := v.run("set-option", "-u", "-t", target, "status-format[1]"); err != nil {
-			v.log("clearing status-format[1] for %q: %v", session, err)
-		} else {
+		current, err := v.output("show-options", "-t", target, "-v", "status-format[1]")
+		switch {
+		case err != nil:
+			v.log("reading status-format[1] during cleanup for %q: %v", session, err)
+		case strings.TrimRight(string(current), "\r\n") != rosterFormat:
 			state.clearFormat = false
+		default:
+			if err := v.run("set-option", "-u", "-t", target, "status-format[1]"); err != nil {
+				v.log("clearing status-format[1] for %q: %v", session, err)
+			} else {
+				state.clearFormat = false
+			}
 		}
 	}
 	if !state.clearFormat && state.clearFormat0 {

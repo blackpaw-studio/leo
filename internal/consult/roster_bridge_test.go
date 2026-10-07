@@ -109,3 +109,23 @@ func TestViewerRosterKeepsABridgedCallersDispatchInTheDispatchSession(t *testing
 		t.Fatalf("leo-dispatch roster = %q, want the dispatch", got)
 	}
 }
+
+func TestViewerRosterCleanupLeavesAUserChangedRosterFormat(t *testing.T) {
+	run, pane := isolatedTmux(t, "leo-worker")
+	isBridged := false
+	v := &Viewer{TmuxPath: "tmux", ExecCommand: run, BridgeConnected: func(string) bool { return isBridged }}
+	now := time.Now()
+	rec := Record{ID: "d-a", Kind: "dispatch", Name: "build", Status: StatusRunning, StartedAt: now, ViewerPaneID: pane, CallerBridgeKey: "worker"}
+	v.UpdateRoster([]Record{rec}, now)
+	if err := run("tmux", "-L", "leo", "set-option", "-t", "leo-worker:", "status-format[1]", "mine").Run(); err != nil {
+		t.Fatal(err)
+	}
+	isBridged = true
+	v.UpdateRoster([]Record{rec}, now.Add(time.Second))
+	if got := showSessionOption(t, run, "leo-worker", "status-format[1]"); got != "mine" {
+		t.Fatalf("status-format[1] = %q, want the user's value kept", got)
+	}
+	if got := showSessionOption(t, run, "leo-worker", "@leo_roster"); got != "" {
+		t.Fatalf("roster = %q, want it cleared", got)
+	}
+}
