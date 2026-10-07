@@ -3,6 +3,7 @@ package claude
 import (
 	"encoding/json"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -157,5 +158,18 @@ func TestPermissionHooksArgv(t *testing.T) {
 	}
 	if !strings.Contains(merged[len(merged)-1], `"Stop"`) || !strings.Contains(merged[len(merged)-1], `"PermissionRequest"`) {
 		t.Fatalf("merged settings lost a hook: %s", merged[len(merged)-1])
+	}
+}
+
+func TestShellCommandRoundTripsThroughSh(t *testing.T) {
+	args := []string{"/opt/it's here/leo", "--config", `/tmp/a b/$HOME/"q"/leo.yaml`, "plain", "", `x'y'z`, `back\slash`}
+	script := `printf '%s\0' ` + shellCommand(args)
+	out, err := exec.Command("sh", "-c", script).Output()
+	if err != nil {
+		t.Fatalf("sh -c %q: %v", script, err)
+	}
+	got := strings.Split(strings.TrimSuffix(string(out), "\x00"), "\x00")
+	if !reflect.DeepEqual(got, args) {
+		t.Fatalf("round trip = %q, want %q (command %s)", got, args, shellCommand(args))
 	}
 }

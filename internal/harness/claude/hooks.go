@@ -128,7 +128,7 @@ func shellCommand(args []string) string {
 			words = append(words, arg)
 			continue
 		}
-		words = append(words, "'"+strings.ReplaceAll(arg, "'", "'\\\"'\\\"'")+"'")
+		words = append(words, "'"+strings.ReplaceAll(arg, "'", `'\''`)+"'")
 	}
 	return strings.Join(words, " ")
 }
