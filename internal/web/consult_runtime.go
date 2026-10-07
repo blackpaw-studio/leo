@@ -78,6 +78,11 @@ func (s *Server) setupConsultRuntime(opts Options, resolveCallerSession func(str
 		delegation := &delegationSource{path: s.configPath, load: s.loadConfig}
 		pusher = &consult.StatePusher{Hub: hub, Records: s.consults.RunRecords, Delegation: delegation.Get, Now: time.Now}
 	}
+	// The bridge feed's outstanding listener is wired here once it lands.
+	dispatchObserver := consult.NewDispatchObserver(s.consults.RunRecords, s.publisher)
+	if s.dispatches == nil {
+		s.dispatches = dispatchObserver
+	}
 	s.consults.SetInteractiveRuntime(runtime)
 	s.consults.MarkInterrupted()
 	// Best-effort: drop settings spill files (which can hold credentials)
@@ -127,6 +132,7 @@ func (s *Server) setupConsultRuntime(opts Options, resolveCallerSession func(str
 				if pusher != nil {
 					pusher.Tick()
 				}
+				dispatchObserver.Tick()
 			}
 		}
 	}()
