@@ -123,6 +123,9 @@ type Server struct {
 	// control serves the agent control routes; set by StartWeb (see
 	// setControl).
 	control atomic.Pointer[controlHolder]
+	// webSources are the web server's bridge feed and dispatch counts,
+	// merged into the local /state rows; set by StartWeb.
+	webSources atomic.Pointer[web.AgentSources]
 
 	// ready is reported on /health and set by MarkReady once startup has
 	// restored agents; until then agent queries (e.g. /agents/stale) answer
@@ -454,6 +457,7 @@ func (s *Server) StartWeb(cfg *config.Config, agentSvc web.AgentService) error {
 		LeoMCP:          s.leoMCP,
 	}, observeOpts...)
 	s.setControl(s.webServer.ControlHandler())
+	s.setWebSources(s.webServer.ObserveSources())
 	bind := cfg.WebBind()
 	addr := fmt.Sprintf("%s:%d", bind, port)
 	if err := s.webServer.ListenAndServe(addr); err != nil {

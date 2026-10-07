@@ -6,7 +6,9 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/blackpaw-studio/leo/internal/bridge"
 	"github.com/blackpaw-studio/leo/internal/consult"
+	"github.com/blackpaw-studio/leo/internal/observe"
 )
 
 // consultLoopIntervals are the consult runtime loop's tick periods. rosterIdle
@@ -78,8 +80,14 @@ func (s *Server) setupConsultRuntime(opts Options, resolveCallerSession func(str
 		delegation := &delegationSource{path: s.configPath, load: s.loadConfig}
 		pusher = &consult.StatePusher{Hub: hub, Records: s.consults.RunRecords, Delegation: delegation.Get, Now: time.Now}
 	}
-	// The bridge feed's outstanding listener is wired here once it lands.
-	dispatchObserver := consult.NewDispatchObserver(s.consults.RunRecords, s.publisher)
+	if hub := opts.Bridge.hub(); hub != nil && s.bridgeFeed == nil {
+		feed := s.newBridgeFeed(opts.Bridge.Router)
+		hub.AddSubscriber(feed)
+		s.bridgeFeed = feed
+	}
+	// Outstanding dispatch counts hold a finished turn at working (B-051).
+	dispatchObserver := consult.NewDispatchObserver(s.consults.RunRecords, s.publisher,
+		consult.WithOutstandingListener(s.attention.SetOutstandingDispatches))
 	if s.dispatches == nil {
 		s.dispatches = dispatchObserver
 	}
@@ -136,4 +144,36 @@ func (s *Server) setupConsultRuntime(opts Options, resolveCallerSession func(str
 			}
 		}
 	}()
+}
+
+// newBridgeFeed builds the observability projection of the agents' bridge
+// events, resolving each bridge key to the agent router routes to it.
+func (s *Server) newBridgeFeed(router *bridge.Router) *observe.BridgeFeed {
+	return observe.NewBridgeFeed(observe.KeyResolverFunc(s.agentForBridgeKey(router)), s.publisher,
+		observe.WithFeedAttention(s.attention),
+		observe.WithFeedActivity(s.activity),
+		observe.WithFeedConnected(router.Connected))
+}
+
+// agentForBridgeKey returns the reverse of router.Key over the supervised
+// agents. Dispatch keys are never agents.
+func (s *Server) agentForBridgeKey(router *bridge.Router) func(key string) (string, bool) {
+	return func(key string) (string, bool) {
+		if _, isDispatch := consult.DispatchIDFromBridgeKey(key); isDispatch || key == "" {
+			return "", false
+		}
+		// Most agents' key is their own name: check that before scanning.
+		if k, ok := router.Key(key); ok && k == key {
+			return key, true
+		}
+		if s.agentSvc == nil {
+			return "", false
+		}
+		for _, rec := range s.agentSvc.List() {
+			if k, ok := router.Key(rec.Name); ok && k == key {
+				return rec.Name, true
+			}
+		}
+		return "", false
+	}
 }

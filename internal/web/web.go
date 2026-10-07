@@ -313,6 +313,17 @@ func WithBridgeFeed(p bridgeFeedProvider) Option {
 	return func(s *Server) { s.bridgeFeed = p }
 }
 
+// ObserveSources returns the bridge feed and dispatch counts this server
+// built (or was given), for other agent projections (the daemon's local
+// /state) to merge the same way GET /api/v1/state does.
+func (s *Server) ObserveSources() AgentSources {
+	src := AgentSources{BridgeFeed: s.bridgeFeed}
+	if s.dispatches != nil {
+		src.Dispatches = s.dispatches
+	}
+	return src
+}
+
 // WithDispatches wires the dispatch projection GET /api/v1/state reads
 // dispatches and outstanding dispatch counts from. Optional.
 func WithDispatches(p dispatchProvider) Option {

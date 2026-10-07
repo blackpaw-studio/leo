@@ -15,6 +15,7 @@ import (
 	"github.com/blackpaw-studio/leo/internal/config"
 	"github.com/blackpaw-studio/leo/internal/observe"
 	"github.com/blackpaw-studio/leo/internal/observe/httpapi"
+	"github.com/blackpaw-studio/leo/internal/web"
 )
 
 type streamingRecorder struct {
@@ -165,5 +166,45 @@ func TestLocalStateCarriesSurfacedFiles(t *testing.T) {
 	}
 	if strings.Count(w.Body.String(), "surfaced_files") != 1 {
 		t.Fatalf("surfaced_files must be omitted for agents without any: %s", w.Body.String())
+	}
+}
+
+// stubBridgeFeed is a fixed bridge feed reading.
+type stubBridgeFeed map[string]observe.BridgeAgentState
+
+func (f stubBridgeFeed) BridgeAgents() map[string]observe.BridgeAgentState { return f }
+
+// stubDispatchCounts is a fixed outstanding-dispatch reading.
+type stubDispatchCounts map[string]int
+
+func (c stubDispatchCounts) OutstandingDispatches() map[string]int { return c }
+
+func TestLocalStateMergesTheWebServersBridgeSources(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "leo.yaml")
+	if err := config.Save(cfgPath, &config.Config{}); err != nil {
+		t.Fatal(err)
+	}
+	s := New(filepath.Join(dir, "leo.sock"), cfgPath, nil)
+	s.SetAgentManager(&fakeAgentManager{records: []agent.Record{{Name: "local", Status: "running"}}})
+	s.setWebSources(web.AgentSources{
+		BridgeFeed: stubBridgeFeed{"local": {Bridge: observe.BridgeConnected, Subagents: 1, Usage: &observe.AgentUsage{SessionID: "s1"}}},
+		Dispatches: stubDispatchCounts{"local": 2},
+	})
+	w := httptest.NewRecorder()
+
+	s.Handler().ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/state", nil))
+
+	var body struct {
+		Data struct {
+			Agents []observe.Agent `json:"agents"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	a := body.Data.Agents[0]
+	if a.Bridge != observe.BridgeConnected || a.Usage == nil || a.Outstanding == nil || *a.Outstanding != (observe.Outstanding{Dispatches: 2, Subagents: 1}) {
+		t.Fatalf("unexpected state: %s", w.Body.String())
 	}
 }

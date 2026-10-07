@@ -839,7 +839,7 @@ func TestProjectAgentsCarriesAttention(t *testing.T) {
 	store := observe.NewAttentionStore(nil)
 	store.Set("agent-a", observe.AttentionWorking)
 
-	got := ProjectAgents([]agent.Record{{Name: "agent-a"}}, nil, nil, store, nil, nil)
+	got := ProjectAgents([]agent.Record{{Name: "agent-a"}}, nil, AgentSources{Attention: store}, nil)
 
 	if got[0].Attention == nil || got[0].Attention.State != observe.AttentionWorking {
 		t.Fatalf("attention = %+v", got[0].Attention)
@@ -889,7 +889,7 @@ func TestProjectAgentsCarriesSurfacedFiles(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	got := ProjectAgents([]agent.Record{{Name: "agent-a"}}, nil, nil, nil, store, nil)
+	got := ProjectAgents([]agent.Record{{Name: "agent-a"}}, nil, AgentSources{Surfaced: store}, nil)
 
 	if len(got[0].SurfacedFiles) != 1 || got[0].SurfacedFiles[0].Path != "p" {
 		t.Fatalf("surfaced files = %+v", got[0].SurfacedFiles)

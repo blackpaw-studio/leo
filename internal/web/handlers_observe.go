@@ -136,18 +136,13 @@ type dispatchProvider interface {
 // (inputs -> Snapshot) so it's unit-testable without an HTTP request or a
 // running supervisor.
 func buildSnapshot(in snapshotInput) observe.Snapshot {
-	var activities map[string]observe.AgentActivity
-	if in.Activity != nil {
-		activities = in.Activity.Activities()
-	}
-	attention := attentionSnapshot(in.Attention)
-	surfaced := surfacedSnapshot(in.SurfacedFiles)
-
-	agents := make([]observe.Agent, 0, len(in.Records))
-	for _, rec := range in.Records {
-		agents = append(agents, buildAgent(rec, in.ProcessStates, activities, attention, surfaced, in.Config))
-	}
-	sort.Slice(agents, func(i, j int) bool { return agents[i].Name < agents[j].Name })
+	agents := projectAgents(in.Records, in.ProcessStates, AgentSources{
+		Activity:   in.Activity,
+		Attention:  in.Attention,
+		Surfaced:   in.SurfacedFiles,
+		BridgeFeed: in.BridgeFeed,
+		Dispatches: in.Dispatches,
+	}, in.Config)
 
 	nextRun := make(map[string]time.Time, len(in.CronEntries))
 	for _, e := range in.CronEntries {
@@ -194,12 +189,40 @@ func dispatchSnapshot(p dispatchProvider, now time.Time) []observe.Dispatch {
 	return p.Dispatches(now)
 }
 
+// agentViews is every per-agent source read once for one projection.
+type agentViews struct {
+	activities  map[string]observe.AgentActivity
+	attention   map[string]observe.AgentAttention
+	surfaced    map[string][]observe.SurfacedFile
+	bridge      map[string]observe.BridgeAgentState
+	dispatches  map[string]int
+	bridgeWired bool
+}
+
+func readAgentViews(src AgentSources) agentViews {
+	v := agentViews{
+		attention:   attentionSnapshot(src.Attention),
+		surfaced:    surfacedSnapshot(src.Surfaced),
+		bridgeWired: src.BridgeFeed != nil,
+	}
+	if src.Activity != nil {
+		v.activities = src.Activity.Activities()
+	}
+	if src.BridgeFeed != nil {
+		v.bridge = src.BridgeFeed.BridgeAgents()
+	}
+	if src.Dispatches != nil {
+		v.dispatches = src.Dispatches.OutstandingDispatches()
+	}
+	return v
+}
+
 // buildAgent maps one agent.Record to its observe.Agent view. Status,
 // restarts, and started-at prefer the supervisor's in-memory process state
 // (states) over the record — the agentstore-backed record can be stale for
 // those fields — falling back to the record when the agent has no live
 // process entry (e.g. a stopped worktree agent kept around for pruning).
-func buildAgent(rec agent.Record, states map[string]ProcessStateInfo, activities map[string]observe.AgentActivity, attention map[string]observe.AgentAttention, surfaced map[string][]observe.SurfacedFile, cfg *config.Config) observe.Agent {
+func buildAgent(rec agent.Record, states map[string]ProcessStateInfo, views agentViews, cfg *config.Config) observe.Agent {
 	rawStatus := rec.Status
 	restarts := rec.Restarts
 	startedAt := rec.StartedAt
@@ -230,7 +253,7 @@ func buildAgent(rec agent.Record, states map[string]ProcessStateInfo, activities
 		}
 	}
 
-	if act, ok := activities[rec.Name]; ok {
+	if act, ok := views.activities[rec.Name]; ok {
 		a.Activity = act.Activity
 		a.CurrentAction = act.CurrentAction
 		if !act.LastActivityAt.IsZero() {
@@ -239,12 +262,37 @@ func buildAgent(rec agent.Record, states map[string]ProcessStateInfo, activities
 		}
 	}
 
-	if att, ok := attention[rec.Name]; ok {
+	if att, ok := views.attention[rec.Name]; ok {
 		a.Attention = &att
 	}
-	a.SurfacedFiles = surfaced[rec.Name]
+	a.SurfacedFiles = views.surfaced[rec.Name]
+	mergeBridge(&a, views)
 
 	return a
+}
+
+// mergeBridge folds the bridge feed's reading and the outstanding child
+// counts into a. A claude agent the feed has no reading for reads as
+// bridge absent; other harnesses carry no bridge field.
+func mergeBridge(a *observe.Agent, views agentViews) {
+	bs, ok := views.bridge[a.Name]
+	switch {
+	case ok:
+		a.Bridge = bs.Bridge
+		a.Usage = bs.Usage
+		if bs.CurrentAction != nil {
+			a.CurrentAction = bs.CurrentAction
+		}
+		if a.Attention != nil && a.Attention.Reason == nil && a.Attention.State == observe.AttentionNeedsInput && bs.Reason != nil {
+			reason := *bs.Reason
+			a.Attention.Reason = &reason
+		}
+	case views.bridgeWired && a.Harness == "claude":
+		a.Bridge = observe.BridgeAbsent
+	}
+	if o := (observe.Outstanding{Dispatches: views.dispatches[a.Name], Subagents: bs.Subagents}); o.Dispatches > 0 || o.Subagents > 0 {
+		a.Outstanding = &o
+	}
 }
 
 // attentionProvider is the narrow read seam onto observe.AttentionStore.
@@ -274,17 +322,26 @@ func surfacedSnapshot(p surfacedProvider) map[string][]observe.SurfacedFile {
 	return p.All()
 }
 
+// AgentSources are the per-agent read seams an agent projection merges.
+// Every field is optional; a nil one leaves its fields absent.
+type AgentSources struct {
+	Activity   observe.ActivityProvider
+	Attention  attentionProvider
+	Surfaced   surfacedProvider
+	BridgeFeed bridgeFeedProvider
+	Dispatches observe.DispatchCounter
+}
+
 // ProjectAgents builds the same rows exposed by /api/v1/state.data.agents.
-func ProjectAgents(records []agent.Record, states map[string]ProcessStateInfo, activity observe.ActivityProvider, attention attentionProvider, surfaced surfacedProvider, cfg *config.Config) []observe.Agent {
-	var activities map[string]observe.AgentActivity
-	if activity != nil {
-		activities = activity.Activities()
-	}
-	attentions := attentionSnapshot(attention)
-	surfacedFiles := surfacedSnapshot(surfaced)
+func ProjectAgents(records []agent.Record, states map[string]ProcessStateInfo, src AgentSources, cfg *config.Config) []observe.Agent {
+	return projectAgents(records, states, src, cfg)
+}
+
+func projectAgents(records []agent.Record, states map[string]ProcessStateInfo, src AgentSources, cfg *config.Config) []observe.Agent {
+	views := readAgentViews(src)
 	out := make([]observe.Agent, 0, len(records))
 	for _, rec := range records {
-		out = append(out, buildAgent(rec, states, activities, attentions, surfacedFiles, cfg))
+		out = append(out, buildAgent(rec, states, views, cfg))
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
 	return out
