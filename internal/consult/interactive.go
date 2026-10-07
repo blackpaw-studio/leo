@@ -490,6 +490,11 @@ func (d *Dispatcher) closeTurnLocked(s *runState, id string, outcome TurnOutcome
 		if !s.record.Status.Terminal() && s.record.Status != StatusSettling {
 			s.record.Status = d.interactiveStatusLocked(s, boundary)
 		}
+		// Panes show only while the orchestrator has work in them; a turn
+		// the user typed never moves one.
+		if t.Source == TurnSourceOrchestrator && oldStatus != StatusIdle && s.record.Status == StatusIdle {
+			d.scheduleHideLocked(s)
+		}
 		if !d.hasWorkingTurnLocked(s) {
 			s.record.foldActive(boundary)
 		}
@@ -578,6 +583,7 @@ func (d *Dispatcher) Send(ctx context.Context, id, message string) (SendResult, 
 		d.mu.Unlock()
 		return SendResult{TurnID: t.TurnID}, errors.New("interactive runtime unavailable")
 	}
+	d.showPane(ctx, s, pane)
 	if d.beforeSendInjectable != nil {
 		d.beforeSendInjectable()
 	}

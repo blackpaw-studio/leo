@@ -159,6 +159,17 @@ flag in `~/.claude.json`.
 | --- | --- | --- | --- |
 | Prompt submitted | `UserPromptSubmit` | `UserPromptSubmit` | Acknowledges an armed orchestrator turn; if that acknowledgement is late, Leo matches normalized prompt text to the oldest undelivered orchestrator turn before opening a user turn. |
 
+A pane split into the caller's window stays there only while the
+orchestrator has work in it. When an orchestrator turn ends and the run goes
+`idle`, Leo moves the pane out with `break-pane -d` into a background window
+named `<label>·<hex4>` in the same tmux session (the record's `viewer_kind`
+becomes `hidden`). A `leo_send_dispatch` follow-up moves it back with
+`join-pane -d`, split below the caller as at launch; if the caller's pane is
+gone, the pane stays in its own window instead. Turns the user types never
+move a pane, and panes that launched in a separate window stay there. Tmux
+pane ids (`%N`) survive both moves, so follow-ups keep addressing the same
+pane.
+
 Interactive statuses are `queued`, `running`, `idle`, `settling`, `closed`,
 `failed`, `canceled`, and `timeout`. Turn outcomes are `finished`,
 `interrupted`, `lost`, and `rejected`. A user submission opens a free user
