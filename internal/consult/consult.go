@@ -72,6 +72,9 @@ type Dispatcher struct {
 	beforeOpeningInject  func()
 	afterOpeningInject   func()
 	beforeSendInjectable func()
+	// launchCancelWait bounds how long a cancellation waits for an
+	// admitted launch to publish its pane before tearing down without it.
+	launchCancelWait     time.Duration
 	notificationDelivery NotificationDelivery
 	closeFinishedViewer  func(Record, func(string) error) (Record, error)
 	// LeoMCP is the leo binary headless dispatches launch as their leo MCP
@@ -828,6 +831,32 @@ func (d *Dispatcher) terminateReapAndCleanup(id string, status Status) (Record, 
 	return d.cleanupWorktree(rec.ID), nil
 }
 
+// defaultLaunchCancelWait bounds how long a cancellation waits for an
+// admitted interactive launch to publish its pane.
+const defaultLaunchCancelWait = 15 * time.Second
+
+// awaitLaunchLocked waits, with d.mu held on entry and exit, for state's
+// admitted launch to finish, up to launchCancelWait.
+func (d *Dispatcher) awaitLaunchLocked(state *runState) {
+	wait := d.launchCancelWait
+	if wait <= 0 {
+		wait = defaultLaunchCancelWait
+	}
+	timer := time.NewTimer(wait)
+	defer timer.Stop()
+	for state.launching != nil {
+		launching := state.launching
+		d.mu.Unlock()
+		select {
+		case <-launching:
+			d.mu.Lock()
+		case <-timer.C:
+			d.mu.Lock()
+			return
+		}
+	}
+}
+
 func (d *Dispatcher) terminate(id string, status Status) (Record, error) {
 	rec, state, err := d.lookup(id)
 	if err != nil || state == nil || rec.Status.Terminal() {
@@ -844,12 +873,10 @@ func (d *Dispatcher) terminateState(state *runState, status Status) Record {
 	if state.record.Mode == ModeInteractive {
 		// An admitted launch is about to publish a pane; let it, so the
 		// teardown below sees (and kills) that pane rather than racing it.
-		for state.launching != nil {
-			launching := state.launching
-			d.mu.Unlock()
-			<-launching
-			d.mu.Lock()
-		}
+		// The wait is bounded: a launch wedged on tmux must not wedge the
+		// cancel. One that publishes later finds the run terminal and kills
+		// its own pane.
+		d.awaitLaunchLocked(state)
 		pane, rt, paneRec := state.record.PaneID, d.interactiveRuntime, cloneRecord(state.record)
 		d.mu.Unlock()
 		// Cancellation kills first. Publishing settling first would allow a

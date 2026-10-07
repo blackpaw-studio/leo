@@ -484,7 +484,17 @@ func (r *TmuxInteractiveRuntime) SessionAlive(session string) (bool, error) {
 	return false, fmt.Errorf("probe tmux session %q: %w: %s", session, err, strings.TrimSpace(string(out)))
 }
 func (r *TmuxInteractiveRuntime) ViewerOverrides(ctx context.Context, session string) ViewerOverrides {
-	return ReadViewerSessionOverrides(ctx, r.tmuxPath, session, r.ExecCommandContext)
+	timeout := r.Timeout
+	if timeout <= 0 {
+		timeout = interactiveCommandTimeout
+	}
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	return ReadViewerSessionOverrides(ctx, r.tmuxPath, session, func(ctx context.Context, name string, args ...string) *exec.Cmd {
+		cmd := r.ExecCommandContext(ctx, name, args...)
+		cmd.WaitDelay = interactiveWaitDelay
+		return cmd
+	})
 }
 func (r *TmuxInteractiveRuntime) FindPaneByDispatchID(windowID, dispatchID string) (string, error) {
 	out, err := r.output(context.Background(), "list-panes", "-t", windowID, "-F", "#{pane_id}\t#{pane_start_command}")
