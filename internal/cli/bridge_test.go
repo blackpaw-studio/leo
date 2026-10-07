@@ -378,6 +378,16 @@ func TestBridgeReportAwaitingAdoptionFailsForARetry(t *testing.T) {
 	}
 }
 
+// A report the daemon refuses for good (an event an older daemon does not
+// know) exits with the code the mod reads as "drop it, do not retry".
+func TestBridgeReportRejectedForGoodExitsWithTheDropCode(t *testing.T) {
+	f := &fakeBridge{reportErr: fmt.Errorf("%w: bridge report: daemon returned 400: unknown event", daemon.ErrBridgeRejected)}
+	err := runBridgeCmdWithStdin(t, f.deps(nil), strings.NewReader(`{"type":"event","name":"effort","level":"high"}`), io.Discard, "report", "--agent", "leo-alpha")
+	if got := ExitCode(err); got != bridgemod.RejectedReportExitCode {
+		t.Fatalf("ExitCode(%v) = %d, want %d", err, got, bridgemod.RejectedReportExitCode)
+	}
+}
+
 func TestBridgeReportInputValidation(t *testing.T) {
 	report := `{"type":"ack","id":"c1","ok":true}`
 	cases := []struct {

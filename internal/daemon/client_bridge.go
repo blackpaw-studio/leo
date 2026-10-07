@@ -30,6 +30,10 @@ var (
 	// typically because, just restarted, it has not adopted the caller's
 	// session; or its bridge is shutting down. Retry.
 	ErrBridgeNotReady = errors.New("leo bridge not ready")
+	// ErrBridgeRejected: the daemon refused the report itself (400, 413):
+	// malformed, or naming what this daemon does not know (a newer mod's
+	// event). Resending it cannot help.
+	ErrBridgeRejected = errors.New("leo bridge rejected the report")
 )
 
 // bridgePath is the URL path of leaf for agent's launch.
@@ -85,7 +89,8 @@ func postBridgeReport(ctx context.Context, cli *http.Client, baseURL, agent, lau
 }
 
 // bridgeStatusError is httpStatusError, wrapping ErrBridgeGone for a 410,
-// ErrBridgeStale for a 409 and ErrBridgeNotReady for a 503.
+// ErrBridgeStale for a 409, ErrBridgeNotReady for a 503 and
+// ErrBridgeRejected for a 400 or 413.
 func bridgeStatusError(what string, resp *http.Response) error {
 	err := httpStatusError(what, resp)
 	switch resp.StatusCode {
@@ -95,6 +100,8 @@ func bridgeStatusError(what string, resp *http.Response) error {
 		return fmt.Errorf("%w: %w", ErrBridgeStale, err)
 	case http.StatusServiceUnavailable:
 		return fmt.Errorf("%w: %w", ErrBridgeNotReady, err)
+	case http.StatusBadRequest, http.StatusRequestEntityTooLarge:
+		return fmt.Errorf("%w: %w", ErrBridgeRejected, err)
 	}
 	return err
 }

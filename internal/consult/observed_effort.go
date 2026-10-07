@@ -40,8 +40,8 @@ func (d *Dispatcher) ApplyObservedEffort(id, level string) {
 	d.applyObservedEffortLocked(s, level)
 }
 
-// applyObservedEffortLocked sets the run's observed effort and its current
-// turn's: the open one, else the latest.
+// applyObservedEffortLocked sets the run's observed effort and that of the
+// turn it ran in: the latest one that started running.
 func (d *Dispatcher) applyObservedEffortLocked(s *runState, level string) {
 	if !observedEffortLevels[level] {
 		return
@@ -57,13 +57,16 @@ func (d *Dispatcher) applyObservedEffortLocked(s *runState, level string) {
 	}
 }
 
+// currentTurnIndex is the latest turn that started running (delivered, or
+// typed by a user), so neither a queued turn nor the one before a fresh
+// submission takes its effort; -1 when none has.
 func currentTurnIndex(turns []Turn) int {
 	for i := len(turns) - 1; i >= 0; i-- {
-		if turns[i].Outcome == "" {
+		if turns[i].Delivered || turns[i].Source == TurnSourceUser {
 			return i
 		}
 	}
-	return len(turns) - 1
+	return -1
 }
 
 // effortFromPayload reads the effort a claude hook payload reports, as

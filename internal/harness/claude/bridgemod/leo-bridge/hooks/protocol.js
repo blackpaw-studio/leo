@@ -27,6 +27,10 @@ export const BACKOFF_RESET_AFTER_MS = 60_000
 // cannot help, so the mod stops bridging until it reloads. Mirrored by
 // bridgemod.StaleLaunchExitCode on the Go side.
 export const STALE_LAUNCH_EXIT_CODE = 3
+// `leo bridge report` exits with this when the daemon refuses the report
+// itself for good (malformed, or an event an older daemon does not know):
+// the mod drops it. Mirrored by bridgemod.RejectedReportExitCode.
+export const REJECTED_REPORT_EXIT_CODE = 4
 // Waits before each retry of a report the daemon did not take, backing off
 // to about a minute in all: long enough to ride out a daemon restart. Acks
 // are idempotent (the mod dedups by id) and events carry ids, so a retry is

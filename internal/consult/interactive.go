@@ -468,7 +468,9 @@ func (d *Dispatcher) openTurnLocked(s *runState, source TurnSource, text string,
 // appendTurnLocked opens a turn without expiring undelivered orchestrator
 // turns; openTurnLocked is the default.
 func (d *Dispatcher) appendTurnLocked(s *runState, source TurnSource, text string, held bool) *Turn {
-	t := Turn{TurnID: fmt.Sprintf("%s#%d", s.record.ID, len(s.record.Turns)+1), Source: source, StartedAt: d.now(), Text: text, SlotHeld: held}
+	// The mod reports effort only when it changes: a turn starts at the
+	// run's last observed one.
+	t := Turn{TurnID: fmt.Sprintf("%s#%d", s.record.ID, len(s.record.Turns)+1), Source: source, StartedAt: d.now(), Text: text, SlotHeld: held, ObservedEffort: s.record.ObservedEffort}
 	s.record.Turns = append(s.record.Turns, t)
 	s.record.Status = StatusQueued
 	if source == TurnSourceUser {
@@ -728,7 +730,9 @@ func (d *Dispatcher) Report(id string, r HookReport) error {
 	}
 	noteLiveTranscriptLocked(s, p)
 	if level := effortFromPayload(p); level != "" {
-		d.applyObservedEffortLocked(s, level)
+		// Once the event has placed its turn: a submission's effort is
+		// the turn it starts, not the one before (unlock runs after).
+		defer d.applyObservedEffortLocked(s, level)
 	}
 	switch event {
 	case "userpromptsubmit":

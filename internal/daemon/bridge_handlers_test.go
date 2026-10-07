@@ -303,6 +303,16 @@ func TestPostBridgeReportSurfacesDaemonError(t *testing.T) {
 	}
 }
 
+// A report the daemon refuses as malformed (400) is refused for good: it
+// surfaces as ErrBridgeRejected, never as a failure worth retrying.
+func TestPostBridgeReportRejectionIsPermanent(t *testing.T) {
+	workDir, _, _ := startBridgeServer(t)
+	err := PostBridgeReport(bridgeTestCtx(t), workDir, bridgeAgent, bridgeLaunch, []byte(`{"type":"event","name":"from-a-newer-mod"}`))
+	if !errors.Is(err, ErrBridgeRejected) {
+		t.Fatalf("err=%v, want ErrBridgeRejected", err)
+	}
+}
+
 func TestOpenBridgeStreamSurfacesDaemonError(t *testing.T) {
 	workDir, _, _ := startBridgeServer(t)
 	body, err := OpenBridgeStream(bridgeTestCtx(t), workDir, "bad name", bridgeLaunch)

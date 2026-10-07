@@ -36,6 +36,7 @@ import {
   REPORT_RETRY_DELAYS_MS,
   reportText,
   splitLines,
+  REJECTED_REPORT_EXIT_CODE,
   STALE_LAUNCH_EXIT_CODE,
   toolActivity,
   touchedEntry,
@@ -214,9 +215,14 @@ async function sendReport($, report) {
   const argv = bridgeArgv('report')
   const body = JSON.stringify(report)
   for (let attempt = 0; ; attempt++) {
-    const why = await tryReport($, argv, body)
+    const { why, isRejected } = await attemptReport($, argv, body)
     if (why === null) {
       isReportFailing = false
+      return
+    }
+    if (isRejected) {
+      // Refused for good: retrying would only hold up the reports behind it.
+      $.ui.log('report rejected, dropped: ' + why)
       return
     }
     if (attempt >= REPORT_RETRY_DELAYS_MS.length) {
@@ -229,12 +235,19 @@ async function sendReport($, report) {
 
 // One report attempt: null on success, else why it failed.
 async function tryReport($, argv, body) {
+  return (await attemptReport($, argv, body)).why
+}
+
+// One report attempt: why is null on success, else why it failed;
+// isRejected when the daemon refused the report for good.
+async function attemptReport($, argv, body) {
   try {
     const result = await $.process.run(argv, { timeoutMs: REPORT_TIMEOUT_MS, stdin: body })
-    if (result.exitCode === 0) return null
-    return 'exit ' + result.exitCode + ': ' + result.stderr.trim()
+    if (result.exitCode === 0) return { why: null, isRejected: false }
+    const why = 'exit ' + result.exitCode + ': ' + result.stderr.trim()
+    return { why, isRejected: result.exitCode === REJECTED_REPORT_EXIT_CODE }
   } catch (err) {
-    return errorText(err)
+    return { why: errorText(err), isRejected: false }
   }
 }
 

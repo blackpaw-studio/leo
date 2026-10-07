@@ -119,3 +119,47 @@ func TestDispatchBridgeSubscriberForwardsObservedEffort(t *testing.T) {
 		t.Fatalf("efforts=%v reports=%v", log.efforts, log.got)
 	}
 }
+
+func effortHook(t *testing.T, eventID, event, prompt, level string) HookReport {
+	t.Helper()
+	payload := map[string]any{"hook_event_name": event}
+	if prompt != "" {
+		payload["prompt"] = prompt
+	}
+	if level != "" {
+		payload["effort"] = map[string]string{"level": level}
+	}
+	b, _ := json.Marshal(payload)
+	return HookReport{EventID: eventID, Payload: b}
+}
+
+// The mod reports effort only when it changes, so a later turn at the same
+// effort starts from the run's last observation.
+func TestObservedEffortSeedsEachNewTurn(t *testing.T) {
+	d, id := startEffortDispatch(t, "")
+	mustReport(t, d, id, effortHook(t, "s1", "UserPromptSubmit", "hello", ""))
+	d.ApplyObservedEffort(id, "high")
+	mustReport(t, d, id, effortHook(t, "c1", "Stop", "", ""))
+	mustReport(t, d, id, effortHook(t, "s2", "UserPromptSubmit", "typed by a human", ""))
+
+	rec := recordOf(t, d, id)
+	if len(rec.Turns) != 2 || rec.Turns[1].ObservedEffort != "high" {
+		t.Fatalf("turns = %+v, want a second turn seeded at high", rec.Turns)
+	}
+}
+
+// A submission's effort belongs to the turn it starts, not the one before.
+func TestShellHookEffortLandsOnTheTurnItsPromptStarts(t *testing.T) {
+	d, id := startEffortDispatch(t, "")
+	mustReport(t, d, id, effortHook(t, "s1", "UserPromptSubmit", "hello", "high"))
+	mustReport(t, d, id, effortHook(t, "c1", "Stop", "", "high"))
+	mustReport(t, d, id, effortHook(t, "s2", "UserPromptSubmit", "typed by a human", "medium"))
+
+	rec := recordOf(t, d, id)
+	if len(rec.Turns) != 2 || rec.Turns[0].ObservedEffort != "high" || rec.Turns[1].ObservedEffort != "medium" {
+		t.Fatalf("turn efforts = %+v, want high then medium", rec.Turns)
+	}
+	if rec.ObservedEffort != "medium" {
+		t.Fatalf("record observed effort = %q, want medium", rec.ObservedEffort)
+	}
+}
