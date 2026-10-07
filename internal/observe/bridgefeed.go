@@ -247,14 +247,30 @@ func (f *BridgeFeed) agentLocked(key, name string) *feedAgent {
 	return st
 }
 
-// pruneLocked drops every state whose key no longer resolves to the agent
-// it is filed under (a deleted agent, or a key reused by another).
+// pruneLocked re-files every state under the agent its key resolves to
+// now: a renamed agent's state moves to the new name (its totals carry
+// over), a deleted agent's is dropped.
 func (f *BridgeFeed) pruneLocked() {
 	if f.resolve == nil {
 		return
 	}
 	for name, st := range f.agents {
-		if owner, ok := f.resolve.AgentForKey(st.key); !ok || owner != name {
+		owner, ok := f.resolve.AgentForKey(st.key)
+		switch {
+		case ok && owner == name:
+			continue
+		case ok && owner != "":
+			delete(f.agents, name)
+			if cur, taken := f.agents[owner]; !taken || cur.key != st.key {
+				// The key belongs to owner now; a state there under
+				// another key is the owner's stale one.
+				if taken {
+					cur.cancelTrailing()
+				}
+				f.agents[owner] = st
+			}
+			f.names[st.key] = owner
+		default:
 			st.cancelTrailing()
 			delete(f.agents, name)
 			if f.names[st.key] == name {

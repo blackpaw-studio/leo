@@ -512,3 +512,25 @@ func TestBridgeFeedReconnectHelloKeepsTheModsSubagentCount(t *testing.T) {
 		t.Fatalf("after a fresh launch: %+v; want the hold released", att)
 	}
 }
+
+// A snapshot taken right after a rename, before the agent's next event,
+// finds the state under the new name rather than losing it.
+func TestBridgeFeedSnapshotAfterRenameMigratesState(t *testing.T) {
+	keys := staticKeys{"alice-key": "alice"}
+	h := newFeedHarness(t, keys)
+	h.send(bridge.Event{Name: bridge.EventTurnComplete, EventID: "a", Tokens: tokens(100, 20)})
+
+	keys["alice-key"] = "alicia"
+
+	agents := h.feed.BridgeAgents()
+	if _, stale := agents["alice"]; stale {
+		t.Fatal("state left under the old name")
+	}
+	if u := agents["alicia"].Usage; u == nil || u.Session.Tokens != 135 {
+		t.Fatalf("alicia usage = %+v; want the carried totals", u)
+	}
+	h.send(bridge.Event{Name: bridge.EventTurnComplete, EventID: "b", Tokens: tokens(100, 20)})
+	if u := h.feed.BridgeAgents()["alicia"].Usage; u == nil || u.Session.Tokens != 270 {
+		t.Fatalf("alicia usage after the next turn = %+v", u)
+	}
+}
