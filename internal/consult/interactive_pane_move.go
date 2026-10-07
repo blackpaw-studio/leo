@@ -61,12 +61,14 @@ func (d *Dispatcher) hidePane(s *runState, id, pane string) {
 	d.persistLocked(s, "")
 	// Hook reports are not serialized with this: a turn the user started
 	// while the pane was moving finds it gone, so it goes straight back.
-	stillIdle := s.record.Status == StatusIdle
+	// A run that has meanwhile hit a permission prompt waits on the
+	// orchestrator's decision, not the user, and stays hidden.
+	rejoin := s.record.Status == StatusRunning
 	d.mu.Unlock()
 	if callerWindow != "" {
 		_ = layout(callerWindow)
 	}
-	if !stillIdle {
+	if rejoin {
 		d.showPane(d.daemonCtx, s, pane)
 	}
 }

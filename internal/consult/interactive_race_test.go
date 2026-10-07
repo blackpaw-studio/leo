@@ -2,6 +2,7 @@ package consult
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 )
@@ -104,5 +105,58 @@ func TestInteractiveUserTurnDuringHideRejoinsPane(t *testing.T) {
 			t.Fatalf("record kind=%q status=%s, want split and running", rec.ViewerKind, rec.Status)
 		}
 		time.Sleep(time.Millisecond)
+	}
+}
+
+// A user turn that hits a permission prompt while the pane is moving leaves
+// the run needing the orchestrator's decision, not the user's: the pane
+// stays hidden.
+func TestInteractiveNeedsInputDuringHideStaysHidden(t *testing.T) {
+	d := NewDispatcher(newFakeRecorder())
+	rt := &movingRuntime{fakeInteractiveRuntime: &fakeInteractiveRuntime{arm: true, empty: true}}
+	d.SetInteractiveRuntime(rt)
+	started, err := d.Start(context.Background(), testConfig(), Request{
+		Template: "codex", Name: "impl", Prompt: "x", Cwd: t.TempDir(), Mode: ModeInteractive,
+		CallerPaneID: "%0", CallerSessionID: "leo-orch", CallerWindowID: "@1",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitForInjection(t, rt.fakeInteractiveRuntime)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	rt.hideHook = func() {
+		_ = d.Report(started.ID, hook(t, "UserPromptSubmit", "u"))
+		go d.RequestPermission(ctx, started.ID, permissionPayload(t, "Bash", map[string]any{"command": "ls"}), time.Minute)
+		deadline := time.Now().Add(time.Second)
+		for {
+			if rec, _ := d.Get(started.ID); rec.Status == StatusNeedsInput {
+				return
+			}
+			if time.Now().After(deadline) {
+				t.Error("run never reached needs_input")
+				return
+			}
+			time.Sleep(time.Millisecond)
+		}
+	}
+	_ = d.Report(started.ID, hook(t, "UserPromptSubmit", "a"))
+	_ = d.Report(started.ID, hook(t, "Stop", "a"))
+	waitForEvents(t, rt, "hide", 1)
+	deadline := time.Now().Add(time.Second)
+	for {
+		if rec, _ := d.Get(started.ID); rec.ViewerKind == viewerHidden {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("pane never recorded hidden")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	time.Sleep(50 * time.Millisecond)
+	for _, event := range rt.log() {
+		if strings.HasPrefix(event, "show") {
+			t.Fatalf("events = %v, want a needs_input pane left hidden", rt.log())
+		}
 	}
 }
