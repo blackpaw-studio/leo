@@ -75,8 +75,10 @@ type BridgeFeed struct {
 type feedAgent struct {
 	key string
 	gen uint64
-	// launch is the launch id of the report being folded in, which the
-	// attention store applies it for only while that launch is bound.
+	// launch is the launch id (bridge.LaunchID) the state belongs to: the
+	// key's newest launch the feed has heard from. Reports from any other
+	// launch are dropped, and the attention store applies this one's only
+	// while it is bound.
 	launch string
 
 	sessionID   string
@@ -165,6 +167,10 @@ func (f *BridgeFeed) BridgeAgents() map[string]BridgeAgentState {
 			delete(f.agents, key)
 			continue
 		}
+		if !f.boundLocked(st) {
+			// Its launch retired; its successor has not reported yet.
+			continue
+		}
 		if cur, taken := owned[name]; !taken || st.gen > cur.gen {
 			owned[name] = st
 		}
@@ -173,6 +179,12 @@ func (f *BridgeFeed) BridgeAgents() map[string]BridgeAgentState {
 		out[name] = f.viewLocked(st)
 	}
 	return out
+}
+
+// boundLocked reports whether st's launch is still the one bound to its key
+// in the attention store; always true without one.
+func (f *BridgeFeed) boundLocked(st *feedAgent) bool {
+	return f.attention == nil || f.attention.IsBoundLaunch(st.key, st.launch)
 }
 
 func (f *BridgeFeed) viewLocked(st *feedAgent) BridgeAgentState {
@@ -208,11 +220,19 @@ func (f *BridgeFeed) OnBridgeEvent(ev bridge.Event) {
 		return
 	}
 	st, ok := f.agents[ev.Agent]
-	if !ok {
-		st = &feedAgent{key: ev.Agent}
+	switch {
+	case !ok:
+		st = &feedAgent{key: ev.Agent, launch: ev.LaunchID}
 		f.agents[ev.Agent] = st
+	case st.launch == ev.LaunchID:
+	case ev.Gen > st.gen:
+		// The key's newest launch (generations only grow): what the
+		// launch it replaced left goes with it.
+		st.relaunch(ev.LaunchID)
+	default:
+		// A late report from a launch the key has moved past.
+		return
 	}
-	st.launch = ev.LaunchID
 	if ev.EventID != "" && st.replayed(sha256.Sum256([]byte(ev.Name+"\x00"+ev.EventID))) {
 		return
 	}
@@ -299,7 +319,7 @@ func (f *BridgeFeed) throttleActivityLocked(name string, st *feedAgent) {
 		return
 	}
 	st.trailingGen++
-	gen := st.trailingGen
+	gen, launch := st.trailingGen, st.launch
 	st.stopTrailing = f.clock.AfterFunc(st.lastActivity.Add(ActivityMinInterval).Sub(now), func() {
 		f.mu.Lock()
 		defer f.mu.Unlock()
@@ -307,12 +327,27 @@ func (f *BridgeFeed) throttleActivityLocked(name string, st *feedAgent) {
 			return
 		}
 		st.stopTrailing = nil
+		// The launch it was armed for may have retired since.
+		if st.launch != launch || !f.boundLocked(st) {
+			return
+		}
 		// The agent may have been renamed since: publish under the name
 		// its key resolves to now, or not at all if none holds it.
 		if current, ok := f.resolve.AgentForKey(st.key); ok && current != "" {
 			f.publishActivityLocked(current, st, f.clock.Now())
 		}
 	})
+}
+
+// relaunch hands the state to launch, the key's newer launch: the prompt,
+// tool, subagents and pending activity edge of the one it replaced died
+// with it. Usage carries over as observeLaunch decides (a resumed session
+// keeps its session totals).
+func (st *feedAgent) relaunch(launch string) {
+	st.cancelTrailing()
+	st.launch = launch
+	st.subagents, st.reason, st.action = 0, nil, nil
+	st.seen, st.seenOrder = nil, nil
 }
 
 // cancelTrailing disarms a pending trailing edge, including one whose

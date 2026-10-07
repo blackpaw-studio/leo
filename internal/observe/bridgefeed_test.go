@@ -726,3 +726,57 @@ func TestBridgeFeedDropsAReportFromARetiredLaunch(t *testing.T) {
 		})
 	}
 }
+
+// The feed holds each key to its newest launch on its own: a newer launch's
+// report resets the state, and a late report from the launch it replaced
+// is dropped under the feed's lock (no attention store to ask here).
+func TestBridgeFeedKeepsEachKeyToItsNewestLaunch(t *testing.T) {
+	keys := staticKeys{"k": "alice"}
+	feed := NewBridgeFeed(keys, nil, WithFeedClock(newFakeClock(time.Now())))
+	send := func(ev bridge.Event) {
+		ev.Agent, ev.SessionID = "k", "s1"
+		feed.OnBridgeEvent(ev)
+	}
+	send(bridge.Event{Name: bridge.ReportHello, Gen: 1, LaunchID: "L1"})
+	send(bridge.Event{Name: bridge.EventSubagents, Gen: 1, LaunchID: "L1", Subagents: &bridge.SubagentsReport{Running: 2}})
+	send(bridge.Event{Name: bridge.EventAttention, Gen: 1, LaunchID: "L1", Attention: &bridge.AttentionReport{State: bridge.AttentionNeedsInput, Kind: "question"}})
+
+	send(bridge.Event{Name: bridge.EventTurnStart, Gen: 2, LaunchID: "L2", EventID: "t1"})
+	if got := feed.BridgeAgents()["alice"]; got.Subagents != 0 || got.Reason != nil {
+		t.Fatalf("after L2's first report: %+v; want L1's children and prompt gone", got)
+	}
+	send(bridge.Event{Name: bridge.EventSubagents, Gen: 1, LaunchID: "L1", Subagents: &bridge.SubagentsReport{Running: 3}})
+	send(bridge.Event{Name: bridge.EventActivity, Gen: 1, LaunchID: "L1", Activity: &bridge.ActivityReport{Tool: "Bash"}})
+	if got := feed.BridgeAgents()["alice"]; got.Subagents != 0 || got.CurrentAction != nil {
+		t.Fatalf("after a late L1 report: %+v; want it dropped", got)
+	}
+}
+
+// A key rebound to a new launch that has not reported yet reads as that
+// launch: nothing the retired launch left shows under the agent.
+func TestBridgeFeedReadOmitsARetiredLaunchsState(t *testing.T) {
+	h := newFeedHarness(t, nil)
+	h.send(bridge.Event{Name: bridge.EventSubagents, Subagents: &bridge.SubagentsReport{Running: 1}})
+
+	h.store.BindBridgeKey("alice-key", "alice-key-launch2", "alice") // relaunched
+
+	if got, ok := h.feed.BridgeAgents()["alice"]; ok && got.Subagents != 0 {
+		t.Fatalf("alice = %+v; want none of the retired launch's subagents", got)
+	}
+}
+
+// A trailing activity edge armed for a launch that retires before it fires
+// is dropped, not published under the agent.
+func TestBridgeFeedTrailingEdgeOfARetiredLaunchIsDropped(t *testing.T) {
+	h := newFeedHarness(t, nil)
+	h.send(bridge.Event{Name: bridge.EventActivity, Activity: &bridge.ActivityReport{Tool: "Read"}})
+	h.clock.Advance(100 * time.Millisecond)
+	h.send(bridge.Event{Name: bridge.EventActivity, Activity: &bridge.ActivityReport{Tool: "Edit"}})
+
+	h.store.BindBridgeKey("alice-key", "alice-key-launch2", "alice") // relaunched
+	h.clock.Advance(time.Second)
+
+	if evs := h.ofType(EventAgentActivity); len(evs) != 1 {
+		t.Fatalf("published %d activity events; want only the leading edge", len(evs))
+	}
+}
