@@ -46,10 +46,11 @@ func managedPlacement(kind string) bool {
 	return kind == "split" || kind == viewerHidden
 }
 
-// desiredPlacementLocked is where s's pane should be now. A pane waiting on
-// the orchestrator's permission decision is hidden; otherwise it goes where
-// the run's latest turn put it (see paneWant). Unmanaged, dying, or
-// releasing panes stay as they are.
+// desiredPlacementLocked is where s's pane should be now. An orchestrator
+// turn waiting on a permission decision is hidden; a user-typed turn's
+// permission prompt moves nothing, since the user is likely in that pane.
+// Otherwise the pane goes where the run's latest turn put it (see
+// paneWant). Unmanaged, dying, or releasing panes stay as they are.
 func (d *Dispatcher) desiredPlacementLocked(s *runState) string {
 	actual := s.record.ViewerKind
 	if !managedPlacement(actual) || s.record.PaneID == "" || s.killRequested || s.releasing ||
@@ -57,6 +58,9 @@ func (d *Dispatcher) desiredPlacementLocked(s *runState) string {
 		return actual
 	}
 	if s.record.Status == StatusNeedsInput {
+		if source, ok := currentTurnSource(s.record); ok && source == TurnSourceUser {
+			return actual
+		}
 		return viewerHidden
 	}
 	if s.paneWant == "" {
@@ -145,4 +149,14 @@ func (d *Dispatcher) showPane(s *runState) bool {
 	s.record.ViewerKind, s.record.ViewerWindowID = "split", ""
 	d.persistLocked(s, "")
 	return true
+}
+
+// currentTurnSource is the source of rec's most recent open turn.
+func currentTurnSource(rec Record) (TurnSource, bool) {
+	for i := len(rec.Turns) - 1; i >= 0; i-- {
+		if rec.Turns[i].Outcome == "" {
+			return rec.Turns[i].Source, true
+		}
+	}
+	return "", false
 }

@@ -167,10 +167,10 @@ func waitForSettledHidden(t *testing.T, d *Dispatcher, rt *movingRuntime, id str
 	}
 }
 
-// A permission prompt that lands while a rejoin's join-pane is running
-// must not leave the needs_input pane in the caller's window. The rejoin
-// here is a user turn typed while the pane was being hidden.
-func TestInteractiveNeedsInputDuringShowEndsHidden(t *testing.T) {
+// A user turn typed while the pane was being hidden brings it back; a
+// permission prompt that turn hits, even mid-join-pane, leaves it there:
+// placement never changes under a user-typed turn.
+func TestInteractiveUserNeedsInputDuringShowKeepsPane(t *testing.T) {
 	d := NewDispatcher(newFakeRecorder())
 	rt := &movingRuntime{fakeInteractiveRuntime: &fakeInteractiveRuntime{arm: true, empty: true}}
 	d.SetInteractiveRuntime(rt)
@@ -197,7 +197,65 @@ func TestInteractiveNeedsInputDuringShowEndsHidden(t *testing.T) {
 	_ = d.Report(id, hook(t, "UserPromptSubmit", "a"))
 	_ = d.Report(id, hook(t, "Stop", "a"))
 	waitForEvents(t, rt, "show", 1)
+	assertPaneStaysSplit(t, d, rt, id, 1)
+}
+
+// assertPaneStaysSplit checks, after a moment, that the pane is recorded
+// split and has been hidden exactly hides times.
+func assertPaneStaysSplit(t *testing.T, d *Dispatcher, rt *movingRuntime, id string, hides int) {
+	t.Helper()
+	time.Sleep(50 * time.Millisecond)
+	if rec, _ := d.Get(id); rec.ViewerKind != "split" || rt.count("hide") != hides {
+		t.Fatalf("viewer kind = %q, events = %v; a user-typed turn must not move the pane", rec.ViewerKind, rt.log())
+	}
+}
+
+// A user typing in a visible pane is likely still in it when their turn
+// hits a permission prompt: the pane must not be yanked away.
+func TestInteractiveUserTurnNeedsInputKeepsVisiblePane(t *testing.T) {
+	d, rt, id := startSplitCodex(t)
+	waitForHidden(t, d, id)
+	if _, err := d.Send(context.Background(), id, "next"); err != nil {
+		t.Fatal(err)
+	}
+	// The orchestrator's turn is still running in the visible pane when
+	// the user types their own.
+	rt.hideHook = func() {
+		rt.hideHook = nil
+		_ = d.Report(id, hook(t, "UserPromptSubmit", "u"))
+	}
+	_ = d.Report(id, hook(t, "UserPromptSubmit", "next"))
+	_ = d.Report(id, hook(t, "Stop", "next"))
+	waitForEvents(t, rt, "show", 2)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go d.RequestPermission(ctx, id, permissionPayload(t, "Bash", map[string]any{"command": "ls"}), time.Minute)
+	waitForStatus(t, d, id, StatusNeedsInput)
+	assertPaneStaysSplit(t, d, rt, id, 2)
+}
+
+// An orchestrator turn's permission prompt parks the pane until the turn
+// runs again.
+func TestInteractiveOrchestratorNeedsInputHidesThenReturns(t *testing.T) {
+	d, rt, id := startSplitCodex(t)
+	waitForHidden(t, d, id)
+	if _, err := d.Send(context.Background(), id, "next"); err != nil {
+		t.Fatal(err)
+	}
+	_ = d.Report(id, hook(t, "UserPromptSubmit", "next"))
+	go d.RequestPermission(context.Background(), id, permissionPayload(t, "Bash", map[string]any{"command": "ls"}), time.Minute)
+	rec := waitForStatus(t, d, id, StatusNeedsInput)
 	waitForSettledHidden(t, d, rt, id)
+	if _, err := d.Decide(id, Decision{Behavior: "allow", RequestID: rec.NeedsInput.RequestID}); err != nil {
+		t.Fatal(err)
+	}
+	waitForEvents(t, rt, "show", 2)
+	if got := waitForStatus(t, d, id, StatusRunning); got.ViewerKind != "split" {
+		time.Sleep(20 * time.Millisecond)
+		if got, _ = d.Get(id); got.ViewerKind != "split" {
+			t.Fatalf("viewer kind = %q after allow, want split", got.ViewerKind)
+		}
+	}
 }
 
 // An orchestrator turn that ends while a rejoin's join-pane is running must

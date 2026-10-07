@@ -257,9 +257,10 @@ If no decision arrives within `defaults.dispatch.approval_timeout` (default
 `30m`), the hook exits without one and claude shows its ordinary prompt in
 the pane; the run goes back to `running`, and a later decision is rejected as
 stale. The same happens if the prompt is answered in the pane first or the
-turn ends. A split pane is parked in its background window while its run is
-`needs_input` (the decision is the orchestrator's) and returns once the
-orchestrator's turn runs again. Codex dispatches run with `-a never` and
+turn ends. When an orchestrator turn is `needs_input`, its split pane is
+parked in its background window (the decision is the orchestrator's) and
+returns once the turn runs again; a user-typed turn's prompt never moves
+the pane. Codex dispatches run with `-a never` and
 never prompt; claude elicitation and question dialogs are not routed.
 
 ## Headless continuation
