@@ -280,7 +280,10 @@ func mergeBridge(a *observe.Agent, views agentViews) {
 	case ok:
 		a.Bridge = bs.Bridge
 		a.Usage = bs.Usage
-		if bs.CurrentAction != nil {
+		// A connected bridge is authoritative for the running tool, nil
+		// included: the pane reading may lag it. Otherwise the bridge
+		// fills in only what it knows.
+		if bs.Bridge == observe.BridgeConnected || bs.CurrentAction != nil {
 			a.CurrentAction = bs.CurrentAction
 		}
 		if a.Attention != nil && a.Attention.Reason == nil && a.Attention.State == observe.AttentionNeedsInput && bs.Reason != nil {

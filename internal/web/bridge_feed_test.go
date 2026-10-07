@@ -192,3 +192,34 @@ func TestSetupConsultRuntimeFeedsBridgeEventsIntoAttention(t *testing.T) {
 		t.Fatalf("published %d turn completions; want the agent's one (events %v)", completed, pub.types())
 	}
 }
+
+// While the bridge is connected it alone says what the agent runs: no tool
+// (nil) clears a stale pane action. A disconnected bridge leaves the pane's.
+func TestBridgeConnectedActionIsAuthoritativeEvenWhenNil(t *testing.T) {
+	pane := &observe.Action{Kind: observe.ActionKindPane, Detail: "stale spinner"}
+	activity := staticActivityProvider{"agent-a": {Activity: observe.ActivityWorking, CurrentAction: pane}, "agent-b": {Activity: observe.ActivityWorking, CurrentAction: pane}}
+	src := AgentSources{
+		Activity: activity,
+		BridgeFeed: fakeBridgeFeed{
+			"agent-a": {Bridge: observe.BridgeConnected},
+			"agent-b": {Bridge: observe.BridgeAbsent},
+		},
+	}
+	records := []agent.Record{{Name: "agent-a"}, {Name: "agent-b"}}
+
+	for name, agents := range map[string][]observe.Agent{
+		"ProjectAgents": ProjectAgents(records, nil, src, nil),
+		"buildSnapshot": buildSnapshot(snapshotInput{Records: records, Activity: activity, BridgeFeed: src.BridgeFeed, Now: time.Now()}).Agents,
+	} {
+		if agents[0].CurrentAction != nil {
+			t.Errorf("%s: connected agent-a action = %+v; want nil", name, agents[0].CurrentAction)
+		}
+		if agents[1].CurrentAction == nil || agents[1].CurrentAction.Detail != "stale spinner" {
+			t.Errorf("%s: absent agent-b action = %+v; want the pane's", name, agents[1].CurrentAction)
+		}
+	}
+}
+
+type staticActivityProvider map[string]observe.AgentActivity
+
+func (s staticActivityProvider) Activities() map[string]observe.AgentActivity { return s }
