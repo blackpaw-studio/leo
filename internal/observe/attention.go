@@ -77,8 +77,10 @@ type AttentionStore struct {
 	// caller had, so their counts follow it here.
 	aliases map[string]string
 	// dispatches is read for fresh dispatch counts whenever a turn
-	// finishes, outside mu (see dispatchCounts).
-	dispatches DispatchCounter
+	// finishes, outside mu (see dispatchCounts). dispatchGen is the newest
+	// snapshot generation applied; an older one arriving late is ignored.
+	dispatches  DispatchSnapshotter
+	dispatchGen uint64
 }
 
 // NewAttentionStore creates an empty store. publisher may be nil.
@@ -113,10 +115,10 @@ func (s *AttentionStore) Set(agent string, state AttentionState) AgentAttention 
 	if s == nil {
 		return AgentAttention{}
 	}
-	counts := s.dispatchCounts(state)
+	gen, counts := s.dispatchCounts(state)
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.applyDispatchCountsLocked(agent, counts)
+	s.applyDispatchCountsLocked(agent, gen, counts)
 	return s.setLocked(agent, state)
 }
 
@@ -200,14 +202,14 @@ func (s *AttentionStore) Advance(agent string, state AttentionState, from ...Att
 	if s == nil {
 		return AgentAttention{}, false
 	}
-	counts := s.dispatchCounts(state)
+	gen, counts := s.dispatchCounts(state)
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	cur, tracked := s.states[agent]
 	if !tracked || len(from) > 0 && !slices.Contains(from, cur) {
 		return AgentAttention{}, false
 	}
-	s.applyDispatchCountsLocked(agent, counts)
+	s.applyDispatchCountsLocked(agent, gen, counts)
 	switch {
 	case state == AttentionWorking && cur == AttentionWorking:
 		delete(s.held, agent)
@@ -294,7 +296,7 @@ func (o Outstanding) total() int { return o.Dispatches + o.Subagents }
 // finishes, so a dispatch started just before is counted at once rather
 // than at the next ReconcileDispatches. The counter must not call back into
 // the store; it is read without the store's lock held.
-func (s *AttentionStore) SetDispatchCounter(c DispatchCounter) {
+func (s *AttentionStore) SetDispatchCounter(c DispatchSnapshotter) {
 	if s == nil {
 		return
 	}
@@ -306,12 +308,18 @@ func (s *AttentionStore) SetDispatchCounter(c DispatchCounter) {
 // ReconcileDispatches sets every agent's outstanding dispatches from
 // counts (each caller's count of non-terminal dispatches), zeroing agents
 // it no longer names. A count under a renamed agent's old name follows it.
-func (s *AttentionStore) ReconcileDispatches(counts map[string]int) {
+// gen is the snapshot's generation (see DispatchSnapshotter): a snapshot
+// older than one already applied is ignored, so a tick preempted after
+// reading cannot undo what a turn completion read since.
+func (s *AttentionStore) ReconcileDispatches(gen uint64, counts map[string]int) {
 	if s == nil {
 		return
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if !s.acceptDispatchGenLocked(gen) {
+		return
+	}
 	eff := s.effectiveCountsLocked(counts)
 	for agent, o := range s.outstanding {
 		if _, named := eff[agent]; !named && o.Dispatches > 0 {
@@ -326,28 +334,38 @@ func (s *AttentionStore) ReconcileDispatches(counts map[string]int) {
 // dispatchCounts reads the counter for a finished transition; nil
 // otherwise or without a counter. Called without mu held: the counter may
 // take locks (the supervisor's) whose holders call into this store.
-func (s *AttentionStore) dispatchCounts(state AttentionState) map[string]int {
+func (s *AttentionStore) dispatchCounts(state AttentionState) (uint64, map[string]int) {
 	if state != AttentionFinished {
-		return nil
+		return 0, nil
 	}
 	s.mu.Lock()
 	c := s.dispatches
 	s.mu.Unlock()
 	if c == nil {
-		return nil
+		return 0, nil
 	}
-	counts := c.OutstandingDispatches()
+	gen, counts := c.DispatchSnapshot()
 	if counts == nil {
 		counts = map[string]int{}
 	}
-	return counts
+	return gen, counts
+}
+
+// acceptDispatchGenLocked reports whether a snapshot of generation gen is
+// no older than any applied, recording it as the newest if so.
+func (s *AttentionStore) acceptDispatchGenLocked(gen uint64) bool {
+	if gen < s.dispatchGen {
+		return false
+	}
+	s.dispatchGen = gen
+	return true
 }
 
 // applyDispatchCountsLocked records agent's outstanding dispatches from
 // counts without publishing (the transition that follows publishes); nil
 // counts change nothing.
-func (s *AttentionStore) applyDispatchCountsLocked(agent string, counts map[string]int) {
-	if counts == nil {
+func (s *AttentionStore) applyDispatchCountsLocked(agent string, gen uint64, counts map[string]int) {
+	if counts == nil || !s.acceptDispatchGenLocked(gen) {
 		return
 	}
 	o := s.outstanding[agent]
@@ -460,14 +478,14 @@ func (s *AttentionStore) SetByToken(token string, state AttentionState, from ...
 	if s == nil || token == "" {
 		return AgentAttention{}, false
 	}
-	counts := s.dispatchCounts(state)
+	gen, counts := s.dispatchCounts(state)
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	agent, ok := s.tokens[token]
 	if !ok {
 		return AgentAttention{}, false
 	}
-	s.applyDispatchCountsLocked(agent, counts)
+	s.applyDispatchCountsLocked(agent, gen, counts)
 	if len(from) > 0 && !slices.Contains(from, s.states[agent]) {
 		return AgentAttention{}, false
 	}

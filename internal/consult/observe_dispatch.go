@@ -21,6 +21,11 @@ type DispatchObserver struct {
 	mu     sync.Mutex
 	last   map[string]observe.Dispatch
 	counts map[string]int
+
+	// snapMu orders DispatchSnapshot: each reads the records and takes the
+	// next snapGen together, so a later generation never holds older data.
+	snapMu  sync.Mutex
+	snapGen uint64
 }
 
 // DispatchObserverOption configures a DispatchObserver.
@@ -72,6 +77,16 @@ func (o *DispatchObserver) Dispatches(now time.Time) []observe.Dispatch {
 // dispatch, not the agent above it.
 func (o *DispatchObserver) OutstandingDispatches() map[string]int {
 	return o.outstandingCounts(o.records())
+}
+
+// DispatchSnapshot returns OutstandingDispatches with a generation that
+// increases in the order the snapshots read the records.
+func (o *DispatchObserver) DispatchSnapshot() (uint64, map[string]int) {
+	o.snapMu.Lock()
+	defer o.snapMu.Unlock()
+	counts := o.outstandingCounts(o.records())
+	o.snapGen++
+	return o.snapGen, counts
 }
 
 // Tick publishes dispatch_changed for each dispatch whose record changed

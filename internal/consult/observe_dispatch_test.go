@@ -4,6 +4,7 @@ import (
 	"reflect"
 	"sort"
 	"strconv"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -245,5 +246,35 @@ func TestOutstandingDispatchesFollowTheCallersBridgeKeyAcrossARename(t *testing.
 
 	if want := map[string]int{"new-name": 1, "gamma": 1, "delta": 1}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("OutstandingDispatches = %v, want %v", got, want)
+	}
+}
+
+// Snapshot generations follow the order the records were read: one that
+// starts while another is inside records() reads after it and gets the
+// higher generation.
+func TestDispatchSnapshotGenerationsFollowReadOrder(t *testing.T) {
+	entered, release := make(chan struct{}), make(chan struct{})
+	var calls atomic.Int32
+	obs := NewDispatchObserver(func() []Record {
+		if calls.Add(1) == 1 {
+			close(entered)
+			<-release
+		}
+		return nil
+	}, nil)
+
+	genA := make(chan uint64, 1)
+	go func() { gen, _ := obs.DispatchSnapshot(); genA <- gen }()
+	<-entered
+	genB := make(chan uint64, 1)
+	go func() { gen, _ := obs.DispatchSnapshot(); genB <- gen }()
+	close(release)
+	a, b := <-genA, <-genB
+
+	if a >= b {
+		t.Fatalf("generations a=%d b=%d; the snapshot read second must be newer", a, b)
+	}
+	if gen, _ := obs.DispatchSnapshot(); gen <= b {
+		t.Fatalf("generation %d did not increase past %d", gen, b)
 	}
 }

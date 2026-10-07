@@ -228,10 +228,23 @@ func TestAttentionMoveCarriesOutstandingAndHold(t *testing.T) {
 	}
 }
 
-// staticCounter is a DispatchCounter returning a settable map.
-type staticCounter struct{ counts map[string]int }
+// staticCounter is a DispatchSnapshotter returning a settable map, each
+// read under the next generation.
+type staticCounter struct {
+	gen    uint64
+	counts map[string]int
+}
 
-func (c *staticCounter) OutstandingDispatches() map[string]int { return c.counts }
+func (c *staticCounter) DispatchSnapshot() (uint64, map[string]int) {
+	c.gen++
+	return c.gen, c.counts
+}
+
+// take is a snapshot of counts as a tick would read it now.
+func (c *staticCounter) take(counts map[string]int) (uint64, map[string]int) {
+	c.counts = counts
+	return c.DispatchSnapshot()
+}
 
 // A dispatch started just before the turn ends is counted when the finish
 // lands, not a tick later.
@@ -247,8 +260,7 @@ func TestAttentionFinishReadsDispatchCountsSynchronously(t *testing.T) {
 	}
 
 	// It ended before any tick saw it: the next reconcile releases it.
-	counter.counts = map[string]int{}
-	s.ReconcileDispatches(counter.counts)
+	s.ReconcileDispatches(counter.take(map[string]int{}))
 	if got, _ := s.Get("a"); got.State != AttentionFinished {
 		t.Fatalf("after reconcile: %+v; want finished", got)
 	}
@@ -274,22 +286,22 @@ func TestAttentionFinishViaAdvanceAndTokenReadDispatchCounts(t *testing.T) {
 func TestAttentionDispatchCountsUnderARenamedAgentsOldNameFollowIt(t *testing.T) {
 	s := NewAttentionStore(nil)
 	s.Set("old", AttentionWorking)
-	s.ReconcileDispatches(map[string]int{"old": 1})
+	s.ReconcileDispatches(1, map[string]int{"old": 1})
 	s.Set("old", AttentionFinished) // held
 
 	s.Move("old", "new")
-	s.ReconcileDispatches(map[string]int{"old": 1})
+	s.ReconcileDispatches(2, map[string]int{"old": 1})
 	if got, _ := s.Get("new"); got.State != AttentionWorking || got.Outstanding == nil || got.Outstanding.Dispatches != 1 {
 		t.Fatalf("renamed agent while its dispatch runs: %+v; want held", got)
 	}
-	s.ReconcileDispatches(map[string]int{})
+	s.ReconcileDispatches(3, map[string]int{})
 	if got, _ := s.Get("new"); got.State != AttentionFinished {
 		t.Fatalf("renamed agent after its dispatch ended: %+v; want finished", got)
 	}
 
 	// A new agent takes the old name: its counts are its own.
 	s.Set("old", AttentionWorking)
-	s.ReconcileDispatches(map[string]int{"old": 2})
+	s.ReconcileDispatches(4, map[string]int{"old": 2})
 	if got, _ := s.Get("new"); got.Outstanding != nil {
 		t.Fatalf("renamed agent picked up the new agent's dispatches: %+v", got.Outstanding)
 	}
@@ -297,3 +309,53 @@ func TestAttentionDispatchCountsUnderARenamedAgentsOldNameFollowIt(t *testing.T)
 		t.Fatalf("new agent outstanding = %+v", got.Outstanding)
 	}
 }
+
+// R1: a tick reads its snapshot (no dispatch yet) and is preempted; a
+// dispatch starts and the turn completes, reading a newer snapshot and
+// holding. The tick's stale zero must not release the hold.
+func TestAttentionRejectsAStaleDispatchSnapshot(t *testing.T) {
+	counter := &staticCounter{}
+	s := NewAttentionStore(nil)
+	s.SetDispatchCounter(counter)
+	s.Set("a", AttentionWorking)
+
+	staleGen, staleCounts := counter.take(map[string]int{})
+	counter.counts = map[string]int{"a": 1}
+	s.Set("a", AttentionFinished)
+	s.ReconcileDispatches(staleGen, staleCounts)
+
+	if got, _ := s.Get("a"); got.State != AttentionWorking || got.Outstanding == nil || got.Outstanding.Dispatches != 1 {
+		t.Fatalf("after the stale reconcile: %+v; want still held", got)
+	}
+	s.ReconcileDispatches(counter.take(map[string]int{"a": 1}))
+	if got, _ := s.Get("a"); got.State != AttentionWorking {
+		t.Fatalf("a current snapshot still counting it: %+v; want held", got)
+	}
+	s.ReconcileDispatches(counter.take(map[string]int{}))
+	if got, _ := s.Get("a"); got.State != AttentionFinished {
+		t.Fatalf("after the dispatch ended: %+v; want finished", got)
+	}
+}
+
+// The mirror race: a completion reads its snapshot, a tick reads a newer
+// one after the dispatch ended and applies first; the completion's older
+// count must not re-hold the agent.
+func TestAttentionCompletionWithAStaleSnapshotDoesNotRehold(t *testing.T) {
+	s := NewAttentionStore(nil)
+	s.Set("a", AttentionWorking)
+	s.ReconcileDispatches(2, map[string]int{})
+
+	s.SetDispatchCounter(fixedSnapshot{gen: 1, counts: map[string]int{"a": 1}})
+	s.Set("a", AttentionFinished)
+
+	if got, _ := s.Get("a"); got.State != AttentionFinished {
+		t.Fatalf("state = %+v; the newer snapshot said nothing is outstanding", got)
+	}
+}
+
+type fixedSnapshot struct {
+	gen    uint64
+	counts map[string]int
+}
+
+func (f fixedSnapshot) DispatchSnapshot() (uint64, map[string]int) { return f.gen, f.counts }

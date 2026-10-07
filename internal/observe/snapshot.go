@@ -307,6 +307,15 @@ type BridgeAgentState struct {
 	CurrentAction *Action
 }
 
+// DispatchSnapshotter is the attention store's seam onto outstanding
+// dispatch counts. Each snapshot carries a generation that increases in the
+// order the snapshots read the dispatch store, so a consumer can refuse one
+// older than what it already applied. Implementations must be safe for
+// concurrent use.
+type DispatchSnapshotter interface {
+	DispatchSnapshot() (gen uint64, counts map[string]int)
+}
+
 // DispatchCounter is the seam the bridge feed and the snapshot read
 // outstanding leo dispatches through (the dispatch store provides it).
 // Implementations must be safe for concurrent use.

@@ -145,7 +145,7 @@ func (s *Server) setupConsultRuntime(opts Options, resolveCallerSession func(str
 					pusher.Tick()
 				}
 				dispatchObserver.Tick()
-				s.attention.ReconcileDispatches(dispatchObserver.OutstandingDispatches())
+				s.attention.ReconcileDispatches(dispatchObserver.DispatchSnapshot())
 			}
 		}
 	}()
