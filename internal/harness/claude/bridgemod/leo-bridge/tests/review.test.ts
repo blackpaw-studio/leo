@@ -16,7 +16,8 @@ test('a subagent turn.start neither marks the main loop busy nor reports', async
   await h.settle()
   expect(h.compacts.length).toBe(1)
   expect(h.aborts).toEqual([])
-  expect(events(h)).toEqual([])
+  // The compact command reports its own phases; no turn event goes out.
+  expect(events(h).filter((r) => String(r.name).startsWith('turn.'))).toEqual([])
 })
 
 test('a failed report is retried with backoff and later reports wait their turn', { timeoutMs: 20_000 }, async ($, on) => {
