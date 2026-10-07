@@ -16,7 +16,8 @@ test('a subagent turn.start neither marks the main loop busy nor reports', async
   await h.settle()
   expect(h.compacts.length).toBe(1)
   expect(h.aborts).toEqual([])
-  expect(events(h)).toEqual([])
+  // The compact command reports its own phases; no turn event goes out.
+  expect(events(h).filter((r) => String(r.name).startsWith('turn.'))).toEqual([])
 })
 
 test('a failed report is retried with backoff and later reports wait their turn', { timeoutMs: 20_000 }, async ($, on) => {
@@ -66,7 +67,7 @@ test('hello says whether a main-loop turn is running', { timeoutMs: 10_000 }, as
   const feeds = [new Feed(), new Feed()]
   const h = setup(on, { feeds })
   await start($, h)
-  expect(h.reports[0]).toEqual({ type: 'hello', session_id: 'sess-1', claude_version: '2.1.289' })
+  expect(h.reports[0]).toEqual({ type: 'hello', session_id: 'sess-1', claude_version: '2.1.289', subagents: 0 })
   await $.turn.start({ text: 'work', turnId: 't1' })
   feeds[0]!.end()
   await advance(h, 1000)

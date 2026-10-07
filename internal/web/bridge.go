@@ -163,16 +163,14 @@ func agentMessageCommand(from, text string) bridge.Command {
 	return bridge.Deliver(bridge.Framed("agent "+from, body), false)
 }
 
-// deliverAgentMessageOverBridge sends a message to agent name's live bridge
-// and writes the response: 200 once accepted, 202 while still queued
-// behind a running turn or (durably) for the agent's next launch, 500 on
-// rejection, a full outbox or a lost bridge — never a tmux retry, which
-// could deliver it twice.
-func (s *Server) deliverAgentMessageOverBridge(w http.ResponseWriter, target bridge.Target, name, from, text string) {
+// deliverAgentMessageOverBridge sends a message to agent name's live bridge:
+// 200 once accepted, 202 while still queued behind a running turn or
+// (durably) for the agent's next launch, 500 on rejection, a full outbox or
+// a lost bridge — never a tmux retry, which could deliver it twice.
+func (s *Server) deliverAgentMessageOverBridge(target bridge.Target, name, from, text string) controlOutcome {
 	ticket, err := s.bridgeRouter.Deliver(name, target, agentMessageCommand(from, text), from)
 	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, apiResponse{Error: fmt.Sprintf("delivering message: %v", err)})
-		return
+		return controlFailed(http.StatusInternalServerError, transportBridge, "delivering message: %v", err)
 	}
 	hub := s.bridgeRouter.Hub
 	send := func(ctx context.Context) error { return hub.Await(ctx, ticket) }
@@ -185,10 +183,10 @@ func (s *Server) deliverAgentMessageOverBridge(w http.ResponseWriter, target bri
 	})
 	switch {
 	case err != nil:
-		writeJSON(w, http.StatusInternalServerError, apiResponse{Error: fmt.Sprintf("delivering message: %v", err)})
+		return controlFailed(http.StatusInternalServerError, transportBridge, "delivering message: %v", err)
 	case !accepted:
-		writeJSON(w, http.StatusAccepted, apiResponse{OK: true, Data: map[string]bool{"queued": true}})
+		return controlOutcome{status: http.StatusAccepted, transport: transportBridge, bridgeQueued: true}
 	default:
-		writeJSON(w, http.StatusOK, apiResponse{OK: true})
+		return controlOK(transportBridge)
 	}
 }

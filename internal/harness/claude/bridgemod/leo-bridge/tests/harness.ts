@@ -5,7 +5,8 @@ import { mock } from 'claude-code/testing'
 export const BIN = '/opt/leo/bin/leo'
 export const AGENT = 'worker'
 export const LAUNCH = 'launch-1'
-export const ENV = { LEO_BRIDGE_BIN: BIN, LEO_BRIDGE_AGENT: AGENT, LEO_BRIDGE_LAUNCH: LAUNCH }
+export const HOME = '/Users/me'
+export const ENV = { LEO_BRIDGE_BIN: BIN, LEO_BRIDGE_AGENT: AGENT, LEO_BRIDGE_LAUNCH: LAUNCH, HOME }
 // What `leo bridge` and `leo bridge report` are spawned with: the key and the
 // launch, so the daemon can refuse a launch that is not the key's current one.
 export const STREAM_ARGV = [BIN, 'bridge', '--agent', AGENT, '--launch', LAUNCH]
@@ -61,6 +62,17 @@ export class Feed {
     }
   }
 }
+
+const CLASSIC_OBSERVED = [
+  'classic.PermissionRequest',
+  'classic.Elicitation',
+  'classic.PostToolUse',
+  'classic.PostToolUseFailure',
+  'classic.PermissionDenied',
+  'classic.SubagentStart',
+  'classic.SubagentStop',
+  'classic.Notification',
+]
 
 export type SubmitResponder = (e: { text: string; asUser?: boolean }) => unknown
 
@@ -161,6 +173,8 @@ export function setup(on: any, opts: HarnessOptions = {}): Harness {
   })
   on('prompt.compose', () => ({ sections: [{ id: 'intro', text: 'core prompt', scope: 'shared' }] }))
   on('agent.offer', () => ({ isOffered: true }))
+  // The classic events the mod observes: nothing beneath answers them.
+  for (const name of CLASSIC_OBSERVED) on(name, () => ({}))
   on('tool.call', ($: any, e: any) => {
     h.toolCalls.push({ ...e })
     if (opts.toolCall) return opts.toolCall(e)

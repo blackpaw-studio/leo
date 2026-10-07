@@ -127,6 +127,18 @@ func (p *procIdentity) setBridge(target bridge.Target) {
 	p.bridge = BridgeRoute{Target: target, Planned: true}
 }
 
+// reserveBridgeKey files key as the key the next launch connects under,
+// before it is opened, so the key resolves to this identity (Router.Key)
+// and no other launch takes it from the first report its mod may make.
+// Its generation stays 0 until setBridge: Router.Route matches only the
+// opened generation, so senders still cannot route to the launch before
+// it is set up (its opening and carried mail queued).
+func (p *procIdentity) reserveBridgeKey(key string) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.bridge.Target = bridge.Target{Key: key}
+}
+
 // setLegacy records a launch without the bridge.
 func (p *procIdentity) setLegacy() {
 	p.mu.Lock()

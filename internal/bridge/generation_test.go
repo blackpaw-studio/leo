@@ -462,3 +462,31 @@ func TestStateHasConnected(t *testing.T) {
 		t.Fatal("a hello without a stream must count")
 	}
 }
+
+// A key's launch id names the launch it is open for, changes with the
+// launch (a later agent reusing the key gets another), never carries the
+// token, and is gone once the key is forgotten.
+func TestLaunchIDNamesTheOpenLaunchWithoutItsToken(t *testing.T) {
+	h := New(Options{Clock: newFakeClock()})
+	t.Cleanup(h.Close)
+	if _, ok := h.LaunchID("k"); ok {
+		t.Fatal("an unopened key has a launch id")
+	}
+	if _, err := h.Open("k", "launch-1"); err != nil {
+		t.Fatal(err)
+	}
+	first, ok := h.LaunchID("k")
+	if !ok || first != LaunchID("k", "launch-1") || strings.Contains(first, "launch-1") {
+		t.Fatalf("LaunchID = %q, %v; want LaunchID(key, launch) without the token", first, ok)
+	}
+	if _, err := h.Open("k", "launch-2"); err != nil {
+		t.Fatal(err)
+	}
+	if second, _ := h.LaunchID("k"); second == first {
+		t.Fatalf("a new launch kept launch id %q", first)
+	}
+	h.Forget("k")
+	if id, ok := h.LaunchID("k"); ok {
+		t.Fatalf("a forgotten key still has launch id %q", id)
+	}
+}

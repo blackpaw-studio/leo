@@ -43,6 +43,9 @@ type supervisorBridge struct {
 	hub            *bridge.Hub
 	launcher       *bridgemod.Launcher
 	connectTimeout time.Duration
+	// open opens a launch's key on the hub (hub.Open): from then on its mod
+	// may connect and report under it.
+	open func(key, launch string) (bridge.Target, error)
 }
 
 // SetBridge wires the claude mod bridge into claude launches: a launcher
@@ -60,7 +63,7 @@ func (s *Supervisor) SetBridge(hub *bridge.Hub, launcher *bridgemod.Launcher, co
 		s.bridge = nil
 		return
 	}
-	s.bridge = &supervisorBridge{hub: hub, launcher: launcher, connectTimeout: connectTimeout}
+	s.bridge = &supervisorBridge{hub: hub, launcher: launcher, connectTimeout: connectTimeout, open: hub.Open}
 }
 
 func (s *Supervisor) bridgeWiring() *supervisorBridge {
@@ -267,8 +270,11 @@ func (s *Supervisor) planBridgeLaunch(ctx context.Context, claudePath, harnessNa
 		id.setLegacy()
 		return bridgeLaunch{}
 	}
-	target, err := w.hub.Open(plan.Key, plan.Launch)
+	id.reserveBridgeKey(plan.Key)
+	s.bindAttentionLaunch(id, plan.Key, plan.Launch)
+	target, err := w.open(plan.Key, plan.Launch)
 	if err != nil {
+		s.unbindAttentionLaunch(plan.Key, plan.Launch)
 		fmt.Fprintf(os.Stderr, "[%s] warning: leo bridge unavailable (%v); launching without it\n", id.Name(), err)
 		id.setLegacy()
 		return bridgeLaunch{}
@@ -288,6 +294,7 @@ func (s *Supervisor) endBridgedLaunch(bl bridgeLaunch, opening *openingDelivery)
 	}
 	connected = w.hub.State(bl.target.Key).HasConnected(bl.target)
 	w.hub.ForgetGen(bl.target)
+	s.unbindAttentionLaunch(bl.plan.Key, bl.plan.Launch)
 	opening.settle(bl)
 	return connected
 }

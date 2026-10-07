@@ -73,8 +73,10 @@ func (s *Supervisor) renameAdoptionLocked(oldName, newName string) {
 // legacy instead, and the holder keeps its generation and its messages.
 // The opening the session's launch queued and never saw acked (see
 // requeueAdoptedOpening; opening may be nil), then the agent's undelivered
-// messages, are queued before the identity takes the key, so nothing a
-// sender routes to the session overtakes them.
+// messages, are queued before the identity takes the opened generation, so
+// nothing a sender routes to the session overtakes them; the key itself is
+// reserved (and its attention bound) before it is opened, so the mod's
+// first reports resolve to the agent.
 func (s *Supervisor) adoptBridge(id *procIdentity, key, launch, conversation string, opening *openingDelivery) bridgeLaunch {
 	w := s.bridgeWiring()
 	if w == nil {
@@ -90,8 +92,11 @@ func (s *Supervisor) adoptBridge(id *procIdentity, key, launch, conversation str
 		s.ReleaseAdoption(id.Name())
 		return bridgeLaunch{}
 	}
-	target, err := w.hub.Open(key, launch)
+	id.reserveBridgeKey(key)
+	s.bindAttentionLaunch(id, key, launch)
+	target, err := w.open(key, launch)
 	if err != nil {
+		s.unbindAttentionLaunch(key, launch)
 		fmt.Fprintf(os.Stderr, "[%s] warning: adopting the leo bridge %s: %v\n", id.Name(), key, err)
 		id.setLegacy()
 		s.ReleaseAdoption(id.Name())
@@ -100,6 +105,7 @@ func (s *Supervisor) adoptBridge(id *procIdentity, key, launch, conversation str
 	bl := bridgeLaunch{plan: bridgemod.Plan{Key: key, Launch: launch}, bridged: true, adopted: true, target: target, conversation: conversation}
 	if opening != nil {
 		if bl = s.requeueAdoptedOpening(id, bl, opening); !bl.bridged {
+			s.unbindAttentionLaunch(key, launch)
 			s.ReleaseAdoption(id.Name())
 			return bl
 		}

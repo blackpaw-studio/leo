@@ -8,6 +8,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"slices"
+	"strings"
+	"unicode"
 )
 
 // Command ops (daemon → mod). The wire shape of each is fixed by the mod
@@ -43,6 +46,14 @@ const (
 	EventTurnStart    = "turn.start"
 	EventTurnComplete = "turn.complete"
 	EventSessionEnd   = "session.end"
+
+	// Observe events feed the observability API, not dispatch turn state
+	// (see observe_reports.go for their payloads). The hub passes them to
+	// subscribers unchanged; HookPayload ignores them.
+	EventActivity  = "activity"
+	EventAttention = "attention"
+	EventSubagents = "subagents"
+	EventCompact   = "compact"
 )
 
 var (
@@ -203,28 +214,50 @@ type Report struct {
 	// Tokens (turn.complete) is the turn's own token counts; nil when the
 	// mod sent none.
 	Tokens *TurnTokens
+
+	// Observe event payloads: exactly the one matching Name is set.
+	Activity  *ActivityReport
+	Attention *AttentionReport
+	Subagents *SubagentsReport
+	Compact   *CompactReport
 }
 
 // reportKeys is the closed set of keys each report type may carry.
 var reportKeys = map[string]map[string]bool{
-	ReportHello:   {"type": true, "session_id": true, "claude_version": true, "busy": true},
-	ReportAck:     {"type": true, "id": true, "ok": true, "error": true},
-	ReportEvent:   {"type": true, "name": true, "event_id": true, "usage": true, "reason": true, "prompt": true, "message": true, "tokens": true},
+	ReportHello: {"type": true, "session_id": true, "claude_version": true, "busy": true, "subagents": true},
+	ReportAck:   {"type": true, "id": true, "ok": true, "error": true},
+	ReportEvent: {
+		"type": true, "name": true, "event_id": true, "usage": true, "reason": true, "prompt": true, "message": true, "tokens": true,
+		"tool": true, "summary": true, "state": true, "kind": true, "running": true, "phase": true, "trigger": true, "error": true,
+	},
 	ReportRequest: {"type": true, "op": true, "dispatch_id": true},
 }
 
-// eventOnlyKeys are event keys valid for a single event name: the prompt a
-// turn began with, and the final message it ended on.
-var eventOnlyKeys = map[string]string{
-	"prompt":  EventTurnStart,
-	"message": EventTurnComplete,
-	"tokens":  EventTurnComplete,
+// eventOnlyKeys are event keys valid only for the named events: the prompt
+// a turn began with, the final message it ended on, and each observe
+// event's payload.
+var eventOnlyKeys = map[string][]string{
+	"prompt":  {EventTurnStart},
+	"message": {EventTurnComplete},
+	"tokens":  {EventTurnComplete},
+	"tool":    {EventActivity, EventAttention},
+	"summary": {EventActivity, EventAttention},
+	"state":   {EventAttention},
+	"kind":    {EventAttention},
+	"running": {EventSubagents},
+	"phase":   {EventCompact},
+	"trigger": {EventCompact},
+	"error":   {EventCompact},
 }
 
 var eventNames = map[string]bool{
 	EventTurnStart:    true,
 	EventTurnComplete: true,
 	EventSessionEnd:   true,
+	EventActivity:     true,
+	EventAttention:    true,
+	EventSubagents:    true,
+	EventCompact:      true,
 }
 
 // ParseReport strictly decodes one report body: a single JSON object of a
@@ -260,10 +293,38 @@ func ParseReport(body []byte) (Report, error) {
 	}
 }
 
+// Caps on mod-supplied identifiers. Both are stored (the session id per
+// agent, event ids in replay caches) and the session id is published, so a
+// report cannot make either arbitrarily large.
+const (
+	MaxSessionIDLen = 128
+	MaxEventIDLen   = 256
+)
+
+// ValidSessionID reports whether id is a session id the daemon stores and
+// publishes: non-empty, at most MaxSessionIDLen, of [A-Za-z0-9._:-] (a
+// claude session id is a UUID).
+func ValidSessionID(id string) bool {
+	if id == "" || len(id) > MaxSessionIDLen {
+		return false
+	}
+	for _, c := range []byte(id) {
+		switch {
+		case 'a' <= c && c <= 'z', 'A' <= c && c <= 'Z', '0' <= c && c <= '9', c == '.', c == '_', c == ':', c == '-':
+		default:
+			return false
+		}
+	}
+	return true
+}
+
 func parseHello(fields map[string]json.RawMessage) (Report, error) {
 	sessionID, err := stringField(fields, "session_id", true)
 	if err != nil {
 		return Report{}, err
+	}
+	if !ValidSessionID(sessionID) {
+		return Report{}, invalidReport("hello session_id must be at most %d of [A-Za-z0-9._:-]", MaxSessionIDLen)
 	}
 	version, err := stringField(fields, "claude_version", true)
 	if err != nil {
@@ -277,7 +338,15 @@ func parseHello(fields map[string]json.RawMessage) (Report, error) {
 		}
 		busy = &b
 	}
-	return Report{Type: ReportHello, SessionID: sessionID, ClaudeVersion: version, Busy: busy}, nil
+	var subagents *SubagentsReport
+	if raw, present := fields["subagents"]; present {
+		var n int
+		if isNull(raw) || json.Unmarshal(raw, &n) != nil || n < 0 {
+			return Report{}, invalidReport("hello subagents must be a count of zero or more")
+		}
+		subagents = &SubagentsReport{Running: n}
+	}
+	return Report{Type: ReportHello, SessionID: sessionID, ClaudeVersion: version, Busy: busy, Subagents: subagents}, nil
 }
 
 func parseAck(fields map[string]json.RawMessage) (Report, error) {
@@ -321,8 +390,8 @@ func parseEvent(fields map[string]json.RawMessage) (Report, error) {
 		return Report{}, invalidReport("unknown event %q", name)
 	}
 	for key, only := range eventOnlyKeys {
-		if _, present := fields[key]; present && name != only {
-			return Report{}, invalidReport("key %q is only valid for %s events", key, only)
+		if _, present := fields[key]; present && !slices.Contains(only, name) {
+			return Report{}, invalidReport("key %q is only valid for %s events", key, strings.Join(only, "/"))
 		}
 	}
 	reason, err := stringField(fields, "reason", false)
@@ -341,6 +410,9 @@ func parseEvent(fields map[string]json.RawMessage) (Report, error) {
 	if err != nil {
 		return Report{}, err
 	}
+	if len(eventID) > MaxEventIDLen || strings.ContainsFunc(eventID, unicode.IsControl) {
+		return Report{}, invalidReport("event_id must be at most %d bytes with no control characters", MaxEventIDLen)
+	}
 	var usage json.RawMessage
 	if raw, present := fields["usage"]; present && !isNull(raw) {
 		if _, err := decodeObject(raw); err != nil {
@@ -352,7 +424,11 @@ func parseEvent(fields map[string]json.RawMessage) (Report, error) {
 	if err != nil {
 		return Report{}, err
 	}
-	return Report{Type: ReportEvent, Name: name, Usage: usage, Reason: reason, Prompt: prompt, Message: message, EventID: eventID, Tokens: tokens}, nil
+	report := Report{Type: ReportEvent, Name: name, Usage: usage, Reason: reason, Prompt: prompt, Message: message, EventID: eventID, Tokens: tokens}
+	if err := parseObservePayload(fields, &report); err != nil {
+		return Report{}, err
+	}
+	return report, nil
 }
 
 // decodeObject decodes exactly one JSON object, rejecting trailing values.

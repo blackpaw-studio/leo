@@ -106,3 +106,21 @@ func TestBootIDIsStableWithinProcess(t *testing.T) {
 		t.Fatalf("BootID() = %q then %q, want stable non-empty", first, second)
 	}
 }
+
+func TestServeEventsHelloAdvertisesFeatures(t *testing.T) {
+	clock := &fakeClock{now: time.Unix(100, 0), ticker: &fakeTicker{ch: make(chan time.Time)}}
+	w := &notifyingWriter{header: make(http.Header), flushed: make(chan struct{}, 2)}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		ServeEvents(w, httptest.NewRequest(http.MethodGet, "/events", nil).WithContext(ctx), EventsOptions{Clock: clock})
+		close(done)
+	}()
+	<-w.flushed
+	cancel()
+	<-done
+	want := `"features":["bridge_turns","attention_reason","dispatch_tree","agent_usage","agent_control"]`
+	if !strings.Contains(w.String(), want) {
+		t.Fatalf("hello = %q, want %s", w.String(), want)
+	}
+}

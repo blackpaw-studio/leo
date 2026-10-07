@@ -35,7 +35,7 @@ test('spawns the bridge stream and says hello before acks', async ($, on) => {
   await start($, h)
   expect(h.spawns).toEqual([STREAM_ARGV])
   // A fresh module cannot tell whether a turn runs, so it leaves busy out.
-  expect(h.reports[0]).toEqual({ type: 'hello', session_id: 'sess-1', claude_version: '2.1.289' })
+  expect(h.reports[0]).toEqual({ type: 'hello', session_id: 'sess-1', claude_version: '2.1.289', subagents: 0 })
   expect(h.reportArgv[0]).toEqual(REPORT_ARGV)
   feed.line(deliver('c1', 'hello'))
   await h.settle()
@@ -294,7 +294,7 @@ test('hello is re-sent when the session id changes (e.g. after /clear)', async (
   const types = h.reports.map((r) => (r.type === 'event' ? r.name : r.type))
   expect(types).toEqual(['hello', 'turn.start', 'hello', 'turn.start'])
   // Re-said from inside turn.start, so the turn is already running.
-  expect(h.reports[2]).toEqual({ type: 'hello', session_id: 'sess-2', claude_version: '2.1.289', busy: true })
+  expect(h.reports[2]).toEqual({ type: 'hello', session_id: 'sess-2', claude_version: '2.1.289', busy: true, subagents: 0 })
 })
 
 test('interrupt while idle acks ok without aborting', async ($, on) => {

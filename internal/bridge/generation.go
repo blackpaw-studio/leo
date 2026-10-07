@@ -2,6 +2,8 @@ package bridge
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"time"
@@ -116,6 +118,26 @@ func (h *Hub) Open(agent, launch string) (Target, error) {
 	delete(h.awaiting, agent)
 	h.notifyLocked()
 	return Target{Key: agent, Gen: life.gen}, nil
+}
+
+// LaunchID names one launch of key for bookkeeping that must not outlive
+// it (a key is reused by a later agent of the same name): the key and a
+// digest of the launch token, so the token itself, which lets a mod
+// connect, is never stored or shown.
+func LaunchID(key, launch string) string {
+	sum := sha256.Sum256([]byte(launch))
+	return key + "@" + hex.EncodeToString(sum[:8])
+}
+
+// LaunchID returns the LaunchID of the launch key is open for, if any.
+func (h *Hub) LaunchID(key string) (string, bool) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	life, ok := h.lives[key]
+	if !ok || life.forgotten() || life.launch == "" {
+		return "", false
+	}
+	return LaunchID(key, life.launch), true
 }
 
 // AwaitAdoption settles which keys no launch has opened that a mod may

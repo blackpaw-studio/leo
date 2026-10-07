@@ -106,7 +106,7 @@ func ServeEvents(w http.ResponseWriter, r *http.Request, opts EventsOptions) {
 	deadline()
 	w.WriteHeader(http.StatusOK)
 	if WriteEvent(w, string(observe.EventHello), observe.HelloPayload{
-		Meta: observe.Meta{Seq: seq, At: now}, Version: observe.SnapshotVersion, ServerTime: now, BootID: boot,
+		Meta: observe.Meta{Seq: seq, At: now}, Version: observe.SnapshotVersion, ServerTime: now, BootID: boot, Features: observe.Features(),
 	}) != nil || rc.Flush() != nil {
 		return
 	}

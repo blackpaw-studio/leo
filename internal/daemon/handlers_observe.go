@@ -77,7 +77,7 @@ func (s *Server) handleState(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 		}
-		return localStateData{Agents: web.ProjectAgents(records, states, s.observeActivity, s.observeAttention, s.observeSurfaced, cfg)}, nil
+		return localStateData{Agents: web.ProjectAgents(records, states, s.agentSources(), cfg)}, nil
 	}, func(w http.ResponseWriter, status int, data any, err error) {
 		if err != nil {
 			writeError(w, status, err.Error())
@@ -119,4 +119,21 @@ func writeData(w http.ResponseWriter, status int, data any) {
 		return
 	}
 	writeJSON(w, status, Response{OK: true, Data: b})
+}
+
+// setWebSources records the web server's bridge feed and dispatch counts
+// for the local /state rows.
+func (s *Server) setWebSources(src web.AgentSources) {
+	s.webSources.Store(&src)
+}
+
+// agentSources are the per-agent sources the local /state rows merge: the
+// daemon's own observability stores plus, once StartWeb has built it, the
+// web server's bridge feed and dispatch counts.
+func (s *Server) agentSources() web.AgentSources {
+	src := web.AgentSources{Activity: s.observeActivity, Attention: s.observeAttention, Surfaced: s.observeSurfaced}
+	if w := s.webSources.Load(); w != nil {
+		src.BridgeFeed, src.Dispatches = w.BridgeFeed, w.Dispatches
+	}
+	return src
 }

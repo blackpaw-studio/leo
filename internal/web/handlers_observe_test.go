@@ -839,7 +839,7 @@ func TestProjectAgentsCarriesAttention(t *testing.T) {
 	store := observe.NewAttentionStore(nil)
 	store.Set("agent-a", observe.AttentionWorking)
 
-	got := ProjectAgents([]agent.Record{{Name: "agent-a"}}, nil, nil, store, nil, nil)
+	got := ProjectAgents([]agent.Record{{Name: "agent-a"}}, nil, AgentSources{Attention: store}, nil)
 
 	if got[0].Attention == nil || got[0].Attention.State != observe.AttentionWorking {
 		t.Fatalf("attention = %+v", got[0].Attention)
@@ -889,9 +889,48 @@ func TestProjectAgentsCarriesSurfacedFiles(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	got := ProjectAgents([]agent.Record{{Name: "agent-a"}}, nil, nil, nil, store, nil)
+	got := ProjectAgents([]agent.Record{{Name: "agent-a"}}, nil, AgentSources{Surfaced: store}, nil)
 
 	if len(got[0].SurfacedFiles) != 1 || got[0].SurfacedFiles[0].Path != "p" {
 		t.Fatalf("surfaced files = %+v", got[0].SurfacedFiles)
+	}
+}
+
+// fakeDispatchProvider is a test double for dispatchProvider.
+type fakeDispatchProvider struct {
+	dispatches []observe.Dispatch
+	gotNow     time.Time
+}
+
+func (f *fakeDispatchProvider) Dispatches(now time.Time) []observe.Dispatch {
+	f.gotNow = now
+	return f.dispatches
+}
+
+func (f *fakeDispatchProvider) OutstandingDispatches() map[string]int { return nil }
+
+func TestBuildSnapshotWithoutBridgeOrDispatchSourcesIsUnchanged(t *testing.T) {
+	snap := buildSnapshot(snapshotInput{Records: []agent.Record{{Name: "agent-a"}}, Now: time.Now()})
+	raw, err := json.Marshal(snap)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, key := range []string{`"dispatches"`, `"usage"`, `"outstanding"`, `"bridge"`, `"reason"`} {
+		if bytes.Contains(raw, []byte(key)) {
+			t.Fatalf("snapshot %s carries %s with no source wired", raw, key)
+		}
+	}
+}
+
+func TestBuildSnapshotDispatchesFromProvider(t *testing.T) {
+	now := time.Unix(1000, 0)
+	want := []observe.Dispatch{{ID: "d-1", Status: "running", CallerAgent: "agent-a", StartedAt: now}}
+	p := &fakeDispatchProvider{dispatches: want}
+	snap := buildSnapshot(snapshotInput{Dispatches: p, Now: now})
+	if len(snap.Dispatches) != 1 || snap.Dispatches[0].ID != "d-1" {
+		t.Fatalf("dispatches = %+v, want %+v", snap.Dispatches, want)
+	}
+	if !p.gotNow.Equal(now) {
+		t.Fatalf("provider asked for now=%v, want %v", p.gotNow, now)
 	}
 }
