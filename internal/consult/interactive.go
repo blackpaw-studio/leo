@@ -173,6 +173,7 @@ func (d *Dispatcher) startInteractive(ctx context.Context, s *runState, req Requ
 	}
 	d.mu.Lock()
 	t := d.openTurnLocked(s, TurnSourceOrchestrator, prompt, true)
+	s.launching = make(chan struct{})
 	d.persistLocked(s, "status")
 	d.persistLocked(s, "turn")
 	d.mu.Unlock()
@@ -214,7 +215,10 @@ func (d *Dispatcher) launchWhenSlotFree(ctx context.Context, s *runState, req Re
 		<-d.sem
 		return
 	}
+	// Admission: from here the slot belongs to the turn (released once, by
+	// whatever closes it) and a cancel waits for the launch to publish.
 	s.awaitingSlot = false
+	s.launching = make(chan struct{})
 	for i := range s.record.Turns {
 		if s.record.Turns[i].TurnID == turnID {
 			s.record.Turns[i].SlotHeld = true
@@ -230,8 +234,17 @@ func (d *Dispatcher) launchWhenSlotFree(ctx context.Context, s *runState, req Re
 	}
 }
 
-// launchInteractive opens turnID's pane. turnID must already hold a slot.
+// launchInteractive opens turnID's pane. turnID must already hold a slot,
+// and the run must have been admitted (s.launching set), which it ends.
 func (d *Dispatcher) launchInteractive(ctx context.Context, s *runState, req Request, harnessName, model string, cfg *config.Config, rt InteractiveRuntime, turnID string) (Started, error) {
+	defer func() {
+		d.mu.Lock()
+		if s.launching != nil {
+			close(s.launching)
+			s.launching = nil
+		}
+		d.mu.Unlock()
+	}()
 	prompt := requestPrompt(req)
 	bridgesOpening := false
 	if b, ok := rt.(bridgeOpeningRuntime); ok {
@@ -298,6 +311,11 @@ func (d *Dispatcher) launchInteractive(ctx context.Context, s *runState, req Req
 			s.record.ViewerTitle = ""
 		}
 		d.persistLocked(s, "")
+		// The opening turn can finish before Launch returns, when there
+		// was no pane yet to hide.
+		if s.record.Status == StatusIdle {
+			d.scheduleHideLocked(s)
+		}
 		return true
 	})
 	if !published {

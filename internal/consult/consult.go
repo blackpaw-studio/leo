@@ -109,6 +109,9 @@ type runState struct {
 	// awaitingSlot marks an interactive run accepted while the limiter was
 	// full: it has no pane until launchWhenSlotFree claims a slot.
 	awaitingSlot bool
+	// launching is open while an admitted launch is creating and publishing
+	// the run's pane; cancellation waits on it so it never races the launch.
+	launching chan struct{}
 	// permissions are the run's pending PermissionRequest hooks, oldest
 	// first; permissionSeq numbers their request ids.
 	permissions   []*permissionRequest
@@ -825,6 +828,14 @@ func (d *Dispatcher) terminate(id string, status Status) (Record, error) {
 func (d *Dispatcher) terminateState(state *runState, status Status) Record {
 	d.mu.Lock()
 	if state.record.Mode == ModeInteractive {
+		// An admitted launch is about to publish a pane; let it, so the
+		// teardown below sees (and kills) that pane rather than racing it.
+		for state.launching != nil {
+			launching := state.launching
+			d.mu.Unlock()
+			<-launching
+			d.mu.Lock()
+		}
 		pane, rt, paneRec := state.record.PaneID, d.interactiveRuntime, cloneRecord(state.record)
 		d.mu.Unlock()
 		// Cancellation kills first. Publishing settling first would allow a

@@ -19,12 +19,16 @@ import (
 // in order, so tests can assert a hidden pane is rejoined before a send.
 type movingRuntime struct {
 	*fakeInteractiveRuntime
-	mu      sync.Mutex
-	events  []string
-	showErr error
+	mu       sync.Mutex
+	events   []string
+	showErr  error
+	hideHook func()
 }
 
 func (r *movingRuntime) HidePane(_ context.Context, pane, name string) (string, error) {
+	if r.hideHook != nil {
+		r.hideHook()
+	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.events = append(r.events, "hide "+pane+" "+name)

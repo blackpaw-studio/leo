@@ -53,13 +53,21 @@ func (d *Dispatcher) hidePane(s *runState, id, pane string) {
 		return
 	}
 	d.mu.Lock()
-	if s.record.PaneID == pane {
-		s.record.ViewerKind, s.record.ViewerWindowID = viewerHidden, window
-		d.persistLocked(s, "")
+	if s.record.PaneID != pane {
+		d.mu.Unlock()
+		return
 	}
+	s.record.ViewerKind, s.record.ViewerWindowID = viewerHidden, window
+	d.persistLocked(s, "")
+	// Hook reports are not serialized with this: a turn the user started
+	// while the pane was moving finds it gone, so it goes straight back.
+	stillIdle := s.record.Status == StatusIdle
 	d.mu.Unlock()
 	if callerWindow != "" {
 		_ = layout(callerWindow)
+	}
+	if !stillIdle {
+		d.showPane(d.daemonCtx, s, pane)
 	}
 }
 
