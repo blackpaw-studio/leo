@@ -389,7 +389,7 @@ func (f *BridgeFeed) attentionLocked(name string, st *feedAgent, r *bridge.Atten
 
 func (f *BridgeFeed) setSubagentsLocked(name string, st *feedAgent, n int) {
 	st.subagents = max(n, 0)
-	f.attention.SetOutstandingSubagents(name, st.subagents)
+	f.attention.SetOutstandingSubagents(st.key, st.subagents)
 }
 
 func (f *BridgeFeed) compactLocked(name string, st *feedAgent, r *bridge.CompactReport) {

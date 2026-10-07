@@ -5,18 +5,33 @@ import (
 	"testing"
 )
 
+// newBridgedStore is a store whose agents "a" and "b" launched under the
+// bridge keys "a-key" and "b-key", as the supervisor binds them.
+func newBridgedStore(pub Publisher) *AttentionStore {
+	s := NewAttentionStore(pub)
+	s.BindBridgeKey("a-key", "a")
+	s.BindBridgeKey("b-key", "b")
+	return s
+}
+
+// setDispatches sets key's outstanding dispatches directly, as a newer
+// dispatch snapshot would.
+func setDispatches(s *AttentionStore, key string, n int) {
+	s.setOutstanding(key, func(o *Outstanding) { o.Dispatches = max(n, 0) })
+}
+
 func TestAttentionFinishedIsDeferredWhileChildrenAreOutstanding(t *testing.T) {
 	tests := []struct {
 		name string
 		set  func(s *AttentionStore, n int)
 	}{
-		{"dispatches", func(s *AttentionStore, n int) { s.SetOutstandingDispatches("a", n) }},
-		{"subagents", func(s *AttentionStore, n int) { s.SetOutstandingSubagents("a", n) }},
+		{"dispatches", func(s *AttentionStore, n int) { setDispatches(s, "a-key", n) }},
+		{"subagents", func(s *AttentionStore, n int) { s.SetOutstandingSubagents("a-key", n) }},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			pub := &recordingPublisher{}
-			s := NewAttentionStore(pub)
+			s := newBridgedStore(pub)
 			s.Set("a", AttentionWorking)
 			tt.set(s, 2)
 
@@ -42,11 +57,11 @@ func TestAttentionFinishedIsDeferredWhileChildrenAreOutstanding(t *testing.T) {
 }
 
 func TestAttentionChildEndingWithoutDeferredFinishStaysWorking(t *testing.T) {
-	s := NewAttentionStore(nil)
+	s := newBridgedStore(nil)
 	s.Set("a", AttentionWorking)
-	s.SetOutstandingSubagents("a", 1)
+	s.SetOutstandingSubagents("a-key", 1)
 
-	s.SetOutstandingSubagents("a", 0)
+	s.SetOutstandingSubagents("a-key", 0)
 
 	if got, _ := s.Get("a"); got.State != AttentionWorking {
 		t.Fatalf("state = %s; a child ending mid-turn must not finish it", got.State)
@@ -54,13 +69,13 @@ func TestAttentionChildEndingWithoutDeferredFinishStaysWorking(t *testing.T) {
 }
 
 func TestAttentionNewTurnCancelsDeferredFinish(t *testing.T) {
-	s := NewAttentionStore(nil)
+	s := newBridgedStore(nil)
 	s.Set("a", AttentionWorking)
-	s.SetOutstandingDispatches("a", 1)
+	setDispatches(s, "a-key", 1)
 	s.Set("a", AttentionFinished) // deferred
 
 	s.Set("a", AttentionWorking) // UserPromptSubmit
-	s.SetOutstandingDispatches("a", 0)
+	setDispatches(s, "a-key", 0)
 
 	if got, _ := s.Get("a"); got.State != AttentionWorking {
 		t.Fatalf("state = %s; the new turn is still running", got.State)
@@ -68,14 +83,14 @@ func TestAttentionNewTurnCancelsDeferredFinish(t *testing.T) {
 }
 
 func TestAttentionAnsweredPromptDuringHoldKeepsDeferredFinish(t *testing.T) {
-	s := NewAttentionStore(nil)
+	s := newBridgedStore(nil)
 	s.Set("a", AttentionWorking)
-	s.SetOutstandingSubagents("a", 1)
+	s.SetOutstandingSubagents("a-key", 1)
 	s.Set("a", AttentionFinished) // deferred
 
 	s.Set("a", AttentionNeedsInput) // a subagent's permission prompt
 	s.Set("a", AttentionWorking)    // answered (PostToolUse)
-	s.SetOutstandingSubagents("a", 0)
+	s.SetOutstandingSubagents("a-key", 0)
 
 	if got, _ := s.Get("a"); got.State != AttentionFinished {
 		t.Fatalf("state = %s; want the deferred finished", got.State)
@@ -83,13 +98,13 @@ func TestAttentionAnsweredPromptDuringHoldKeepsDeferredFinish(t *testing.T) {
 }
 
 func TestAttentionLifecycleTransitionDropsDeferredFinish(t *testing.T) {
-	s := NewAttentionStore(nil)
+	s := newBridgedStore(nil)
 	s.Set("a", AttentionWorking)
-	s.SetOutstandingSubagents("a", 1)
+	s.SetOutstandingSubagents("a-key", 1)
 	s.Set("a", AttentionFinished) // deferred
 
 	s.Set("a", AttentionErrored)
-	s.SetOutstandingSubagents("a", 0)
+	s.SetOutstandingSubagents("a-key", 0)
 
 	if got, _ := s.Get("a"); got.State != AttentionErrored {
 		t.Fatalf("state = %s; want errored", got.State)
@@ -98,11 +113,11 @@ func TestAttentionLifecycleTransitionDropsDeferredFinish(t *testing.T) {
 
 func TestAttentionOutstandingChangePublishesWithNewRevision(t *testing.T) {
 	pub := &recordingPublisher{}
-	s := NewAttentionStore(pub)
+	s := newBridgedStore(pub)
 	s.Set("a", AttentionWorking)
 
-	s.SetOutstandingDispatches("a", 1)
-	s.SetOutstandingDispatches("a", 1) // unchanged: silent
+	setDispatches(s, "a-key", 1)
+	setDispatches(s, "a-key", 1) // unchanged: silent
 
 	if len(pub.events) != 2 {
 		t.Fatalf("published %d events; want 2", len(pub.events))
@@ -115,9 +130,9 @@ func TestAttentionOutstandingChangePublishesWithNewRevision(t *testing.T) {
 
 func TestAttentionOutstandingForUntrackedAgentIsKeptSilently(t *testing.T) {
 	pub := &recordingPublisher{}
-	s := NewAttentionStore(pub)
+	s := newBridgedStore(pub)
 
-	s.SetOutstandingDispatches("a", 1)
+	setDispatches(s, "a-key", 1)
 	if len(pub.events) != 0 {
 		t.Fatalf("published for an untracked agent: %v", eventTypes(pub.events))
 	}
@@ -133,9 +148,9 @@ func TestAttentionOutstandingForUntrackedAgentIsKeptSilently(t *testing.T) {
 }
 
 func TestAttentionNegativeOutstandingClampsToZero(t *testing.T) {
-	s := NewAttentionStore(nil)
+	s := newBridgedStore(nil)
 	s.Set("a", AttentionWorking)
-	s.SetOutstandingSubagents("a", -3)
+	s.SetOutstandingSubagents("a-key", -3)
 	if got, _ := s.Get("a"); got.Outstanding != nil {
 		t.Fatalf("outstanding = %+v; want absent", got.Outstanding)
 	}
@@ -143,7 +158,7 @@ func TestAttentionNegativeOutstandingClampsToZero(t *testing.T) {
 
 func TestAttentionAdvanceSkipsRepeatsAndUntracked(t *testing.T) {
 	pub := &recordingPublisher{}
-	s := NewAttentionStore(pub)
+	s := newBridgedStore(pub)
 
 	if _, ok := s.Advance("ghost", AttentionWorking); ok {
 		t.Fatal("Advance invented an attention source")
@@ -168,9 +183,9 @@ func TestAttentionAdvanceSkipsRepeatsAndUntracked(t *testing.T) {
 
 func TestAttentionAdvanceFinishedDuringHoldIsSilent(t *testing.T) {
 	pub := &recordingPublisher{}
-	s := NewAttentionStore(pub)
+	s := newBridgedStore(pub)
 	s.Set("a", AttentionWorking)
-	s.SetOutstandingSubagents("a", 1)
+	s.SetOutstandingSubagents("a-key", 1)
 	before := len(pub.events)
 
 	s.Advance("a", AttentionFinished)
@@ -179,14 +194,14 @@ func TestAttentionAdvanceFinishedDuringHoldIsSilent(t *testing.T) {
 	if len(pub.events) != before {
 		t.Fatalf("held finish published %d events", len(pub.events)-before)
 	}
-	s.SetOutstandingSubagents("a", 0)
+	s.SetOutstandingSubagents("a-key", 0)
 	if got, _ := s.Get("a"); got.State != AttentionFinished {
 		t.Fatalf("state = %s; want finished", got.State)
 	}
 }
 
 func TestAttentionNeedsInputCarriesClampedReasonUntilCleared(t *testing.T) {
-	s := NewAttentionStore(nil)
+	s := newBridgedStore(nil)
 	s.Set("a", AttentionWorking)
 
 	att, ok := s.AdvanceNeedsInput("a", AttentionReason{Kind: AttentionReasonPermission, Tool: "Bash", Detail: "rm\n-rf\x1b[31m /tmp/x"})
@@ -205,7 +220,7 @@ func TestAttentionNeedsInputCarriesClampedReasonUntilCleared(t *testing.T) {
 }
 
 func TestAttentionHookNeedsInputGainsReasonFromBridge(t *testing.T) {
-	s := NewAttentionStore(nil)
+	s := newBridgedStore(nil)
 	s.Set("a", AttentionNeedsInput) // Notification hook, no reason
 
 	att, ok := s.AdvanceNeedsInput("a", AttentionReason{Kind: AttentionReasonQuestion})
@@ -216,12 +231,16 @@ func TestAttentionHookNeedsInputGainsReasonFromBridge(t *testing.T) {
 
 func TestAttentionMoveCarriesOutstandingAndHold(t *testing.T) {
 	s := NewAttentionStore(nil)
+	s.BindBridgeKey("k", "old")
 	s.Set("old", AttentionWorking)
-	s.SetOutstandingSubagents("old", 1)
+	s.SetOutstandingSubagents("k", 1)
 	s.Set("old", AttentionFinished) // deferred
 
 	s.Move("old", "new")
-	s.SetOutstandingSubagents("new", 0)
+	if got, _ := s.Get("new"); got.State != AttentionWorking || got.Outstanding == nil || got.Outstanding.Subagents != 1 {
+		t.Fatalf("after the rename: %+v; want the hold and its count carried", got)
+	}
+	s.SetOutstandingSubagents("k", 0)
 
 	if got, _ := s.Get("new"); got.State != AttentionFinished {
 		t.Fatalf("state = %s; want the deferred finish under the new name", got.State)
@@ -249,8 +268,8 @@ func (c *staticCounter) take(counts map[string]int) (uint64, map[string]int) {
 // A dispatch started just before the turn ends is counted when the finish
 // lands, not a tick later.
 func TestAttentionFinishReadsDispatchCountsSynchronously(t *testing.T) {
-	counter := &staticCounter{counts: map[string]int{"a": 1}}
-	s := NewAttentionStore(nil)
+	counter := &staticCounter{counts: map[string]int{"a-key": 1}}
+	s := newBridgedStore(nil)
 	s.SetDispatchCounter(counter)
 	s.Set("a", AttentionWorking)
 
@@ -267,8 +286,8 @@ func TestAttentionFinishReadsDispatchCountsSynchronously(t *testing.T) {
 }
 
 func TestAttentionFinishViaAdvanceAndTokenReadDispatchCounts(t *testing.T) {
-	counter := &staticCounter{counts: map[string]int{"a": 1}}
-	s := NewAttentionStore(nil)
+	counter := &staticCounter{counts: map[string]int{"a-key": 1}}
+	s := newBridgedStore(nil)
 	s.SetDispatchCounter(counter)
 	s.RegisterToken("tok", "a")
 	s.Set("a", AttentionWorking)
@@ -286,19 +305,19 @@ func TestAttentionFinishViaAdvanceAndTokenReadDispatchCounts(t *testing.T) {
 // holding. The tick's stale zero must not release the hold.
 func TestAttentionRejectsAStaleDispatchSnapshot(t *testing.T) {
 	counter := &staticCounter{}
-	s := NewAttentionStore(nil)
+	s := newBridgedStore(nil)
 	s.SetDispatchCounter(counter)
 	s.Set("a", AttentionWorking)
 
 	staleGen, staleCounts := counter.take(map[string]int{})
-	counter.counts = map[string]int{"a": 1}
+	counter.counts = map[string]int{"a-key": 1}
 	s.Set("a", AttentionFinished)
 	s.ReconcileDispatches(staleGen, staleCounts)
 
 	if got, _ := s.Get("a"); got.State != AttentionWorking || got.Outstanding == nil || got.Outstanding.Dispatches != 1 {
 		t.Fatalf("after the stale reconcile: %+v; want still held", got)
 	}
-	s.ReconcileDispatches(counter.take(map[string]int{"a": 1}))
+	s.ReconcileDispatches(counter.take(map[string]int{"a-key": 1}))
 	if got, _ := s.Get("a"); got.State != AttentionWorking {
 		t.Fatalf("a current snapshot still counting it: %+v; want held", got)
 	}
@@ -312,11 +331,11 @@ func TestAttentionRejectsAStaleDispatchSnapshot(t *testing.T) {
 // one after the dispatch ended and applies first; the completion's older
 // count must not re-hold the agent.
 func TestAttentionCompletionWithAStaleSnapshotDoesNotRehold(t *testing.T) {
-	s := NewAttentionStore(nil)
+	s := newBridgedStore(nil)
 	s.Set("a", AttentionWorking)
 	s.ReconcileDispatches(2, map[string]int{})
 
-	s.SetDispatchCounter(fixedSnapshot{gen: 1, counts: map[string]int{"a": 1}})
+	s.SetDispatchCounter(fixedSnapshot{gen: 1, counts: map[string]int{"a-key": 1}})
 	s.Set("a", AttentionFinished)
 
 	if got, _ := s.Get("a"); got.State != AttentionFinished {
@@ -353,10 +372,10 @@ func (h *hookedSnapshot) DispatchSnapshot() (uint64, map[string]int) {
 // applies first, then A's gen 1 is rejected. Both snapshots count A's
 // dispatch, so A must still be held, not finished on a stale zero.
 func TestAttentionConcurrentCompletionsHoldEachAgentByTheNewestSnapshot(t *testing.T) {
-	s := NewAttentionStore(nil)
+	s := newBridgedStore(nil)
 	s.Set("a", AttentionWorking)
 	s.Set("b", AttentionWorking)
-	counter := &hookedSnapshot{counts: map[string]int{"a": 1}}
+	counter := &hookedSnapshot{counts: map[string]int{"a-key": 1}}
 	counter.during = func() { s.Set("b", AttentionFinished) }
 	s.SetDispatchCounter(counter)
 
@@ -377,8 +396,8 @@ func TestAttentionConcurrentCompletionsHoldEachAgentByTheNewestSnapshot(t *testi
 // snapshot in full: a held agent whose last dispatch ended is released,
 // not left with a silently zeroed count no later tick would change.
 func TestAttentionSkippedTokenTransitionStillReleasesAHold(t *testing.T) {
-	counter := &staticCounter{counts: map[string]int{"a": 1}}
-	s := NewAttentionStore(nil)
+	counter := &staticCounter{counts: map[string]int{"a-key": 1}}
+	s := newBridgedStore(nil)
 	s.SetDispatchCounter(counter)
 	s.RegisterToken("tok", "a")
 	s.Set("a", AttentionWorking)
@@ -391,5 +410,79 @@ func TestAttentionSkippedTokenTransitionStillReleasesAHold(t *testing.T) {
 
 	if got, _ := s.Get("a"); got.State != AttentionFinished {
 		t.Fatalf("a = %+v; want released to finished", got)
+	}
+}
+
+// Two agents swap names (through a temporary one) while each is held:
+// each hold stays with the agent whose key's children are running.
+func TestAttentionNameSwapKeepsEachHoldWithItsKey(t *testing.T) {
+	s := newBridgedStore(nil)
+	for _, agent := range []string{"a", "b"} {
+		s.Set(agent, AttentionWorking)
+	}
+	s.SetOutstandingSubagents("a-key", 1)
+	setDispatches(s, "b-key", 1)
+	s.Set("a", AttentionFinished)
+	s.Set("b", AttentionFinished)
+
+	s.Move("a", "tmp")
+	s.Move("b", "a")
+	s.Move("tmp", "b")
+	s.SetOutstandingSubagents("a-key", 0) // now agent "b"'s child
+
+	if got, _ := s.Get("b"); got.State != AttentionFinished {
+		t.Fatalf("b (a-key) = %+v; want released", got)
+	}
+	if got, _ := s.Get("a"); got.State != AttentionWorking || got.Outstanding == nil || got.Outstanding.Dispatches != 1 {
+		t.Fatalf("a (b-key) = %+v; want still held by its dispatch", got)
+	}
+}
+
+// A name deleted and recreated under a new launch key does not inherit
+// the old launch's children.
+func TestAttentionRecreatedNameDoesNotInheritAnotherKeysCount(t *testing.T) {
+	s := NewAttentionStore(nil)
+	s.BindBridgeKey("k1", "a")
+	s.SetOutstandingSubagents("k1", 2)
+	s.UnregisterAgent("a")
+	s.Remove("a")
+
+	s.BindBridgeKey("k2", "a")
+	s.Set("a", AttentionWorking)
+	s.Set("a", AttentionFinished)
+
+	if got, _ := s.Get("a"); got.State != AttentionFinished || got.Outstanding != nil {
+		t.Fatalf("recreated a = %+v; want finished with nothing outstanding", got)
+	}
+}
+
+// A launch bound after the supervisor's rename but before the store's Move
+// keeps its binding: the moved one is the older launch's.
+func TestAttentionBindingMadeBeforeMoveWins(t *testing.T) {
+	s := NewAttentionStore(nil)
+	s.BindBridgeKey("k-old", "old")
+	s.BindBridgeKey("k-new", "new")
+	s.Set("old", AttentionWorking)
+	s.SetOutstandingSubagents("k-new", 1)
+
+	s.Move("old", "new")
+
+	if got, _ := s.Get("new"); got.Outstanding == nil || got.Outstanding.Subagents != 1 {
+		t.Fatalf("new = %+v; want the later launch's count", got)
+	}
+}
+
+// Rebinding a launch's key (a relaunch) moves its count to the agent and
+// releases a hold the old launch's children no longer justify.
+func TestAttentionRebindToAnIdleKeyReleasesTheHold(t *testing.T) {
+	s := newBridgedStore(nil)
+	s.Set("a", AttentionWorking)
+	s.SetOutstandingSubagents("a-key", 1)
+	s.Set("a", AttentionFinished) // held
+
+	s.BindBridgeKey("a-key2", "a")
+
+	if got, _ := s.Get("a"); got.State != AttentionFinished || got.Outstanding != nil {
+		t.Fatalf("a = %+v; want released by the new launch", got)
 	}
 }

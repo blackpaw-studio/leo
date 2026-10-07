@@ -1270,6 +1270,7 @@ func superviseProcess(ctx context.Context, tmuxPath, claudePath string, spec Pro
 				id.setLegacy()
 				sv.ReleaseAdoption(name)
 			}
+			sv.bindAttentionBridge(id, bl)
 			launchCtx, endLaunch = context.WithCancel(ctx)
 			if bl.bridged {
 				go sv.watchBridgeLaunch(launchCtx, id, bl, opening, tmuxPath, &fellBack)
@@ -1323,6 +1324,7 @@ func superviseProcess(ctx context.Context, tmuxPath, claudePath string, spec Pro
 			// sent to the new claude can overtake it.
 			conversation := conversationArg(currentArgs)
 			bl = sv.planBridgeLaunch(ctx, binPath, harnessName, id, forceLegacy, conversation)
+			sv.bindAttentionBridge(id, bl)
 			if bl.bridged && opening.bridgeable(conversation) {
 				bl, _ = sv.queueOpening(id, bl, opening)
 			}

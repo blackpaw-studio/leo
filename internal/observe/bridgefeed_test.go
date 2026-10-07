@@ -27,6 +27,9 @@ func newFeedHarness(t *testing.T, keys staticKeys) *feedHarness {
 	}
 	h := &feedHarness{pub: &syncRecorder{}, clock: newFakeClock(time.Date(2026, 10, 6, 12, 0, 0, 0, time.UTC)), connected: map[string]bool{}}
 	h.store = NewAttentionStore(h.pub)
+	for key, name := range keys {
+		h.store.BindBridgeKey(key, name)
+	}
 	h.store.Set("alice", AttentionUnknown)
 	h.feed = NewBridgeFeed(keys, h.pub,
 		WithFeedAttention(h.store),

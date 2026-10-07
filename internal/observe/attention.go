@@ -65,11 +65,12 @@ type AttentionStore struct {
 	publisher Publisher
 	activity  ActivityProvider
 
-	// outstanding counts each agent's running children, kept whether or
-	// not the agent is tracked yet. held marks a finished deferred by
-	// them (B-051): the agent shows working until the count reaches 0.
-	outstanding map[string]Outstanding
-	held        map[string]bool
+	// bridge counts each bridged agent's running children by bridge key,
+	// kept whether or not the agent is tracked yet. held marks a finished
+	// deferred by them (B-051): the agent shows working until the count
+	// reaches 0.
+	bridge bridgeOutstanding
+	held   map[string]bool
 	// reasons holds what a needs_input agent is waiting on, when known.
 	reasons map[string]AttentionReason
 	// dispatches is read for fresh dispatch counts whenever a turn
@@ -87,9 +88,9 @@ func NewAttentionStore(publisher Publisher) *AttentionStore {
 		tokens:    make(map[string]string),
 		publisher: publisher,
 
-		outstanding: make(map[string]Outstanding),
-		held:        make(map[string]bool),
-		reasons:     make(map[string]AttentionReason),
+		bridge:  newBridgeOutstanding(),
+		held:    make(map[string]bool),
+		reasons: make(map[string]AttentionReason),
 	}
 }
 
@@ -154,7 +155,7 @@ func (s *AttentionStore) SetIfUntracked(agent string, state AttentionState) (Age
 func (s *AttentionStore) setLocked(agent string, state AttentionState) AgentAttention {
 	prev := s.states[agent]
 	switch {
-	case state == AttentionFinished && s.outstanding[agent].total() > 0:
+	case state == AttentionFinished && s.bridge.of(agent).total() > 0:
 		s.held[agent] = true
 		state = AttentionWorking
 	case state == AttentionWorking && prev == AttentionNeedsInput:
@@ -177,7 +178,7 @@ func (s *AttentionStore) attentionLocked(agent string) AgentAttention {
 	if r, ok := s.reasons[agent]; ok {
 		att.Reason = &r
 	}
-	if o := s.outstanding[agent]; o.total() > 0 {
+	if o := s.bridge.of(agent); o.total() > 0 {
 		att.Outstanding = &o
 	}
 	return att
@@ -205,7 +206,7 @@ func (s *AttentionStore) Advance(agent string, state AttentionState, from ...Att
 	case state == AttentionWorking && cur == AttentionWorking:
 		delete(s.held, agent)
 		return AgentAttention{}, false
-	case state == AttentionFinished && cur == AttentionWorking && s.outstanding[agent].total() > 0:
+	case state == AttentionFinished && cur == AttentionWorking && s.bridge.of(agent).total() > 0:
 		s.held[agent] = true
 		return AgentAttention{}, false
 	case state == cur:
@@ -234,46 +235,41 @@ func (s *AttentionStore) AdvanceNeedsInput(agent string, reason AttentionReason)
 	return s.setLocked(agent, AttentionNeedsInput), true
 }
 
-// SetOutstandingDispatches records how many leo dispatches agent has
-// running. See setOutstanding.
-func (s *AttentionStore) SetOutstandingDispatches(agent string, n int) {
-	s.setOutstanding(agent, func(o *Outstanding) { o.Dispatches = max(n, 0) })
-}
-
 // SetOutstandingSubagents records how many native background subagents
-// agent has running. See setOutstanding.
-func (s *AttentionStore) SetOutstandingSubagents(agent string, n int) {
-	s.setOutstanding(agent, func(o *Outstanding) { o.Subagents = max(n, 0) })
+// the launch holding bridge key key has running. See setOutstanding.
+func (s *AttentionStore) SetOutstandingSubagents(key string, n int) {
+	s.setOutstanding(key, func(o *Outstanding) { o.Subagents = max(n, 0) })
 }
 
-// setOutstanding applies one source's count. A change for a tracked agent
-// publishes it under a new revision; the last child ending releases a held
-// finished. Counts for an untracked agent are kept for when it is.
-func (s *AttentionStore) setOutstanding(agent string, apply func(*Outstanding)) {
+// setOutstanding applies one source's count to key. A change for a tracked
+// agent bound to key publishes it under a new revision; the last child
+// ending releases a held finished. Counts for a key no tracked agent holds
+// are kept for when one does.
+func (s *AttentionStore) setOutstanding(key string, apply func(*Outstanding)) {
 	if s == nil {
 		return
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.setOutstandingLocked(agent, apply)
+	s.setOutstandingLocked(key, apply)
 }
 
-func (s *AttentionStore) setOutstandingLocked(agent string, apply func(*Outstanding)) {
-	prev := s.outstanding[agent]
-	next := prev
-	apply(&next)
-	if next == prev {
+func (s *AttentionStore) setOutstandingLocked(key string, apply func(*Outstanding)) {
+	if !s.bridge.set(key, apply) {
 		return
 	}
-	if next.total() == 0 {
-		delete(s.outstanding, agent)
-	} else {
-		s.outstanding[agent] = next
+	if agent, ok := s.bridge.agent(key); ok {
+		s.outstandingChangedLocked(agent)
 	}
+}
+
+// outstandingChangedLocked publishes a tracked agent's changed outstanding
+// count, or finishes it if that released its hold.
+func (s *AttentionStore) outstandingChangedLocked(agent string) {
 	if _, tracked := s.states[agent]; !tracked {
 		return
 	}
-	if next.total() == 0 && s.held[agent] {
+	if s.bridge.of(agent).total() == 0 && s.held[agent] {
 		s.setLocked(agent, AttentionFinished)
 		return
 	}
@@ -281,7 +277,31 @@ func (s *AttentionStore) setOutstandingLocked(agent string, apply func(*Outstand
 	s.publishLocked(agent, s.attentionLocked(agent))
 }
 
-func (o Outstanding) total() int { return o.Dispatches + o.Subagents }
+// BindBridgeKey files agent's outstanding children under the bridge key
+// of its live launch, replacing any key it or key had before; an empty key
+// unbinds agent (a launch without the bridge). The supervisor binds every
+// launch, so counts reported by key reach the agent under whatever name
+// it has then (Move carries the binding).
+func (s *AttentionStore) BindBridgeKey(key, agent string) {
+	if s == nil || agent == "" {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	prevHolder, hadHolder := s.bridge.agent(key)
+	before := s.bridge.of(agent)
+	if key == "" {
+		s.bridge.unbind(agent)
+	} else {
+		s.bridge.bind(key, agent)
+	}
+	if hadHolder && prevHolder != agent {
+		s.outstandingChangedLocked(prevHolder)
+	}
+	if s.bridge.of(agent) != before {
+		s.outstandingChangedLocked(agent)
+	}
+}
 
 // SetDispatchCounter wires the dispatch store read whenever a turn
 // finishes, so a dispatch started just before is counted at once rather
@@ -296,9 +316,10 @@ func (s *AttentionStore) SetDispatchCounter(c DispatchSnapshotter) {
 	s.mu.Unlock()
 }
 
-// ReconcileDispatches sets every agent's outstanding dispatches from
+// ReconcileDispatches sets every bridge key's outstanding dispatches from
 // counts (each caller's count of non-terminal dispatches, keyed by the
-// agent's current name), zeroing agents it no longer names.
+// caller's bridge key), zeroing keys it no longer names. Each key's count
+// reaches the agent bound to it when the snapshot is applied.
 // gen is the snapshot's generation (see DispatchSnapshotter): a snapshot
 // older than one already applied is ignored, so a tick preempted after
 // reading cannot undo what a turn completion read since.
@@ -320,32 +341,21 @@ func (s *AttentionStore) reconcileLocked(gen uint64, counts map[string]int, quie
 	if counts == nil || !s.acceptDispatchGenLocked(gen) {
 		return
 	}
-	set := func(agent string, n int) {
-		if agent == quiet {
-			s.setDispatchesQuietLocked(agent, n)
+	set := func(key string, n int) {
+		apply := func(o *Outstanding) { o.Dispatches = max(n, 0) }
+		if agent, ok := s.bridge.agent(key); ok && agent == quiet {
+			s.bridge.set(key, apply)
 			return
 		}
-		s.setOutstandingLocked(agent, func(o *Outstanding) { o.Dispatches = max(n, 0) })
+		s.setOutstandingLocked(key, apply)
 	}
-	for agent, o := range s.outstanding {
-		if _, named := counts[agent]; !named && o.Dispatches > 0 {
-			set(agent, 0)
+	for _, key := range s.bridge.dispatchKeys() {
+		if _, named := counts[key]; !named {
+			set(key, 0)
 		}
 	}
-	for agent, n := range counts {
-		set(agent, n)
-	}
-}
-
-// setDispatchesQuietLocked records agent's outstanding dispatches without
-// publishing.
-func (s *AttentionStore) setDispatchesQuietLocked(agent string, n int) {
-	o := s.outstanding[agent]
-	o.Dispatches = max(n, 0)
-	if o.total() == 0 {
-		delete(s.outstanding, agent)
-	} else {
-		s.outstanding[agent] = o
+	for key, n := range counts {
+		set(key, n)
 	}
 }
 
@@ -415,13 +425,15 @@ func (s *AttentionStore) UnregisterToken(token string) {
 	s.mu.Unlock()
 }
 
-// UnregisterAgent stops routing every token of agent.
+// UnregisterAgent stops routing every token of agent and unbinds its
+// bridge key: no launch of it is live.
 func (s *AttentionStore) UnregisterAgent(agent string) {
 	if s == nil {
 		return
 	}
 	s.mu.Lock()
 	s.unregisterAgentLocked(agent)
+	s.bridge.unbind(agent)
 	s.mu.Unlock()
 }
 
@@ -470,9 +482,9 @@ func (s *AttentionStore) SetByToken(token string, state AttentionState, from ...
 	return s.setLocked(agent, state), true
 }
 
-// Move re-keys an agent's attention and tokens after a rename and announces
-// the attention under the new name so a stream consumer learns the carried
-// state. The revision bumps past both names' counters: a consumer may
+// Move re-keys an agent's attention, tokens and bridge key binding after a
+// rename and announces the attention under the new name so a stream
+// consumer learns the carried state. The revision bumps past both names' counters: a consumer may
 // already have seen newName at its own (possibly higher) revision. Tokens
 // move even when oldName has no attention yet.
 func (s *AttentionStore) Move(oldName, newName string) {
@@ -486,7 +498,7 @@ func (s *AttentionStore) Move(oldName, newName string) {
 			s.tokens[token] = newName
 		}
 	}
-	moveKey(s.outstanding, oldName, newName)
+	s.bridge.move(oldName, newName)
 	state, ok := s.states[oldName]
 	if !ok {
 		return

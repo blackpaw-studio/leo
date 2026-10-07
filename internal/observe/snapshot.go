@@ -308,9 +308,10 @@ type BridgeAgentState struct {
 }
 
 // DispatchSnapshotter is the attention store's seam onto outstanding
-// dispatch counts. Each snapshot carries a generation that increases in the
-// order the snapshots read the dispatch store, so a consumer can refuse one
-// older than what it already applied. Implementations must be safe for
+// dispatch counts, keyed by each caller's bridge key (never its mutable
+// name). Each snapshot carries a generation that increases in the order the
+// snapshots read the dispatch store, so a consumer can refuse one older
+// than what it already applied. Implementations must be safe for
 // concurrent use.
 type DispatchSnapshotter interface {
 	DispatchSnapshot() (gen uint64, counts map[string]int)

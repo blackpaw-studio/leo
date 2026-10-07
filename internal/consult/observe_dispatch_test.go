@@ -252,6 +252,11 @@ func TestOutstandingDispatchesFollowTheCallersBridgeKeyAcrossARename(t *testing.
 	if want := map[string]int{"new-name": 1}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("OutstandingDispatches = %v, want %v", got, want)
 	}
+	// The attention store's snapshot stays keyed by the caller's bridge
+	// key: it resolves the owner itself as it applies the counts.
+	if _, snap := obs.DispatchSnapshot(); !reflect.DeepEqual(snap, map[string]int{"k-old": 1, "k-gone": 1}) {
+		t.Fatalf("DispatchSnapshot = %v; want counts by bridge key", snap)
+	}
 }
 
 // Snapshot generations follow the order the records were read: one that

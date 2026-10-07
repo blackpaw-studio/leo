@@ -15,6 +15,7 @@ import (
 	"github.com/blackpaw-studio/leo/internal/harness"
 	claudeharness "github.com/blackpaw-studio/leo/internal/harness/claude"
 	"github.com/blackpaw-studio/leo/internal/harness/claude/bridgemod"
+	"github.com/blackpaw-studio/leo/internal/observe"
 	"github.com/blackpaw-studio/leo/internal/outbox"
 )
 
@@ -154,6 +155,8 @@ type bridgeTestOpts struct {
 	home string
 	// adoptions are reserved before the loop starts, as RestoreAgents does.
 	adoptions []string
+	// attention is the store the supervisor drives (default none).
+	attention *observe.AttentionStore
 	// isDurable keeps agent delivers in an outbox under home, as the
 	// daemon does (see mailStore).
 	isDurable bool
@@ -197,6 +200,9 @@ func startBridged(t *testing.T, tmuxPath, version string, connectTimeout time.Du
 	}
 	if o.adoptions != nil {
 		sv.ReserveAdoptions(o.adoptions)
+	}
+	if o.attention != nil {
+		sv.SetAttention(o.attention)
 	}
 	id := newProcIdentity(spec.Name, spec.ClaudeArgs)
 	sv.mu.Lock()
@@ -485,6 +491,31 @@ func TestLegacyLaunchPastesAnOversizedOpening(t *testing.T) {
 		}
 		if time.Now().After(deadline) {
 			t.Fatalf("pasted %d times, want 1", len(got))
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+// A bridged launch files its agent's attention under its bridge key, so
+// children the bridge counts by key hold that agent's finished turn.
+func TestBridgedLaunchBindsItsKeyForAttention(t *testing.T) {
+	tmuxPath, _ := statefulTmux(t, "")
+	store := observe.NewAttentionStore(nil)
+	f := startBridged(t, tmuxPath, "2.1.289", time.Minute, claudeSpec(t, "alpha"),
+		func(o *bridgeTestOpts) { o.attention = store })
+
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		if key, ok := f.sv.BridgeKey("alpha"); ok {
+			store.SetOutstandingSubagents(key, 1)
+			// The launch may drop alpha's attention (it has no hooks here).
+			if att := store.Set("alpha", observe.AttentionWorking); att.Outstanding != nil && att.Outstanding.Subagents == 1 {
+				return
+			}
+		}
+		if time.Now().After(deadline) {
+			att, _ := store.Get("alpha")
+			t.Fatalf("the launch's key never reached alpha's attention: %+v", att)
 		}
 		time.Sleep(10 * time.Millisecond)
 	}

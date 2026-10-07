@@ -43,12 +43,13 @@ func WithOutstandingListener(fn func(agent string, outstanding int)) DispatchObs
 }
 
 // WithDispatchOwner resolves a caller's bridge key to the agent holding it
-// now. Only dispatches whose caller has a bridge key that resolves count
-// toward an agent's outstanding dispatches: the key is fixed at the
-// caller's launch, so it follows a rename where Record.Caller cannot. A
-// keyless dispatch (codex/opencode callers, the CLI, a claude without the
-// mod) is still listed but never holds attention. Without an owner nothing
-// counts.
+// now, for the name-keyed reads (OutstandingDispatches, the Tick
+// listener). Only dispatches whose caller has a bridge key count: the key
+// is fixed at the caller's launch, so it follows a rename where
+// Record.Caller cannot. A keyless dispatch (codex/opencode callers, the
+// CLI, a claude without the mod) is still listed but never holds
+// attention. Without an owner those reads count nothing; DispatchSnapshot
+// needs none.
 func WithDispatchOwner(fn func(key string) (agent string, ok bool)) DispatchObserverOption {
 	return func(o *DispatchObserver) { o.owner = fn }
 }
@@ -82,12 +83,20 @@ func (o *DispatchObserver) OutstandingDispatches() map[string]int {
 	return o.outstandingCounts(o.records())
 }
 
-// DispatchSnapshot returns OutstandingDispatches with a generation that
-// increases in the order the snapshots read the records.
+// DispatchSnapshot returns each caller's count of its own non-terminal
+// dispatches keyed by the caller's bridge key, not its name: the attention
+// store resolves the key to the agent holding it as it applies the counts,
+// so a rename between this read and that cannot misfile them. The
+// generation increases in the order the snapshots read the records.
 func (o *DispatchObserver) DispatchSnapshot() (uint64, map[string]int) {
 	o.snapMu.Lock()
 	defer o.snapMu.Unlock()
-	counts := o.outstandingCounts(o.records())
+	counts := map[string]int{}
+	for _, rec := range o.records() {
+		if outstanding(rec) {
+			counts[rec.CallerBridgeKey]++
+		}
+	}
 	o.snapGen++
 	return o.snapGen, counts
 }
@@ -144,7 +153,7 @@ func (o *DispatchObserver) notifyCountsLocked(counts map[string]int) {
 func (o *DispatchObserver) outstandingCounts(records []Record) map[string]int {
 	counts := map[string]int{}
 	for _, rec := range records {
-		if rec.Kind != "dispatch" || rec.Status.Terminal() || parentDispatchID(rec) != "" {
+		if !outstanding(rec) {
 			continue
 		}
 		if caller, ok := o.keyOwner(rec); ok {
@@ -152,6 +161,14 @@ func (o *DispatchObserver) outstandingCounts(records []Record) map[string]int {
 		}
 	}
 	return counts
+}
+
+// outstanding reports whether rec is a running dispatch that holds its
+// caller's attention: a direct one by a caller with a bridge key. A
+// dispatch's own dispatches count toward that dispatch, not the agent above
+// it; a keyless caller's never count.
+func outstanding(rec Record) bool {
+	return rec.Kind == "dispatch" && !rec.Status.Terminal() && rec.CallerBridgeKey != "" && parentDispatchID(rec) == ""
 }
 
 // keyOwner is the agent holding rec's caller bridge key now; ok=false for
