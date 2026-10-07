@@ -86,11 +86,32 @@ func requestPermission(ctx context.Context, stdin io.Reader, id, configPath stri
 	if resp.StatusCode != http.StatusOK {
 		return consult.PermissionDecision{}, fmt.Errorf("daemon returned status %d", resp.StatusCode)
 	}
+	return decodePermissionReply(io.LimitReader(resp.Body, 1<<20))
+}
+
+// decodePermissionReply accepts exactly one {ok: true, data} envelope and
+// nothing after it. Anything else is an error, so the hook stays silent and
+// claude falls back to its own prompt rather than act on a partial or
+// ambiguous reply. An empty data (no decision) is valid.
+func decodePermissionReply(body io.Reader) (consult.PermissionDecision, error) {
 	var envelope struct {
+		OK   bool                       `json:"ok"`
 		Data consult.PermissionDecision `json:"data"`
 	}
-	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&envelope); err != nil {
+	dec := json.NewDecoder(body)
+	if err := dec.Decode(&envelope); err != nil {
 		return consult.PermissionDecision{}, fmt.Errorf("decode decision: %w", err)
 	}
-	return envelope.Data, nil
+	if err := dec.Decode(&json.RawMessage{}); err != io.EOF {
+		return consult.PermissionDecision{}, fmt.Errorf("decode decision: trailing data after the reply")
+	}
+	if !envelope.OK {
+		return consult.PermissionDecision{}, fmt.Errorf("daemon reply is not ok")
+	}
+	switch envelope.Data.Behavior {
+	case "", "allow", "deny":
+		return envelope.Data, nil
+	default:
+		return consult.PermissionDecision{}, fmt.Errorf("unknown decision %q", envelope.Data.Behavior)
+	}
 }

@@ -109,3 +109,24 @@ func TestDispatchPermissionDaemonDownPrintsNothing(t *testing.T) {
 		t.Fatalf("stdout = %q with the daemon down", out)
 	}
 }
+
+func TestDispatchPermissionMalformedReplyPrintsNothing(t *testing.T) {
+	replies := map[string]string{
+		"not ok":           `{"ok":false,"data":{"behavior":"allow"}}`,
+		"ok missing":       `{"data":{"behavior":"allow"}}`,
+		"trailing value":   `{"ok":true,"data":{"behavior":"deny"}}{"ok":true,"data":{"behavior":"allow"}}`,
+		"trailing garbage": `{"ok":true,"data":{"behavior":"allow"}} x`,
+		"bad behavior":     `{"ok":true,"data":{"behavior":"ask"}}`,
+	}
+	for name, reply := range replies {
+		t.Run(name, func(t *testing.T) {
+			clearReportEnv(t)
+			configPath, _ := permissionDaemon(t, reply)
+			t.Setenv("LEO_DISPATCH_ID", "d-test")
+			t.Setenv("LEO_CONFIG", configPath)
+			if out := runPermission(t, permissionHookInput); out != "" {
+				t.Fatalf("stdout = %q for reply %s, want nothing", out, reply)
+			}
+		})
+	}
+}
