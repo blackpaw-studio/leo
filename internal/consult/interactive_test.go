@@ -1098,10 +1098,28 @@ func claudeHook(t *testing.T, eventID, event, prompt string) HookReport {
 	return HookReport{EventID: eventID, Payload: b}
 }
 
+// testClockMu guards the *time.Time a test shares with a dispatcher's clock
+// when a Wait goroutine reads it while the test advances it.
+var testClockMu sync.RWMutex
+
+func sharedClock(now *time.Time) func() time.Time {
+	return func() time.Time {
+		testClockMu.RLock()
+		defer testClockMu.RUnlock()
+		return *now
+	}
+}
+
+func advanceClock(now *time.Time, by time.Duration) {
+	testClockMu.Lock()
+	defer testClockMu.Unlock()
+	*now = now.Add(by)
+}
+
 func startClaudeInteractive(t *testing.T, now *time.Time) (*Dispatcher, *fakeInteractiveRuntime, string) {
 	t.Helper()
 	d := NewDispatcher(newFakeRecorder())
-	d.now = func() time.Time { return *now }
+	d.now = sharedClock(now)
 	rt := &fakeInteractiveRuntime{arm: true, empty: true}
 	d.SetInteractiveRuntime(rt)
 	started, err := d.Start(context.Background(), testConfig(), Request{Template: "claude", Prompt: "hello", Cwd: t.TempDir(), Mode: ModeInteractive})

@@ -44,18 +44,23 @@ type DelegationState struct {
 // ActiveSeconds is the working time when the snapshot was taken; the mod
 // adds its own clock to it while Status is running.
 type DispatchState struct {
-	ID            string   `json:"id"`
-	Name          string   `json:"name"`
-	Role          string   `json:"role"`
-	Template      string   `json:"template"`
-	Model         string   `json:"model"`
-	Effort        string   `json:"effort,omitempty"`
-	Status        string   `json:"status"`
-	Stalled       bool     `json:"stalled"`
-	ActiveSeconds float64  `json:"active_seconds"`
-	TokensIn      *int64   `json:"tokens_in,omitempty"`
-	TokensOut     *int64   `json:"tokens_out,omitempty"`
-	CostUSD       *float64 `json:"cost_usd,omitempty"`
+	ID       string `json:"id"`
+	Name     string `json:"name"`
+	Role     string `json:"role"`
+	Template string `json:"template"`
+	Model    string `json:"model"`
+	Effort   string `json:"effort,omitempty"`
+	// ObservedEffort is the effort the dispatch was seen running at.
+	ObservedEffort string   `json:"observed_effort,omitempty"`
+	Status         string   `json:"status"`
+	Stalled        bool     `json:"stalled"`
+	ActiveSeconds  float64  `json:"active_seconds"`
+	TokensIn       *int64   `json:"tokens_in,omitempty"`
+	TokensOut      *int64   `json:"tokens_out,omitempty"`
+	CostUSD        *float64 `json:"cost_usd,omitempty"`
+	// Pending summarizes the background work a waiting dispatch is paused
+	// on, e.g. "1 shell · 1 monitor"; empty otherwise.
+	Pending string `json:"pending,omitempty"`
 }
 
 // DispatchRunning is the status whose working time keeps counting.

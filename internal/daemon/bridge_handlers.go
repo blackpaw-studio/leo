@@ -108,7 +108,9 @@ func (s *Server) handleBridgeReport(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusRequestEntityTooLarge, fmt.Sprintf("report exceeds %d bytes", maxBridgeReportBytes))
 			return
 		}
-		writeError(w, http.StatusBadRequest, "reading report: "+err.Error())
+		// Never read, so never judged: the mod retries (only a report the
+		// daemon refuses on its merits is a permanent 400).
+		writeError(w, http.StatusServiceUnavailable, "reading report: "+err.Error())
 		return
 	}
 	report, err := bridge.ParseReport(body)

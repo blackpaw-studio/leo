@@ -139,6 +139,42 @@ func TestDispatchListInteractive(t *testing.T) {
 	}
 }
 
+func TestDispatchListShowsRequestedOrObservedEffort(t *testing.T) {
+	state := t.TempDir()
+	dir := filepath.Join(state, "dispatches")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	writeTestRecord(t, dir, consult.Record{ID: "d-def", Template: "coding", Harness: "claude", Status: consult.StatusRunning, StartedAt: time.Now(), ObservedEffort: "medium"})
+	writeTestRecord(t, dir, consult.Record{ID: "d-down", Template: "coding", Harness: "claude", Status: consult.StatusRunning, StartedAt: time.Now(), Effort: "xhigh", ObservedEffort: "high"})
+	var out bytes.Buffer
+	if err := listConsults(state, false, &out); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"EFFORT", "~medium", "xhigh→high"} {
+		if !strings.Contains(out.String(), want) {
+			t.Errorf("list missing %q: %s", want, out.String())
+		}
+	}
+}
+
+func TestDispatchListShowsWaitingPendingWork(t *testing.T) {
+	state := t.TempDir()
+	dir := filepath.Join(state, "dispatches")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	writeTestRecord(t, dir, consult.Record{ID: "d-wait", Template: "coding", Harness: "claude", Model: "opus", Mode: consult.ModeInteractive, Status: consult.StatusWaiting, StartedAt: time.Now(),
+		PendingWork: &consult.PendingWork{Tasks: map[string]int{"shell": 1}, Wakeups: 2}})
+	var out bytes.Buffer
+	if err := listConsults(state, false, &out); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "waiting (1 shell · 2 wakeups)") {
+		t.Errorf("list missing waiting summary: %s", out.String())
+	}
+}
+
 func TestDispatchListMarksIncompleteUsage(t *testing.T) {
 	state := t.TempDir()
 	dir := filepath.Join(state, "dispatches")

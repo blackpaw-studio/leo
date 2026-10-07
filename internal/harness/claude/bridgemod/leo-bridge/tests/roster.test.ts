@@ -9,7 +9,7 @@ test('parseState coerces fields and drops dispatches without an id', () => {
   })
   expect(state).toEqual({
     delegation: { enabled: true, section: 's', hideAgents: ['Explore'] },
-    dispatches: [{ id: 'd1', name: '', role: '', template: '', model: '', effort: '', status: 'running', stalled: false, activeSeconds: 0, tokensIn: 5, tokensOut: undefined, costUsd: undefined }],
+    dispatches: [{ id: 'd1', name: '', role: '', template: '', model: '', effort: '', observedEffort: '', status: 'running', stalled: false, pending: '', activeSeconds: 0, tokensIn: 5, tokensOut: undefined, costUsd: undefined }],
   })
 })
 
@@ -43,7 +43,7 @@ test('elapsed time reads m:ss, then h:mm:ss', () => {
   expect(formatElapsed(3725)).toBe('1:02:05')
 })
 
-const row = (over: object) => ({ id: 'd', name: '', role: '', template: '', model: '', effort: '', status: 'running', stalled: false, activeSeconds: 0, tokensIn: undefined, tokensOut: undefined, costUsd: undefined, ...over })
+const row = (over: object) => ({ id: 'd', name: '', role: '', template: '', model: '', effort: '', status: 'running', stalled: false, pending: '', activeSeconds: 0, tokensIn: undefined, tokensOut: undefined, costUsd: undefined, ...over })
 
 test('the status line says nothing of dispatches', () => {
   const state = { delegation: { enabled: true }, dispatches: [row({ status: 'running' }), row({ status: 'idle' })] }
@@ -53,6 +53,38 @@ test('the status line says nothing of dispatches', () => {
 
 test('parseState reads effort as a string', () => {
   expect(parseState({ op: 'state', dispatches: [{ id: 'd1', effort: 'high' }] })?.dispatches[0].effort).toBe('high')
+})
+
+test('parseState reads the observed effort as a string', () => {
+  expect(parseState({ op: 'state', dispatches: [{ id: 'd1', observed_effort: 'medium' }] })?.dispatches[0].observedEffort).toBe('medium')
+})
+
+test('a requested effort shows as is; an observed default is marked; a downgrade shows both', () => {
+  const rows = rosterRows(
+    [
+      row({ id: 'a', name: 'a', model: 'opus', effort: 'high', observedEffort: 'high' }),
+      row({ id: 'b', name: 'b', model: 'opus', observedEffort: 'medium' }),
+      row({ id: 'c', name: 'c', model: 'opus', effort: 'xhigh', observedEffort: 'high' }),
+    ],
+    0,
+    0,
+  )
+  expect(rows.map(rowText)).toEqual([
+    '    ⟳ a  opus · high        0:00  –/–',
+    '    ⟳ b  opus · ~medium     0:00  –/–',
+    '    ⟳ c  opus · xhigh→high  0:00  –/–',
+  ])
+})
+
+test('a long model id is cut to 16 columns, keeping the effort label whole', () => {
+  const rows = rosterRows([row({ name: 'x', model: 'claude-opus-5-5-20261001', effort: 'xhigh', observedEffort: 'high' })], 0, 0)
+  expect(rowText(rows[0])).toBe('    ⟳ x  claude-opus-5-5- · xhigh→high  0:00  –/–')
+})
+
+test('a waiting row shows model, effort label and its pending work together', () => {
+  const rows = rosterRows([row({ name: 'impl', model: 'opus', observedEffort: 'medium', status: 'waiting', pending: '1 shell · 1 monitor', tokensIn: 1200, tokensOut: 340 })], 0, 0)
+  expect(rowText(rows[0])).toContain('opus · ~medium')
+  expect(rowText(rows[0])).toContain('1 shell · 1 monitor')
 })
 
 test('rows are indented and padded into columns', () => {
@@ -116,4 +148,22 @@ test('labels are cut and padded by code points: emoji never split, CJK counted a
   expect(rowText(rosterRows([row({ name: rockets })], 0, 0)[0])).toBe('    ⟳ ' + '🚀'.repeat(16) + '  0:00  –/–')
   const rows = rosterRows([row({ id: 'a', name: '日本語', model: 'm' }), row({ id: 'b', name: 'abcd', model: 'm' })], 0, 0)
   expect(rows.map(rowText)).toEqual(['    ⟳ 日本語   m  0:00  –/–', '    ⟳ abcd  m  0:00  –/–'])
+})
+
+test('parseState reads a waiting dispatch\'s pending summary', () => {
+  const state = parseState({ op: 'state', dispatches: [{ id: 'd1', status: 'waiting', pending: '1 shell · 1 monitor' }, { id: 'd2', pending: 7 }] })
+  expect(state?.dispatches.map((d) => d.pending)).toEqual(['1 shell · 1 monitor', ''])
+})
+
+test('a waiting dispatch has its own glyph, distinct from idle, and shows what it waits on', () => {
+  const [waiting, idle] = rosterRows([row({ id: 'a', name: 'build', status: 'waiting', pending: '1 shell · 1 monitor', activeSeconds: 41 }), row({ id: 'b', name: 'rev', status: 'idle' })], 0, 0)
+  expect(waiting.segments[1]).toMatchObject({ text: '⧗', dimColor: true })
+  expect(idle.segments[1]).toMatchObject({ text: '⏸' })
+  expect(waiting.isLive).toBe(true)
+  expect(rowText(waiting)).toContain('0:41 1 shell · 1 monitor')
+})
+
+test('a waiting dispatch\'s time does not run on between snapshots', () => {
+  const [waiting] = rosterRows([row({ status: 'waiting', pending: '1 shell', activeSeconds: 10 })], 0, 60_000)
+  expect(rowText(waiting)).toContain('0:10')
 })

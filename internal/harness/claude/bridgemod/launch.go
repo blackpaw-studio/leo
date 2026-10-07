@@ -44,6 +44,12 @@ const (
 	// STALE_LAUNCH_EXIT_CODE in leo-bridge/hooks/protocol.js.
 	StaleLaunchExitCode = 3
 
+	// RejectedReportExitCode is how `leo bridge report` exits when the
+	// daemon refuses the report itself for good (malformed, or an event it
+	// does not know): the mod drops it rather than retrying. Mirrored by
+	// REJECTED_REPORT_EXIT_CODE in leo-bridge/hooks/protocol.js.
+	RejectedReportExitCode = 4
+
 	// PluginDirFlag loads a plugin directory for one claude session.
 	PluginDirFlag = "--plugin-dir"
 

@@ -71,7 +71,9 @@ type Turn struct {
 	Error         string      `json:"error,omitempty"`
 	Text          string      `json:"text,omitempty"`
 	HarnessTurnID string      `json:"harness_turn_id,omitempty"`
-	armedAt       time.Time
+	// ObservedEffort is the latest effort the harness reported in the turn.
+	ObservedEffort string `json:"observed_effort,omitempty"`
+	armedAt        time.Time
 }
 
 // InvocationUsage keeps a native invocation's provisional/final accounting
@@ -101,26 +103,29 @@ const (
 // daemon. The final answer is deliberately not duplicated here: it is the
 // last event in the stream.
 type Record struct {
-	ID            string        `json:"id"`
-	Caller        string        `json:"caller,omitempty"`
-	Template      string        `json:"template"`
-	Role          string        `json:"role,omitempty"`
-	Profile       string        `json:"profile,omitempty"`
-	Harness       string        `json:"harness"`
-	Model         string        `json:"model"`
-	Effort        string        `json:"effort,omitempty"`
-	Kind          string        `json:"kind"`
-	Cwd           string        `json:"cwd"`
-	Name          string        `json:"name,omitempty"`
-	Prompt        string        `json:"prompt"`
-	Status        Status        `json:"status"`
-	StartedAt     time.Time     `json:"started_at"`
-	EndedAt       time.Time     `json:"ended_at,omitzero"`
-	ActiveSeconds float64       `json:"active_seconds"`
-	RunningSince  *time.Time    `json:"running_since"`
-	Error         string        `json:"error,omitempty"`
-	Text          string        `json:"text,omitempty"`
-	Timeout       time.Duration `json:"timeout,omitempty"`
+	ID       string `json:"id"`
+	Caller   string `json:"caller,omitempty"`
+	Template string `json:"template"`
+	Role     string `json:"role,omitempty"`
+	Profile  string `json:"profile,omitempty"`
+	Harness  string `json:"harness"`
+	Model    string `json:"model"`
+	Effort   string `json:"effort,omitempty"`
+	// ObservedEffort is the effort the harness last reported running at,
+	// which may be its default (no Effort requested) or a downgrade.
+	ObservedEffort string        `json:"observed_effort,omitempty"`
+	Kind           string        `json:"kind"`
+	Cwd            string        `json:"cwd"`
+	Name           string        `json:"name,omitempty"`
+	Prompt         string        `json:"prompt"`
+	Status         Status        `json:"status"`
+	StartedAt      time.Time     `json:"started_at"`
+	EndedAt        time.Time     `json:"ended_at,omitzero"`
+	ActiveSeconds  float64       `json:"active_seconds"`
+	RunningSince   *time.Time    `json:"running_since"`
+	Error          string        `json:"error,omitempty"`
+	Text           string        `json:"text,omitempty"`
+	Timeout        time.Duration `json:"timeout,omitempty"`
 	// ViewerWindowID identifies the optional tmux viewer so lifecycle cleanup
 	// can survive a daemon restart.
 	ViewerWindowID  string `json:"viewer_window_id,omitempty"`
@@ -157,8 +162,10 @@ type Record struct {
 	Turns              []Turn                  `json:"turns,omitempty"`
 	Steered            bool                    `json:"steered,omitempty"`
 	// NeedsInput is what a needs_input run waits on (see RequestPermission).
-	NeedsInput   *NeedsInput `json:"needs_input,omitempty"`
-	HookActivity time.Time   `json:"-"`
+	NeedsInput *NeedsInput `json:"needs_input,omitempty"`
+	// PendingWork is the background work a waiting run is paused on.
+	PendingWork  *PendingWork `json:"pending_work,omitempty"`
+	HookActivity time.Time    `json:"-"`
 }
 
 func (r *Record) startActive(now time.Time) {

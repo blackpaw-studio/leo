@@ -29,6 +29,7 @@ func cloneRecord(record Record) Record {
 	record.UsageTurns = clonePtr(record.UsageTurns)
 	record.ToolCalls = clonePtr(record.ToolCalls)
 	record.NeedsInput = clonePtr(record.NeedsInput)
+	record.PendingWork = clonePendingWork(record.PendingWork)
 	if record.RunningSince != nil {
 		runningSince := *record.RunningSince
 		record.RunningSince = &runningSince
@@ -104,11 +105,12 @@ func interactiveEntry(rec Record, turnID string, now time.Time) Entry {
 	t := turnByID(rec, turnID)
 	e.Outcome, e.Delivered, e.Text = t.Outcome, t.Delivered, t.Text
 	e.NeedsInput = clonePtr(rec.NeedsInput)
+	e.Pending = rec.PendingWork.Summary()
 	activity := rec.HookActivity
 	if activity.IsZero() {
 		activity = t.StartedAt
 	}
-	if t.Outcome == "" && !activity.IsZero() && now.Sub(activity) >= stalledAfter {
+	if t.Outcome == "" && !activity.IsZero() && now.Sub(activity) >= stalledAfterFor(rec.Status) {
 		e.Stalled = true
 	}
 	return e

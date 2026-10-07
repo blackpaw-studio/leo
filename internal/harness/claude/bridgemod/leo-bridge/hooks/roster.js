@@ -22,6 +22,8 @@ export const FALLBACK_DISPATCH_FAILED = 'leo_dispatch failed'
 
 const RUNNING = 'running'
 const IDLE = 'idle'
+// A dispatch whose turn stopped on background work that will wake it.
+const WAITING = 'waiting'
 const TERMINAL = ['done', 'failed', 'timeout', 'canceled', 'closed', 'released']
 
 /**
@@ -89,8 +91,10 @@ function parseDispatch(d) {
     template: str(d.template),
     model: str(d.model),
     effort: str(d.effort),
+    observedEffort: str(d.observed_effort),
     status: str(d.status),
     stalled: d.stalled === true,
+    pending: str(d.pending),
     activeSeconds: num(d.active_seconds) ?? 0,
     tokensIn: num(d.tokens_in),
     tokensOut: num(d.tokens_out),
@@ -202,12 +206,16 @@ export const TERMINAL_LINGER_MS = 10_000
 const DEFAULT_BAND_WIDTH = 40
 const BAND_TITLE = 'leo dispatches '
 const LABEL_MAX = 16
+// A model id is cut to this, so its effort label (a downgrade flag) stays in
+// view however long the id.
+const MODEL_MAX = 16
 // The band's left padding, in line with the engine's lines under the prompt;
 // rows sit a further two in, beneath the header.
 const BAND_PAD = '  '
 const INDENT = BAND_PAD + '  '
 const COLUMN_GAP = '  '
 const STALLED = 'stalled'
+const PENDING_MAX = 40
 
 /** The band's header: padding, its title, then a rule to the band's width. */
 export function bandHeader(width) {
@@ -255,6 +263,7 @@ export function lingerEnd(seen) {
 
 function glyph(status) {
   if (status === IDLE || status === 'settling') return '⏸'
+  if (status === WAITING) return '⧗'
   if (status === 'done' || status === 'closed') return '✓'
   if (['failed', 'canceled', 'timeout'].includes(status)) return '✗'
   if (status === 'queued') return '…'
@@ -264,20 +273,29 @@ function glyph(status) {
 // The glyph's Text props: the status color.
 function glyphStyle(d) {
   if (d.stalled) return { color: 'warning' }
-  if (['idle', 'settling', 'queued'].includes(d.status)) return { dimColor: true }
+  if ([IDLE, WAITING, 'settling', 'queued'].includes(d.status)) return { dimColor: true }
   if (d.status === 'done' || d.status === 'closed') return { color: 'success' }
   if (['failed', 'canceled', 'timeout'].includes(d.status)) return { color: 'error' }
   if (d.status === RUNNING) return { color: 'cyan' }
   return {}
 }
 
+// The effort a row shows: the requested one; the observed one marked ~ when
+// none was requested (the model's default); both when they differ.
+function effortLabel(d) {
+  const observed = d.observedEffort ?? ''
+  if (d.effort !== '' && observed !== '' && observed !== d.effort) return d.effort + '→' + observed
+  if (d.effort !== '') return d.effort
+  return observed === '' ? '' : '~' + observed
+}
+
 // One row's column values, unpadded, in band order.
 function rowCells(d, receivedAt, now) {
   return [
     { text: Array.from(d.name || d.role || d.template || d.id).slice(0, LABEL_MAX).join(''), align: 'left', gap: COLUMN_GAP },
-    { text: [d.model, d.effort].filter((x) => x !== '').join(' · '), align: 'left', gap: COLUMN_GAP, dimColor: true },
+    { text: [Array.from(d.model).slice(0, MODEL_MAX).join(''), effortLabel(d)].filter((x) => x !== '').join(' · '), align: 'left', gap: COLUMN_GAP, dimColor: true },
     { text: formatElapsed(elapsedSeconds(d, receivedAt, now)), align: 'right', gap: COLUMN_GAP },
-    { text: d.stalled ? STALLED : '', align: 'left', gap: ' ' },
+    { text: d.stalled ? STALLED : d.status === WAITING ? Array.from(d.pending).slice(0, PENDING_MAX).join('') : '', align: 'left', gap: ' ' },
     { text: formatTokens(d.tokensIn) + '/' + formatTokens(d.tokensOut), align: 'right', gap: COLUMN_GAP, dimColor: true },
     { text: d.costUsd === undefined ? '' : '$' + d.costUsd.toFixed(2), align: 'right', gap: COLUMN_GAP, dimColor: true },
   ]

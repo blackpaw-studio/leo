@@ -147,7 +147,7 @@ func TestSerialLocksAreReclaimed(t *testing.T) {
 
 func TestEntryFoundationJSONRoundTrip(t *testing.T) {
 	in, out, turns, tools, cost := int64(0), int64(2), 3, 4, 1.25
-	want := Entry{ID: "d-x", Status: StatusDone, InputTokens: &in, OutputTokens: &out, UsageTurns: &turns, ToolCalls: &tools, CostUSD: &cost, Worktree: "/tmp/w", Branch: "leo/x"}
+	want := Entry{ID: "d-x", Status: StatusDone, InputTokens: &in, OutputTokens: &out, UsageTurns: &turns, ToolCalls: &tools, CostUSD: &cost, Worktree: "/tmp/w", Branch: "leo/x", Pending: "1 shell"}
 	raw, err := json.Marshal(want)
 	if err != nil {
 		t.Fatal(err)

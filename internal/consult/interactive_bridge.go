@@ -341,6 +341,13 @@ type BridgeTokenSink interface {
 	ApplyBridgeTokens(id, eventID string, tokens *bridge.TurnTokens)
 }
 
+// LiveUsageSink is a BridgeReportSink that tracks running dispatches' live
+// usage; the Dispatcher is one. The subscriber has it catch up a completed
+// turn's transcript before reporting the Stop that lets a follow-up in.
+type LiveUsageSink interface {
+	CatchUpLiveUsage(id string)
+}
+
 // DispatchBridgeSubscriber returns the hub subscriber that drives bridged
 // dispatches' state: a hello hands a dispatch's reports to its bridge (see
 // BridgeOwnsReports), then each turn or session event of it goes to the
@@ -354,9 +361,18 @@ func (r *TmuxInteractiveRuntime) DispatchBridgeSubscriber(sink BridgeReportSink)
 		if !ok || !r.claimReport(id, ev) {
 			return
 		}
+		if ev.Name == bridge.EventEffort {
+			if effortSink, ok := sink.(ObservedEffortSink); ok {
+				effortSink.ApplyObservedEffort(id, ev.Effort)
+			}
+			return
+		}
 		eventID, payload, ok := bridge.HookPayload(ev)
 		if !ok {
 			return
+		}
+		if liveSink, ok := sink.(LiveUsageSink); ok && ev.Name == bridge.EventTurnComplete {
+			liveSink.CatchUpLiveUsage(id)
 		}
 		if err := sink.Report(id, HookReport{EventID: eventID, Payload: payload}); err != nil {
 			fmt.Fprintf(os.Stderr, "dispatch %s: applying bridge %s: %v\n", id, ev.Name, err)

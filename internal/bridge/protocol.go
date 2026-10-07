@@ -54,7 +54,15 @@ const (
 	EventAttention = "attention"
 	EventSubagents = "subagents"
 	EventCompact   = "compact"
+
+	// EventEffort reports the effort a main-loop step asked for (Level):
+	// the session's setting or the model's default. It feeds a dispatch's
+	// observed effort; HookPayload ignores it.
+	EventEffort = "effort"
 )
+
+// effortLevels are the effort levels an EventEffort may report.
+var effortLevels = map[string]bool{"low": true, "medium": true, "high": true, "xhigh": true, "max": true}
 
 var (
 	// ErrInvalidCommand wraps every Command.Validate failure.
@@ -214,12 +222,18 @@ type Report struct {
 	// Tokens (turn.complete) is the turn's own token counts; nil when the
 	// mod sent none.
 	Tokens *TurnTokens
+	// Pending (turn.complete) is the background work the turn left in
+	// flight; nil when the mod sent none.
+	Pending *PendingWork
 
 	// Observe event payloads: exactly the one matching Name is set.
 	Activity  *ActivityReport
 	Attention *AttentionReport
 	Subagents *SubagentsReport
 	Compact   *CompactReport
+
+	// Effort (effort events) is the level reported.
+	Effort string
 }
 
 // reportKeys is the closed set of keys each report type may carry.
@@ -227,8 +241,9 @@ var reportKeys = map[string]map[string]bool{
 	ReportHello: {"type": true, "session_id": true, "claude_version": true, "busy": true, "subagents": true},
 	ReportAck:   {"type": true, "id": true, "ok": true, "error": true},
 	ReportEvent: {
-		"type": true, "name": true, "event_id": true, "usage": true, "reason": true, "prompt": true, "message": true, "tokens": true,
+		"type": true, "name": true, "event_id": true, "usage": true, "reason": true, "prompt": true, "message": true, "tokens": true, "pending": true,
 		"tool": true, "summary": true, "state": true, "kind": true, "running": true, "phase": true, "trigger": true, "error": true,
+		"level": true,
 	},
 	ReportRequest: {"type": true, "op": true, "dispatch_id": true},
 }
@@ -240,6 +255,7 @@ var eventOnlyKeys = map[string][]string{
 	"prompt":  {EventTurnStart},
 	"message": {EventTurnComplete},
 	"tokens":  {EventTurnComplete},
+	"pending": {EventTurnComplete},
 	"tool":    {EventActivity, EventAttention},
 	"summary": {EventActivity, EventAttention},
 	"state":   {EventAttention},
@@ -248,6 +264,7 @@ var eventOnlyKeys = map[string][]string{
 	"phase":   {EventCompact},
 	"trigger": {EventCompact},
 	"error":   {EventCompact},
+	"level":   {EventEffort},
 }
 
 var eventNames = map[string]bool{
@@ -258,6 +275,7 @@ var eventNames = map[string]bool{
 	EventAttention:    true,
 	EventSubagents:    true,
 	EventCompact:      true,
+	EventEffort:       true,
 }
 
 // ParseReport strictly decodes one report body: a single JSON object of a
@@ -424,9 +442,18 @@ func parseEvent(fields map[string]json.RawMessage) (Report, error) {
 	if err != nil {
 		return Report{}, err
 	}
-	report := Report{Type: ReportEvent, Name: name, Usage: usage, Reason: reason, Prompt: prompt, Message: message, EventID: eventID, Tokens: tokens}
+	pending, err := parsePending(fields)
+	if err != nil {
+		return Report{}, err
+	}
+	report := Report{Type: ReportEvent, Name: name, Usage: usage, Reason: reason, Prompt: prompt, Message: message, EventID: eventID, Tokens: tokens, Pending: pending}
 	if err := parseObservePayload(fields, &report); err != nil {
 		return Report{}, err
+	}
+	if name == EventEffort {
+		if report.Effort, err = enumField(fields, "level", effortLevels, true); err != nil {
+			return Report{}, err
+		}
 	}
 	return report, nil
 }

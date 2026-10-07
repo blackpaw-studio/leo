@@ -136,6 +136,9 @@ more than argv holds.`,
 				fmt.Fprintf(cmd.ErrOrStderr(), "bridge report: dropped: %v\n", err)
 				return nil
 			}
+			if errors.Is(err, daemon.ErrBridgeRejected) {
+				return exitCodeError{code: bridgemod.RejectedReportExitCode, err: err}
+			}
 			return err
 		},
 	}

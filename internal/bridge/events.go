@@ -24,10 +24,11 @@ type Event struct {
 	ClaudeVersion string
 	Usage         json.RawMessage
 	Reason        string
-	Prompt        string      // turn.start
-	Message       string      // turn.complete
-	EventID       string      // stable across retries of one event; may be empty
-	Tokens        *TurnTokens // turn.complete: the turn's own token counts
+	Prompt        string       // turn.start
+	Message       string       // turn.complete
+	EventID       string       // stable across retries of one event; may be empty
+	Tokens        *TurnTokens  // turn.complete: the turn's own token counts
+	Pending       *PendingWork // turn.complete: background work left in flight
 	// Observe event payloads (see Report): exactly the one matching Name is
 	// set, except that a hello may carry Subagents (the mod's running
 	// count). The observability projection reads these; nothing else does.
@@ -35,6 +36,7 @@ type Event struct {
 	Attention *AttentionReport
 	Subagents *SubagentsReport
 	Compact   *CompactReport
+	Effort    string // effort: the level a main-loop step asked for
 	At        time.Time
 }
 
@@ -217,10 +219,12 @@ func (h *Hub) recordLocked(agent string, st *agentState, r Report) Event {
 		Message:       r.Message,
 		EventID:       r.EventID,
 		Tokens:        cloneTokens(r.Tokens),
+		Pending:       clonePending(r.Pending),
 		Activity:      cloneOf(r.Activity),
 		Attention:     cloneOf(r.Attention),
 		Subagents:     cloneOf(r.Subagents),
 		Compact:       cloneOf(r.Compact),
+		Effort:        r.Effort,
 		At:            now,
 	}
 }

@@ -134,3 +134,13 @@ func TestRenderRosterMarksPartialUsageWithoutOverflow(t *testing.T) {
 		t.Fatalf("roster=%q", got)
 	}
 }
+
+func TestRenderRosterWaitingShowsPendingWork(t *testing.T) {
+	now := time.Date(2026, 10, 7, 12, 0, 0, 0, time.UTC)
+	records := []Record{{ID: "d-1", Kind: "dispatch", Name: "build", Status: StatusWaiting, StartedAt: now, ActiveSeconds: 41,
+		PendingWork: &PendingWork{Tasks: map[string]int{"shell": 1, "monitor": 1}}}}
+	got := RenderRoster(records, now)
+	if !strings.Contains(got, "⧗ build 0:41 · 1 shell · 1 monitor") {
+		t.Fatalf("RenderRoster = %q", got)
+	}
+}

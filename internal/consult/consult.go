@@ -83,6 +83,8 @@ type Dispatcher struct {
 	// LeoMCP is the leo binary headless dispatches launch as their leo MCP
 	// server. The zero value runs the bare "leo" from PATH.
 	LeoMCP leomcp.Server
+	// liveUsage reads running interactive claude dispatches' transcripts.
+	liveUsage liveUsageConfig
 }
 
 func (d *Dispatcher) SetCloseFinishedViewer(fn func(Record, func(string) error) (Record, error)) {
@@ -136,6 +138,8 @@ type runState struct {
 	permissionSeq int
 	// bridgedUsage is a bridged interactive run's usage as its mod reports it.
 	bridgedUsage bridgedUsage
+	// live is a running interactive claude run's transcript-derived usage.
+	live liveUsage
 }
 
 // NewDispatcher builds a dispatcher recording through rec. A nil recorder
@@ -173,6 +177,7 @@ func NewDispatcherWithOnStart(rec Recorder, parent context.Context, onStart func
 		runs:               make(map[string]*runState),
 		onStart:            onStart,
 		now:                time.Now,
+		liveUsage:          defaultLiveUsageConfig(),
 		waits:              make(map[string]int),
 		serial:             make(map[string]*serialLock),
 		placement:          NewViewerPlacementCoordinator(),

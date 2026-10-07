@@ -118,3 +118,57 @@ test('an event without a usable id source carries no event id', async ($, on) =>
   await h.settle()
   expect(events(h)[0]).toEqual({ type: 'event', name: 'turn.start', prompt: 'go' })
 })
+
+// Claude's Stop hook lists background work still in flight; the turn's
+// turn.complete carries it so leo keeps the dispatch's turn open.
+const shell = { id: 'b1', type: 'shell', status: 'running', description: 'go build', command: 'go build' }
+const monitor = { id: 'm1', type: 'monitor', status: 'running', description: 'watch' }
+const stopInput = (over: object) => ({ hook_event_name: 'Stop', session_id: 's', transcript_path: '/t', cwd: '/', stop_hook_active: false, ...over }) as any
+
+test('turn.complete carries the pending work its Stop hook listed', async ($, on) => {
+  const h = setup(on)
+  await start($, h)
+  await $.turn.start({ text: 'go', turnId: 't1' })
+  await $.classic.Stop(stopInput({ background_tasks: [shell, monitor, { ...shell, id: 'b2', status: 'completed' }], session_crons: [{ id: 'c1', schedule: '* * * * *', recurring: true, prompt: 'poll' }] }))
+  await $.turn.complete({ turnId: 't1', answer: 'waiting on the build', durationMs: 5, isAborted: false, reason: 'answer' })
+  await h.settle()
+  const complete = events(h).find((e) => e.name === 'turn.complete')
+  expect(complete).toMatchObject({ message: 'waiting on the build', pending: { tasks: { shell: 1, monitor: 1 }, wakeups: 1 } })
+})
+
+test('turn.complete has no pending when the Stop hook listed none, or an older claude sent no lists', async ($, on) => {
+  const h = setup(on)
+  await start($, h)
+  await $.turn.start({ text: 'go', turnId: 't1' })
+  await $.classic.Stop(stopInput({ background_tasks: [], session_crons: [] }))
+  await $.turn.complete({ turnId: 't1', answer: 'done', durationMs: 5, isAborted: false, reason: 'answer' })
+  await $.turn.start({ text: 'again', turnId: 't2' })
+  await $.classic.Stop(stopInput({}))
+  await $.turn.complete({ turnId: 't2', answer: 'done', durationMs: 5, isAborted: false, reason: 'answer' })
+  await h.settle()
+  for (const e of events(h).filter((e) => e.name === 'turn.complete')) expect(e.pending).toBeUndefined()
+})
+
+test('pending work from an earlier turn\'s Stop never rides on a later turn', async ($, on) => {
+  const h = setup(on)
+  await start($, h)
+  await $.classic.Stop(stopInput({ background_tasks: [shell] }))
+  await $.turn.start({ text: 'go', turnId: 't1' })
+  await $.turn.complete({ turnId: 't1', answer: 'done', durationMs: 5, isAborted: false, reason: 'answer' })
+  await h.settle()
+  expect(events(h).find((e) => e.name === 'turn.complete')?.pending).toBeUndefined()
+})
+
+// A task type naming an Object.prototype key must count like any other,
+// never as NaN (which would serialize to null).
+test('task types that name prototype keys are counted', async ($, on) => {
+  const h = setup(on)
+  await start($, h)
+  await $.turn.start({ text: 'go', turnId: 't1' })
+  const task = (id: string, type: string) => ({ id, type, status: 'running', description: '' })
+  await $.classic.Stop(stopInput({ background_tasks: [task('a', 'constructor'), task('b', 'constructor'), task('c', '__proto__'), task('d', 'toString')] }))
+  await $.turn.complete({ turnId: 't1', answer: 'waiting', durationMs: 5, isAborted: false, reason: 'answer' })
+  await h.settle()
+  const pending = events(h).find((e) => e.name === 'turn.complete')?.pending
+  expect(JSON.stringify(pending)).toBe('{"tasks":{"constructor":2,"__proto__":1,"tostring":1},"wakeups":0}')
+})

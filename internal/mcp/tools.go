@@ -534,6 +534,9 @@ func newRegistry(client *daemonClient, processName string, perms leotools.Permis
 				if entry.Stalled {
 					extra += " · stalled"
 				}
+				if entry.Pending != "" {
+					extra += " · waiting on " + entry.Pending
+				}
 			}
 			if need := entry.NeedsInput; need != nil {
 				body = fmt.Sprintf("needs_input: %s\nAnswer with leo_send_dispatch {id: %q, decision: allow|deny, request_id: %q, reason?}.", consult.DescribeNeedsInput(*need), entry.ID, need.RequestID)

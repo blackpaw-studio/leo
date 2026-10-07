@@ -679,6 +679,22 @@ func TestInteractiveDispatchMCPWaitRendering(t *testing.T) {
 	}
 }
 
+func TestInteractiveDispatchMCPWaitRendersPendingWork(t *testing.T) {
+	d := newFakeDaemon(func(method, path string, body []byte) (int, string) {
+		if method == "GET" && path == "/api/dispatch/wait" {
+			return 200, `{"ok":true,"data":[{"id":"d-test","status":"waiting","elapsed_seconds":1,"active_seconds":0.4,"turn_id":"d-test#1","delivered":true,"pending":"1 shell · 1 monitor","text":""}]}`
+		}
+		return 404, `{"ok":false,"error":"nope"}`
+	})
+	defer d.close()
+	reg := newRegistry(newDaemonClient(d.port(), "tok"), "assistant", leotools.Permissions{})
+	resp := runRequest(t, reg, map[string]any{"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": map[string]any{"name": "leo_wait", "arguments": map[string]any{"ids": []any{"d-test#1"}}}})
+	text := resp["result"].(map[string]any)["content"].([]any)[0].(map[string]any)["text"].(string)
+	if want := "[d-test · waiting · elapsed 1.0s · active 0.4s · turn 1  · waiting on 1 shell · 1 monitor]"; !strings.Contains(text, want) {
+		t.Errorf("wait missing %q: %s", want, text)
+	}
+}
+
 // TestConsultAndMessageDescriptionsCrossReference guards the copy that keeps
 // "consult fable" from being mis-routed to leo_send_message: each tool must
 // name the other so the model can tell a template from a running agent.
