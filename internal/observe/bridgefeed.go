@@ -94,6 +94,9 @@ type feedAgent struct {
 
 	lastActivity time.Time
 	stopTrailing func() bool
+	// trailingGen identifies the armed trailing callback; a callback that
+	// finds it moved on (an immediate edge published since) does nothing.
+	trailingGen uint64
 }
 
 // BridgeFeedOption configures a BridgeFeed.
@@ -267,15 +270,21 @@ func (f *BridgeFeed) activityLocked(name string, st *feedAgent, r *bridge.Activi
 func (f *BridgeFeed) throttleActivityLocked(name string, st *feedAgent) {
 	now := f.clock.Now()
 	if st.lastActivity.IsZero() || now.Sub(st.lastActivity) >= ActivityMinInterval {
+		st.cancelTrailing()
 		f.publishActivityLocked(name, st, now)
 		return
 	}
 	if st.stopTrailing != nil {
 		return
 	}
+	st.trailingGen++
+	gen := st.trailingGen
 	st.stopTrailing = f.clock.AfterFunc(st.lastActivity.Add(ActivityMinInterval).Sub(now), func() {
 		f.mu.Lock()
 		defer f.mu.Unlock()
+		if st.trailingGen != gen || st.stopTrailing == nil {
+			return
+		}
 		// The agent may have been renamed since; publish under its
 		// current name, or not at all if its state is gone.
 		for current, s := range f.agents {
@@ -286,6 +295,17 @@ func (f *BridgeFeed) throttleActivityLocked(name string, st *feedAgent) {
 			}
 		}
 	})
+}
+
+// cancelTrailing disarms a pending trailing edge, including one whose
+// callback is already waiting for the lock.
+func (st *feedAgent) cancelTrailing() {
+	if st.stopTrailing == nil {
+		return
+	}
+	st.stopTrailing()
+	st.stopTrailing = nil
+	st.trailingGen++
 }
 
 func (f *BridgeFeed) publishActivityLocked(name string, st *feedAgent, now time.Time) {

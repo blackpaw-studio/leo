@@ -94,3 +94,11 @@ func (c *fakeClock) pendingTimers() int {
 	}
 	return n
 }
+
+// jump moves the clock forward by d without firing due timers, as when a
+// timer goroutine has not run yet.
+func (c *fakeClock) jump(d time.Duration) {
+	c.mu.Lock()
+	c.now = c.now.Add(d)
+	c.mu.Unlock()
+}

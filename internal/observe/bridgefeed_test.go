@@ -431,3 +431,25 @@ func TestBridgeFeedRejectsAbsurdOrNonFiniteCost(t *testing.T) {
 		}
 	}
 }
+
+func TestBridgeFeedImmediateEdgeCancelsALateTrailingCallback(t *testing.T) {
+	h := newFeedHarness(t, nil)
+	activity := func(tool string) {
+		h.send(bridge.Event{Name: bridge.EventActivity, Activity: &bridge.ActivityReport{Tool: tool}})
+	}
+	activity("Read") // leading edge at t0
+	h.clock.Advance(500 * time.Millisecond)
+	activity("Bash")                     // arms the trailing edge for t0+1s
+	h.clock.jump(700 * time.Millisecond) // t0+1.2s: the timer is due but has not run
+	activity("Edit")                     // an interval has passed: published at once
+
+	h.clock.Advance(0) // the stale timer finally runs
+
+	evs := h.ofType(EventAgentActivity)
+	if len(evs) != 2 {
+		t.Fatalf("published %d activity events; want 2 (the stale trailing edge must not double-publish)", len(evs))
+	}
+	if got := evs[1].Payload.(*AgentActivityPayload).CurrentAction.Detail; got != "Edit" {
+		t.Fatalf("second event = %q", got)
+	}
+}
