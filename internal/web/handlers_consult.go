@@ -131,10 +131,26 @@ func (s *Server) handleAPIDelegationResolve(w http.ResponseWriter, r *http.Reque
 
 func (s *Server) handleAPIDispatchSend(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		Message string `json:"message"`
+		Message   string `json:"message"`
+		Decision  string `json:"decision"`
+		Reason    string `json:"reason"`
+		RequestID string `json:"request_id"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSON(w, http.StatusBadRequest, apiResponse{Error: fmt.Sprintf("invalid request: %v", err)})
+		return
+	}
+	if req.Decision != "" {
+		if req.Message != "" {
+			writeJSON(w, http.StatusBadRequest, apiResponse{Error: "send either a message or a decision, not both"})
+			return
+		}
+		answered, err := s.consults.Decide(r.PathValue("id"), consult.Decision{Behavior: req.Decision, Reason: req.Reason, RequestID: req.RequestID})
+		if err != nil {
+			s.writeDispatchSendConflict(w, r.PathValue("id"), err)
+			return
+		}
+		writeJSON(w, http.StatusOK, apiResponse{OK: true, Data: answered})
 		return
 	}
 	cfg, cfgErr := s.loadConfig()
@@ -144,21 +160,48 @@ func (s *Server) handleAPIDispatchSend(w http.ResponseWriter, r *http.Request) {
 	}
 	result, err := s.consults.SendWithConfig(r.Context(), cfg, r.PathValue("id"), req.Message)
 	if err != nil {
-		// Send failures are ordinary state conflicts: callers need both the
-		// reason and current state without treating the daemon as unavailable.
-		status := "unknown"
-		if rec, getErr := s.consults.Get(r.PathValue("id")); getErr == nil {
-			status = string(rec.Status)
-		}
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusConflict)
-		_ = json.NewEncoder(w).Encode(struct {
-			Error  string `json:"error"`
-			Status string `json:"status"`
-		}{err.Error(), status})
+		s.writeDispatchSendConflict(w, r.PathValue("id"), err)
 		return
 	}
 	writeJSON(w, http.StatusOK, apiResponse{OK: true, Data: result})
+}
+
+// writeDispatchSendConflict reports a refused send or decision. Refusals are
+// ordinary state conflicts: callers need both the reason and current state
+// without treating the daemon as unavailable.
+func (s *Server) writeDispatchSendConflict(w http.ResponseWriter, id string, err error) {
+	status := "unknown"
+	if rec, getErr := s.consults.Get(id); getErr == nil {
+		status = string(rec.Status)
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusConflict)
+	_ = json.NewEncoder(w).Encode(struct {
+		Error  string `json:"error"`
+		Status string `json:"status"`
+	}{err.Error(), status})
+}
+
+// handleAPIDispatchPermission is the long poll behind a dispatched claude's
+// PermissionRequest hook: it answers with the orchestrator's decision, or
+// with none (an empty object) once the approval timeout passes, the run
+// settles, or the hook goes away, and claude then shows its own prompt.
+func (s *Server) handleAPIDispatchPermission(w http.ResponseWriter, r *http.Request) {
+	_ = http.NewResponseController(w).SetWriteDeadline(time.Time{})
+	var req struct {
+		Payload json.RawMessage `json:"payload"`
+	}
+	if err := decodeDispatchJSON(r, &req); err != nil {
+		writeJSON(w, http.StatusBadRequest, apiResponse{Error: fmt.Sprintf("invalid request: %v", err)})
+		return
+	}
+	cfg, err := s.loadConfig()
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, apiResponse{Error: fmt.Sprintf("loading config: %v", err)})
+		return
+	}
+	decision := s.consults.RequestPermission(r.Context(), r.PathValue("id"), req.Payload, cfg.DispatchApprovalTimeout())
+	writeJSON(w, http.StatusOK, apiResponse{OK: true, Data: decision})
 }
 
 func (s *Server) handleAPIDispatchReport(w http.ResponseWriter, r *http.Request) {

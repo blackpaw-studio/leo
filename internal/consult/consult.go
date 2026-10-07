@@ -109,6 +109,10 @@ type runState struct {
 	// awaitingSlot marks an interactive run accepted while the limiter was
 	// full: it has no pane until launchWhenSlotFree claims a slot.
 	awaitingSlot bool
+	// permissions are the run's pending PermissionRequest hooks, oldest
+	// first; permissionSeq numbers their request ids.
+	permissions   []*permissionRequest
+	permissionSeq int
 	// bridgedUsage is a bridged interactive run's usage as its mod reports it.
 	bridgedUsage bridgedUsage
 }
@@ -641,7 +645,7 @@ func (d *Dispatcher) Wait(ctx context.Context, ids []string, timeout time.Durati
 			cases = append(cases, reflect.SelectCase{Dir: reflect.SelectRecv, Chan: reflect.ValueOf(deadline.C)})
 		}
 		for i, state := range states {
-			if state != nil && !entries[i].Status.Terminal() && entries[i].Outcome == "" {
+			if state != nil && !entries[i].Status.Terminal() && entries[i].Outcome == "" && entries[i].Status != StatusNeedsInput {
 				pending = true
 				if d.stateRecord(state).Mode == ModeInteractive {
 					interactivePending = true
@@ -650,6 +654,13 @@ func (d *Dispatcher) Wait(ctx context.Context, ids []string, timeout time.Durati
 			}
 		}
 		if !pending {
+			d.mu.Lock()
+			for i := range entries {
+				if entries[i].Status == StatusNeedsInput {
+					d.suppressNeedsInputNotificationLocked(strings.SplitN(ids[i], "#", 2)[0], entries[i].NeedsInput)
+				}
+			}
+			d.mu.Unlock()
 			return entries
 		}
 		// Interactive turns complete before their parent session does. Polling

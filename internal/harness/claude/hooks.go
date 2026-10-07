@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 )
 
 var prepareInteractiveMu sync.Mutex
@@ -130,4 +131,26 @@ func shellCommand(args []string) string {
 		words = append(words, "'"+strings.ReplaceAll(arg, "'", "'\\\"'\\\"'")+"'")
 	}
 	return strings.Join(words, " ")
+}
+
+// permissionHookGrace is how much longer claude lets the PermissionRequest
+// hook run than the hook itself waits, so the hook always exits on its own
+// (no decision: the TUI prompt shows) rather than being killed.
+const permissionHookGrace = time.Minute
+
+// PermissionHooks routes a dispatched claude's permission prompts to its
+// orchestrator: the command long-polls the daemon for a decision for up to
+// wait, and returning none leaves claude's own prompt to the pane.
+func PermissionHooks(permissionCmd []string, wait time.Duration) ([]string, error) {
+	if len(permissionCmd) == 0 {
+		return nil, fmt.Errorf("claude: empty dispatch permission command")
+	}
+	hook := map[string]any{"type": "command", "command": shellCommand(permissionCmd), "timeout": int((wait + permissionHookGrace).Seconds())}
+	encoded, err := json.Marshal(map[string]any{"hooks": map[string]any{
+		"PermissionRequest": []any{map[string]any{"hooks": []any{hook}}},
+	}})
+	if err != nil {
+		return nil, fmt.Errorf("claude: encoding permission hook settings: %w", err)
+	}
+	return []string{"--settings", string(encoded)}, nil
 }

@@ -489,6 +489,13 @@ func (d *Dispatcher) closeTurnLocked(s *runState, id string, outcome TurnOutcome
 		}
 		if !s.record.Status.Terminal() && s.record.Status != StatusSettling {
 			s.record.Status = d.interactiveStatusLocked(s, boundary)
+			if s.record.Status == StatusIdle {
+				// A prompt still pending when its turn ended was answered in
+				// the pane or abandoned; either way nobody needs it now.
+				d.dropPermissionsLocked(s)
+			} else if len(s.permissions) > 0 {
+				d.refreshNeedsInputLocked(s)
+			}
 		}
 		// Panes show only while the orchestrator has work in them; a turn
 		// the user typed never moves one.
@@ -551,6 +558,11 @@ func (d *Dispatcher) Send(ctx context.Context, id, message string) (SendResult, 
 	if s.awaitingSlot {
 		d.mu.Unlock()
 		return SendResult{}, errors.New("dispatch is queued for a concurrency slot and has not started; leo_wait on it first")
+	}
+	if s.record.Status == StatusNeedsInput && s.record.NeedsInput != nil {
+		need := *s.record.NeedsInput
+		d.mu.Unlock()
+		return SendResult{}, fmt.Errorf("dispatch is waiting on a permission decision (%s: %s, request %s); answer with decision allow|deny (and an optional reason) instead of a message", need.Tool, need.Summary, need.RequestID)
 	}
 	if s.record.Status != StatusIdle {
 		st := s.record.Status
@@ -757,6 +769,9 @@ func (d *Dispatcher) Report(id string, r HookReport) error {
 	case "sessionend":
 		d.beginSettlementLocked(s, StatusClosed, finalReportGrace)
 	}
+	if len(s.permissions) > 0 {
+		d.refreshNeedsInputLocked(s)
+	}
 	return nil
 }
 
@@ -903,6 +918,7 @@ func (d *Dispatcher) beginSettlementLocked(s *runState, status Status, grace tim
 	if s.record.Status.Terminal() || s.record.Status == StatusSettling {
 		return
 	}
+	d.dropPermissionsLocked(s)
 	boundary := d.now()
 	s.record.Status = StatusSettling
 	s.record.foldActive(boundary)
@@ -914,6 +930,7 @@ func (d *Dispatcher) finishInteractiveLocked(s *runState, status Status) {
 	if s.record.Status.Terminal() {
 		return
 	}
+	d.dropPermissionsLocked(s)
 	s.record.foldActive(d.now())
 	for _, t := range s.record.Turns {
 		if t.Outcome == "" {

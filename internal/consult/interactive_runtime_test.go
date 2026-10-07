@@ -152,7 +152,7 @@ func TestInteractiveLaunchArgv(t *testing.T) {
 	if got := launch[len(launch)-1]; !containsAll(got, "/opt/leo --config /tmp/leo.yaml dispatch report") {
 		t.Fatalf("hook command missing from %q", got)
 	}
-	if got := launch[len(launch)-1]; strings.Count(got, "--settings") != 1 || !containsAll(got, "crossSessionInbound", "Stop", "UserPromptSubmit", "SessionEnd") {
+	if got := launch[len(launch)-1]; strings.Count(got, "--settings") != 1 || !containsAll(got, "crossSessionInbound", "Stop", "UserPromptSubmit", "SessionEnd", "PermissionRequest", "/opt/leo --config /tmp/leo.yaml dispatch permission", `"timeout":1860`) {
 		t.Fatalf("Claude interactive settings were not merged: %q", got)
 	}
 }

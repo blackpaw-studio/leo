@@ -5,8 +5,10 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"sync"
 	"testing"
+	"time"
 )
 
 func TestTurnHooksArgv(t *testing.T) {
@@ -128,5 +130,32 @@ func TestClaudePrepareInteractivePreservesExistingAndConcurrentProjects(t *testi
 	}
 	if projects[otherKey].(map[string]any)["hasTrustDialogAccepted"] != true {
 		t.Fatalf("concurrent project was dropped: %#v", projects)
+	}
+}
+
+func TestPermissionHooksArgv(t *testing.T) {
+	got, err := PermissionHooks([]string{"/opt/leo", "dispatch", "permission"}, 30*time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 || got[0] != "--settings" {
+		t.Fatalf("PermissionHooks() = %#v", got)
+	}
+	var settings map[string]any
+	if err := json.Unmarshal([]byte(got[1]), &settings); err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]any{"PermissionRequest": []any{map[string]any{"hooks": []any{map[string]any{
+		"type": "command", "command": "/opt/leo dispatch permission", "timeout": float64(1860),
+	}}}}}
+	if !reflect.DeepEqual(settings["hooks"], want) {
+		t.Fatalf("hooks = %#v\nwant %#v", settings["hooks"], want)
+	}
+	merged, err := MergeSettingsArgs([]string{"--settings", `{"hooks":{"Stop":[]}}`}, got, MergeOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(merged[len(merged)-1], `"Stop"`) || !strings.Contains(merged[len(merged)-1], `"PermissionRequest"`) {
+		t.Fatalf("merged settings lost a hook: %s", merged[len(merged)-1])
 	}
 }

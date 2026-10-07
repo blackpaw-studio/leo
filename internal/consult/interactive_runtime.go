@@ -169,6 +169,15 @@ func (r *TmuxInteractiveRuntime) Launch(ctx context.Context, req LaunchRequest) 
 	if err != nil {
 		return "", "", err
 	}
+	if h.Name() == "claude" {
+		// Permission prompts go to the orchestrator (see
+		// Dispatcher.RequestPermission) before they ever show in the pane.
+		permission, err := claudeharness.PermissionHooks([]string{r.leoPath, "--config", r.configPath, "dispatch", "permission"}, cfg.DispatchApprovalTimeout())
+		if err != nil {
+			return "", "", err
+		}
+		hooks = append(hooks, permission...)
+	}
 	args, err = claudeharness.MergeSettingsArgs(args, hooks, claudeharness.MergeOptions{BaseDir: req.Cwd, SpillPath: dispatchSpillPath(cfg.HomePath, req.ID)})
 	if err != nil {
 		return "", "", err

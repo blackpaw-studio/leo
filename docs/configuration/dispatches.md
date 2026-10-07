@@ -170,8 +170,8 @@ move a pane, and panes that launched in a separate window stay there. Tmux
 pane ids (`%N`) survive both moves, so follow-ups keep addressing the same
 pane.
 
-Interactive statuses are `queued`, `running`, `idle`, `settling`, `closed`,
-`failed`, `canceled`, and `timeout`. Turn outcomes are `finished`,
+Interactive statuses are `queued`, `running`, `needs_input`, `idle`,
+`settling`, `closed`, `failed`, `canceled`, and `timeout`. Turn outcomes are `finished`,
 `interrupted`, `lost`, and `rejected`. A user submission opens a free user
 turn and marks the record `steered: true`; orchestrator turns consume a
 concurrency slot until they settle. Slots are per orchestrator turn, so idle
@@ -204,6 +204,37 @@ leo_dispatch(..., mode: "interactive") → leo_wait(["d-…"])
 → leo_send_dispatch({id: "d-…", message: "Follow up"})
 → leo_wait(["d-…#2"]) → leo_cancel({id: "d-…"})
 ```
+
+## Permission prompts
+
+An interactive claude dispatch routes its tool permission prompts to the
+orchestrator instead of leaving them in the pane. Leo merges a
+`PermissionRequest` hook (`leo dispatch permission`) into the dispatch's
+`--settings` next to its turn hooks. When claude is about to ask, the hook
+hands the request to the daemon and waits for an answer.
+
+Meanwhile the run's status is `needs_input`, and its record and wait entries
+carry `needs_input: {kind: "permission", tool, summary, request_id}`, where
+`summary` is the command, path, or URL the tool call acts on. `leo_wait`
+returns as soon as any waited dispatch enters `needs_input`, the same way it
+returns on a terminal state. A dispatch with notifications on also notifies
+its caller, unless a wait already covers it.
+
+Answer with `leo_send_dispatch {id, decision: "allow" | "deny", reason?,
+request_id?}` (HTTP: the same fields on `POST /api/dispatch/{id}/send`). A
+`deny` reason reaches the subagent as the denial's message. Without
+`request_id` the oldest pending request is answered; a `request_id` that is
+no longer pending is rejected as stale. A plain `message` sent to a
+`needs_input` run is rejected with a hint to send a decision. A dispatch
+subagent cannot answer prompts itself: its leo MCP refuses `decision`.
+
+If no decision arrives within `defaults.dispatch.approval_timeout` (default
+`30m`), the hook exits without one and claude shows its ordinary prompt in
+the pane; the run goes back to `running`, and a later decision is rejected as
+stale. The same happens if the prompt is answered in the pane first or the
+turn ends. A `needs_input` run never pulls its pane back into the caller's
+window. Codex dispatches run with `-a never` and never prompt; claude
+elicitation and question dialogs are not routed.
 
 ## Headless continuation
 

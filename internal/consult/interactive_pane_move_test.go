@@ -313,3 +313,19 @@ func TestTmuxPaneMoveRoundTripsThroughRealTmux(t *testing.T) {
 		t.Fatal("rejoin to a gone caller pane succeeded")
 	}
 }
+
+func TestInteractiveNeedsInputDoesNotPullPaneBack(t *testing.T) {
+	d, rt, id := startSplitCodex(t)
+	waitForHidden(t, d, id)
+	// The user typed in the hidden pane and that turn hit a permission prompt.
+	_ = d.Report(id, hook(t, "UserPromptSubmit", "u"))
+	go d.RequestPermission(context.Background(), id, permissionPayload(t, "Bash", map[string]any{"command": "ls"}), time.Minute)
+	waitForStatus(t, d, id, StatusNeedsInput)
+	if _, err := d.Decide(id, Decision{Behavior: "allow"}); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(20 * time.Millisecond)
+	if rt.count("show") != 0 {
+		t.Fatalf("events = %v, needs_input must not move the pane", rt.log())
+	}
+}

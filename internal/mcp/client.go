@@ -276,6 +276,18 @@ func (c *daemonClient) sendDispatch(ctx context.Context, id, message string) (co
 	return result, nil
 }
 
+func (c *daemonClient) decideDispatch(ctx context.Context, id string, decision consult.Decision) (consult.NeedsInput, error) {
+	raw, err := c.doContext(ctx, http.MethodPost, "/api/dispatch/"+url.PathEscape(id)+"/send", decision)
+	if err != nil {
+		return consult.NeedsInput{}, err
+	}
+	var answered consult.NeedsInput
+	if err := json.Unmarshal(raw, &answered); err != nil {
+		return answered, fmt.Errorf("decode dispatch decision: %w", err)
+	}
+	return answered, nil
+}
+
 func (c *daemonClient) getDispatch(ctx context.Context, id string) (consult.Record, error) {
 	raw, err := c.doContext(ctx, http.MethodGet, "/api/dispatch/"+url.PathEscape(id), nil)
 	if err != nil {
