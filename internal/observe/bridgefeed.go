@@ -249,35 +249,34 @@ func (f *BridgeFeed) agentLocked(key, name string) *feedAgent {
 
 // pruneLocked re-files every state under the agent its key resolves to
 // now: a renamed agent's state moves to the new name (its totals carry
-// over), a deleted agent's is dropped.
+// over), a deleted agent's is dropped. The maps are rebuilt in one pass,
+// so agents that swapped names each keep their own state. Two states whose
+// keys resolve to one agent keep the one already filed there.
 func (f *BridgeFeed) pruneLocked() {
 	if f.resolve == nil {
 		return
 	}
+	agents := make(map[string]*feedAgent, len(f.agents))
 	for name, st := range f.agents {
 		owner, ok := f.resolve.AgentForKey(st.key)
-		switch {
-		case ok && owner == name:
-			continue
-		case ok && owner != "":
-			delete(f.agents, name)
-			if cur, taken := f.agents[owner]; !taken || cur.key != st.key {
-				// The key belongs to owner now; a state there under
-				// another key is the owner's stale one.
-				if taken {
-					cur.cancelTrailing()
-				}
-				f.agents[owner] = st
-			}
-			f.names[st.key] = owner
-		default:
+		if !ok || owner == "" {
 			st.cancelTrailing()
-			delete(f.agents, name)
-			if f.names[st.key] == name {
-				delete(f.names, st.key)
-			}
+			continue
 		}
+		if cur, taken := agents[owner]; taken {
+			if name != owner {
+				st.cancelTrailing()
+				continue
+			}
+			cur.cancelTrailing()
+		}
+		agents[owner] = st
 	}
+	names := make(map[string]string, len(agents))
+	for name, st := range agents {
+		names[st.key] = name
+	}
+	f.agents, f.names = agents, names
 }
 
 func (f *BridgeFeed) turnCompleteLocked(name string, st *feedAgent, ev bridge.Event) {

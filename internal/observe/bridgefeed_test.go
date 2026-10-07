@@ -534,3 +534,27 @@ func TestBridgeFeedSnapshotAfterRenameMigratesState(t *testing.T) {
 		t.Fatalf("alicia usage after the next turn = %+v", u)
 	}
 }
+
+// Two agents swap names through a temp name between snapshots: each state
+// must land under its key's new owner, neither overwriting the other.
+func TestBridgeFeedSnapshotAfterANameSwapKeepsBothStates(t *testing.T) {
+	keys := staticKeys{"alice-key": "alice", "bob-key": "bob"}
+	h := newFeedHarness(t, keys)
+	h.send(bridge.Event{Name: bridge.EventTurnComplete, EventID: "a", Tokens: tokens(100, 20)})
+	h.send(bridge.Event{Agent: "bob-key", Name: bridge.EventTurnComplete, EventID: "b", Tokens: tokens(200, 40)})
+	before := h.feed.BridgeAgents()
+	aliceTokens, bobTokens := before["alice"].Usage.Session.Tokens, before["bob"].Usage.Session.Tokens
+	if aliceTokens == bobTokens {
+		t.Fatalf("fixture needs distinct totals, both %d", aliceTokens)
+	}
+
+	keys["alice-key"], keys["bob-key"] = "bob", "alice"
+
+	after := h.feed.BridgeAgents()
+	if u := after["bob"].Usage; u == nil || u.Session.Tokens != aliceTokens {
+		t.Fatalf("bob (alice-key) usage = %+v; want %d", u, aliceTokens)
+	}
+	if u := after["alice"].Usage; u == nil || u.Session.Tokens != bobTokens {
+		t.Fatalf("alice (bob-key) usage = %+v; want %d", u, bobTokens)
+	}
+}
