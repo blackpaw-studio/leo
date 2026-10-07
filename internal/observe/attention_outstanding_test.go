@@ -160,20 +160,20 @@ func TestAttentionAdvanceSkipsRepeatsAndUntracked(t *testing.T) {
 	pub := &recordingPublisher{}
 	s := newBridgedStore(pub)
 
-	if _, ok := s.Advance("ghost", AttentionWorking); ok {
+	if _, ok := s.AdvanceBridge("ghost-key", AttentionWorking); ok {
 		t.Fatal("Advance invented an attention source")
 	}
 	s.Set("a", AttentionWorking)
-	if _, ok := s.Advance("a", AttentionWorking); ok {
+	if _, ok := s.AdvanceBridge("a-key", AttentionWorking); ok {
 		t.Fatal("Advance to the current state must be a no-op")
 	}
-	if _, ok := s.Advance("a", AttentionWorking, AttentionNeedsInput); ok {
+	if _, ok := s.AdvanceBridge("a-key", AttentionWorking, AttentionNeedsInput); ok {
 		t.Fatal("Advance with an unmet from must be a no-op")
 	}
-	if _, ok := s.Advance("a", AttentionFinished); !ok {
+	if _, ok := s.AdvanceBridge("a-key", AttentionFinished); !ok {
 		t.Fatal("Advance to a new state must apply")
 	}
-	if _, ok := s.Advance("a", AttentionFinished); ok {
+	if _, ok := s.AdvanceBridge("a-key", AttentionFinished); ok {
 		t.Fatal("a second finished must be a no-op")
 	}
 	if len(pub.events) != 2 {
@@ -188,8 +188,8 @@ func TestAttentionAdvanceFinishedDuringHoldIsSilent(t *testing.T) {
 	s.SetOutstandingSubagents("a-key", 1)
 	before := len(pub.events)
 
-	s.Advance("a", AttentionFinished)
-	s.Advance("a", AttentionFinished)
+	s.AdvanceBridge("a-key", AttentionFinished)
+	s.AdvanceBridge("a-key", AttentionFinished)
 
 	if len(pub.events) != before {
 		t.Fatalf("held finish published %d events", len(pub.events)-before)
@@ -204,16 +204,16 @@ func TestAttentionNeedsInputCarriesClampedReasonUntilCleared(t *testing.T) {
 	s := newBridgedStore(nil)
 	s.Set("a", AttentionWorking)
 
-	att, ok := s.AdvanceNeedsInput("a", AttentionReason{Kind: AttentionReasonPermission, Tool: "Bash", Detail: "rm\n-rf\x1b[31m /tmp/x"})
+	att, ok := s.AdvanceBridgeNeedsInput("a-key", AttentionReason{Kind: AttentionReasonPermission, Tool: "Bash", Detail: "rm\n-rf\x1b[31m /tmp/x"})
 	if !ok || att.Reason == nil || att.Reason.Detail != "rm -rf /tmp/x" {
 		t.Fatalf("AdvanceNeedsInput = %+v, %v", att.Reason, ok)
 	}
 	// The same reason again (hook and mod both report it) is a no-op.
-	if _, ok := s.AdvanceNeedsInput("a", AttentionReason{Kind: AttentionReasonPermission, Tool: "Bash", Detail: "rm -rf /tmp/x"}); ok {
+	if _, ok := s.AdvanceBridgeNeedsInput("a-key", AttentionReason{Kind: AttentionReasonPermission, Tool: "Bash", Detail: "rm -rf /tmp/x"}); ok {
 		t.Fatal("repeated reason must be a no-op")
 	}
 
-	s.Advance("a", AttentionWorking, AttentionNeedsInput)
+	s.AdvanceBridge("a-key", AttentionWorking, AttentionNeedsInput)
 	if got, _ := s.Get("a"); got.Reason != nil {
 		t.Fatalf("reason = %+v after clearing", got.Reason)
 	}
@@ -223,7 +223,7 @@ func TestAttentionHookNeedsInputGainsReasonFromBridge(t *testing.T) {
 	s := newBridgedStore(nil)
 	s.Set("a", AttentionNeedsInput) // Notification hook, no reason
 
-	att, ok := s.AdvanceNeedsInput("a", AttentionReason{Kind: AttentionReasonQuestion})
+	att, ok := s.AdvanceBridgeNeedsInput("a-key", AttentionReason{Kind: AttentionReasonQuestion})
 	if !ok || att.Reason == nil || att.Reason.Kind != AttentionReasonQuestion {
 		t.Fatalf("AdvanceNeedsInput = %+v, %v", att, ok)
 	}
@@ -292,7 +292,7 @@ func TestAttentionFinishViaAdvanceAndTokenReadDispatchCounts(t *testing.T) {
 	s.RegisterToken("tok", "a")
 	s.Set("a", AttentionWorking)
 
-	s.Advance("a", AttentionFinished)
+	s.AdvanceBridge("a-key", AttentionFinished)
 	s.SetByToken("tok", AttentionFinished)
 
 	if got, _ := s.Get("a"); got.State != AttentionWorking {

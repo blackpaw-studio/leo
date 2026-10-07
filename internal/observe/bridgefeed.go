@@ -221,7 +221,7 @@ func (f *BridgeFeed) OnBridgeEvent(ev bridge.Event) {
 		}
 	case bridge.EventTurnStart:
 		f.publish(EventAgentTurnStarted, &AgentTurnStartedPayload{Agent: name, SessionID: ev.SessionID})
-		f.attention.Advance(name, AttentionWorking)
+		f.attention.AdvanceBridge(st.key, AttentionWorking)
 	case bridge.EventTurnComplete:
 		f.turnCompleteLocked(name, st, ev)
 		return
@@ -262,7 +262,7 @@ func (f *BridgeFeed) turnCompleteLocked(name string, st *feedAgent, ev bridge.Ev
 		p.Context = cloneOf(st.context)
 	}
 	f.publish(EventAgentTurnCompleted, p)
-	f.attention.Advance(name, AttentionFinished)
+	f.attention.AdvanceBridge(st.key, AttentionFinished)
 }
 
 func (f *BridgeFeed) activityLocked(name string, st *feedAgent, r *bridge.ActivityReport) {
@@ -341,12 +341,12 @@ func (f *BridgeFeed) attentionLocked(name string, st *feedAgent, r *bridge.Atten
 	}
 	if r.State != bridge.AttentionNeedsInput {
 		st.reason = nil
-		f.attention.Advance(name, AttentionWorking, AttentionNeedsInput)
+		f.attention.AdvanceBridge(st.key, AttentionWorking, AttentionNeedsInput)
 		return
 	}
 	reason := ClampAttentionReason(AttentionReason{Kind: AttentionReasonKind(r.Kind), Tool: r.Tool, Detail: r.Summary})
 	st.reason = &reason
-	f.attention.AdvanceNeedsInput(name, reason)
+	f.attention.AdvanceBridgeNeedsInput(st.key, reason)
 }
 
 func (f *BridgeFeed) setSubagentsLocked(name string, st *feedAgent, n int) {

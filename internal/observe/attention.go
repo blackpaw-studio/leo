@@ -184,19 +184,26 @@ func (s *AttentionStore) attentionLocked(agent string) AgentAttention {
 	return att
 }
 
-// Advance is SetIfTracked for a source that may repeat what another already
+// AdvanceBridge is SetIfTracked, for the agent bound to bridge key key
+// (see BindBridgeKey), for a source that may repeat what another already
 // reported (the claude mod bridge alongside the harness hooks): a
 // transition to the current state is skipped, as is a finished already
 // held, and a working that repeats a held one only drops the hold (a new
-// turn began). With from, it applies only from one of those states.
-// ok=false means nothing was published.
-func (s *AttentionStore) Advance(agent string, state AttentionState, from ...AttentionState) (AgentAttention, bool) {
+// turn began). With from, it applies only from one of those states. The
+// key is resolved and the transition applied atomically, so a rename
+// cannot part a report from its agent. ok=false means nothing was
+// published.
+func (s *AttentionStore) AdvanceBridge(key string, state AttentionState, from ...AttentionState) (AgentAttention, bool) {
 	if s == nil {
 		return AgentAttention{}, false
 	}
 	gen, counts := s.dispatchCounts(state)
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	agent, bound := s.bridge.agent(key)
+	if !bound {
+		return AgentAttention{}, false
+	}
 	cur, tracked := s.states[agent]
 	if !tracked || len(from) > 0 && !slices.Contains(from, cur) {
 		return AgentAttention{}, false
@@ -215,15 +222,20 @@ func (s *AttentionStore) Advance(agent string, state AttentionState, from ...Att
 	return s.setLocked(agent, state), true
 }
 
-// AdvanceNeedsInput moves a tracked agent to needs_input with reason
-// (clamped), unless it is already there for the same reason.
-func (s *AttentionStore) AdvanceNeedsInput(agent string, reason AttentionReason) (AgentAttention, bool) {
+// AdvanceBridgeNeedsInput moves the tracked agent bound to bridge key key
+// to needs_input with reason (clamped), unless it is already there for the
+// same reason.
+func (s *AttentionStore) AdvanceBridgeNeedsInput(key string, reason AttentionReason) (AgentAttention, bool) {
 	if s == nil {
 		return AgentAttention{}, false
 	}
 	reason = ClampAttentionReason(reason)
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	agent, bound := s.bridge.agent(key)
+	if !bound {
+		return AgentAttention{}, false
+	}
 	cur, tracked := s.states[agent]
 	if !tracked {
 		return AgentAttention{}, false

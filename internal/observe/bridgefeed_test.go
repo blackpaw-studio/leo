@@ -638,3 +638,54 @@ func TestBridgeFeedRecreatedAgentDoesNotInheritState(t *testing.T) {
 		})
 	}
 }
+
+// hookedKeys resolves like staticKeys, running during once inside the
+// first resolution, after the name is read and before it is returned.
+type hookedKeys struct {
+	keys   staticKeys
+	during func()
+}
+
+func (h *hookedKeys) AgentForKey(key string) (string, bool) {
+	name, ok := h.keys.AgentForKey(key)
+	if f := h.during; f != nil {
+		h.during = nil
+		f()
+	}
+	return name, ok
+}
+
+// The feed resolves a report's agent, the agent is renamed, then the
+// feed applies the report: its transitions reach the renamed agent and
+// nobody who takes the old name.
+func TestBridgeFeedTransitionsResolvedBeforeARenameReachTheRenamedAgent(t *testing.T) {
+	report := map[string]bridge.Event{
+		"turn.complete": {Name: bridge.EventTurnComplete, EventID: "c1"},
+		"needs_input":   {Name: bridge.EventAttention, Attention: &bridge.AttentionReport{State: bridge.AttentionNeedsInput, Kind: "permission", Tool: "Bash"}},
+	}
+	want := map[string]AttentionState{"turn.complete": AttentionFinished, "needs_input": AttentionNeedsInput}
+	for name, ev := range report {
+		t.Run(name, func(t *testing.T) {
+			keys := &hookedKeys{keys: staticKeys{"k": "old"}}
+			store := NewAttentionStore(nil)
+			store.BindBridgeKey("k", "old")
+			store.Set("old", AttentionWorking)
+			feed := NewBridgeFeed(keys, nil, WithFeedAttention(store), WithFeedClock(newFakeClock(time.Now())))
+			keys.during = func() {
+				keys.keys["k"] = "new"
+				store.Move("old", "new")
+				store.Set("old", AttentionWorking) // a new agent takes the old name
+			}
+
+			ev.Agent, ev.Gen, ev.SessionID = "k", 1, "s1"
+			feed.OnBridgeEvent(ev)
+
+			if got, _ := store.Get("new"); got.State != want[name] {
+				t.Fatalf("renamed agent = %+v; want %s", got, want[name])
+			}
+			if got, _ := store.Get("old"); got.State != AttentionWorking {
+				t.Fatalf("the old name's new agent = %+v; want untouched", got)
+			}
+		})
+	}
+}
