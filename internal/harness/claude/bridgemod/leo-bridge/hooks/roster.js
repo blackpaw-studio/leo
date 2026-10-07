@@ -263,7 +263,7 @@ function glyphStyle(d) {
 // One row's column values, unpadded, in band order.
 function rowCells(d, receivedAt, now) {
   return [
-    { text: (d.name || d.role || d.template || d.id).slice(0, LABEL_MAX), align: 'left', gap: COLUMN_GAP },
+    { text: Array.from(d.name || d.role || d.template || d.id).slice(0, LABEL_MAX).join(''), align: 'left', gap: COLUMN_GAP },
     { text: [d.model, d.effort].filter((x) => x !== '').join(' · '), align: 'left', gap: COLUMN_GAP, dimColor: true },
     { text: formatElapsed(elapsedSeconds(d, receivedAt, now)), align: 'right', gap: COLUMN_GAP },
     { text: d.stalled ? STALLED : '', align: 'left', gap: ' ' },
@@ -282,7 +282,7 @@ function rowCells(d, receivedAt, now) {
  */
 export function rosterRows(dispatches, receivedAt, now) {
   const cells = dispatches.map((d) => rowCells(d, receivedAt, now))
-  const widths = (cells[0] ?? []).map((_, i) => Math.max(...cells.map((row) => [...row[i].text].length)))
+  const widths = (cells[0] ?? []).map((_, i) => Math.max(...cells.map((row) => codePoints(row[i].text))))
   return dispatches.map((d, r) => ({
     id: d.id,
     isLive: !isTerminal(d.status),
@@ -295,9 +295,15 @@ export function rosterRows(dispatches, receivedAt, now) {
 }
 
 function padded(cell, width) {
-  const pad = ' '.repeat(width - [...cell.text].length)
+  const pad = ' '.repeat(width - codePoints(cell.text))
   const text = cell.align === 'right' ? pad + cell.text : cell.text + pad
   return cell.dimColor ? { text, dimColor: true } : { text }
+}
+
+// Columns are cut and padded in code points, so a surrogate pair is never
+// split. Wide (CJK, emoji) characters still count as one column each.
+function codePoints(text) {
+  return Array.from(text).length
 }
 
 /** A row's text as drawn. */

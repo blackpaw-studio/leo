@@ -110,3 +110,10 @@ test('a terminal dispatch shows for 10 s after first seen terminal; one terminal
   expect(shownDispatches([done], later, 10_999).map((d) => d.id)).toEqual(['a'])
   expect(shownDispatches([done], later, 11_000)).toEqual([])
 })
+
+test('labels are cut and padded by code points: emoji never split, CJK counted as one each', () => {
+  const rockets = '🚀'.repeat(17)
+  expect(rowText(rosterRows([row({ name: rockets })], 0, 0)[0])).toBe('    ⟳ ' + '🚀'.repeat(16) + '  0:00  –/–')
+  const rows = rosterRows([row({ id: 'a', name: '日本語', model: 'm' }), row({ id: 'b', name: 'abcd', model: 'm' })], 0, 0)
+  expect(rows.map(rowText)).toEqual(['    ⟳ 日本語   m  0:00  –/–', '    ⟳ abcd  m  0:00  –/–'])
+})
