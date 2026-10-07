@@ -729,11 +729,10 @@ func (d *Dispatcher) Report(id string, r HookReport) error {
 		s.record.SessionID = str(p, "session_id")
 	}
 	noteLiveTranscriptLocked(s, p)
-	if level := effortFromPayload(p); level != "" {
-		// Once the event has placed its turn: a submission's effort is
-		// the turn it starts, not the one before (unlock runs after).
-		defer d.applyObservedEffortLocked(s, level)
-	}
+	// Effort lands only once the event is accepted and its turn placed: a
+	// submission's effort is the turn it starts, and a hook for a closed
+	// turn carries none.
+	effort := effortFromPayload(p)
 	switch event {
 	case "userpromptsubmit":
 		oldStatus := s.record.Status
@@ -767,6 +766,7 @@ func (d *Dispatcher) Report(id string, r HookReport) error {
 				// Fold into the working turn, however long it was hook-silent:
 				// a separate turn would never close (#211), and closing this
 				// one would report it lost while it is still working.
+				d.applyObservedEffortLocked(s, effort, currentTurnIndex(s.record.Turns))
 				d.persistLocked(s, "")
 				return nil
 			}
@@ -780,6 +780,7 @@ func (d *Dispatcher) Report(id string, r HookReport) error {
 			}
 			t.HarnessTurnID = hid
 		}
+		d.applyObservedEffortLocked(s, effort, currentTurnIndex(s.record.Turns))
 		closeApplied := false
 		if hid != "" {
 			if pc, ok := s.pendingCloses[hid]; ok && d.now().Before(pc.until) {
@@ -809,9 +810,13 @@ func (d *Dispatcher) Report(id string, r HookReport) error {
 			return nil
 		}
 		text := str(p, "last_assistant_message")
-		if hid == "" {
+		switch {
+		case hid == "":
+			d.applyObservedEffortLocked(s, effort, currentTurnIndex(s.record.Turns))
 			d.closeWorkingLocked(s, out, text)
-		} else if !d.closeHarnessLocked(s, hid, out, text) {
+		case d.closeHarnessLocked(s, hid, out, text):
+			d.applyObservedEffortLocked(s, effort, harnessTurnIndex(s.record.Turns, hid))
+		default:
 			s.pendingCloses[hid] = pendingClose{out, text, d.now().Add(unmatchedGrace)}
 		}
 	case "sessionend":

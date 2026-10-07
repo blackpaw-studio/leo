@@ -163,3 +163,32 @@ func TestShellHookEffortLandsOnTheTurnItsPromptStarts(t *testing.T) {
 		t.Fatalf("record observed effort = %q, want medium", rec.ObservedEffort)
 	}
 }
+
+func turnHook(t *testing.T, eventID, event, turn, prompt, level string) HookReport {
+	t.Helper()
+	payload := map[string]any{"hook_event_name": event, "turn_id": turn}
+	if prompt != "" {
+		payload["prompt"] = prompt
+	}
+	if level != "" {
+		payload["effort"] = map[string]string{"level": level}
+	}
+	b, _ := json.Marshal(payload)
+	return HookReport{EventID: eventID, Payload: b}
+}
+
+// A late hook for a turn that already closed is ignored, effort included:
+// it must not rewrite the running turn's.
+func TestObservedEffortIgnoresAHookForAClosedTurn(t *testing.T) {
+	d, id := startEffortDispatch(t, "")
+	mustReport(t, d, id, turnHook(t, "s-a", "UserPromptSubmit", "a", "hello", "high"))
+	mustReport(t, d, id, turnHook(t, "c-a", "Stop", "a", "", "high"))
+	mustReport(t, d, id, turnHook(t, "s-b", "UserPromptSubmit", "b", "typed by a human", "high"))
+	mustReport(t, d, id, turnHook(t, "late-a", "Stop", "a", "", "low"))
+
+	rec := recordOf(t, d, id)
+	last := rec.Turns[len(rec.Turns)-1]
+	if last.HarnessTurnID != "b" || last.ObservedEffort != "high" || rec.ObservedEffort != "high" {
+		t.Fatalf("record=%q turn %s=%q, want high on running turn b", rec.ObservedEffort, last.HarnessTurnID, last.ObservedEffort)
+	}
+}

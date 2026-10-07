@@ -7,6 +7,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
@@ -418,4 +419,21 @@ func TestBridgeTellsAModAwaitingAdoptionToRetry(t *testing.T) {
 	expect(ErrBridgeNotReady, "503")
 	hub.EndAdoption(key)
 	expect(ErrBridgeStale, "409")
+}
+
+type failingBody struct{}
+
+func (failingBody) Read([]byte) (int, error) { return 0, errors.New("connection reset") }
+
+// A report whose body could not be read was never judged: the daemon
+// answers with a status the mod retries, never the permanent 400.
+func TestBridgeReportBodyReadFailureIsRetryable(t *testing.T) {
+	_, _, s := startBridgeServer(t)
+	req := httptest.NewRequest(http.MethodPost, "/api/bridge/"+bridgeAgent+"/report?launch="+bridgeLaunch, failingBody{})
+	req.SetPathValue("agent", bridgeAgent)
+	w := httptest.NewRecorder()
+	s.handleBridgeReport(w, req)
+	if w.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status=%d, want %d", w.Code, http.StatusServiceUnavailable)
+	}
 }

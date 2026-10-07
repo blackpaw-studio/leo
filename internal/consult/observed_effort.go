@@ -37,18 +37,18 @@ func (d *Dispatcher) ApplyObservedEffort(id, level string) {
 	if s.record.Mode != ModeInteractive || s.record.Status.Terminal() {
 		return
 	}
-	d.applyObservedEffortLocked(s, level)
+	d.applyObservedEffortLocked(s, level, currentTurnIndex(s.record.Turns))
 }
 
 // applyObservedEffortLocked sets the run's observed effort and that of the
-// turn it ran in: the latest one that started running.
-func (d *Dispatcher) applyObservedEffortLocked(s *runState, level string) {
+// turn at index turn (none when -1).
+func (d *Dispatcher) applyObservedEffortLocked(s *runState, level string, turn int) {
 	if !observedEffortLevels[level] {
 		return
 	}
 	changed := s.record.ObservedEffort != level
 	s.record.ObservedEffort = level
-	if i := currentTurnIndex(s.record.Turns); i >= 0 && s.record.Turns[i].ObservedEffort != level {
+	if i := turn; i >= 0 && s.record.Turns[i].ObservedEffort != level {
 		s.record.Turns[i].ObservedEffort = level
 		changed = true
 	}
@@ -63,6 +63,16 @@ func (d *Dispatcher) applyObservedEffortLocked(s *runState, level string) {
 func currentTurnIndex(turns []Turn) int {
 	for i := len(turns) - 1; i >= 0; i-- {
 		if turns[i].Delivered || turns[i].Source == TurnSourceUser {
+			return i
+		}
+	}
+	return -1
+}
+
+// harnessTurnIndex is the turn the harness knows as hid, or -1.
+func harnessTurnIndex(turns []Turn, hid string) int {
+	for i := len(turns) - 1; i >= 0; i-- {
+		if turns[i].HarnessTurnID == hid {
 			return i
 		}
 	}
