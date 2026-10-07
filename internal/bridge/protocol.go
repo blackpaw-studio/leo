@@ -224,7 +224,7 @@ type Report struct {
 
 // reportKeys is the closed set of keys each report type may carry.
 var reportKeys = map[string]map[string]bool{
-	ReportHello: {"type": true, "session_id": true, "claude_version": true, "busy": true},
+	ReportHello: {"type": true, "session_id": true, "claude_version": true, "busy": true, "subagents": true},
 	ReportAck:   {"type": true, "id": true, "ok": true, "error": true},
 	ReportEvent: {
 		"type": true, "name": true, "event_id": true, "usage": true, "reason": true, "prompt": true, "message": true, "tokens": true,
@@ -338,7 +338,15 @@ func parseHello(fields map[string]json.RawMessage) (Report, error) {
 		}
 		busy = &b
 	}
-	return Report{Type: ReportHello, SessionID: sessionID, ClaudeVersion: version, Busy: busy}, nil
+	var subagents *SubagentsReport
+	if raw, present := fields["subagents"]; present {
+		var n int
+		if isNull(raw) || json.Unmarshal(raw, &n) != nil || n < 0 {
+			return Report{}, invalidReport("hello subagents must be a count of zero or more")
+		}
+		subagents = &SubagentsReport{Running: n}
+	}
+	return Report{Type: ReportHello, SessionID: sessionID, ClaudeVersion: version, Busy: busy, Subagents: subagents}, nil
 }
 
 func parseAck(fields map[string]json.RawMessage) (Report, error) {

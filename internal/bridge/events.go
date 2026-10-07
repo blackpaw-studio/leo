@@ -25,7 +25,8 @@ type Event struct {
 	EventID       string      // stable across retries of one event; may be empty
 	Tokens        *TurnTokens // turn.complete: the turn's own token counts
 	// Observe event payloads (see Report): exactly the one matching Name is
-	// set. The observability projection reads these; nothing else does.
+	// set, except that a hello may carry Subagents (the mod's running
+	// count). The observability projection reads these; nothing else does.
 	Activity  *ActivityReport
 	Attention *AttentionReport
 	Subagents *SubagentsReport

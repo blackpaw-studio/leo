@@ -109,6 +109,11 @@ func TestParseReportAccepts(t *testing.T) {
 			want: Report{Type: ReportHello, SessionID: "s-1", ClaudeVersion: "2.1.289", Busy: boolPtr(true)},
 		},
 		{
+			name: "hello with running subagents",
+			body: `{"type":"hello","session_id":"s-1","claude_version":"2.1.289","subagents":2}`,
+			want: Report{Type: ReportHello, SessionID: "s-1", ClaudeVersion: "2.1.289", Subagents: &SubagentsReport{Running: 2}},
+		},
+		{
 			name: "hello saying idle",
 			body: `{"type":"hello","session_id":"s-1","claude_version":"2.1.289","busy":false}`,
 			want: Report{Type: ReportHello, SessionID: "s-1", ClaudeVersion: "2.1.289", Busy: boolPtr(false)},
@@ -201,6 +206,9 @@ func TestParseReportRejects(t *testing.T) {
 		{"hello unknown field", `{"type":"hello","session_id":"s","claude_version":"v","extra":1}`},
 		{"hello busy wrong kind", `{"type":"hello","session_id":"s","claude_version":"v","busy":"yes"}`},
 		{"hello busy null", `{"type":"hello","session_id":"s","claude_version":"v","busy":null}`},
+		{"hello negative subagents", `{"type":"hello","session_id":"s","claude_version":"v","subagents":-1}`},
+		{"hello fractional subagents", `{"type":"hello","session_id":"s","claude_version":"v","subagents":1.5}`},
+		{"hello null subagents", `{"type":"hello","session_id":"s","claude_version":"v","subagents":null}`},
 		{"hello session_id too long", `{"type":"hello","session_id":"` + strings.Repeat("s", MaxSessionIDLen+1) + `","claude_version":"v"}`},
 		{"hello session_id with a space", `{"type":"hello","session_id":"a b","claude_version":"v"}`},
 		{"hello session_id with a control", `{"type":"hello","session_id":"a\u001b[2J","claude_version":"v"}`},

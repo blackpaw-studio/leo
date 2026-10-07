@@ -297,3 +297,19 @@ test('a compact command from leo reports manual phases', async ($, on) => {
   await h.settle()
   expect(named(h, 'compact')).toEqual([compact('started', 'manual'), compact('completed', 'manual')])
 })
+
+// Every reconnect says hello; it carries the subagents still running so the
+// daemon keeps holding the agent instead of reading the hello as a reset.
+test('a reconnect hello carries the running subagent count', { timeoutMs: 20_000 }, async ($, on) => {
+  const feeds = [new Feed(), new Feed()]
+  const h = setup(on, { feeds })
+  await start($, h)
+  await $.classic.SubagentStart({ agent_id: 'a1', agent_type: 'general-purpose' })
+  await $.classic.SubagentStart({ agent_id: 'a2', agent_type: 'general-purpose' })
+  await $.classic.SubagentStop({ agent_id: 'a2', agent_type: 'general-purpose' })
+  await h.settle()
+  feeds[0]!.end()
+  await advance(h, 1000)
+  const hellos = h.reports.filter((r: any) => r.type === 'hello')
+  expect(hellos.map((r: any) => r.subagents)).toEqual([0, 1])
+})

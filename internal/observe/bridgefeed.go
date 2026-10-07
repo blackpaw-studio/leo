@@ -183,12 +183,18 @@ func (f *BridgeFeed) OnBridgeEvent(ev bridge.Event) {
 	if ev.EventID != "" && st.replayed(sha256.Sum256([]byte(ev.Name+"\x00"+ev.EventID))) {
 		return
 	}
+	freshLaunch := ev.Gen != 0 && ev.Gen != st.gen
 	usageChanged := st.observeLaunch(ev)
 	switch ev.Name {
 	case bridge.ReportHello:
-		// A fresh mod (respawn or hot reload) counts its subagents from
-		// zero; keeping the old count would hold the agent forever.
-		f.setSubagentsLocked(name, st, 0)
+		// Every reconnect says hello. The mod's own count wins; without
+		// one, only a fresh launch (whose subagents died with it) resets.
+		switch {
+		case ev.Subagents != nil:
+			f.setSubagentsLocked(name, st, ev.Subagents.Running)
+		case freshLaunch:
+			f.setSubagentsLocked(name, st, 0)
+		}
 	case bridge.EventTurnStart:
 		f.publish(EventAgentTurnStarted, &AgentTurnStartedPayload{Agent: name, SessionID: ev.SessionID})
 		f.attention.Advance(name, AttentionWorking)

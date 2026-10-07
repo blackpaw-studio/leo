@@ -15,7 +15,7 @@ test('hello leaves busy unsaid until the mod has seen a turn', { timeoutMs: 15_0
   const feeds = [new Feed(), new Feed(), new Feed()]
   const h = setup(on, { feeds })
   await start($, h)
-  expect(hellos(h)[0]).toEqual({ type: 'hello', session_id: 'sess-1', claude_version: '2.1.289' })
+  expect(hellos(h)[0]).toEqual({ type: 'hello', session_id: 'sess-1', claude_version: '2.1.289', subagents: 0 })
   await $.turn.start({ text: 'work', turnId: 't1' })
   feeds[0]!.end()
   await advance(h, 1000)

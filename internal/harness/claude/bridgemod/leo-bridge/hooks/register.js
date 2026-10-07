@@ -280,7 +280,7 @@ async function sendHello($) {
   const sessionId = await $.session.id()
   const version = await $.session.version()
   helloSessionId = sessionId
-  return helloReport(sessionId, version.version, isTurnKnown ? runningTurn !== null : undefined)
+  return helloReport(sessionId, version.version, isTurnKnown ? runningTurn !== null : undefined, subagentIds.size)
 }
 
 // Re-says hello when the session id moved since the last one (a /clear or

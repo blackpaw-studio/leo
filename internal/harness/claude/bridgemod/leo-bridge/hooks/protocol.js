@@ -242,11 +242,13 @@ export function nextBackoff(current, livedMs) {
  * @param {boolean | undefined} busy whether a main-loop turn is running right
  *   now; undefined (left out, so the daemon keeps what it knows) when the
  *   mod cannot tell
- * @returns {{ type: 'hello', session_id: string, claude_version: string, busy?: boolean }}
+ * @param {number} subagents the subagents this mod sees running, so a
+ *   reconnect's hello keeps the daemon's count instead of resetting it
+ * @returns {{ type: 'hello', session_id: string, claude_version: string, busy?: boolean, subagents: number }}
  */
-export function helloReport(sessionId, claudeVersion, busy) {
+export function helloReport(sessionId, claudeVersion, busy, subagents) {
   const hello = { type: 'hello', session_id: sessionId, claude_version: claudeVersion }
-  return busy === undefined ? hello : { ...hello, busy }
+  return { ...(busy === undefined ? hello : { ...hello, busy }), subagents }
 }
 
 /** @returns {{ type: 'ack', id: string, ok: boolean, error?: string }} */

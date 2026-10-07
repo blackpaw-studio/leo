@@ -290,8 +290,8 @@ func TestBridgeFeedSubagentCountResetByModReloadReleasesHold(t *testing.T) {
 	h.send(bridge.Event{Name: bridge.EventSubagents, Subagents: &bridge.SubagentsReport{Running: 2}})
 	h.send(bridge.Event{Name: bridge.EventTurnComplete, EventID: "tc1"})
 
-	// The mod hot-reloads: a fresh hello, its count starting over.
-	h.send(bridge.Event{Name: bridge.ReportHello})
+	// The mod hot-reloads: its hello reports the count it starts over at.
+	h.send(bridge.Event{Name: bridge.ReportHello, Subagents: &bridge.SubagentsReport{Running: 0}})
 
 	if got := h.feed.BridgeAgents()["alice"].Subagents; got != 0 {
 		t.Fatalf("subagents = %d after reload", got)
@@ -486,5 +486,29 @@ func TestBridgeFeedStaleKeyMappingNeverMovesAnotherAgentsState(t *testing.T) {
 	}
 	if u := agents["carol"].Usage; u == nil || u.Session.Tokens != 19 {
 		t.Fatalf("carol usage = %+v; want only carol's own turn", u)
+	}
+}
+
+func TestBridgeFeedReconnectHelloKeepsTheModsSubagentCount(t *testing.T) {
+	h := newFeedHarness(t, nil)
+	h.send(bridge.Event{Name: bridge.ReportHello, Subagents: &bridge.SubagentsReport{Running: 0}})
+	h.send(bridge.Event{Name: bridge.EventTurnStart, EventID: "t1"})
+	h.send(bridge.Event{Name: bridge.EventSubagents, Subagents: &bridge.SubagentsReport{Running: 1}})
+	h.send(bridge.Event{Name: bridge.EventTurnComplete, EventID: "c1"})
+
+	// The stream reconnects: same launch, the mod still tracks one.
+	h.send(bridge.Event{Name: bridge.ReportHello, Subagents: &bridge.SubagentsReport{Running: 1}})
+	if att, _ := h.store.Get("alice"); att.State != AttentionWorking || h.feed.BridgeAgents()["alice"].Subagents != 1 {
+		t.Fatalf("after a reconnect hello: %+v, subagents %d; want still held", att, h.feed.BridgeAgents()["alice"].Subagents)
+	}
+	// A hello without the count (an older mod) on the same launch keeps it.
+	h.send(bridge.Event{Name: bridge.ReportHello})
+	if got := h.feed.BridgeAgents()["alice"].Subagents; got != 1 {
+		t.Fatalf("subagents = %d after a countless hello on the same launch", got)
+	}
+	// A fresh launch starts from zero.
+	h.send(bridge.Event{Name: bridge.ReportHello, Gen: 2})
+	if att, _ := h.store.Get("alice"); att.State != AttentionFinished {
+		t.Fatalf("after a fresh launch: %+v; want the hold released", att)
 	}
 }
