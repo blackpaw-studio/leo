@@ -56,10 +56,12 @@ func (s *Server) isOperator(r *http.Request) bool {
 	return matchesAnyToken(extractBearer(r.Header.Get("Authorization")), []string{s.apiToken}) || proxyAuthenticated(r, s.trustedProxies)
 }
 
-// requireOperator refuses any caller but the operator with 403.
-func (s *Server) requireOperator(h http.HandlerFunc) http.HandlerFunc {
+// requireOperatorToken refuses, with 403, any caller without the operator
+// bearer token. Unlike isOperator it does not accept a trusted proxy's SSO
+// identity: the control routes drive agents, so they take the token alone.
+func (s *Server) requireOperatorToken(h http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if !s.isOperator(r) {
+		if !matchesAnyToken(extractBearer(r.Header.Get("Authorization")), []string{s.apiToken}) {
 			writeJSON(w, http.StatusForbidden, apiResponse{Error: "operator token required"})
 			return
 		}

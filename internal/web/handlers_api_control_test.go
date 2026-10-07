@@ -4,7 +4,9 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"sync"
@@ -343,5 +345,31 @@ func TestControlHandlerServesSocketRoutes(t *testing.T) {
 	h.ServeHTTP(w, httptest.NewRequest("POST", "/agents/ghost/interrupt", nil))
 	if w.Code != http.StatusNotFound {
 		t.Fatalf("unknown agent status = %d", w.Code)
+	}
+}
+
+// The control API takes the operator bearer token only: an SSO identity
+// from a trusted proxy, which reaches the viewer routes, must not drive
+// agents.
+func TestAPIControlRejectsTrustedProxySSO(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "leo.yaml")
+	if err := os.WriteFile(cfgPath, []byte(testConfigWithTemplatesYAML), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	s := New(cfgPath, nil, nil, nil, &mockAgentService{}, Options{
+		Port: testPort, APIToken: testAPIToken, AgentToken: testAgentToken, TrustedProxies: []string{"10.0.0.0/8"},
+	})
+	for _, verb := range apiControlVerbs {
+		path := "/api/v1/agents/assistant/" + verb
+		req := httptest.NewRequest(http.MethodPost, path, strings.NewReader(`{"text":"hi"}`))
+		req.Host = testHost
+		req.RemoteAddr = "10.1.2.3:1234"
+		req.Header.Set("Remote-User", "alice")
+		w := httptest.NewRecorder()
+		s.httpServer.Handler.ServeHTTP(w, req)
+		if w.Code != http.StatusForbidden {
+			t.Errorf("POST %s via trusted-proxy SSO = %d, want 403; body = %s", path, w.Code, w.Body.String())
+		}
 	}
 }
