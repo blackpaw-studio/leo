@@ -693,6 +693,7 @@ func (d *Dispatcher) Wait(ctx context.Context, ids []string, timeout time.Durati
 			}
 		}
 		if !pending {
+			d.awaitSettled(ctx, deadline, states, dones, entries, skipCleanup)
 			return entries
 		}
 		// Interactive turns complete before their parent session does. Polling
@@ -729,6 +730,29 @@ func (d *Dispatcher) Wait(ctx context.Context, ids []string, timeout time.Durati
 					entries[i] = headlessEntry(rec, turnIDs[i], d.now())
 				}
 			}
+		}
+	}
+}
+
+// awaitSettled holds a wait open until each terminal headless run it reports
+// has finished writing its recording. A run turns terminal under d.mu but
+// persists its final text and closes its recording afterwards; returning in
+// between lets the caller observe (and tear down around) a half-finalized
+// run. The wait is cut short by ctx or the wait deadline.
+func (d *Dispatcher) awaitSettled(ctx context.Context, deadline *time.Timer, states []*runState, dones []chan struct{}, entries []Entry, skipCleanup []bool) {
+	for i, state := range states {
+		if state == nil || dones[i] == nil || skipCleanup[i] || !entries[i].Status.Terminal() {
+			continue
+		}
+		if d.stateRecord(state).Mode == ModeInteractive {
+			continue
+		}
+		select {
+		case <-dones[i]:
+		case <-ctx.Done():
+			return
+		case <-deadline.C:
+			return
 		}
 	}
 }
