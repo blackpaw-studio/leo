@@ -59,6 +59,10 @@ type Started struct {
 	Placement string `json:"placement,omitempty"`
 	Pane      string `json:"pane,omitempty"`
 	Window    string `json:"window,omitempty"`
+	// Queued reports an interactive dispatch accepted while every
+	// concurrency slot was taken: it has no pane yet and launches, placed as
+	// usual, once a slot frees.
+	Queued bool `json:"queued,omitempty"`
 }
 
 func requestKind(req Request) string {

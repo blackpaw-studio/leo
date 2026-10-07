@@ -828,8 +828,11 @@ func (r *registry) callContext(ctx context.Context, name string, raw json.RawMes
 // formatDispatchPlacement describes where an interactive dispatch's TUI
 // actually landed, so the caller doesn't go hunting for a tmux window that
 // was really a split pane (or vice versa). Headless dispatches carry no
-// placement and render nothing.
+// placement and render nothing; a queued interactive dispatch has no pane yet.
 func formatDispatchPlacement(started consult.Started) string {
+	if started.Queued {
+		return " · queued: every slot is busy; it launches when one frees (leo_wait on it)"
+	}
 	switch started.Placement {
 	case "split":
 		if started.Pane == "" {

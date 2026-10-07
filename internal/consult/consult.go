@@ -106,6 +106,9 @@ type runState struct {
 	// after Wait so worktree cleanup can prove no detached child remains.
 	pgid            int
 	headlessStarted bool
+	// awaitingSlot marks an interactive run accepted while the limiter was
+	// full: it has no pane until launchWhenSlotFree claims a slot.
+	awaitingSlot bool
 	// bridgedUsage is a bridged interactive run's usage as its mod reports it.
 	bridgedUsage bridgedUsage
 }

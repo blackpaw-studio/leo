@@ -169,32 +169,87 @@ func (d *Dispatcher) startInteractive(ctx context.Context, s *runState, req Requ
 		return Started{}, invalidf("interactive dispatch is not supported by harness %q", harnessName)
 	}
 	if !d.trySlot() {
-		d.mu.Lock()
-		t := d.openTurnLocked(s, TurnSourceOrchestrator, prompt, false)
-		d.closeTurnLocked(s, t.TurnID, TurnRejected, "no capacity")
-		d.finishInteractiveLocked(s, StatusFailed)
-		d.mu.Unlock()
-		return Started{ID: s.record.ID, Harness: harnessName, Model: model, Cwd: req.Cwd}, nil
+		return d.queueInteractive(ctx, s, req, harnessName, model, cfg, rt), nil
 	}
+	d.mu.Lock()
+	t := d.openTurnLocked(s, TurnSourceOrchestrator, prompt, true)
+	d.persistLocked(s, "status")
+	d.persistLocked(s, "turn")
+	d.mu.Unlock()
+	return d.launchInteractive(ctx, s, req, harnessName, model, cfg, rt, t.TurnID)
+}
+
+// queueInteractive records an interactive dispatch that found every slot
+// taken: its opening turn waits, without a pane, until launchWhenSlotFree
+// claims a slot and launches it exactly as an immediate start would.
+func (d *Dispatcher) queueInteractive(ctx context.Context, s *runState, req Request, harnessName, model string, cfg *config.Config, rt InteractiveRuntime) Started {
+	d.mu.Lock()
+	t := d.openTurnLocked(s, TurnSourceOrchestrator, requestPrompt(req), false)
+	s.awaitingSlot = true
+	d.persistLocked(s, "status")
+	d.persistLocked(s, "turn")
+	d.mu.Unlock()
+	go d.launchWhenSlotFree(ctx, s, req, harnessName, model, cfg, rt, t.TurnID)
+	return Started{ID: s.record.ID, Harness: harnessName, Model: model, Cwd: req.Cwd, Queued: true}
+}
+
+// launchWhenSlotFree blocks on a concurrency slot for a queued interactive
+// dispatch, then launches it. A run settled while it waited (canceled, timed
+// out) never takes a slot and never gets a pane.
+func (d *Dispatcher) launchWhenSlotFree(ctx context.Context, s *runState, req Request, harnessName, model string, cfg *config.Config, rt InteractiveRuntime, turnID string) {
+	select {
+	case d.sem <- struct{}{}:
+	case <-s.done:
+		return
+	case <-ctx.Done():
+		d.mu.Lock()
+		s.awaitingSlot = false
+		d.finishInteractiveLocked(s, StatusCanceled)
+		d.mu.Unlock()
+		return
+	}
+	d.mu.Lock()
+	if s.record.Status.Terminal() || s.record.Status == StatusSettling || turnByID(s.record, turnID).Outcome != "" {
+		d.mu.Unlock()
+		<-d.sem
+		return
+	}
+	s.awaitingSlot = false
+	for i := range s.record.Turns {
+		if s.record.Turns[i].TurnID == turnID {
+			s.record.Turns[i].SlotHeld = true
+			d.persistTurnLocked(s, s.record.Turns[i])
+		}
+	}
+	d.mu.Unlock()
+	if _, err := d.launchInteractive(ctx, s, req, harnessName, model, cfg, rt, turnID); err != nil {
+		fmt.Fprintf(os.Stderr, "dispatch %s: launching queued interactive dispatch: %v\n", s.record.ID, err)
+		if req.Isolation == "worktree" {
+			d.cleanupWorktree(s.record.ID)
+		}
+	}
+}
+
+// launchInteractive opens turnID's pane. turnID must already hold a slot.
+func (d *Dispatcher) launchInteractive(ctx context.Context, s *runState, req Request, harnessName, model string, cfg *config.Config, rt InteractiveRuntime, turnID string) (Started, error) {
+	prompt := requestPrompt(req)
 	bridgesOpening := false
 	if b, ok := rt.(bridgeOpeningRuntime); ok {
 		bridgesOpening = b.BridgesOpening(ctx, harnessName)
 	}
-	d.mu.Lock()
-	t := d.openTurnLocked(s, TurnSourceOrchestrator, prompt, true)
 	if bridgesOpening || claudeDeliversPromptViaArgv(harnessName, prompt) {
 		// Claude submits an argv- or bridge-delivered opening brief itself,
 		// as an ordinary UserPromptSubmit, which can arrive (via the hook's
 		// own "leo dispatch report" process) before Launch even returns, let
 		// alone before the async injectOpening goroutine below would have
-		// armed it. Arm turn 1 here, under the same lock that opened it, so
-		// no hook can ever observe it unarmed. A bridged launch that falls
-		// back to a paste is armed again by that paste.
-		d.armTurnLocked(s, t.TurnID)
+		// armed it. Arm turn 1 here, before Launch, so no hook can ever
+		// observe it unarmed. A bridged launch that falls back to a paste is
+		// armed again by that paste.
+		d.mu.Lock()
+		d.armTurnLocked(s, turnID)
+		d.persistLocked(s, "")
+		d.mu.Unlock()
 	}
-	d.persistLocked(s, "status")
-	d.persistLocked(s, "turn")
-	d.mu.Unlock()
 	overrides := ViewerOverrides{}
 	if provider, ok := rt.(viewerOverridesRuntime); ok && req.CallerSessionID != "" {
 		overrides = provider.ViewerOverrides(ctx, req.CallerSessionID)
@@ -218,7 +273,7 @@ func (d *Dispatcher) startInteractive(ctx context.Context, s *runState, req Requ
 	if err != nil {
 		d.placement.Cancel(placementRecord.ID)
 		d.mu.Lock()
-		d.closeTurnLocked(s, t.TurnID, TurnRejected, err.Error())
+		d.closeTurnLocked(s, turnID, TurnRejected, err.Error())
 		d.finishInteractiveLocked(s, StatusFailed)
 		d.mu.Unlock()
 		return Started{}, err
@@ -258,7 +313,7 @@ func (d *Dispatcher) startInteractive(ctx context.Context, s *runState, req Requ
 		}
 		return Started{}, context.Canceled
 	}
-	go d.injectOpening(ctx, s, rt, harnessName, t.TurnID, pane, prompt)
+	go d.injectOpening(ctx, s, rt, harnessName, turnID, pane, prompt)
 	return Started{ID: s.record.ID, Harness: harnessName, Model: model, Cwd: req.Cwd, Placement: placement.Kind, Pane: pane, Window: window}, nil
 }
 
@@ -487,6 +542,10 @@ func (d *Dispatcher) Send(ctx context.Context, id, message string) (SendResult, 
 	if s.record.Mode != ModeInteractive {
 		d.mu.Unlock()
 		return SendResult{}, errors.New("dispatch is not interactive")
+	}
+	if s.awaitingSlot {
+		d.mu.Unlock()
+		return SendResult{}, errors.New("dispatch is queued for a concurrency slot and has not started; leo_wait on it first")
 	}
 	if s.record.Status != StatusIdle {
 		st := s.record.Status

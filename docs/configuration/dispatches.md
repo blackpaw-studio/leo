@@ -245,8 +245,13 @@ directory:
   record turn and status transitions; malformed output is kept as raw text.
 
 Headless status moves through `queued → running → done | failed | timeout |
-canceled`. At most six headless runs execute at once; queued work remains
-cancellable. Interactive slots are instead held per orchestrator turn.
+canceled`. At most six runs execute at once; queued work remains
+cancellable. Interactive slots are instead held per orchestrator turn. An
+interactive dispatch started while every slot is busy is recorded `queued`
+with no pane (`leo_dispatch` says so) and launches, placed as usual, once a
+slot frees. `leo_cancel` on it finishes it `canceled` without opening a pane;
+`leo_send_dispatch` on it is rejected until it has started, so `leo_wait` on
+it first.
 Consult runs are capped at 30 minutes. Dispatch runs are unlimited unless
 `timeout_seconds` (or CLI `--timeout`) is set. Leo retains the 20 newest
 settled records and never prunes plausible in-flight runs.

@@ -27,3 +27,11 @@ func TestFormatDispatchPlacementHeadless(t *testing.T) {
 		t.Fatalf("formatDispatchPlacement(headless) = %q, want empty", got)
 	}
 }
+
+func TestFormatDispatchPlacementQueued(t *testing.T) {
+	got := formatDispatchPlacement(consult.Started{Queued: true})
+	want := " · queued: every slot is busy; it launches when one frees (leo_wait on it)"
+	if got != want {
+		t.Fatalf("formatDispatchPlacement(queued) = %q, want %q", got, want)
+	}
+}
