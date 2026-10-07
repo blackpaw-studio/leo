@@ -10,7 +10,7 @@ import (
 // A cancel that lands after a queued run was admitted to launch must wait
 // for the launch to publish, then tear the pane down; the slot is released
 // exactly once.
-func TestInteractiveCancelDuringQueuedLaunchWaitsAndKillsPane(t *testing.T) {
+func TestInteractiveCancelDuringQueuedLaunchKillsPane(t *testing.T) {
 	d := NewDispatcher(newFakeRecorder())
 	rt := &fakeInteractiveRuntime{arm: true, empty: true}
 	launching, release := make(chan struct{}), make(chan struct{})
@@ -23,25 +23,29 @@ func TestInteractiveCancelDuringQueuedLaunchWaitsAndKillsPane(t *testing.T) {
 	}
 	freeOne()
 	<-launching
+	// Cancel does not wait on the launch itself, only on its queued kill;
+	// the launch, publishing after that kill, kills its own pane.
 	canceled := make(chan Record, 1)
 	go func() { rec, _ := d.Cancel(started.ID); canceled <- rec }()
-	select {
-	case rec := <-canceled:
-		t.Fatalf("cancel returned (%s) while the admitted launch was still in flight", rec.Status)
-	case <-time.After(50 * time.Millisecond):
-	}
-	close(release)
 	var rec Record
 	select {
 	case rec = <-canceled:
 	case <-time.After(time.Second):
-		t.Fatal("cancel never returned")
+		t.Fatal("cancel blocked on the in-flight launch")
 	}
 	if rec.Status != StatusCanceled || rec.PaneID != "" {
 		t.Fatalf("record status=%s pane=%q, want canceled without a pane", rec.Status, rec.PaneID)
 	}
-	if rt.killCount() < 1 {
-		t.Fatal("the launched pane of a canceled run was never killed")
+	close(release)
+	deadline := time.Now().Add(time.Second)
+	for rt.killCount() < 1 {
+		if time.Now().After(deadline) {
+			t.Fatal("the launched pane of a canceled run was never killed")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	if rec, _ := d.Get(started.ID); rec.Status != StatusCanceled || rec.PaneID != "" {
+		t.Fatalf("record status=%s pane=%q after the launch, want canceled without a pane", rec.Status, rec.PaneID)
 	}
 	time.Sleep(20 * time.Millisecond)
 	if len(d.sem) != cap(d.sem)-1 {

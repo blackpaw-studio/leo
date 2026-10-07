@@ -333,3 +333,20 @@ func TestInteractiveNeedsInputDoesNotPullPaneBack(t *testing.T) {
 		t.Fatalf("events = %v, needs_input must not move the pane", rt.log())
 	}
 }
+
+// layoutRuntime pauses the first caller-window relayout, the step a hide
+// runs after breaking the pane out.
+type layoutRuntime struct {
+	*movingRuntime
+	once       sync.Once
+	layoutHook func()
+}
+
+func (r *layoutRuntime) ReapplyLayout(target string) error {
+	r.once.Do(func() {
+		if r.layoutHook != nil {
+			r.layoutHook()
+		}
+	})
+	return r.movingRuntime.ReapplyLayout(target)
+}

@@ -72,9 +72,12 @@ type Dispatcher struct {
 	beforeOpeningInject  func()
 	afterOpeningInject   func()
 	beforeSendInjectable func()
-	// launchCancelWait bounds how long a cancellation waits for an
-	// admitted launch to publish its pane before tearing down without it.
-	launchCancelWait     time.Duration
+	// paneOpWait bounds how long a cancellation waits for its queued pane
+	// kill (see defaultPaneOpWait).
+	paneOpWait time.Duration
+	// beforeCancelSettle runs after a cancellation's pane teardown, just
+	// before it settles the run. Tests use it to land work in that gap.
+	beforeCancelSettle   func()
 	notificationDelivery NotificationDelivery
 	closeFinishedViewer  func(Record, func(string) error) (Record, error)
 	// LeoMCP is the leo binary headless dispatches launch as their leo MCP
@@ -112,9 +115,17 @@ type runState struct {
 	// awaitingSlot marks an interactive run accepted while the limiter was
 	// full: it has no pane until launchWhenSlotFree claims a slot.
 	awaitingSlot bool
-	// launching is open while an admitted launch is creating and publishing
-	// the run's pane; cancellation waits on it so it never races the launch.
-	launching chan struct{}
+	// paneOps are the run's queued pane-affecting steps, run in order by a
+	// single worker while paneWorker is set (see enqueuePaneOpLocked).
+	paneOps    []paneOp
+	paneWorker bool
+	// killRequested marks a cancellation whose kill is queued: any later op
+	// kills the run's pane rather than publish or show it.
+	killRequested bool
+	// hidesPending counts queued or running hides. A user turn that starts
+	// while one is pending typed into a pane still in the caller's window,
+	// so it queues a rejoin.
+	hidesPending int
 	// permissions are the run's pending PermissionRequest hooks, oldest
 	// first; permissionSeq numbers their request ids.
 	permissions   []*permissionRequest
@@ -831,32 +842,6 @@ func (d *Dispatcher) terminateReapAndCleanup(id string, status Status) (Record, 
 	return d.cleanupWorktree(rec.ID), nil
 }
 
-// defaultLaunchCancelWait bounds how long a cancellation waits for an
-// admitted interactive launch to publish its pane.
-const defaultLaunchCancelWait = 15 * time.Second
-
-// awaitLaunchLocked waits, with d.mu held on entry and exit, for state's
-// admitted launch to finish, up to launchCancelWait.
-func (d *Dispatcher) awaitLaunchLocked(state *runState) {
-	wait := d.launchCancelWait
-	if wait <= 0 {
-		wait = defaultLaunchCancelWait
-	}
-	timer := time.NewTimer(wait)
-	defer timer.Stop()
-	for state.launching != nil {
-		launching := state.launching
-		d.mu.Unlock()
-		select {
-		case <-launching:
-			d.mu.Lock()
-		case <-timer.C:
-			d.mu.Lock()
-			return
-		}
-	}
-}
-
 func (d *Dispatcher) terminate(id string, status Status) (Record, error) {
 	rec, state, err := d.lookup(id)
 	if err != nil || state == nil || rec.Status.Terminal() {
@@ -871,29 +856,24 @@ func (d *Dispatcher) terminate(id string, status Status) (Record, error) {
 func (d *Dispatcher) terminateState(state *runState, status Status) Record {
 	d.mu.Lock()
 	if state.record.Mode == ModeInteractive {
-		// An admitted launch is about to publish a pane; let it, so the
-		// teardown below sees (and kills) that pane rather than racing it.
-		// The wait is bounded: a launch wedged on tmux must not wedge the
-		// cancel. One that publishes later finds the run terminal and kills
-		// its own pane.
-		d.awaitLaunchLocked(state)
-		pane, rt, paneRec := state.record.PaneID, d.interactiveRuntime, cloneRecord(state.record)
-		d.mu.Unlock()
 		// Cancellation kills first. Publishing settling first would allow a
-		// concurrent hook to observe a partially torn-down session.
-		if pane != "" && rt != nil && rt.Alive(pane) {
-			paneRec, _ = d.closeRecordedPane(paneRec, pane, rt.Kill, runtimeLayout(rt))
+		// concurrent hook to observe a partially torn-down session. The kill
+		// queues behind any pane op under way, and killRequested makes every
+		// later one (a launch still publishing, say) kill instead, so the
+		// bounded wait cannot leave a canceled run with a live pane.
+		state.killRequested = true
+		killed := d.enqueuePaneOpLocked(state, paneOpKill, func() { d.killRunPane(state) })
+		d.mu.Unlock()
+		d.awaitPaneOp(killed)
+		if d.beforeCancelSettle != nil {
+			d.beforeCancelSettle()
 		}
 		d.mu.Lock()
-		if state.record.Status.Terminal() {
-			d.mu.Unlock()
-			return paneRec
-		}
 		if !state.record.Status.Terminal() {
 			d.beginSettlementLocked(state, status, 0)
 			d.finishInteractiveLocked(state, status)
 		}
-		rec := state.record
+		rec := cloneRecord(state.record)
 		d.mu.Unlock()
 		return rec
 	}

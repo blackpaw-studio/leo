@@ -173,7 +173,6 @@ func (d *Dispatcher) startInteractive(ctx context.Context, s *runState, req Requ
 	}
 	d.mu.Lock()
 	t := d.openTurnLocked(s, TurnSourceOrchestrator, prompt, true)
-	s.launching = make(chan struct{})
 	d.persistLocked(s, "status")
 	d.persistLocked(s, "turn")
 	d.mu.Unlock()
@@ -216,9 +215,8 @@ func (d *Dispatcher) launchWhenSlotFree(ctx context.Context, s *runState, req Re
 		return
 	}
 	// Admission: from here the slot belongs to the turn (released once, by
-	// whatever closes it) and a cancel waits for the launch to publish.
+	// whatever closes it).
 	s.awaitingSlot = false
-	s.launching = make(chan struct{})
 	for i := range s.record.Turns {
 		if s.record.Turns[i].TurnID == turnID {
 			s.record.Turns[i].SlotHeld = true
@@ -234,17 +232,8 @@ func (d *Dispatcher) launchWhenSlotFree(ctx context.Context, s *runState, req Re
 	}
 }
 
-// launchInteractive opens turnID's pane. turnID must already hold a slot,
-// and the run must have been admitted (s.launching set), which it ends.
+// launchInteractive opens turnID's pane. turnID must already hold a slot.
 func (d *Dispatcher) launchInteractive(ctx context.Context, s *runState, req Request, harnessName, model string, cfg *config.Config, rt InteractiveRuntime, turnID string) (Started, error) {
-	defer func() {
-		d.mu.Lock()
-		if s.launching != nil {
-			close(s.launching)
-			s.launching = nil
-		}
-		d.mu.Unlock()
-	}()
 	prompt := requestPrompt(req)
 	bridgesOpening := false
 	if b, ok := rt.(bridgeOpeningRuntime); ok {
@@ -291,14 +280,34 @@ func (d *Dispatcher) launchInteractive(ctx context.Context, s *runState, req Req
 		d.mu.Unlock()
 		return Started{}, err
 	}
-	published := d.placement.Publish(placementRecord.ID, func() bool {
+	// Publication is a pane op, so it is ordered against a cancellation's
+	// kill: whichever runs second sees the other's effect.
+	published := false
+	d.mu.Lock()
+	publishing := d.enqueuePaneOpLocked(s, paneOpPublish, func() {
+		published = d.publishPane(s, rt, placement, pane, window)
+	})
+	d.mu.Unlock()
+	<-publishing
+	if !published {
+		return Started{}, context.Canceled
+	}
+	go d.injectOpening(ctx, s, rt, harnessName, turnID, pane, prompt)
+	return Started{ID: s.record.ID, Harness: harnessName, Model: model, Cwd: req.Cwd, Placement: placement.Kind, Pane: pane, Window: window}, nil
+}
+
+// publishPane attaches a launched pane to its run, or kills it when the run
+// was settled or canceled while it launched. It runs as a pane op.
+func (d *Dispatcher) publishPane(s *runState, rt InteractiveRuntime, placement ViewerPlacement, pane, window string) bool {
+	id := s.record.ID
+	published := d.placement.Publish(id, func() bool {
 		d.mu.Lock()
 		defer d.mu.Unlock()
 		// A claude opening turn armed before Launch can already have been
 		// delivered (Running) or even finished (Idle) by the time Launch
 		// returns, if its hook raced ahead of this goroutine. Any
 		// non-terminal, non-settling status still has a live pane to attach.
-		if s.record.Status.Terminal() || s.record.Status == StatusSettling {
+		if s.killRequested || s.record.Status.Terminal() || s.record.Status == StatusSettling {
 			return false
 		}
 		s.record.PaneID = pane
@@ -318,21 +327,19 @@ func (d *Dispatcher) launchInteractive(ctx context.Context, s *runState, req Req
 		}
 		return true
 	})
-	if !published {
-		d.mu.Lock()
-		s.record.ViewerKind = placement.Kind
-		s.record.PaneID = pane
-		d.persistLocked(s, "")
-		placementRecord = cloneRecord(s.record)
-		d.mu.Unlock()
-		_, closeErr := d.closeRecordedPane(placementRecord, pane, rt.Kill, runtimeLayout(rt))
-		if closeErr == nil {
-			d.placement.Cancel(placementRecord.ID)
-		}
-		return Started{}, context.Canceled
+	if published {
+		return true
 	}
-	go d.injectOpening(ctx, s, rt, harnessName, turnID, pane, prompt)
-	return Started{ID: s.record.ID, Harness: harnessName, Model: model, Cwd: req.Cwd, Placement: placement.Kind, Pane: pane, Window: window}, nil
+	d.mu.Lock()
+	s.record.ViewerKind = placement.Kind
+	s.record.PaneID = pane
+	d.persistLocked(s, "")
+	rec := cloneRecord(s.record)
+	d.mu.Unlock()
+	if _, err := d.closeRecordedPane(rec, pane, rt.Kill, runtimeLayout(rt)); err == nil {
+		d.placement.Cancel(id)
+	}
+	return false
 }
 
 // injectOpening deliberately runs after Start returns: the TUI's readiness
@@ -359,10 +366,7 @@ func (d *Dispatcher) injectOpening(ctx context.Context, s *runState, rt Interact
 		if !settled && !paneChanged {
 			return
 		}
-		d.mu.Lock()
-		rec := cloneRecord(s.record)
-		d.mu.Unlock()
-		_, _ = d.closeRecordedPane(rec, pane, rt.Kill, runtimeLayout(rt))
+		d.reconcileOpeningPane(s, rt, pane)
 		return
 	}
 	injection := rt.Inject
@@ -419,13 +423,9 @@ func (d *Dispatcher) openingNeedsPaste(ctx context.Context, s *runState, rt Inte
 // different pane, while its opening was on its way.
 func (d *Dispatcher) reconcileOpeningPane(s *runState, rt InteractiveRuntime, pane string) {
 	d.mu.Lock()
-	settled := s.record.Status.Terminal() || s.record.Status == StatusSettling
-	paneChanged := s.record.PaneID != pane
-	rec := cloneRecord(s.record)
+	closed := d.enqueuePaneOpLocked(s, paneOpKill, func() { d.closeStalePane(s, rt, pane) })
 	d.mu.Unlock()
-	if settled || paneChanged {
-		_, _ = d.closeRecordedPane(rec, pane, rt.Kill, runtimeLayout(rt))
-	}
+	<-closed
 }
 
 // failOpening fails the run over its opening turn's delivery error. Opening
@@ -434,7 +434,8 @@ func (d *Dispatcher) reconcileOpeningPane(s *runState, rt InteractiveRuntime, pa
 func (d *Dispatcher) failOpening(s *runState, turnID string, err error) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	if !s.record.Status.Terminal() && s.record.Status != StatusSettling &&
+	// A cancellation tearing the pane down settles the run itself.
+	if !s.killRequested && !s.record.Status.Terminal() && s.record.Status != StatusSettling &&
 		len(s.record.Turns) > 0 &&
 		s.record.Turns[len(s.record.Turns)-1].TurnID == turnID &&
 		s.record.Turns[len(s.record.Turns)-1].Outcome == "" {
@@ -472,6 +473,10 @@ func (d *Dispatcher) appendTurnLocked(s *runState, source TurnSource, text strin
 	if source == TurnSourceUser {
 		s.record.Status = StatusRunning
 		s.record.startActive(d.now())
+		if s.hidesPending > 0 {
+			// Typed into the pane before the pending hide moved it away.
+			d.scheduleShowLocked(s)
+		}
 	}
 	return &s.record.Turns[len(s.record.Turns)-1]
 }
@@ -606,6 +611,7 @@ func (d *Dispatcher) Send(ctx context.Context, id, message string) (SendResult, 
 	pane := s.record.PaneID
 	rt := d.interactiveRuntime
 	d.persistLocked(s, "turn")
+	shown := d.scheduleShowLocked(s)
 	d.mu.Unlock()
 	if rt == nil {
 		d.mu.Lock()
@@ -613,7 +619,10 @@ func (d *Dispatcher) Send(ctx context.Context, id, message string) (SendResult, 
 		d.mu.Unlock()
 		return SendResult{TurnID: t.TurnID}, errors.New("interactive runtime unavailable")
 	}
-	d.showPane(ctx, s, pane)
+	select {
+	case <-shown:
+	case <-ctx.Done():
+	}
 	if d.beforeSendInjectable != nil {
 		d.beforeSendInjectable()
 	}
@@ -1106,25 +1115,17 @@ func (d *Dispatcher) Sweep(now time.Time) {
 		}
 	}
 	if rt != nil {
+		retries := make([]<-chan struct{}, 0, len(cleanups))
 		for _, state := range cleanups {
 			d.mu.Lock()
-			if state.releasing || state.record.Status == StatusReleased || !state.killPending || state.record.PaneID == "" {
-				d.mu.Unlock()
-				continue
+			if !d.paneOpQueuedLocked(state, paneOpKill) {
+				state := state
+				retries = append(retries, d.enqueuePaneOpLocked(state, paneOpKill, func() { d.retryPaneKill(state, rt) }))
 			}
-			rec, pane := cloneRecord(state.record), state.record.PaneID
 			d.mu.Unlock()
-			kill := rt.Kill
-			if prober, ok := rt.(panePresenceRuntime); ok {
-				presence, err := prober.PanePresence(pane)
-				if err != nil {
-					continue
-				}
-				if presence == PaneAbsent {
-					kill = func(string) error { return nil }
-				}
-			}
-			_, _ = d.closeRecordedPane(rec, pane, kill, runtimeLayout(rt))
+		}
+		for _, done := range retries {
+			<-done
 		}
 	}
 }
