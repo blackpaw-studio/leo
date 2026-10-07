@@ -25,9 +25,9 @@ func ConfigPath(cfg *config.Config) string {
 
 // EnsureConfig writes the Leo-managed MCP config file if it isn't already
 // up to date. Idempotent. Returns the absolute path on success.
-func EnsureConfig(cfg *config.Config) (string, error) {
+func (s Server) EnsureConfig(cfg *config.Config) (string, error) {
 	path := ConfigPath(cfg)
-	want := buildConfig()
+	want := s.buildConfig()
 
 	if existing, err := os.ReadFile(path); err == nil && bytesEqual(existing, want) {
 		return path, nil
@@ -50,7 +50,7 @@ func EnsureConfig(cfg *config.Config) (string, error) {
 // is enabled the server operates in full mode (daemon-backed tools like
 // leo_send_message); without it, the server self-selects local-only mode
 // from its environment and serves only the local leo_skill tool.
-func AppendArg(args []string, cfg *config.Config) []string {
+func (s Server) AppendArg(args []string, cfg *config.Config) []string {
 	if cfg == nil {
 		return args
 	}
@@ -61,7 +61,7 @@ func AppendArg(args []string, cfg *config.Config) []string {
 		// misconfigured callers happen to run from.
 		return args
 	}
-	path, err := EnsureConfig(cfg)
+	path, err := s.EnsureConfig(cfg)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "leo: warning: could not write leo MCP config: %v\n", err)
 		return args
@@ -237,26 +237,41 @@ func MergeSystemPrompt(cfg *config.Config, userPrompt string) string {
 	}
 }
 
-func buildConfig() []byte {
-	v := map[string]any{
-		"mcpServers": map[string]any{
-			"leo": map[string]any{
-				"command": "leo",
-				"args":    []string{"mcp-server"},
-			},
-		},
-	}
-	out, err := json.MarshalIndent(v, "", "  ")
+// mcpConfig is the Claude Code MCP config shape wiring the leo server.
+// Structs (not maps) keep the key order stable: command before args.
+type mcpConfig struct {
+	MCPServers map[string]mcpServer `json:"mcpServers"`
+}
+
+type mcpServer struct {
+	Command string   `json:"command"`
+	Args    []string `json:"args"`
+}
+
+func (s Server) mcpConfig() mcpConfig {
+	return mcpConfig{MCPServers: map[string]mcpServer{
+		"leo": {Command: s.Executable(), Args: s.Args()},
+	}}
+}
+
+func (s Server) buildConfig() []byte {
+	out, err := json.MarshalIndent(s.mcpConfig(), "", "  ")
 	if err != nil {
-		// Fall back to a guaranteed-valid hand-rolled string.
-		return []byte(`{"mcpServers":{"leo":{"command":"leo","args":["mcp-server"]}}}` + "\n")
+		// Strings and string slices always marshal; unreachable.
+		panic(fmt.Sprintf("leomcp: marshal MCP config: %v", err))
 	}
 	return append(out, '\n')
 }
 
 // InlineConfig returns the Leo bridge as compact JSON for strict Claude MCP
 // profiles. Unlike EnsureConfig it never touches the filesystem.
-func InlineConfig() string { return `{"mcpServers":{"leo":{"command":"leo","args":["mcp-server"]}}}` }
+func (s Server) InlineConfig() string {
+	out, err := json.Marshal(s.mcpConfig())
+	if err != nil {
+		panic(fmt.Sprintf("leomcp: marshal MCP config: %v", err))
+	}
+	return string(out)
+}
 
 func bytesEqual(a, b []byte) bool {
 	if len(a) != len(b) {

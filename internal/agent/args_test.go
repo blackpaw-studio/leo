@@ -30,7 +30,7 @@ func TestBuildTemplateArgsWiresLeoMCPWhenWebEnabled(t *testing.T) {
 	cfg := &config.Config{HomePath: t.TempDir(), Web: config.WebConfig{Enabled: true}}
 	tmpl := config.TemplateConfig{}
 
-	args, env := BuildTemplateArgs(cfg, tmpl, "agent-x", "/tmp/ws", "", "")
+	args, env := BuildTemplateArgs(cfg, tmpl, "agent-x", "/tmp/ws", "", "", leomcp.Server{})
 
 	if !hasFlagValue(args, "--mcp-config", "leo-mcp.json") {
 		t.Errorf("expected --mcp-config pointing at leo-mcp.json; got %v", args)
@@ -52,7 +52,7 @@ func TestBuildTemplateArgsLeoMCPAlwaysWiredWhenWebDisabled(t *testing.T) {
 	// and the leo_skill nudge still appear, but the messaging nudge (which
 	// requires the daemon's web listener) does not.
 	cfg := &config.Config{HomePath: t.TempDir(), Web: config.WebConfig{Enabled: false}}
-	args, _ := BuildTemplateArgs(cfg, config.TemplateConfig{}, "agent-x", "/tmp/ws", "", "")
+	args, _ := BuildTemplateArgs(cfg, config.TemplateConfig{}, "agent-x", "/tmp/ws", "", "", leomcp.Server{})
 
 	if !hasFlagValue(args, "--mcp-config", "leo-mcp.json") {
 		t.Errorf("expected --mcp-config pointing at leo-mcp.json even when web disabled; got %v", args)
@@ -211,7 +211,7 @@ func TestBuildTemplateArgsCharacterization(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, _ := BuildTemplateArgs(tt.cfg, tt.tmpl, "myagent", "/tmp/ws", tt.prompt, "")
+			got, _ := BuildTemplateArgs(tt.cfg, tt.tmpl, "myagent", "/tmp/ws", tt.prompt, "", leomcp.Server{})
 			if !reflect.DeepEqual(got, tt.want) {
 				t.Fatalf("BuildTemplateArgs argv mismatch\n got: %q\nwant: %q", got, tt.want)
 			}
@@ -231,7 +231,7 @@ func TestResolveTemplateLaunchCodexFillsLeoMCPBridge(t *testing.T) {
 	}
 	tmpl := config.TemplateConfig{}
 
-	h, spec, err := resolveTemplateLaunch(cfg, tmpl, "agent-x", "/tmp/ws", "", "tok")
+	h, spec, err := resolveTemplateLaunch(cfg, tmpl, "agent-x", "/tmp/ws", "", "tok", leomcp.Server{})
 	if err != nil {
 		t.Fatalf("resolveTemplateLaunch: %v", err)
 	}
@@ -289,7 +289,7 @@ func TestResolveTemplateLaunchCodexLeoMCPWhenWebDisabled(t *testing.T) {
 		Web:      config.WebConfig{Enabled: false},
 		Defaults: config.DefaultsConfig{Harness: "codex"},
 	}
-	_, spec, err := resolveTemplateLaunch(cfg, config.TemplateConfig{}, "agent-x", "/tmp/ws", "", "tok")
+	_, spec, err := resolveTemplateLaunch(cfg, config.TemplateConfig{}, "agent-x", "/tmp/ws", "", "tok", leomcp.Server{})
 	if err != nil {
 		t.Fatalf("resolveTemplateLaunch: %v", err)
 	}
@@ -312,7 +312,7 @@ func TestResolveTemplateLaunchCodexLeoMCPWithoutToken(t *testing.T) {
 		Web:      config.WebConfig{Enabled: true},
 		Defaults: config.DefaultsConfig{Harness: "codex"},
 	}
-	_, spec, err := resolveTemplateLaunch(cfg, config.TemplateConfig{}, "agent-x", "/tmp/ws", "", "")
+	_, spec, err := resolveTemplateLaunch(cfg, config.TemplateConfig{}, "agent-x", "/tmp/ws", "", "", leomcp.Server{})
 	if err != nil {
 		t.Fatalf("resolveTemplateLaunch: %v", err)
 	}
@@ -336,7 +336,7 @@ func TestResolveTemplateLaunchOpencodeFillsLeoMCPBridge(t *testing.T) {
 		Web:      config.WebConfig{Enabled: true, Port: 4141},
 		Defaults: config.DefaultsConfig{Harness: "opencode"},
 	}
-	h, spec, err := resolveTemplateLaunch(cfg, config.TemplateConfig{}, "agent-x", "/tmp/ws", "", "sekrit-token")
+	h, spec, err := resolveTemplateLaunch(cfg, config.TemplateConfig{}, "agent-x", "/tmp/ws", "", "sekrit-token", leomcp.Server{})
 	if err != nil {
 		t.Fatalf("resolveTemplateLaunch: %v", err)
 	}
@@ -385,7 +385,7 @@ func TestResolveTemplateLaunchOpencodeBridgeWithEmptyTokenWhenTokenEmpty(t *test
 		Web:      config.WebConfig{Enabled: true},
 		Defaults: config.DefaultsConfig{Harness: "opencode"},
 	}
-	_, spec, err := resolveTemplateLaunch(cfg, config.TemplateConfig{}, "agent-x", "/tmp/ws", "", "")
+	_, spec, err := resolveTemplateLaunch(cfg, config.TemplateConfig{}, "agent-x", "/tmp/ws", "", "", leomcp.Server{})
 	if err != nil {
 		t.Fatalf("resolveTemplateLaunch: %v", err)
 	}
@@ -406,7 +406,7 @@ func TestResolveTemplateLaunchOpencodeBridgeWithEmptyTokenWhenTokenEmpty(t *test
 // keyed off this.
 func TestResolveTemplateLaunchKindIsAgent(t *testing.T) {
 	cfg := &config.Config{HomePath: t.TempDir()}
-	_, spec, err := resolveTemplateLaunch(cfg, config.TemplateConfig{}, "agent-x", "/tmp/ws", "", "")
+	_, spec, err := resolveTemplateLaunch(cfg, config.TemplateConfig{}, "agent-x", "/tmp/ws", "", "", leomcp.Server{})
 	if err != nil {
 		t.Fatalf("resolveTemplateLaunch: %v", err)
 	}

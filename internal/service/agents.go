@@ -10,8 +10,10 @@ import (
 
 	"github.com/blackpaw-studio/leo/internal/agent"
 	"github.com/blackpaw-studio/leo/internal/agentstore"
+	"github.com/blackpaw-studio/leo/internal/config"
 	"github.com/blackpaw-studio/leo/internal/daemon"
 	"github.com/blackpaw-studio/leo/internal/git"
+	"github.com/blackpaw-studio/leo/internal/leomcp"
 )
 
 // agentSpawner is the minimal supervisor surface RestoreAgents needs.
@@ -71,7 +73,7 @@ type restoreSpawn struct {
 //
 // After all records are processed, `git worktree prune` runs once per unique
 // canonical path so git's administrative state matches the filesystem.
-func RestoreAgents(homePath, tmuxPath, webToken string, sv agentSpawner) int {
+func RestoreAgents(homePath, tmuxPath, webToken string, sv agentSpawner, mcp leomcp.Server) int {
 	path := agentstore.FilePath(homePath)
 	records, err := agentstore.Load(path)
 	if err != nil || len(records) == 0 {
@@ -177,6 +179,15 @@ func RestoreAgents(homePath, tmuxPath, webToken string, sv agentSpawner) int {
 				}
 			}
 		}
+
+		// A record persisted before the leo MCP server ran the daemon's own
+		// binary still launches a bare "leo" from PATH; point it at mcp.
+		migratedArgs, migratedEnv, err := mcp.MigrateLaunch(&config.Config{HomePath: homePath}, rec.Harness, rec.ClaudeArgs, rec.Env)
+		if err != nil {
+			// MigrateLaunch returned the stored launch unchanged.
+			fmt.Fprintf(os.Stderr, "restore: agent %q: leo MCP server left unmigrated: %v\n", name, err)
+		}
+		rec.ClaudeArgs, rec.Env = migratedArgs, migratedEnv
 
 		args := rec.ClaudeArgs
 		if rec.Harness == "" || rec.Harness == "claude" {

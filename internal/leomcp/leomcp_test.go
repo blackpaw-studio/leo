@@ -15,7 +15,7 @@ func TestEnsureConfigWritesFile(t *testing.T) {
 	dir := t.TempDir()
 	cfg := &config.Config{HomePath: dir}
 
-	path, err := EnsureConfig(cfg)
+	path, err := Server{}.EnsureConfig(cfg)
 	if err != nil {
 		t.Fatalf("EnsureConfig: %v", err)
 	}
@@ -49,7 +49,7 @@ func TestEnsureConfigIdempotent(t *testing.T) {
 	dir := t.TempDir()
 	cfg := &config.Config{HomePath: dir}
 
-	path, err := EnsureConfig(cfg)
+	path, err := Server{}.EnsureConfig(cfg)
 	if err != nil {
 		t.Fatalf("first EnsureConfig: %v", err)
 	}
@@ -58,7 +58,7 @@ func TestEnsureConfigIdempotent(t *testing.T) {
 		t.Fatalf("stat: %v", err)
 	}
 
-	if _, err := EnsureConfig(cfg); err != nil {
+	if _, err := (Server{}).EnsureConfig(cfg); err != nil {
 		t.Fatalf("second EnsureConfig: %v", err)
 	}
 	stat2, err := os.Stat(path)
@@ -75,7 +75,7 @@ func TestAppendArgIncludedWhenWebDisabled(t *testing.T) {
 	cfg := &config.Config{HomePath: dir}
 	cfg.Web.Enabled = false
 
-	args := AppendArg([]string{"--model", "sonnet"}, cfg)
+	args := Server{}.AppendArg([]string{"--model", "sonnet"}, cfg)
 	found := false
 	for i := 0; i < len(args)-1; i++ {
 		if args[i] == "--mcp-config" && strings.HasSuffix(args[i+1], "leo-mcp.json") {
@@ -98,7 +98,7 @@ func TestAppendArgIncludedWhenWebEnabled(t *testing.T) {
 	cfg := &config.Config{HomePath: dir}
 	cfg.Web.Enabled = true
 
-	args := AppendArg([]string{"--model", "sonnet"}, cfg)
+	args := Server{}.AppendArg([]string{"--model", "sonnet"}, cfg)
 	found := false
 	for i := 0; i < len(args)-1; i++ {
 		if args[i] == "--mcp-config" && strings.HasSuffix(args[i+1], "leo-mcp.json") {
@@ -114,7 +114,7 @@ func TestAppendArgSkippedWhenHomePathEmpty(t *testing.T) {
 	cfg := &config.Config{}
 	cfg.Web.Enabled = true
 
-	args := AppendArg([]string{"--model", "sonnet"}, cfg)
+	args := Server{}.AppendArg([]string{"--model", "sonnet"}, cfg)
 	for i := 0; i < len(args)-1; i++ {
 		if args[i] == "--mcp-config" {
 			t.Fatalf("expected no --mcp-config when HomePath is empty; got %v", args)

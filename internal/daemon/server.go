@@ -115,7 +115,10 @@ type Server struct {
 	// bridgeRouter routes agent names to their live bridges; both handed to
 	// the web server by StartWeb. Either may be nil (no bridge use).
 	bridgeLauncher *bridgemod.Launcher
-	bridgeRouter   *bridge.Router
+	// leoMCP is the leo binary dispatches launch as their leo MCP server,
+	// handed to the web server's consult runtime (see WithLeoMCP).
+	leoMCP       leomcp.Server
+	bridgeRouter *bridge.Router
 
 	// ready is reported on /health and set by MarkReady once startup has
 	// restored agents; until then agent queries (e.g. /agents/stale) answer
@@ -131,6 +134,13 @@ type Option func(*Server)
 // WithBridge serves hub on the bridge routes instead of a private one.
 func WithBridge(hub *bridge.Hub) Option {
 	return func(s *Server) { s.bridge = hub }
+}
+
+// WithLeoMCP sets the daemon's own leo binary (see leomcp.ResolveServer):
+// the leo MCP server dispatches launch, and the `leo run` that cron and the
+// web UI's manual runs exec.
+func WithLeoMCP(s leomcp.Server) Option {
+	return func(srv *Server) { srv.leoMCP = s }
 }
 
 // WithBridgeLaunches hands the web server what it needs to drive claude
@@ -171,15 +181,9 @@ func (s *Server) ConfigWriter() *config.Writer { return s.configWriter }
 
 // New creates a new daemon server. The processes provider is optional (may be nil).
 func New(sockPath, configPath string, processes ProcessStateProvider, opts ...Option) *Server {
-	leoPath, err := exec.LookPath("leo")
-	if err != nil {
-		leoPath = "leo"
-	}
-
 	s := &Server{
 		sockPath:      sockPath,
 		configPath:    configPath,
-		scheduler:     cron.New(leoPath, configPath),
 		processes:     processes,
 		router:        newSessionRouter(),
 		parentContext: context.Background(),
@@ -189,6 +193,9 @@ func New(sockPath, configPath string, processes ProcessStateProvider, opts ...Op
 	for _, opt := range opts {
 		opt(s)
 	}
+	// Cron fires `leo run` from the daemon's own binary (WithLeoMCP), so an
+	// isolated daemon never runs tasks through whichever leo is on PATH.
+	s.scheduler = cron.New(s.leoMCP.Executable(), configPath)
 	if s.bridge == nil {
 		s.bridge = bridge.New(bridge.Options{})
 	}
@@ -437,6 +444,7 @@ func (s *Server) StartWeb(cfg *config.Config, agentSvc web.AgentService) error {
 		// Consults record to <state>/consults for `leo consult watch`.
 		ConsultRecorder: consult.NewFileRecorder(cfg.StatePath()),
 		ParentContext:   s.parentContext,
+		LeoMCP:          s.leoMCP,
 	}, observeOpts...)
 	bind := cfg.WebBind()
 	addr := fmt.Sprintf("%s:%d", bind, port)

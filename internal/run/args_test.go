@@ -142,7 +142,7 @@ func TestBuildArgsCharacterization(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, _ := buildArgs(tt.cfg, tt.task, "mytask", tt.prompt, tt.sessionID, tt.leoEnv)
+			got, _ := buildArgs(tt.cfg, tt.task, "mytask", tt.prompt, tt.sessionID, tt.leoEnv, leomcp.Server{})
 			if !reflect.DeepEqual(got, tt.want) {
 				t.Fatalf("buildArgs argv mismatch\n got: %q\nwant: %q", got, tt.want)
 			}
@@ -167,7 +167,7 @@ func TestBuildArgsCodex(t *testing.T) {
 	}
 	task := cfg.Tasks["mytask"]
 
-	args, env := buildArgs(cfg, task, "mytask", "do it", "", nil)
+	args, env := buildArgs(cfg, task, "mytask", "do it", "", nil, leomcp.Server{})
 	joined := strings.Join(args, " ")
 	// No task/defaults model override, so TaskModel falls through to the
 	// built-in default ("sonnet") — the harness matches defaults.harness, so
@@ -203,7 +203,7 @@ func TestBuildArgsCodexWithLeoMCP(t *testing.T) {
 		"LEO_API_TOKEN":    "tok",
 	}
 
-	args, _ := buildArgs(cfg, task, "mytask", "do it", "", leoEnv)
+	args, _ := buildArgs(cfg, task, "mytask", "do it", "", leoEnv, leomcp.Server{})
 	joined := strings.Join(args, " ")
 	for _, want := range []string{
 		`-c mcp_servers.leo.command="leo"`,
@@ -243,7 +243,7 @@ func TestBuildArgsOpencode(t *testing.T) {
 		"LEO_API_TOKEN":    "tok-abc",
 	}
 
-	args, env := buildArgs(cfg, task, "mytask", "do it", "", leoEnv)
+	args, env := buildArgs(cfg, task, "mytask", "do it", "", leoEnv, leomcp.Server{})
 	// No task/defaults model override, so TaskModel falls through to the
 	// built-in default ("sonnet") — the harness matches defaults.harness, so
 	// the fall-through applies.
@@ -288,7 +288,7 @@ func TestBuildArgsNonClaudeModelCascade(t *testing.T) {
 			}
 			task := config.TaskConfig{Workspace: "/tmp/ws", Harness: h}
 
-			args, _ := buildArgs(cfg, task, "mytask", "do it", "", nil)
+			args, _ := buildArgs(cfg, task, "mytask", "do it", "", nil, leomcp.Server{})
 			for i, a := range args {
 				if a == "--model" {
 					t.Errorf("did not expect --model in argv (defaults.model is claude-shaped); got %v (at index %d)", args, i)

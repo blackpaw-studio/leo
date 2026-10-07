@@ -17,6 +17,7 @@ import (
 	"github.com/blackpaw-studio/leo/internal/agentstore"
 	"github.com/blackpaw-studio/leo/internal/daemon"
 	claudeharness "github.com/blackpaw-studio/leo/internal/harness/claude"
+	"github.com/blackpaw-studio/leo/internal/leomcp"
 	"github.com/blackpaw-studio/leo/internal/session"
 )
 
@@ -315,7 +316,7 @@ func TestRestoreAgentsDropsWorktreeWithMissingWorkspace(t *testing.T) {
 	}
 
 	spawner := &fakeAgentSpawner{}
-	restored := RestoreAgents(home, "", "", spawner)
+	restored := RestoreAgents(home, "", "", spawner, leomcp.Server{})
 	if restored != 0 {
 		t.Fatalf("expected 0 restored, got %d", restored)
 	}
@@ -356,7 +357,7 @@ func TestRestoreAgentsDroppingAWorktreeDropsItsMail(t *testing.T) {
 	}
 
 	spawner := &mailDroppingSpawner{}
-	RestoreAgents(home, "", "", spawner)
+	RestoreAgents(home, "", "", spawner, leomcp.Server{})
 
 	if !slices.Equal(spawner.dropped, []string{rec.Name}) {
 		t.Fatalf("dropped mail of %v, want [%s]", spawner.dropped, rec.Name)
@@ -400,7 +401,7 @@ func TestRestoreAgentsSkipsStoppedWorktreeRecord(t *testing.T) {
 	}
 
 	spawner := &fakeAgentSpawner{}
-	restored := RestoreAgents(home, "", "", spawner)
+	restored := RestoreAgents(home, "", "", spawner, leomcp.Server{})
 	if restored != 0 {
 		t.Fatalf("expected 0 restored, got %d", restored)
 	}
@@ -434,7 +435,7 @@ func TestRestoreAgentsRespawnsSharedWithResume(t *testing.T) {
 
 	const wantToken = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
 	spawner := &fakeAgentSpawner{}
-	restored := RestoreAgents(home, "", wantToken, spawner)
+	restored := RestoreAgents(home, "", wantToken, spawner, leomcp.Server{})
 	if restored != 1 {
 		t.Fatalf("expected 1 restored, got %d", restored)
 	}
@@ -484,7 +485,7 @@ func TestRestoreAgentsThreadsHarnessOntoSpawnSpec(t *testing.T) {
 	}
 
 	spawner := &fakeAgentSpawner{}
-	if restored := RestoreAgents(home, "", "tok", spawner); restored != 1 {
+	if restored := RestoreAgents(home, "", "tok", spawner, leomcp.Server{}); restored != 1 {
 		t.Fatalf("expected 1 restored, got %d", restored)
 	}
 	if len(spawner.calls) != 1 {
@@ -520,7 +521,7 @@ func TestRestoreAgentsSkipsClaudeOnlyResumeLogicForNonClaude(t *testing.T) {
 	}
 
 	spawner := &fakeAgentSpawner{}
-	if restored := RestoreAgents(home, "", "tok", spawner); restored != 1 {
+	if restored := RestoreAgents(home, "", "tok", spawner, leomcp.Server{}); restored != 1 {
 		t.Fatalf("expected 1 restored, got %d", restored)
 	}
 	if len(spawner.calls) != 1 {
@@ -558,7 +559,7 @@ func TestRestoreAgentsLegacyRecordRespawnsWithoutResume(t *testing.T) {
 
 	const wantToken = "fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210"
 	spawner := &fakeAgentSpawner{}
-	restored := RestoreAgents(home, "", wantToken, spawner)
+	restored := RestoreAgents(home, "", wantToken, spawner, leomcp.Server{})
 	if restored != 1 {
 		t.Fatalf("expected 1 restored, got %d", restored)
 	}
@@ -596,7 +597,7 @@ func TestRestoreAgentsKeepsFailedSharedRecord(t *testing.T) {
 	}
 
 	spawner := &fakeAgentSpawner{nextErr: fmt.Errorf("supervisor rejected spawn")}
-	restored := RestoreAgents(home, "", "", spawner)
+	restored := RestoreAgents(home, "", "", spawner, leomcp.Server{})
 	if restored != 0 {
 		t.Fatalf("expected 0 restored, got %d", restored)
 	}
@@ -635,7 +636,7 @@ func TestRestoreAgentsKeepsSharedRecordWithMissingWorkspace(t *testing.T) {
 	}
 
 	spawner := &fakeAgentSpawner{}
-	restored := RestoreAgents(home, "", "", spawner)
+	restored := RestoreAgents(home, "", "", spawner, leomcp.Server{})
 	if restored != 0 {
 		t.Fatalf("expected 0 restored, got %d", restored)
 	}
@@ -682,7 +683,7 @@ func TestRestoreAgentsStoppedSurvivesMissingWorkspaceUnmodified(t *testing.T) {
 		}
 
 		spawner := &fakeAgentSpawner{}
-		restored := RestoreAgents(home, "", "", spawner)
+		restored := RestoreAgents(home, "", "", spawner, leomcp.Server{})
 		if restored != 0 {
 			t.Fatalf("wake=%v: expected 0 restored, got %d", wake, restored)
 		}
@@ -732,7 +733,7 @@ func TestRestoreAgentsRetriesFailedRestoreRecord(t *testing.T) {
 	}
 
 	spawner := &fakeAgentSpawner{}
-	restored := RestoreAgents(home, "", "", spawner)
+	restored := RestoreAgents(home, "", "", spawner, leomcp.Server{})
 	if restored != 1 {
 		t.Fatalf("expected 1 restored (retry succeeded), got %d", restored)
 	}
@@ -776,7 +777,7 @@ func TestRestoreAgentsRetryReMarksOnRepeatFailure(t *testing.T) {
 	}
 
 	spawner := &fakeAgentSpawner{nextErr: fmt.Errorf("supervisor rejected spawn again")}
-	restored := RestoreAgents(home, "", "", spawner)
+	restored := RestoreAgents(home, "", "", spawner, leomcp.Server{})
 	if restored != 0 {
 		t.Fatalf("expected 0 restored, got %d", restored)
 	}
@@ -831,7 +832,7 @@ func TestRestoreAgentsRepeatFailureSameReasonSkipsWrite(t *testing.T) {
 	time.Sleep(10 * time.Millisecond)
 
 	spawner := &fakeAgentSpawner{}
-	restored := RestoreAgents(home, "", "", spawner)
+	restored := RestoreAgents(home, "", "", spawner, leomcp.Server{})
 	if restored != 0 {
 		t.Fatalf("expected 0 restored (still broken), got %d", restored)
 	}
@@ -894,7 +895,7 @@ func TestRestoreAgentsNonENOENTStatErrorDoesNotMarkRecord(t *testing.T) {
 	}
 
 	spawner := &fakeAgentSpawner{}
-	restored := RestoreAgents(home, "", "", spawner)
+	restored := RestoreAgents(home, "", "", spawner, leomcp.Server{})
 	if restored != 1 {
 		t.Fatalf("expected 1 restored (stat error must not block spawn), got %d", restored)
 	}
@@ -936,7 +937,7 @@ func TestRestoreAgentsAdoptsLiveSession(t *testing.T) {
 	defer func() { tmuxHasSession = origHas }()
 
 	spawner := &fakeAgentSpawner{}
-	restored := RestoreAgents(home, "tmux", "", spawner)
+	restored := RestoreAgents(home, "tmux", "", spawner, leomcp.Server{})
 	if restored != 1 {
 		t.Fatalf("expected 1 restored, got %d", restored)
 	}
@@ -969,7 +970,7 @@ func TestRestoreAgentsFreshSpawnWhenSessionGone(t *testing.T) {
 	defer func() { tmuxHasSession = origHas }()
 
 	spawner := &fakeAgentSpawner{}
-	restored := RestoreAgents(home, "tmux", "", spawner)
+	restored := RestoreAgents(home, "tmux", "", spawner, leomcp.Server{})
 	if restored != 1 {
 		t.Fatalf("expected 1 restored, got %d", restored)
 	}
@@ -1077,7 +1078,7 @@ func TestRestoreAgentsPrefersLatestJSONLAfterClear(t *testing.T) {
 	}
 
 	spawner := &fakeAgentSpawner{}
-	restored := RestoreAgents(home, "", "", spawner)
+	restored := RestoreAgents(home, "", "", spawner, leomcp.Server{})
 	if restored != 1 {
 		t.Fatalf("expected 1 restored, got %d", restored)
 	}
@@ -1122,7 +1123,7 @@ func TestRestoreAgentsSkipsStopped(t *testing.T) {
 	}
 
 	spawner := &fakeAgentSpawner{}
-	RestoreAgents(home, "", "tok", spawner)
+	RestoreAgents(home, "", "tok", spawner, leomcp.Server{})
 
 	spawned := map[string]bool{}
 	for _, c := range spawner.calls {
@@ -1179,7 +1180,7 @@ func TestRestoreAgentsHonorsNoResume(t *testing.T) {
 	}
 
 	spawner := &fakeAgentSpawner{}
-	restored := RestoreAgents(home, "", "", spawner)
+	restored := RestoreAgents(home, "", "", spawner, leomcp.Server{})
 	if restored != 1 {
 		t.Fatalf("expected 1 restored, got %d", restored)
 	}
@@ -1250,7 +1251,7 @@ func TestRestoreAgentsHonorsSessionPinned(t *testing.T) {
 	}
 
 	spawner := &fakeAgentSpawner{}
-	if restored := RestoreAgents(home, "", "", spawner); restored != 1 {
+	if restored := RestoreAgents(home, "", "", spawner, leomcp.Server{}); restored != 1 {
 		t.Fatalf("expected 1 restored, got %d", restored)
 	}
 
@@ -1315,7 +1316,7 @@ func TestRestoreAgentsReservesAdoptionsBeforeSpawning(t *testing.T) {
 	defer func() { tmuxHasSession = origHas }()
 
 	spawner := &reservingSpawner{failName: "c"}
-	RestoreAgents(home, "tmux", "", spawner)
+	RestoreAgents(home, "tmux", "", spawner, leomcp.Server{})
 	if len(spawner.log) == 0 || spawner.log[0] != "reserve a,c" {
 		t.Fatalf("calls = %v, want the live sessions reserved first", spawner.log)
 	}
@@ -1331,7 +1332,7 @@ func TestRestoreAgentsReservesAdoptionsBeforeSpawning(t *testing.T) {
 // With nothing to restore the hub still learns that no adoption is coming.
 func TestRestoreAgentsSettlesAdoptionWithNothingToRestore(t *testing.T) {
 	spawner := &reservingSpawner{}
-	RestoreAgents(t.TempDir(), "tmux", "", spawner)
+	RestoreAgents(t.TempDir(), "tmux", "", spawner, leomcp.Server{})
 	if len(spawner.log) != 1 || spawner.log[0] != "reserve " {
 		t.Fatalf("calls = %v, want one empty reservation", spawner.log)
 	}

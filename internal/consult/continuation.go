@@ -75,7 +75,7 @@ func (d *Dispatcher) continueHeadless(cfg *config.Config, rec Record, message st
 		return SendResult{}, fmt.Errorf("template %q harness_options: %w", rec.Template, err)
 	}
 	if opts, ok := decoded.(claudeharness.Options); ok {
-		decoded = resolveClaudeDispatchProfile(cfg, tmpl, "dispatch", opts, tmpl.Env)
+		decoded = resolveClaudeDispatchProfile(cfg, tmpl, "dispatch", opts, tmpl.Env, d.LeoMCP)
 	}
 	cwd, recreate, err := d.resumeWorkspace(rec)
 	if err != nil {

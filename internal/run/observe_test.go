@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/blackpaw-studio/leo/internal/config"
+	"github.com/blackpaw-studio/leo/internal/leomcp"
 	"github.com/blackpaw-studio/leo/internal/observe"
 )
 
@@ -46,8 +47,8 @@ func TestRunWithNoPublisherDoesNotPanic(t *testing.T) {
 	cfg := setUpTaskWorkspace(t, t.TempDir(), "mytask")
 
 	// Act + Assert: no publisher configured must be a safe no-op.
-	if err := Run(cfg, "mytask", nil); err != nil {
-		t.Fatalf("Run() error: %v", err)
+	if err := Run(cfg, "mytask", nil, leomcp.Server{}); err != nil {
+		t.Fatalf("Run(, leomcp.Server{}) error: %v", err)
 	}
 }
 
@@ -70,8 +71,8 @@ func TestRunPublishesStartedThenSucceeded(t *testing.T) {
 	cfg := setUpTaskWorkspace(t, t.TempDir(), "mytask")
 
 	// Act
-	if err := Run(cfg, "mytask", nil); err != nil {
-		t.Fatalf("Run() error: %v", err)
+	if err := Run(cfg, "mytask", nil, leomcp.Server{}); err != nil {
+		t.Fatalf("Run(, leomcp.Server{}) error: %v", err)
 	}
 
 	// Assert
@@ -140,8 +141,8 @@ func TestRunPublishesFailedWithReasonOnError(t *testing.T) {
 	cfg := setUpTaskWorkspace(t, t.TempDir(), "mytask")
 
 	// Act
-	if err := Run(cfg, "mytask", nil); err == nil {
-		t.Fatal("expected Run() to return an error")
+	if err := Run(cfg, "mytask", nil, leomcp.Server{}); err == nil {
+		t.Fatal("expected Run(, leomcp.Server{}) to return an error")
 	}
 
 	// Assert

@@ -2,10 +2,12 @@ package cli
 
 import (
 	"fmt"
+	"os"
 	"strings"
 
 	"github.com/blackpaw-studio/leo/internal/config"
 	"github.com/blackpaw-studio/leo/internal/daemon"
+	"github.com/blackpaw-studio/leo/internal/leomcp"
 	"github.com/blackpaw-studio/leo/internal/redact"
 	"github.com/blackpaw-studio/leo/internal/run"
 	"github.com/blackpaw-studio/leo/internal/session"
@@ -34,7 +36,7 @@ func newRunCmd() *cobra.Command {
 			sessions := session.NewStore(cfg.HomePath)
 
 			if dryRun {
-				prompt, cliArgs, err := run.Preview(cfg, taskName, sessions)
+				prompt, cliArgs, err := run.Preview(cfg, taskName, sessions, leomcp.ResolveServer(os.Executable, os.Stderr))
 				if err != nil {
 					return err
 				}
@@ -72,7 +74,7 @@ func newRunCmd() *cobra.Command {
 			// daemon.ObservePublisher's doc comment for the non-fatal contract:
 			// a daemon that isn't running must never break or slow this run.
 			run.SetPublisher(daemon.NewObservePublisher(cfg.HomePath))
-			return run.Run(cfg, taskName, sessions)
+			return run.Run(cfg, taskName, sessions, leomcp.ResolveServer(os.Executable, os.Stderr))
 		},
 	}
 

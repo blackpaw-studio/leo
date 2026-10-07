@@ -10,6 +10,7 @@ import (
 	"github.com/blackpaw-studio/leo/internal/config"
 	codexharness "github.com/blackpaw-studio/leo/internal/harness/codex"
 	opencodeharness "github.com/blackpaw-studio/leo/internal/harness/opencode"
+	"github.com/blackpaw-studio/leo/internal/leomcp"
 	"github.com/blackpaw-studio/leo/internal/leotools"
 )
 
@@ -35,7 +36,7 @@ func TestBuildTemplateArgsExportsPermissions(t *testing.T) {
 				Web:      config.WebConfig{Enabled: true},
 				Defaults: config.DefaultsConfig{Harness: harness},
 			}
-			_, env := BuildTemplateArgs(cfg, restrictedTemplate(harness), "agent-x", "/tmp/ws", "", "tok")
+			_, env := BuildTemplateArgs(cfg, restrictedTemplate(harness), "agent-x", "/tmp/ws", "", "tok", leomcp.Server{})
 
 			raw, ok := env[permissionsEnvVar]
 			if !ok {
@@ -74,7 +75,7 @@ func TestBuildTemplateArgsOmitsPermissionsWhenUnrestricted(t *testing.T) {
 				Web:      config.WebConfig{Enabled: true},
 				Defaults: config.DefaultsConfig{Harness: harness},
 			}
-			_, env := BuildTemplateArgs(cfg, config.TemplateConfig{Harness: harness}, "agent-x", "/tmp/ws", "", "tok")
+			_, env := BuildTemplateArgs(cfg, config.TemplateConfig{Harness: harness}, "agent-x", "/tmp/ws", "", "tok", leomcp.Server{})
 			if _, ok := env[permissionsEnvVar]; ok {
 				t.Errorf("%s exported %s for an unrestricted template", harness, permissionsEnvVar)
 			}
@@ -90,7 +91,7 @@ func TestBuildTemplateArgsOmitsPermissionsWhenEmpty(t *testing.T) {
 		DenyTools:  []string{},
 		CanMessage: []string{},
 	}}
-	_, env := BuildTemplateArgs(cfg, tmpl, "agent-x", "/tmp/ws", "", "tok")
+	_, env := BuildTemplateArgs(cfg, tmpl, "agent-x", "/tmp/ws", "", "tok", leomcp.Server{})
 	if _, ok := env[permissionsEnvVar]; ok {
 		t.Errorf("an empty permissions block must not export %s", permissionsEnvVar)
 	}
@@ -104,7 +105,7 @@ func TestCodexBridgeForwardsPermissionsEnvVar(t *testing.T) {
 		Web:      config.WebConfig{Enabled: true},
 		Defaults: config.DefaultsConfig{Harness: "codex"},
 	}
-	_, spec, err := resolveTemplateLaunch(cfg, restrictedTemplate("codex"), "agent-x", "/tmp/ws", "", "tok")
+	_, spec, err := resolveTemplateLaunch(cfg, restrictedTemplate("codex"), "agent-x", "/tmp/ws", "", "tok", leomcp.Server{})
 	if err != nil {
 		t.Fatalf("resolveTemplateLaunch: %v", err)
 	}
@@ -125,7 +126,7 @@ func TestOpencodeBridgeCarriesPermissionsValue(t *testing.T) {
 		Web:      config.WebConfig{Enabled: true},
 		Defaults: config.DefaultsConfig{Harness: "opencode"},
 	}
-	_, spec, err := resolveTemplateLaunch(cfg, restrictedTemplate("opencode"), "agent-x", "/tmp/ws", "", "tok")
+	_, spec, err := resolveTemplateLaunch(cfg, restrictedTemplate("opencode"), "agent-x", "/tmp/ws", "", "tok", leomcp.Server{})
 	if err != nil {
 		t.Fatalf("resolveTemplateLaunch: %v", err)
 	}
@@ -146,7 +147,7 @@ func TestOpencodeBridgeCarriesPermissionsValue(t *testing.T) {
 	}
 
 	// Unrestricted templates must leave the bridge map as it was.
-	_, plain, err := resolveTemplateLaunch(cfg, config.TemplateConfig{}, "agent-x", "/tmp/ws", "", "tok")
+	_, plain, err := resolveTemplateLaunch(cfg, config.TemplateConfig{}, "agent-x", "/tmp/ws", "", "tok", leomcp.Server{})
 	if err != nil {
 		t.Fatalf("resolveTemplateLaunch: %v", err)
 	}
@@ -195,7 +196,7 @@ func TestResolveRestartArgsDropsStalePermissions(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			_, env := resolveRestartArgs(cfg, tc.rec, "tok")
+			_, env := resolveRestartArgs(cfg, tc.rec, "tok", leomcp.Server{})
 			if got, ok := env[permissionsEnvVar]; ok {
 				t.Errorf("stale %s survived restart as %q; the template no longer restricts", permissionsEnvVar, got)
 			}
@@ -221,7 +222,7 @@ func TestResolveRestartArgsAppliesCurrentPermissions(t *testing.T) {
 		SpawnEnv: map[string]string{permissionsEnvVar: `{"can_message":["anyone"]}`},
 	}
 
-	_, env := resolveRestartArgs(cfg, rec, "tok")
+	_, env := resolveRestartArgs(cfg, rec, "tok", leomcp.Server{})
 	var got leotools.Permissions
 	if err := json.Unmarshal([]byte(env[permissionsEnvVar]), &got); err != nil {
 		t.Fatalf("unmarshal %q: %v", env[permissionsEnvVar], err)

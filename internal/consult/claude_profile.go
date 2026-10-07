@@ -10,12 +10,12 @@ import (
 
 // resolveClaudeDispatchProfile applies lean defaults only when neither scope
 // explicitly opts into a profile. It returns a copy and never mutates decoded.
-func resolveClaudeDispatchProfile(cfg *config.Config, tmpl config.TemplateConfig, kind string, o claudeharness.Options, env map[string]string) claudeharness.Options {
+func resolveClaudeDispatchProfile(cfg *config.Config, tmpl config.TemplateConfig, kind string, o claudeharness.Options, env map[string]string, mcp leomcp.Server) claudeharness.Options {
 	if kind != "dispatch" {
 		return o
 	}
 	if len(o.LeoMCPArgs) == 0 {
-		o.LeoMCPArgs = leomcp.AppendArg(nil, cfg)
+		o.LeoMCPArgs = mcp.AppendArg(nil, cfg)
 	}
 	if len(o.LeoMCPArgs) > 0 {
 		o.LeoMCPToolTimeout = leomcp.ToolTimeout
@@ -38,7 +38,7 @@ func resolveClaudeDispatchProfile(cfg *config.Config, tmpl config.TemplateConfig
 		o.MCPConfigPath = ""
 		o.LeoMCPArgs = nil
 		if bridgePresent {
-			o.StrictMCPConfig = leomcp.InlineConfig()
+			o.StrictMCPConfig = mcp.InlineConfig()
 		} else {
 			o.StrictMCPConfig = `{"mcpServers":{}}`
 		}

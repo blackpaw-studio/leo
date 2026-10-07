@@ -8,6 +8,7 @@ import (
 
 	"github.com/blackpaw-studio/leo/internal/agentstore"
 	"github.com/blackpaw-studio/leo/internal/config"
+	"github.com/blackpaw-studio/leo/internal/leomcp"
 )
 
 // staleFixture builds a manager over one running agent whose record is seeded
@@ -27,7 +28,7 @@ func staleFixture(t *testing.T, tmpl config.TemplateConfig, seed func(r *agentst
 	sup := &capturingSupervisor{
 		agents: map[string]ProcessState{"leo-x": {Name: "leo-x", Status: "running"}},
 	}
-	curArgs, curEnv := BuildTemplateArgs(cfg, tmpl, "leo-x", "/w", "", "tok")
+	curArgs, curEnv := BuildTemplateArgs(cfg, tmpl, "leo-x", "/w", "", "tok", leomcp.Server{})
 	rec := agentstore.Record{
 		Name:      "leo-x",
 		Template:  "coding",

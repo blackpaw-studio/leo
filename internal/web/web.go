@@ -24,6 +24,7 @@ import (
 	"github.com/blackpaw-studio/leo/internal/harness"
 	claudeharness "github.com/blackpaw-studio/leo/internal/harness/claude"
 	"github.com/blackpaw-studio/leo/internal/history"
+	"github.com/blackpaw-studio/leo/internal/leomcp"
 	"github.com/blackpaw-studio/leo/internal/observe"
 	"github.com/blackpaw-studio/leo/internal/peerinbox"
 	"github.com/blackpaw-studio/leo/internal/tmux"
@@ -382,6 +383,10 @@ type Options struct {
 	// Bridge wires the claude mod bridge into agent messaging and dispatch
 	// launches. Optional; the zero value keeps everything on tmux.
 	Bridge BridgeOptions
+	// LeoMCP is the daemon's own leo binary: the leo MCP server dispatches
+	// launch, and the leo that manual task runs and `service restart` exec.
+	// The zero value runs the bare "leo" from PATH.
+	LeoMCP leomcp.Server
 }
 
 // New creates a new web UI server. agentSvc may be nil if agent spawning is
@@ -389,11 +394,6 @@ type Options struct {
 // event bus, version) via the functional-option pattern — every existing
 // caller passing none keeps its current behavior unchanged.
 func New(configPath string, processes ProcessStateProvider, scheduler SchedulerProvider, reloader ConfigReloader, agentSvc AgentService, opts Options, extra ...Option) *Server {
-	leoPath, err := exec.LookPath("leo")
-	if err != nil {
-		leoPath = "leo"
-	}
-
 	trustedProxies, err := parseTrustedProxies(opts.TrustedProxies)
 	if err != nil {
 		log.Printf("web: ignoring web.trusted_proxies: %v", err)
@@ -410,7 +410,7 @@ func New(configPath string, processes ProcessStateProvider, scheduler SchedulerP
 		scheduler:          scheduler,
 		reloader:           reloader,
 		agentSvc:           agentSvc,
-		leoPath:            leoPath,
+		leoPath:            opts.LeoMCP.Executable(),
 		port:               opts.Port,
 		apiToken:           opts.APIToken,
 		agentToken:         opts.AgentToken,
