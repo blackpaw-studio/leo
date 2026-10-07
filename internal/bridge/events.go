@@ -14,7 +14,11 @@ import (
 type Event struct {
 	Agent string
 	// Gen is the generation (see Target) whose launch reported it.
-	Gen           uint64
+	Gen uint64
+	// LaunchID names the launch that reported it (see LaunchID): a
+	// subscriber delivered a report after that launch retired can tell it
+	// from its successor's, which a reused key cannot.
+	LaunchID      string
 	Name          string
 	SessionID     string
 	ClaudeVersion string
@@ -142,7 +146,7 @@ func (h *Hub) applyEvent(agent, launch string, r Report) error {
 		return err
 	}
 	ev := h.recordLocked(agent, h.stateLocked(agent), r)
-	ev.Gen = life.gen
+	ev.Gen, ev.LaunchID = life.gen, LaunchID(agent, life.launch)
 	h.notifyLocked()
 	subs := h.subs // AddSubscriber replaces, never mutates, the slice
 	h.mu.Unlock()

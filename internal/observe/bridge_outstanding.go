@@ -105,6 +105,17 @@ func (b *bridgeOutstanding) agent(key string) (string, bool) {
 	return bl.agent, ok
 }
 
+// boundAgent returns the agent key belongs to while launch is the launch
+// bound to it: a report from any other launch of the key (one that retired
+// after the hub accepted it) has no agent.
+func (b *bridgeOutstanding) boundAgent(key, launch string) (string, bool) {
+	bl, ok := b.launches[key]
+	if !ok || bl.launch != launch {
+		return "", false
+	}
+	return bl.agent, true
+}
+
 // launchAgent returns the agent launch belongs to now, if it is bound.
 func (b *bridgeOutstanding) launchAgent(launch string) (string, bool) {
 	key, ok := b.byLaunch[launch]
@@ -123,11 +134,12 @@ func (b *bridgeOutstanding) of(agent string) Outstanding {
 	return Outstanding{Dispatches: b.dispatches[b.launches[key].launch], Subagents: b.subagents[key]}
 }
 
-// setSubagents records key's bound launch's subagents, reporting whether
-// that changed anything. A key with no bound launch is ignored: its
-// launch ended, or (binding precedes the key's use) never existed.
-func (b *bridgeOutstanding) setSubagents(key string, n int) bool {
-	if _, bound := b.launches[key]; !bound {
+// setSubagents records launch's subagents while it is the launch bound to
+// key, reporting whether that changed anything. Another launch's report is
+// ignored: it ended (its children with it), or (binding precedes the key's
+// use) never existed.
+func (b *bridgeOutstanding) setSubagents(key, launch string, n int) bool {
+	if _, bound := b.boundAgent(key, launch); !bound {
 		return false
 	}
 	return setCount(b.subagents, key, n)

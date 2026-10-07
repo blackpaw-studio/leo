@@ -184,8 +184,9 @@ func (s *AttentionStore) attentionLocked(agent string) AgentAttention {
 	return att
 }
 
-// AdvanceBridge is SetIfTracked, for the agent bound to bridge key key
-// (see BindBridgeKey), for a source that may repeat what another already
+// AdvanceBridge is SetIfTracked, for the agent whose bound launch on bridge
+// key key is launch (see BindBridgeKey; a report from a launch retired
+// since is dropped), for a source that may repeat what another already
 // reported (the claude mod bridge alongside the harness hooks): a
 // transition to the current state is skipped, as is a finished already
 // held, and a working that repeats a held one only drops the hold (a new
@@ -193,14 +194,14 @@ func (s *AttentionStore) attentionLocked(agent string) AgentAttention {
 // key is resolved and the transition applied atomically, so a rename
 // cannot part a report from its agent. ok=false means nothing was
 // published.
-func (s *AttentionStore) AdvanceBridge(key string, state AttentionState, from ...AttentionState) (AgentAttention, bool) {
+func (s *AttentionStore) AdvanceBridge(key, launch string, state AttentionState, from ...AttentionState) (AgentAttention, bool) {
 	if s == nil {
 		return AgentAttention{}, false
 	}
 	gen, counts := s.dispatchCounts(state)
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	agent, bound := s.bridge.agent(key)
+	agent, bound := s.bridge.boundAgent(key, launch)
 	if !bound {
 		return AgentAttention{}, false
 	}
@@ -222,17 +223,17 @@ func (s *AttentionStore) AdvanceBridge(key string, state AttentionState, from ..
 	return s.setLocked(agent, state), true
 }
 
-// AdvanceBridgeNeedsInput moves the tracked agent bound to bridge key key
-// to needs_input with reason (clamped), unless it is already there for the
-// same reason.
-func (s *AttentionStore) AdvanceBridgeNeedsInput(key string, reason AttentionReason) (AgentAttention, bool) {
+// AdvanceBridgeNeedsInput moves the tracked agent whose bound launch on
+// bridge key key is launch to needs_input with reason (clamped), unless it
+// is already there for the same reason.
+func (s *AttentionStore) AdvanceBridgeNeedsInput(key, launch string, reason AttentionReason) (AgentAttention, bool) {
 	if s == nil {
 		return AgentAttention{}, false
 	}
 	reason = ClampAttentionReason(reason)
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	agent, bound := s.bridge.agent(key)
+	agent, bound := s.bridge.boundAgent(key, launch)
 	if !bound {
 		return AgentAttention{}, false
 	}
@@ -248,16 +249,16 @@ func (s *AttentionStore) AdvanceBridgeNeedsInput(key string, reason AttentionRea
 }
 
 // SetOutstandingSubagents records how many native background subagents
-// the launch bound to bridge key key has running. A change for its tracked
+// launch, bound to bridge key key, has running. A change for its tracked
 // agent publishes under a new revision; the last child ending releases a
-// held finished. A key with no bound launch is ignored (see BindBridgeKey).
-func (s *AttentionStore) SetOutstandingSubagents(key string, n int) {
+// held finished. A launch not bound to key is ignored (see BindBridgeKey).
+func (s *AttentionStore) SetOutstandingSubagents(key, launch string, n int) {
 	if s == nil {
 		return
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if !s.bridge.setSubagents(key, n) {
+	if !s.bridge.setSubagents(key, launch, n) {
 		return
 	}
 	if agent, ok := s.bridge.agent(key); ok {
@@ -312,6 +313,18 @@ func (s *AttentionStore) BindBridgeKey(key, launch, agent string) {
 	if s.bridge.of(agent) != before {
 		s.outstandingChangedLocked(agent)
 	}
+}
+
+// IsBoundLaunch reports whether launch is the launch bound to bridge key
+// key now.
+func (s *AttentionStore) IsBoundLaunch(key, launch string) bool {
+	if s == nil {
+		return false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	_, ok := s.bridge.boundAgent(key, launch)
+	return ok
 }
 
 // UnbindBridgeLaunch retires a launch that ended, if it is still the one

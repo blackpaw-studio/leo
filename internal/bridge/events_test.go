@@ -128,6 +128,11 @@ func TestSubscriberSeesEventsInOrderWithSession(t *testing.T) {
 	if got[0].ClaudeVersion != "2.1.287" {
 		t.Fatalf("hello event lost claude_version: %+v", got[0])
 	}
+	for i, ev := range got {
+		if ev.LaunchID != LaunchID(agentA, testLaunch) {
+			t.Fatalf("event %d LaunchID = %q; want the reporting launch's", i, ev.LaunchID)
+		}
+	}
 	if string(got[2].Usage) != `{"u":1}` || got[3].Reason != "clear" {
 		t.Fatalf("payload fields lost: %+v / %+v", got[2], got[3])
 	}

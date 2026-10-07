@@ -219,7 +219,7 @@ func TestAnAdoptionCarriesAFullOutboxWholeBehindTheOpening(t *testing.T) {
 	seedMail(t, home, "alpha", full...)
 	f := startBridged(t, tmuxPath, "2.1.289", time.Minute, adoptSpec(t, "the opening"), withHome(home), durable)
 
-	waitFor(t, "adoption", func() bool { _, ok := f.sv.BridgeKey("alpha"); return ok })
+	waitFor(t, "adoption", func() bool { return holdsOpenedKey(f.sv, "alpha") })
 	if got, want := f.hub.State("alpha").Pending, len(full)+1; got != want {
 		t.Fatalf("pending=%d, want the opening and all %d carried messages", got, len(full))
 	}

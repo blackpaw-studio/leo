@@ -584,7 +584,7 @@ func TestAdoptQueuesNothingAnotherLaunchQueued(t *testing.T) {
 	queuedFor(t, home, "launch-other", "open-other")
 	f := startBridged(t, tmuxPath, "2.1.289", time.Minute, adoptSpec(t, "the opening"), withHome(home))
 
-	waitFor(t, "adoption", func() bool { _, ok := f.sv.BridgeKey("alpha"); return ok })
+	waitFor(t, "adoption", func() bool { return holdsOpenedKey(f.sv, "alpha") })
 	time.Sleep(50 * time.Millisecond)
 	if got := f.hub.State("alpha").Pending; got != 0 {
 		t.Fatalf("pending=%d, want nothing queued for the adopted launch", got)
@@ -606,7 +606,7 @@ func TestAdoptedSessionIsNeverKilled(t *testing.T) {
 			queuedFor(t, home, "launch-old", "open-from-the-launch")
 			f := startBridged(t, tmuxPath, "2.1.289", 30*time.Millisecond, adoptSpec(t, "the opening"), withHome(home))
 
-			waitFor(t, "adoption", func() bool { _, ok := f.sv.BridgeKey("alpha"); return ok })
+			waitFor(t, "adoption", func() bool { return holdsOpenedKey(f.sv, "alpha") })
 			time.Sleep(200 * time.Millisecond) // well past the connect timeout
 			if got := f.hub.State("alpha").Pending; got != 1 {
 				t.Fatalf("pending=%d past the connect timeout, want the opening still queued", got)

@@ -128,7 +128,7 @@ func TestSetupConsultRuntimeFeedsBridgeEventsIntoAttention(t *testing.T) {
 	const name, key = "leo-coding-leo", "lcl-key"
 	pub := &lockedRecorder{}
 	store := observe.NewAttentionStore(pub)
-	store.BindBridgeKey(key, key+"-launch", name) // as the supervisor does at launch
+	store.BindBridgeKey(key, bridge.LaunchID(key, "launch-1"), name) // as the supervisor does at launch
 	store.Set(name, observe.AttentionUnknown)
 	s.attention, s.publisher, s.bridgeFeed = store, pub, nil
 

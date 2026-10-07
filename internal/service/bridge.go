@@ -270,6 +270,7 @@ func (s *Supervisor) planBridgeLaunch(ctx context.Context, claudePath, harnessNa
 		id.setLegacy()
 		return bridgeLaunch{}
 	}
+	id.reserveBridgeKey(plan.Key)
 	s.bindAttentionLaunch(id, plan.Key, plan.Launch)
 	target, err := w.open(plan.Key, plan.Launch)
 	if err != nil {

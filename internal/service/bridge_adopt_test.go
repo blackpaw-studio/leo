@@ -140,7 +140,10 @@ func TestAFreshLaunchGivesUpItsAdoption(t *testing.T) {
 	spec.Adopt = true
 	f := startBridged(t, tmuxPath, "2.1.289", time.Minute, spec, func(o *bridgeTestOpts) { o.adoptions = []string{"alpha"} })
 	waitForNewSessions(t, logPath, 1)
-	waitFor(t, "the fresh launch's key", func() bool { key, ok := f.sv.BridgeKey("alpha"); return ok && key == "alpha" })
+	waitFor(t, "the fresh launch's key", func() bool {
+		key, ok := f.sv.BridgeKey("alpha")
+		return ok && key == "alpha" && holdsOpenedKey(f.sv, "alpha")
+	})
 	f.sv.mu.RLock()
 	left := len(f.sv.adoptionKeys)
 	f.sv.mu.RUnlock()

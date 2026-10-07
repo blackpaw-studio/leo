@@ -86,7 +86,7 @@ func newB051Harness(t *testing.T) *b051Harness {
 }
 
 func (h *b051Harness) send(ev bridge.Event) {
-	ev.Agent = "alice-key"
+	ev.Agent, ev.LaunchID = "alice-key", "alice-key-launch"
 	if ev.Gen == 0 {
 		ev.Gen = 1
 	}

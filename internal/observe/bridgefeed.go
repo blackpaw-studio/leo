@@ -75,6 +75,9 @@ type BridgeFeed struct {
 type feedAgent struct {
 	key string
 	gen uint64
+	// launch is the launch id of the report being folded in, which the
+	// attention store applies it for only while that launch is bound.
+	launch string
 
 	sessionID   string
 	session     UsageTotals
@@ -199,11 +202,17 @@ func (f *BridgeFeed) OnBridgeEvent(ev bridge.Event) {
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.attention != nil && !f.attention.IsBoundLaunch(ev.Agent, ev.LaunchID) {
+		// A launch that retired after the hub accepted this report: it
+		// must not reach (or be published as) its successor's.
+		return
+	}
 	st, ok := f.agents[ev.Agent]
 	if !ok {
 		st = &feedAgent{key: ev.Agent}
 		f.agents[ev.Agent] = st
 	}
+	st.launch = ev.LaunchID
 	if ev.EventID != "" && st.replayed(sha256.Sum256([]byte(ev.Name+"\x00"+ev.EventID))) {
 		return
 	}
@@ -221,7 +230,7 @@ func (f *BridgeFeed) OnBridgeEvent(ev bridge.Event) {
 		}
 	case bridge.EventTurnStart:
 		f.publish(EventAgentTurnStarted, &AgentTurnStartedPayload{Agent: name, SessionID: ev.SessionID})
-		f.attention.AdvanceBridge(st.key, AttentionWorking)
+		f.attention.AdvanceBridge(st.key, st.launch, AttentionWorking)
 	case bridge.EventTurnComplete:
 		f.turnCompleteLocked(name, st, ev)
 		return
@@ -262,7 +271,7 @@ func (f *BridgeFeed) turnCompleteLocked(name string, st *feedAgent, ev bridge.Ev
 		p.Context = cloneOf(st.context)
 	}
 	f.publish(EventAgentTurnCompleted, p)
-	f.attention.AdvanceBridge(st.key, AttentionFinished)
+	f.attention.AdvanceBridge(st.key, st.launch, AttentionFinished)
 }
 
 func (f *BridgeFeed) activityLocked(name string, st *feedAgent, r *bridge.ActivityReport) {
@@ -341,17 +350,17 @@ func (f *BridgeFeed) attentionLocked(name string, st *feedAgent, r *bridge.Atten
 	}
 	if r.State != bridge.AttentionNeedsInput {
 		st.reason = nil
-		f.attention.AdvanceBridge(st.key, AttentionWorking, AttentionNeedsInput)
+		f.attention.AdvanceBridge(st.key, st.launch, AttentionWorking, AttentionNeedsInput)
 		return
 	}
 	reason := ClampAttentionReason(AttentionReason{Kind: AttentionReasonKind(r.Kind), Tool: r.Tool, Detail: r.Summary})
 	st.reason = &reason
-	f.attention.AdvanceBridgeNeedsInput(st.key, reason)
+	f.attention.AdvanceBridgeNeedsInput(st.key, st.launch, reason)
 }
 
 func (f *BridgeFeed) setSubagentsLocked(name string, st *feedAgent, n int) {
 	st.subagents = max(n, 0)
-	f.attention.SetOutstandingSubagents(st.key, st.subagents)
+	f.attention.SetOutstandingSubagents(st.key, st.launch, st.subagents)
 }
 
 func (f *BridgeFeed) compactLocked(name string, st *feedAgent, r *bridge.CompactReport) {

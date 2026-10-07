@@ -46,6 +46,9 @@ func (h *feedHarness) send(ev bridge.Event) {
 	if ev.Gen == 0 {
 		ev.Gen = 1
 	}
+	if ev.LaunchID == "" {
+		ev.LaunchID = ev.Agent + "-launch" // as newFeedHarness binds it
+	}
 	if ev.SessionID == "" {
 		ev.SessionID = "s1"
 	}
@@ -477,13 +480,15 @@ func TestBridgeFeedStaleKeyMappingNeverMovesAnotherAgentsState(t *testing.T) {
 	// alice is deleted and recreated under a new launch key.
 	delete(keys, "k1")
 	keys["k2"] = "alice"
+	h.store.BindBridgeKey("k2", "k2-launch", "alice")
 	h.send(bridge.Event{Agent: "k2", Name: bridge.ReportHello, Gen: 1, SessionID: "s9"})
 	h.send(bridge.Event{Agent: "k2", Name: bridge.EventTurnComplete, EventID: "b", SessionID: "s9", Tokens: tokens(1, 1)})
 	// The old key is reused by an unrelated agent: a new launch, so a new
 	// generation (generations are never reused) and its own session.
 	keys["k1"] = "carol"
-	h.send(bridge.Event{Agent: "k1", Name: bridge.ReportHello, Gen: 3, SessionID: "s7"})
-	h.send(bridge.Event{Agent: "k1", Name: bridge.EventTurnComplete, EventID: "c", Gen: 3, SessionID: "s7", Tokens: tokens(2, 2)})
+	h.store.BindBridgeKey("k1", "k1-L3", "carol")
+	h.send(bridge.Event{Agent: "k1", Name: bridge.ReportHello, Gen: 3, LaunchID: "k1-L3", SessionID: "s7"})
+	h.send(bridge.Event{Agent: "k1", Name: bridge.EventTurnComplete, EventID: "c", Gen: 3, LaunchID: "k1-L3", SessionID: "s7", Tokens: tokens(2, 2)})
 
 	agents := h.feed.BridgeAgents()
 	if u := agents["alice"].Usage; u == nil || u.SessionID != "s9" {
@@ -677,7 +682,7 @@ func TestBridgeFeedTransitionsResolvedBeforeARenameReachTheRenamedAgent(t *testi
 				store.Set("old", AttentionWorking) // a new agent takes the old name
 			}
 
-			ev.Agent, ev.Gen, ev.SessionID = "k", 1, "s1"
+			ev.Agent, ev.Gen, ev.LaunchID, ev.SessionID = "k", 1, "k-launch", "s1"
 			feed.OnBridgeEvent(ev)
 
 			if got, _ := store.Get("new"); got.State != want[name] {
@@ -685,6 +690,38 @@ func TestBridgeFeedTransitionsResolvedBeforeARenameReachTheRenamedAgent(t *testi
 			}
 			if got, _ := store.Get("old"); got.State != AttentionWorking {
 				t.Fatalf("the old name's new agent = %+v; want untouched", got)
+			}
+		})
+	}
+}
+
+// The hub accepted a report from a launch that then retired (relaunched
+// under the same key) before the feed got it: the report is the dead
+// launch's, so neither its turn nor its children reach the successor.
+func TestBridgeFeedDropsAReportFromARetiredLaunch(t *testing.T) {
+	for name, ev := range map[string]bridge.Event{
+		"turn.complete": {Name: bridge.EventTurnComplete, EventID: "c1", Tokens: tokens(5, 5)},
+		"subagents":     {Name: bridge.EventSubagents, Subagents: &bridge.SubagentsReport{Running: 1}},
+		"needs_input":   {Name: bridge.EventAttention, Attention: &bridge.AttentionReport{State: bridge.AttentionNeedsInput, Kind: "permission"}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			pub := &syncRecorder{}
+			keys := &hookedKeys{keys: staticKeys{"k": "alice"}}
+			store := NewAttentionStore(pub)
+			store.BindBridgeKey("k", "k-L1", "alice")
+			store.Set("alice", AttentionWorking)
+			feed := NewBridgeFeed(keys, pub, WithFeedAttention(store), WithFeedClock(newFakeClock(time.Now())))
+			keys.during = func() { store.BindBridgeKey("k", "k-L2", "alice") } // relaunched
+			pub.reset()
+
+			ev.Agent, ev.Gen, ev.LaunchID, ev.SessionID = "k", 1, "k-L1", "s1"
+			feed.OnBridgeEvent(ev)
+
+			if got, _ := store.Get("alice"); got.State != AttentionWorking || got.Outstanding != nil {
+				t.Fatalf("alice = %+v; want untouched by the dead launch", got)
+			}
+			if evs := pub.snapshot(); len(evs) != 0 {
+				t.Fatalf("published %v for a dead launch's report", eventTypes(evs))
 			}
 		})
 	}
