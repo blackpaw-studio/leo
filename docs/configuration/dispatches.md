@@ -66,6 +66,22 @@ unchanged worktrees are removed while their branches remain available.
 A subagent that deliberately daemonizes a writer outside its process group can
 outlive collection; such writes after a clean removal are lost.
 
+A template can make this the default with `isolation: worktree` (see
+[templates](config-reference.md#templates)); an explicit `isolation` argument
+still wins. An isolated run's prompt names its worktree and states that
+uncommitted changes in the caller's tree are not visible, so commit before
+dispatching a review. A reviewer that must run tests can pair it with a
+writable sandbox without risking the real tree:
+
+```yaml
+templates:
+  codex-reviewer:
+    harness: codex
+    isolation: worktree
+    harness_options:
+      permission_mode: workspace-write
+```
+
 One notification is considered for each completed headless run or interactive
 turn. A covering `leo_wait` suppresses it, including a wait registered after
 completion but before delivery. The single-line notification identifies the

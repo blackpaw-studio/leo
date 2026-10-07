@@ -284,6 +284,11 @@ type TemplateConfig struct {
 	IdleSuspendAfter string         `yaml:"idle_suspend_after,omitempty"`
 	Harness          string         `yaml:"harness,omitempty"`
 	HarnessOptions   map[string]any `yaml:"harness_options,omitempty"`
+	// Isolation runs dispatches and consults of this template from a
+	// managed Git worktree at the caller's committed HEAD ("worktree"),
+	// exactly as the leo_dispatch isolation argument does. Empty runs in
+	// the caller's tree; a dispatch's own isolation argument wins.
+	Isolation string `yaml:"isolation,omitempty"`
 	// Permissions constrains the leo MCP tool surface agents spawned from
 	// this template see, and which agents/templates they may message, spawn,
 	// or consult. The zero value is unrestricted — exactly the behavior
@@ -551,6 +556,9 @@ func (c *Config) Validate() error {
 			if d, err := time.ParseDuration(tmpl.IdleSuspendAfter); err != nil || d <= 0 {
 				errs = append(errs, fmt.Sprintf("templates.%s.idle_suspend_after %q must be a positive duration", name, tmpl.IdleSuspendAfter))
 			}
+		}
+		if tmpl.Isolation != "" && tmpl.Isolation != "worktree" {
+			errs = append(errs, fmt.Sprintf("templates.%s.isolation %q must be empty or \"worktree\"", name, tmpl.Isolation))
 		}
 		errs = append(errs, validatePermissions(name, tmpl.Permissions, c.Templates)...)
 	}

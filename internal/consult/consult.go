@@ -183,6 +183,7 @@ func newID() string {
 // Request contexts govern only validation and the immediate caller, never the
 // lifetime of an accepted run.
 func (d *Dispatcher) Start(_ context.Context, cfg *config.Config, req Request) (Started, error) {
+	req = withTemplateIsolation(cfg, req)
 	if req.Isolation != "" && req.Isolation != "worktree" {
 		return Started{}, invalidf("isolation must be empty or \"worktree\"")
 	}
@@ -867,6 +868,7 @@ func (d *Dispatcher) currentInvocationCancelLocked(state *runState, done chan st
 // Consult preserves the synchronous one-off consultant API over dispatch.
 func (d *Dispatcher) Consult(ctx context.Context, cfg *config.Config, req Request) (Result, error) {
 	req.Kind, req.Preamble = "consult", true
+	req = withTemplateIsolation(cfg, req)
 	started, err := d.Start(ctx, cfg, req)
 	if err != nil {
 		return Result{}, err
