@@ -80,6 +80,9 @@ func (s *Server) setupConsultRuntime(opts Options, resolveCallerSession func(str
 		delegation := &delegationSource{path: s.configPath, load: s.loadConfig}
 		pusher = &consult.StatePusher{Hub: hub, Records: s.consults.RunRecords, Delegation: delegation.Get, Now: time.Now}
 	}
+	if hub := opts.Bridge.hub(); hub != nil {
+		viewer.BridgeConnected = hub.Connected
+	}
 	if hub := opts.Bridge.hub(); hub != nil && s.bridgeFeed == nil {
 		feed := s.newBridgeFeed(opts.Bridge.Router)
 		hub.AddSubscriber(feed)

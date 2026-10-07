@@ -113,6 +113,10 @@ func (v *Viewer) UpdateRoster(records []Record, now time.Time) {
 				}
 			}
 		}
+		if session != "" && session != dispatchViewerSession && v.isBridgedCaller(rec) {
+			unresolved = append(unresolved, rec.ID+":bridged")
+			session = ""
+		}
 		if session != "" {
 			resolved[session] = append(resolved[session], rec)
 		}
@@ -181,6 +185,14 @@ func (v *Viewer) UpdateRoster(records []Record, now time.Time) {
 			v.logRosterEvent("applied:"+state.sessionID, "roster: applied to %q", session)
 		}
 	}
+}
+
+// isBridgedCaller reports whether rec's caller has a live bridge: its band
+// draws rec, so the caller's session roster leaves it out (leo-dispatch
+// keeps it). A session left with nothing to draw has its roster cleared,
+// and redrawn once the bridge disconnects.
+func (v *Viewer) isBridgedCaller(rec Record) bool {
+	return v.BridgeConnected != nil && rec.CallerBridgeKey != "" && v.BridgeConnected(rec.CallerBridgeKey)
 }
 
 func (v *Viewer) logRosterInventory(panes, sessions, records, eligible int, resolved map[string][]Record, unresolved []string) {
