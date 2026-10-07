@@ -105,9 +105,13 @@ type runState struct {
 	eventIDs       []string
 	closedHarness  map[string]bool
 	closedIDs      []string
-	idleSince      time.Time
-	killPending    bool
-	releasing      bool
+	// stopEchoes are the normalized prompts of sent turns a Stop confirmed
+	// before their submit was seen (see confirmArmedLocked): that submit,
+	// arriving late, is their echo and is dropped.
+	stopEchoes  []string
+	idleSince   time.Time
+	killPending bool
+	releasing   bool
 	// pgid is the headless command's private process group. It is retained
 	// after Wait so worktree cleanup can prove no detached child remains.
 	pgid            int

@@ -69,6 +69,10 @@ func TestParseReportPendingRejectsNullCounts(t *testing.T) {
 	for name, body := range map[string]string{
 		"null count":   `{"type":"event","name":"turn.complete","pending":{"tasks":{"constructor":null}}}`,
 		"null wakeups": `{"type":"event","name":"turn.complete","pending":{"wakeups":null}}`,
+		"null tasks":   `{"type":"event","name":"turn.complete","pending":{"tasks":null}}`,
+		"array tasks":  `{"type":"event","name":"turn.complete","pending":{"tasks":[1]}}`,
+		"string tasks": `{"type":"event","name":"turn.complete","pending":{"tasks":"shell"}}`,
+		"string count": `{"type":"event","name":"turn.complete","pending":{"wakeups":"1"}}`,
 	} {
 		t.Run(name, func(t *testing.T) {
 			if _, err := ParseReport([]byte(body)); !errors.Is(err, ErrInvalidReport) {
