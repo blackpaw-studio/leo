@@ -99,9 +99,11 @@ route first, then the legacy inbox/tmux path. A missing agent returns 404.
   Those counts cover only records with a `CallerBridgeKey`, resolved through
   `bridgeKeyOwner`; no tmux lookup or rename alias is used for keyless records.
 - Bridge-sourced state (the feed's per-agent store, outstanding dispatch and subagent
-  counts, and the B-051 hold's counts) is keyed by bridge key; agent names are resolved
-  only at read and publish time, through a key↔name binding the supervisor sets per launch
-  and the attention store's `Move` carries.
+  counts, and the B-051 hold's counts and transitions) is keyed by bridge key; agent names
+  are resolved only at read and publish time, through a key↔name binding the supervisor
+  sets per launch before opening its key and the attention store's `Move` carries.
+  Dispatches are counted by their caller's launch id (`bridge.LaunchID`), since a recreated
+  agent reuses its predecessor's key.
 
 ## Testing
 
