@@ -1299,3 +1299,30 @@ func TestValidateRejectsBadIdleSuspend(t *testing.T) {
 		t.Fatalf("error should mention idle_suspend_after: %v", err)
 	}
 }
+
+func TestValidateTemplateIsolation(t *testing.T) {
+	tests := []struct {
+		name      string
+		isolation string
+		wantErr   string
+	}{
+		{name: "empty inherits nothing", isolation: ""},
+		{name: "worktree", isolation: "worktree"},
+		{name: "unknown", isolation: "sandbox", wantErr: `templates.reviewer.isolation "sandbox" must be empty or "worktree"`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := &Config{Templates: map[string]TemplateConfig{"reviewer": {Isolation: tt.isolation}}}
+			err := cfg.Validate()
+			if tt.wantErr == "" {
+				if err != nil {
+					t.Fatalf("Validate() = %v, want nil", err)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+				t.Fatalf("Validate() = %v, want error containing %q", err, tt.wantErr)
+			}
+		})
+	}
+}

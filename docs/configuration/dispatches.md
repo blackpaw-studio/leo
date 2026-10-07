@@ -54,7 +54,7 @@ implementation, review, or exploration that can proceed while the caller does
 other work. The prompt must say exactly what the subagent should do; it has no
 access to the caller's conversation. `cwd` defaults to the caller's working
 directory. `mode` is `headless` by default; set it to `interactive` to start a
-steerable TUI (see [Interactive mode](#interactive-mode)).
+TUI the user may watch (see [Interactive mode](#interactive-mode)).
 
 Dispatch notifications default to enabled. Set `notify: false` (or CLI
 `--notify=false`) to disable the eventual completion wake-up. Synchronous
@@ -65,6 +65,22 @@ committed changes and reports their path and branch when the result is collected
 unchanged worktrees are removed while their branches remain available.
 A subagent that deliberately daemonizes a writer outside its process group can
 outlive collection; such writes after a clean removal are lost.
+
+A template can make this the default with `isolation: worktree` (see
+[templates](config-reference.md#templates)); an explicit `isolation` argument
+still wins. An isolated run's prompt names its worktree and states that
+uncommitted changes in the caller's tree are not visible, so commit before
+dispatching a review. A reviewer that must run tests can pair it with a
+writable sandbox without risking the real tree:
+
+```yaml
+templates:
+  codex-reviewer:
+    harness: codex
+    isolation: worktree
+    harness_options:
+      permission_mode: workspace-write
+```
 
 One notification is considered for each completed headless run or interactive
 turn. A covering `leo_wait` suppresses it, including a wait registered after
@@ -145,8 +161,10 @@ supported by the opencode harness.
 Leo opens a real Codex or Claude TUI, placed the same way as the viewer
 (usually a split pane in the caller's own tmux window, falling back to a
 separate window when the pane cap is reached or the caller can't be
-resolved), labeled `<label>·<hex4>`. The user can watch it and type directly
-into its composer. `leo_dispatch` reports back exactly where it landed
+resolved), labeled `<label>·<hex4>`. The pane is for the user to watch:
+follow-ups go through `leo_send_dispatch`, and an orchestrator never asks the
+user to type into it. Typing there still works and is recorded as a user turn
+(`steered`), but nothing depends on it. `leo_dispatch` reports back exactly where it landed
 (`pane <id> (title <label>)` or `window <label> (pane <id>)`). The opening prompt and each orchestrator follow-up are turns; their
 completion is reported by the harness hooks to `leo dispatch report`.
 Codex uses `user_prompt_submit`, `stop`, `interrupt`, and `session_end` hooks

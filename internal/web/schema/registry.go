@@ -114,6 +114,8 @@ var registry = map[Section][]Field{
 		fEnv("Advanced", true),
 		{Key: "idle_suspend_after", Label: "Idle suspend after", Kind: KindDuration, Group: "Advanced", Advanced: true,
 			Help: "Auto-suspend idle ephemeral agents, e.g. \"2h\"; empty disables"},
+		{Key: "isolation", Label: "Isolation", Kind: KindSelect, Options: "isolations", Group: "Advanced", Advanced: true,
+			Help: "worktree runs dispatches of this template from a throwaway Git worktree at committed HEAD"},
 	}...)...),
 
 	// Rendered inside the template form's Advanced section, alongside the

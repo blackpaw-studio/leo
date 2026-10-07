@@ -5,8 +5,9 @@ Leo can spawn and manage ephemeral coding agents two ways: the HTTP API (used by
 For bounded work that does not need a persistent agent or a branch, use
 `leo_dispatch`: it starts a template asynchronously, returns an ID, and
 `leo_wait` collects the result. It is headless by default; pass
-`mode: "interactive"` to run a steerable Codex/Claude TUI in the caller's
-tmux session, then use `leo_send_dispatch` only when it is idle. Once review
+`mode: "interactive"` to run a Codex/Claude TUI in the caller's tmux session
+that the user may watch. Send follow-ups through `leo_send_dispatch` (only
+when the run is idle); never ask the user to type into a dispatch pane. Once review
 passes, release an interactive dispatch with `leo_release`. Use
 `leo_consult` for a synchronous second opinion, and `leo_cancel` to stop an
 in-flight dispatch. Call `leo dispatch watch <id>` to inspect the retained
