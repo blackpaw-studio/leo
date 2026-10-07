@@ -50,6 +50,10 @@ type Viewer struct {
 	PersistRecord      func(Record)
 	PersistIntent      func(Record)
 	ClosePane          func(Record, string, func(string) error, func(string) error) (Record, error)
+	// BridgeConnected reports whether a bridge key has a live mod stream. A
+	// bridged caller's band shows its dispatches, so the tmux roster leaves
+	// them out. Nil means no bridge: every dispatch is drawn.
+	BridgeConnected func(key string) bool
 }
 
 type handledWindow struct {

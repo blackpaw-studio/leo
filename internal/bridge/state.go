@@ -49,6 +49,7 @@ type DispatchState struct {
 	Role          string   `json:"role"`
 	Template      string   `json:"template"`
 	Model         string   `json:"model"`
+	Effort        string   `json:"effort,omitempty"`
 	Status        string   `json:"status"`
 	Stalled       bool     `json:"stalled"`
 	ActiveSeconds float64  `json:"active_seconds"`

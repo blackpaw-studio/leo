@@ -54,9 +54,10 @@ func TestBridgeDispatchStatesMapsTheRecord(t *testing.T) {
 	since := stateNow.Add(-5 * time.Second)
 	rec := callerRecord("d1", "alpha", StatusRunning)
 	rec.ActiveSeconds, rec.RunningSince = 10, &since
+	rec.Effort = "high"
 	rec.InputTokens, rec.OutputTokens, rec.CostUSD = ptr(int64(100)), ptr(int64(20)), ptr(0.25)
 	got := BridgeDispatchStates([]Record{rec}, "alpha", stateNow)
-	want := []bridge.DispatchState{{ID: "d1", Name: "n-d1", Role: "implement", Template: "codex", Model: "gpt", Status: "running", ActiveSeconds: 15, TokensIn: ptr(int64(100)), TokensOut: ptr(int64(20)), CostUSD: ptr(0.25)}}
+	want := []bridge.DispatchState{{ID: "d1", Name: "n-d1", Role: "implement", Template: "codex", Model: "gpt", Effort: "high", Status: "running", ActiveSeconds: 15, TokensIn: ptr(int64(100)), TokensOut: ptr(int64(20)), CostUSD: ptr(0.25)}}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("got %+v, want %+v", got[0], want[0])
 	}

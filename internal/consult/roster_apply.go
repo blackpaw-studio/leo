@@ -113,6 +113,10 @@ func (v *Viewer) UpdateRoster(records []Record, now time.Time) {
 				}
 			}
 		}
+		if session != "" && session != dispatchViewerSession && v.isBridgedCaller(rec) {
+			unresolved = append(unresolved, rec.ID+":bridged")
+			session = ""
+		}
 		if session != "" {
 			resolved[session] = append(resolved[session], rec)
 		}
@@ -181,6 +185,14 @@ func (v *Viewer) UpdateRoster(records []Record, now time.Time) {
 			v.logRosterEvent("applied:"+state.sessionID, "roster: applied to %q", session)
 		}
 	}
+}
+
+// isBridgedCaller reports whether rec's caller has a live bridge: its band
+// draws rec, so the caller's session roster leaves it out (leo-dispatch
+// keeps it). A session left with nothing to draw has its roster cleared,
+// and redrawn once the bridge disconnects.
+func (v *Viewer) isBridgedCaller(rec Record) bool {
+	return v.BridgeConnected != nil && rec.CallerBridgeKey != "" && v.BridgeConnected(rec.CallerBridgeKey)
 }
 
 func (v *Viewer) logRosterInventory(panes, sessions, records, eligible int, resolved map[string][]Record, unresolved []string) {
@@ -421,11 +433,21 @@ func (v *Viewer) clearRosterState(session string, state rosterSessionState) rost
 		}
 		*pending = false
 	}
+	// status-format[1] is Leo's only while it still holds the roster format:
+	// a value the person set since is theirs to keep.
 	if state.clearFormat {
-		if err := v.run("set-option", "-u", "-t", target, "status-format[1]"); err != nil {
-			v.log("clearing status-format[1] for %q: %v", session, err)
-		} else {
+		current, err := v.output("show-options", "-t", target, "-v", "status-format[1]")
+		switch {
+		case err != nil:
+			v.log("reading status-format[1] during cleanup for %q: %v", session, err)
+		case strings.TrimRight(string(current), "\r\n") != rosterFormat:
 			state.clearFormat = false
+		default:
+			if err := v.run("set-option", "-u", "-t", target, "status-format[1]"); err != nil {
+				v.log("clearing status-format[1] for %q: %v", session, err)
+			} else {
+				state.clearFormat = false
+			}
 		}
 	}
 	if !state.clearFormat && state.clearFormat0 {
