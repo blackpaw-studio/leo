@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/blackpaw-studio/leo/internal/agentstore"
+	"github.com/blackpaw-studio/leo/internal/bridge"
 	"github.com/blackpaw-studio/leo/internal/config"
 	"github.com/blackpaw-studio/leo/internal/daemon"
 	"github.com/blackpaw-studio/leo/internal/observe"
@@ -103,24 +104,29 @@ func (s *Supervisor) registerAttentionToken(name string, id *procIdentity, token
 	s.attention.RegisterToken(token, name)
 }
 
-// bindAttentionBridge files the attention of id's agent under the bridge
-// key of its live launch (none for a launch without the bridge), for the
-// live generation only, so the counts the bridge reports by key hold that
-// agent's turn (B-051) under whatever name it has. It binds the identity's
-// current name: a rename since the launch began is the attention store's
-// to carry (Move), and a binding made after it wins over the moved one.
-func (s *Supervisor) bindAttentionBridge(id *procIdentity, bl bridgeLaunch) {
+// bindAttentionLaunch files the attention of id's agent under the bridged
+// launch that will connect under key with token launch, for the live
+// generation only. It runs before the key is opened, so nothing the mod
+// reports under it (an adopted session's mod reconnects at once) can
+// precede the binding: what the bridge counts by key holds that agent's
+// turn (B-051) under whatever name it has. It binds the identity's current
+// name: a rename since the launch began is the attention store's to carry
+// (Move), and a binding made after it wins over the moved one.
+func (s *Supervisor) bindAttentionLaunch(id *procIdentity, key, launch string) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	name := id.Name()
 	if cur, ok := s.identities[name]; !ok || cur != id {
 		return
 	}
-	key := ""
-	if bl.bridged {
-		key = bl.target.Key
-	}
-	s.attention.BindBridgeKey(key, name)
+	s.attention.BindBridgeKey(key, bridge.LaunchID(key, launch), name)
+}
+
+// unbindAttentionLaunch retires a bridged launch's binding (see
+// bindAttentionLaunch) once it ends or never opened, unless a later launch
+// has taken the key since.
+func (s *Supervisor) unbindAttentionLaunch(key, launch string) {
+	s.attentionStore().UnbindBridgeLaunch(key, bridge.LaunchID(key, launch))
 }
 
 // endLaunchToken retires a launch's token that will never run again: it

@@ -184,11 +184,27 @@ func (s *Server) agentForBridgeKey(router *bridge.Router) func(key string) (stri
 	}
 }
 
-// dispatchCallerOwner returns the agent holding a dispatch caller's bridge
-// key now; a calling dispatch's key belongs to no agent.
-func (s *Server) dispatchCallerOwner(key string) (string, bool) {
+// dispatchCallerOwner returns the agent whose live launch a dispatch
+// caller's bridge key and launch id name: none once that launch is gone,
+// even if a later agent took the key. A calling dispatch's key belongs to
+// no agent.
+func (s *Server) dispatchCallerOwner(key, launch string) (string, bool) {
 	if _, isDispatch := consult.DispatchIDFromBridgeKey(key); isDispatch {
 		return "", false
 	}
+	if current := s.bridgeLaunchID(key); current == "" || current != launch {
+		return "", false
+	}
 	return s.bridgeKeyOwner(key)
+}
+
+// bridgeLaunchID returns the launch id (bridge.LaunchID) of the launch
+// bridge key key is open for now; "" for none. A dispatch caller asking
+// under the key is that launch: its claude is the one connected under it.
+func (s *Server) bridgeLaunchID(key string) string {
+	if key == "" || s.bridgeRouter == nil || s.bridgeRouter.Hub == nil {
+		return ""
+	}
+	id, _ := s.bridgeRouter.Hub.LaunchID(key)
+	return id
 }

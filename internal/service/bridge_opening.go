@@ -298,6 +298,7 @@ func (s *Supervisor) enqueueOpening(id *procIdentity, bl bridgeLaunch, cmd bridg
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "[%s] queueing the opening prompt on the bridge: %v; launching without the bridge\n", id.Name(), err)
 		w.hub.ForgetGen(bl.target)
+		s.unbindAttentionLaunch(bl.plan.Key, bl.plan.Launch)
 		id.setLegacy()
 		return bridgeLaunch{}, false
 	}

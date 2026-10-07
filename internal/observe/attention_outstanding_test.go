@@ -9,15 +9,17 @@ import (
 // bridge keys "a-key" and "b-key", as the supervisor binds them.
 func newBridgedStore(pub Publisher) *AttentionStore {
 	s := NewAttentionStore(pub)
-	s.BindBridgeKey("a-key", "a")
-	s.BindBridgeKey("b-key", "b")
+	s.BindBridgeKey("a-key", "a-key-launch", "a")
+	s.BindBridgeKey("b-key", "b-key-launch", "b")
 	return s
 }
 
-// setDispatches sets key's outstanding dispatches directly, as a newer
+// setDispatches sets a launch's outstanding dispatches directly, as a newer
 // dispatch snapshot would.
-func setDispatches(s *AttentionStore, key string, n int) {
-	s.setOutstanding(key, func(o *Outstanding) { o.Dispatches = max(n, 0) })
+func setDispatches(s *AttentionStore, launch string, n int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.setDispatchesLocked(launch, n)
 }
 
 func TestAttentionFinishedIsDeferredWhileChildrenAreOutstanding(t *testing.T) {
@@ -25,7 +27,7 @@ func TestAttentionFinishedIsDeferredWhileChildrenAreOutstanding(t *testing.T) {
 		name string
 		set  func(s *AttentionStore, n int)
 	}{
-		{"dispatches", func(s *AttentionStore, n int) { setDispatches(s, "a-key", n) }},
+		{"dispatches", func(s *AttentionStore, n int) { setDispatches(s, "a-key-launch", n) }},
 		{"subagents", func(s *AttentionStore, n int) { s.SetOutstandingSubagents("a-key", n) }},
 	}
 	for _, tt := range tests {
@@ -71,11 +73,11 @@ func TestAttentionChildEndingWithoutDeferredFinishStaysWorking(t *testing.T) {
 func TestAttentionNewTurnCancelsDeferredFinish(t *testing.T) {
 	s := newBridgedStore(nil)
 	s.Set("a", AttentionWorking)
-	setDispatches(s, "a-key", 1)
+	setDispatches(s, "a-key-launch", 1)
 	s.Set("a", AttentionFinished) // deferred
 
 	s.Set("a", AttentionWorking) // UserPromptSubmit
-	setDispatches(s, "a-key", 0)
+	setDispatches(s, "a-key-launch", 0)
 
 	if got, _ := s.Get("a"); got.State != AttentionWorking {
 		t.Fatalf("state = %s; the new turn is still running", got.State)
@@ -116,8 +118,8 @@ func TestAttentionOutstandingChangePublishesWithNewRevision(t *testing.T) {
 	s := newBridgedStore(pub)
 	s.Set("a", AttentionWorking)
 
-	setDispatches(s, "a-key", 1)
-	setDispatches(s, "a-key", 1) // unchanged: silent
+	setDispatches(s, "a-key-launch", 1)
+	setDispatches(s, "a-key-launch", 1) // unchanged: silent
 
 	if len(pub.events) != 2 {
 		t.Fatalf("published %d events; want 2", len(pub.events))
@@ -132,7 +134,7 @@ func TestAttentionOutstandingForUntrackedAgentIsKeptSilently(t *testing.T) {
 	pub := &recordingPublisher{}
 	s := newBridgedStore(pub)
 
-	setDispatches(s, "a-key", 1)
+	setDispatches(s, "a-key-launch", 1)
 	if len(pub.events) != 0 {
 		t.Fatalf("published for an untracked agent: %v", eventTypes(pub.events))
 	}
@@ -231,7 +233,7 @@ func TestAttentionHookNeedsInputGainsReasonFromBridge(t *testing.T) {
 
 func TestAttentionMoveCarriesOutstandingAndHold(t *testing.T) {
 	s := NewAttentionStore(nil)
-	s.BindBridgeKey("k", "old")
+	s.BindBridgeKey("k", "k-launch", "old")
 	s.Set("old", AttentionWorking)
 	s.SetOutstandingSubagents("k", 1)
 	s.Set("old", AttentionFinished) // deferred
@@ -268,7 +270,7 @@ func (c *staticCounter) take(counts map[string]int) (uint64, map[string]int) {
 // A dispatch started just before the turn ends is counted when the finish
 // lands, not a tick later.
 func TestAttentionFinishReadsDispatchCountsSynchronously(t *testing.T) {
-	counter := &staticCounter{counts: map[string]int{"a-key": 1}}
+	counter := &staticCounter{counts: map[string]int{"a-key-launch": 1}}
 	s := newBridgedStore(nil)
 	s.SetDispatchCounter(counter)
 	s.Set("a", AttentionWorking)
@@ -286,7 +288,7 @@ func TestAttentionFinishReadsDispatchCountsSynchronously(t *testing.T) {
 }
 
 func TestAttentionFinishViaAdvanceAndTokenReadDispatchCounts(t *testing.T) {
-	counter := &staticCounter{counts: map[string]int{"a-key": 1}}
+	counter := &staticCounter{counts: map[string]int{"a-key-launch": 1}}
 	s := newBridgedStore(nil)
 	s.SetDispatchCounter(counter)
 	s.RegisterToken("tok", "a")
@@ -310,14 +312,14 @@ func TestAttentionRejectsAStaleDispatchSnapshot(t *testing.T) {
 	s.Set("a", AttentionWorking)
 
 	staleGen, staleCounts := counter.take(map[string]int{})
-	counter.counts = map[string]int{"a-key": 1}
+	counter.counts = map[string]int{"a-key-launch": 1}
 	s.Set("a", AttentionFinished)
 	s.ReconcileDispatches(staleGen, staleCounts)
 
 	if got, _ := s.Get("a"); got.State != AttentionWorking || got.Outstanding == nil || got.Outstanding.Dispatches != 1 {
 		t.Fatalf("after the stale reconcile: %+v; want still held", got)
 	}
-	s.ReconcileDispatches(counter.take(map[string]int{"a-key": 1}))
+	s.ReconcileDispatches(counter.take(map[string]int{"a-key-launch": 1}))
 	if got, _ := s.Get("a"); got.State != AttentionWorking {
 		t.Fatalf("a current snapshot still counting it: %+v; want held", got)
 	}
@@ -335,7 +337,7 @@ func TestAttentionCompletionWithAStaleSnapshotDoesNotRehold(t *testing.T) {
 	s.Set("a", AttentionWorking)
 	s.ReconcileDispatches(2, map[string]int{})
 
-	s.SetDispatchCounter(fixedSnapshot{gen: 1, counts: map[string]int{"a-key": 1}})
+	s.SetDispatchCounter(fixedSnapshot{gen: 1, counts: map[string]int{"a-key-launch": 1}})
 	s.Set("a", AttentionFinished)
 
 	if got, _ := s.Get("a"); got.State != AttentionFinished {
@@ -375,7 +377,7 @@ func TestAttentionConcurrentCompletionsHoldEachAgentByTheNewestSnapshot(t *testi
 	s := newBridgedStore(nil)
 	s.Set("a", AttentionWorking)
 	s.Set("b", AttentionWorking)
-	counter := &hookedSnapshot{counts: map[string]int{"a-key": 1}}
+	counter := &hookedSnapshot{counts: map[string]int{"a-key-launch": 1}}
 	counter.during = func() { s.Set("b", AttentionFinished) }
 	s.SetDispatchCounter(counter)
 
@@ -396,7 +398,7 @@ func TestAttentionConcurrentCompletionsHoldEachAgentByTheNewestSnapshot(t *testi
 // snapshot in full: a held agent whose last dispatch ended is released,
 // not left with a silently zeroed count no later tick would change.
 func TestAttentionSkippedTokenTransitionStillReleasesAHold(t *testing.T) {
-	counter := &staticCounter{counts: map[string]int{"a-key": 1}}
+	counter := &staticCounter{counts: map[string]int{"a-key-launch": 1}}
 	s := newBridgedStore(nil)
 	s.SetDispatchCounter(counter)
 	s.RegisterToken("tok", "a")
@@ -421,7 +423,7 @@ func TestAttentionNameSwapKeepsEachHoldWithItsKey(t *testing.T) {
 		s.Set(agent, AttentionWorking)
 	}
 	s.SetOutstandingSubagents("a-key", 1)
-	setDispatches(s, "b-key", 1)
+	setDispatches(s, "b-key-launch", 1)
 	s.Set("a", AttentionFinished)
 	s.Set("b", AttentionFinished)
 
@@ -442,12 +444,12 @@ func TestAttentionNameSwapKeepsEachHoldWithItsKey(t *testing.T) {
 // the old launch's children.
 func TestAttentionRecreatedNameDoesNotInheritAnotherKeysCount(t *testing.T) {
 	s := NewAttentionStore(nil)
-	s.BindBridgeKey("k1", "a")
+	s.BindBridgeKey("k1", "k1-launch", "a")
 	s.SetOutstandingSubagents("k1", 2)
 	s.UnregisterAgent("a")
 	s.Remove("a")
 
-	s.BindBridgeKey("k2", "a")
+	s.BindBridgeKey("k2", "k2-launch", "a")
 	s.Set("a", AttentionWorking)
 	s.Set("a", AttentionFinished)
 
@@ -460,8 +462,8 @@ func TestAttentionRecreatedNameDoesNotInheritAnotherKeysCount(t *testing.T) {
 // keeps its binding: the moved one is the older launch's.
 func TestAttentionBindingMadeBeforeMoveWins(t *testing.T) {
 	s := NewAttentionStore(nil)
-	s.BindBridgeKey("k-old", "old")
-	s.BindBridgeKey("k-new", "new")
+	s.BindBridgeKey("k-old", "k-old-launch", "old")
+	s.BindBridgeKey("k-new", "k-new-launch", "new")
 	s.Set("old", AttentionWorking)
 	s.SetOutstandingSubagents("k-new", 1)
 
@@ -480,9 +482,28 @@ func TestAttentionRebindToAnIdleKeyReleasesTheHold(t *testing.T) {
 	s.SetOutstandingSubagents("a-key", 1)
 	s.Set("a", AttentionFinished) // held
 
-	s.BindBridgeKey("a-key2", "a")
+	s.BindBridgeKey("a-key2", "a-key2-launch", "a")
 
 	if got, _ := s.Get("a"); got.State != AttentionFinished || got.Outstanding != nil {
 		t.Fatalf("a = %+v; want released by the new launch", got)
+	}
+}
+
+// A launch that ended cannot report its subagents stopping: unbinding it
+// drops its count, so neither its key's next launch inherits it nor do
+// retired keys pile up.
+func TestAttentionUnbindDropsTheLaunchsSubagentCount(t *testing.T) {
+	s := newBridgedStore(nil)
+	s.SetOutstandingSubagents("a-key", 2)
+
+	s.UnregisterAgent("a")
+	if n := len(s.bridge.subagents); n != 0 {
+		t.Fatalf("%d count entries left after the only bound launches' agent stopped", n)
+	}
+	s.BindBridgeKey("a-key", "a-key-launch2", "a")
+	s.Set("a", AttentionWorking)
+
+	if att := s.Set("a", AttentionFinished); att.State != AttentionFinished {
+		t.Fatalf("relaunched a = %+v; want finished, the old launch's subagents gone", att)
 	}
 }

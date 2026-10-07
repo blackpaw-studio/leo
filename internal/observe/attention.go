@@ -248,29 +248,30 @@ func (s *AttentionStore) AdvanceBridgeNeedsInput(key string, reason AttentionRea
 }
 
 // SetOutstandingSubagents records how many native background subagents
-// the launch holding bridge key key has running. See setOutstanding.
+// the launch bound to bridge key key has running. A change for its tracked
+// agent publishes under a new revision; the last child ending releases a
+// held finished. A key with no bound launch is ignored (see BindBridgeKey).
 func (s *AttentionStore) SetOutstandingSubagents(key string, n int) {
-	s.setOutstanding(key, func(o *Outstanding) { o.Subagents = max(n, 0) })
-}
-
-// setOutstanding applies one source's count to key. A change for a tracked
-// agent bound to key publishes it under a new revision; the last child
-// ending releases a held finished. Counts for a key no tracked agent holds
-// are kept for when one does.
-func (s *AttentionStore) setOutstanding(key string, apply func(*Outstanding)) {
 	if s == nil {
 		return
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.setOutstandingLocked(key, apply)
-}
-
-func (s *AttentionStore) setOutstandingLocked(key string, apply func(*Outstanding)) {
-	if !s.bridge.set(key, apply) {
+	if !s.bridge.setSubagents(key, n) {
 		return
 	}
 	if agent, ok := s.bridge.agent(key); ok {
+		s.outstandingChangedLocked(agent)
+	}
+}
+
+// setDispatchesLocked records launch's outstanding dispatches, publishing
+// for the agent it is bound to as SetOutstandingSubagents does.
+func (s *AttentionStore) setDispatchesLocked(launch string, n int) {
+	if !s.bridge.setDispatches(launch, n) {
+		return
+	}
+	if agent, ok := s.bridge.launchAgent(launch); ok {
 		s.outstandingChangedLocked(agent)
 	}
 }
@@ -289,28 +290,41 @@ func (s *AttentionStore) outstandingChangedLocked(agent string) {
 	s.publishLocked(agent, s.attentionLocked(agent))
 }
 
-// BindBridgeKey files agent's outstanding children under the bridge key
-// of its live launch, replacing any key it or key had before; an empty key
-// unbinds agent (a launch without the bridge). The supervisor binds every
-// launch, so counts reported by key reach the agent under whatever name
-// it has then (Move carries the binding).
-func (s *AttentionStore) BindBridgeKey(key, agent string) {
-	if s == nil || agent == "" {
+// BindBridgeKey files agent's live launch, connecting under bridge key key
+// with launch id launch (see bridge.LaunchID), replacing any launch agent
+// or key had. The supervisor binds each bridged launch before its key can
+// be reported under and unbinds it (UnbindBridgeLaunch) when it ends, so
+// what the bridge reports by key, and dispatches by their caller's launch
+// id, reach the agent under whatever name it has then (Move carries the
+// binding). Empty arguments are ignored.
+func (s *AttentionStore) BindBridgeKey(key, launch, agent string) {
+	if s == nil || key == "" || launch == "" || agent == "" {
 		return
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	prevHolder, hadHolder := s.bridge.agent(key)
-	before := s.bridge.of(agent)
-	if key == "" {
-		s.bridge.unbind(agent)
-	} else {
-		s.bridge.bind(key, agent)
-	}
-	if hadHolder && prevHolder != agent {
+	prevBefore, before := s.bridge.of(prevHolder), s.bridge.of(agent)
+	s.bridge.bind(key, launch, agent)
+	if hadHolder && prevHolder != agent && s.bridge.of(prevHolder) != prevBefore {
 		s.outstandingChangedLocked(prevHolder)
 	}
 	if s.bridge.of(agent) != before {
+		s.outstandingChangedLocked(agent)
+	}
+}
+
+// UnbindBridgeLaunch retires a launch that ended, if it is still the one
+// bound to key: its subagents died with it.
+func (s *AttentionStore) UnbindBridgeLaunch(key, launch string) {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	agent, bound := s.bridge.agent(key)
+	before := s.bridge.of(agent)
+	if _, ok := s.bridge.unbindLaunch(key, launch); ok && bound && before.total() > 0 {
 		s.outstandingChangedLocked(agent)
 	}
 }
@@ -328,10 +342,11 @@ func (s *AttentionStore) SetDispatchCounter(c DispatchSnapshotter) {
 	s.mu.Unlock()
 }
 
-// ReconcileDispatches sets every bridge key's outstanding dispatches from
-// counts (each caller's count of non-terminal dispatches, keyed by the
-// caller's bridge key), zeroing keys it no longer names. Each key's count
-// reaches the agent bound to it when the snapshot is applied.
+// ReconcileDispatches sets every caller launch's outstanding dispatches
+// from counts (each caller's count of non-terminal dispatches, keyed by
+// the caller's launch id), zeroing launches it no longer names. Each
+// count reaches the agent its launch is bound to when the snapshot is
+// applied; an unbound launch's (a stopped agent's) holds nobody.
 // gen is the snapshot's generation (see DispatchSnapshotter): a snapshot
 // older than one already applied is ignored, so a tick preempted after
 // reading cannot undo what a turn completion read since.
@@ -353,21 +368,20 @@ func (s *AttentionStore) reconcileLocked(gen uint64, counts map[string]int, quie
 	if counts == nil || !s.acceptDispatchGenLocked(gen) {
 		return
 	}
-	set := func(key string, n int) {
-		apply := func(o *Outstanding) { o.Dispatches = max(n, 0) }
-		if agent, ok := s.bridge.agent(key); ok && agent == quiet {
-			s.bridge.set(key, apply)
+	set := func(launch string, n int) {
+		if agent, ok := s.bridge.launchAgent(launch); ok && agent == quiet {
+			s.bridge.setDispatches(launch, n)
 			return
 		}
-		s.setOutstandingLocked(key, apply)
+		s.setDispatchesLocked(launch, n)
 	}
-	for _, key := range s.bridge.dispatchKeys() {
-		if _, named := counts[key]; !named {
-			set(key, 0)
+	for _, launch := range s.bridge.dispatchLaunches() {
+		if _, named := counts[launch]; !named {
+			set(launch, 0)
 		}
 	}
-	for key, n := range counts {
-		set(key, n)
+	for launch, n := range counts {
+		set(launch, n)
 	}
 }
 
@@ -438,7 +452,7 @@ func (s *AttentionStore) UnregisterToken(token string) {
 }
 
 // UnregisterAgent stops routing every token of agent and unbinds its
-// bridge key: no launch of it is live.
+// bridge launch: no launch of it is live.
 func (s *AttentionStore) UnregisterAgent(agent string) {
 	if s == nil {
 		return

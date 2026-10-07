@@ -32,6 +32,10 @@ type Request struct {
 	// CallerBridgeKey is the bridge key of the claude that asked
 	// ($LEO_BRIDGE_AGENT), so its mod can be shown the dispatch. Optional.
 	CallerBridgeKey string
+	// CallerBridgeLaunch is the launch id (bridge.LaunchID) of that
+	// claude's launch, which the key alone does not name: a recreated
+	// agent takes its predecessor's key again. Optional.
+	CallerBridgeLaunch string
 }
 
 type Result struct {

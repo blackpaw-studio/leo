@@ -16,7 +16,7 @@ type DispatchObserver struct {
 	publisher     observe.Publisher
 	now           func() time.Time
 	onOutstanding func(agent string, outstanding int)
-	owner         func(key string) (agent string, ok bool)
+	owner         func(key, launch string) (agent string, ok bool)
 
 	mu     sync.Mutex
 	last   map[string]observe.Dispatch
@@ -42,15 +42,16 @@ func WithOutstandingListener(fn func(agent string, outstanding int)) DispatchObs
 	return func(o *DispatchObserver) { o.onOutstanding = fn }
 }
 
-// WithDispatchOwner resolves a caller's bridge key to the agent holding it
-// now, for the name-keyed reads (OutstandingDispatches, the Tick
-// listener). Only dispatches whose caller has a bridge key count: the key
-// is fixed at the caller's launch, so it follows a rename where
-// Record.Caller cannot. A keyless dispatch (codex/opencode callers, the
-// CLI, a claude without the mod) is still listed but never holds
-// attention. Without an owner those reads count nothing; DispatchSnapshot
-// needs none.
-func WithDispatchOwner(fn func(key string) (agent string, ok bool)) DispatchObserverOption {
+// WithDispatchOwner resolves a caller's bridge key and launch id to the
+// agent whose live launch they are, for the name-keyed reads
+// (OutstandingDispatches, the Tick listener); ok=false once that launch is
+// gone, even if a later agent took the key. Only dispatches whose caller
+// has a bridge launch count: it is fixed for the caller's launch, so it
+// follows a rename where Record.Caller cannot. A keyless dispatch
+// (codex/opencode callers, the CLI, a claude without the mod) is still
+// listed but never holds attention. Without an owner those reads count
+// nothing; DispatchSnapshot needs none.
+func WithDispatchOwner(fn func(key, launch string) (agent string, ok bool)) DispatchObserverOption {
 	return func(o *DispatchObserver) { o.owner = fn }
 }
 
@@ -84,17 +85,18 @@ func (o *DispatchObserver) OutstandingDispatches() map[string]int {
 }
 
 // DispatchSnapshot returns each caller's count of its own non-terminal
-// dispatches keyed by the caller's bridge key, not its name: the attention
-// store resolves the key to the agent holding it as it applies the counts,
-// so a rename between this read and that cannot misfile them. The
-// generation increases in the order the snapshots read the records.
+// dispatches keyed by the caller's launch id, not its name or bare key:
+// the attention store resolves the launch to its agent as it applies the
+// counts, so neither a rename between this read and that nor a later
+// agent reusing the key can misfile them. The generation increases in the
+// order the snapshots read the records.
 func (o *DispatchObserver) DispatchSnapshot() (uint64, map[string]int) {
 	o.snapMu.Lock()
 	defer o.snapMu.Unlock()
 	counts := map[string]int{}
 	for _, rec := range o.records() {
 		if outstanding(rec) {
-			counts[rec.CallerBridgeKey]++
+			counts[rec.CallerBridgeLaunch]++
 		}
 	}
 	o.snapGen++
@@ -164,20 +166,20 @@ func (o *DispatchObserver) outstandingCounts(records []Record) map[string]int {
 }
 
 // outstanding reports whether rec is a running dispatch that holds its
-// caller's attention: a direct one by a caller with a bridge key. A
-// dispatch's own dispatches count toward that dispatch, not the agent above
-// it; a keyless caller's never count.
+// caller's attention: a direct one by a caller with a bridge key and
+// launch. A dispatch's own dispatches count toward that dispatch, not the
+// agent above it; a keyless caller's never count.
 func outstanding(rec Record) bool {
-	return rec.Kind == "dispatch" && !rec.Status.Terminal() && rec.CallerBridgeKey != "" && parentDispatchID(rec) == ""
+	return rec.Kind == "dispatch" && !rec.Status.Terminal() && rec.CallerBridgeKey != "" && rec.CallerBridgeLaunch != "" && parentDispatchID(rec) == ""
 }
 
-// keyOwner is the agent holding rec's caller bridge key now; ok=false for
-// a keyless record or a key no agent holds.
+// keyOwner is the agent whose live launch rec's caller is; ok=false for a
+// keyless record or a launch that is gone.
 func (o *DispatchObserver) keyOwner(rec Record) (agent string, ok bool) {
 	if o.owner == nil || rec.CallerBridgeKey == "" {
 		return "", false
 	}
-	agent, ok = o.owner(rec.CallerBridgeKey)
+	agent, ok = o.owner(rec.CallerBridgeKey, rec.CallerBridgeLaunch)
 	return agent, ok && agent != ""
 }
 

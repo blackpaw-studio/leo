@@ -90,8 +90,10 @@ func (s *Supervisor) adoptBridge(id *procIdentity, key, launch, conversation str
 		s.ReleaseAdoption(id.Name())
 		return bridgeLaunch{}
 	}
-	target, err := w.hub.Open(key, launch)
+	s.bindAttentionLaunch(id, key, launch)
+	target, err := w.open(key, launch)
 	if err != nil {
+		s.unbindAttentionLaunch(key, launch)
 		fmt.Fprintf(os.Stderr, "[%s] warning: adopting the leo bridge %s: %v\n", id.Name(), key, err)
 		id.setLegacy()
 		s.ReleaseAdoption(id.Name())
@@ -100,6 +102,7 @@ func (s *Supervisor) adoptBridge(id *procIdentity, key, launch, conversation str
 	bl := bridgeLaunch{plan: bridgemod.Plan{Key: key, Launch: launch}, bridged: true, adopted: true, target: target, conversation: conversation}
 	if opening != nil {
 		if bl = s.requeueAdoptedOpening(id, bl, opening); !bl.bridged {
+			s.unbindAttentionLaunch(key, launch)
 			s.ReleaseAdoption(id.Name())
 			return bl
 		}

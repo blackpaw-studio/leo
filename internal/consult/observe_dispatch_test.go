@@ -62,15 +62,16 @@ func newObserveHarness(recs ...Record) *observeHarness {
 }
 
 // agentDispatch is a dispatch by caller through its bridge, whose key is
-// its own name (see ownKey).
+// its own name and whose launch is caller-launch (see ownKey).
 func agentDispatch(id, caller string, status Status) Record {
 	rec := callerRecord(id, caller, status)
-	rec.Caller, rec.CallerBridgeKey = caller, caller
+	rec.Caller, rec.CallerBridgeKey, rec.CallerBridgeLaunch = caller, caller, caller+"-launch"
 	return rec
 }
 
-// ownKey resolves each bridge key to the agent of the same name.
-func ownKey(key string) (string, bool) { return key, true }
+// ownKey resolves each bridge key to the agent of the same name, whatever
+// its launch.
+func ownKey(key, _ string) (string, bool) { return key, true }
 
 func observedIDs(ds []observe.Dispatch) []string {
 	out := []string{}
@@ -240,22 +241,22 @@ func TestDispatchObserverWithoutListenerOrPublisher(t *testing.T) {
 // rename while Record.Caller keeps the old name.
 func TestOutstandingDispatchesFollowTheCallersBridgeKeyAcrossARename(t *testing.T) {
 	renamed := agentDispatch("d1", "old-name", StatusRunning)
-	renamed.CallerBridgeKey = "k-old"
+	renamed.CallerBridgeKey, renamed.CallerBridgeLaunch = "k-old", "k-old@1"
 	orphaned := agentDispatch("d3", "delta", StatusRunning)
-	orphaned.CallerBridgeKey = "k-gone"
-	owners := map[string]string{"k-old": "new-name"}
+	orphaned.CallerBridgeKey, orphaned.CallerBridgeLaunch = "k-gone", "k-gone@1"
+	owners := map[string]string{"k-old@1": "new-name"}
 	obs := NewDispatchObserver(func() []Record { return []Record{renamed, orphaned} }, nil,
-		WithDispatchOwner(func(key string) (string, bool) { name, ok := owners[key]; return name, ok }))
+		WithDispatchOwner(func(_, launch string) (string, bool) { name, ok := owners[launch]; return name, ok }))
 
 	got := obs.OutstandingDispatches()
 
 	if want := map[string]int{"new-name": 1}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("OutstandingDispatches = %v, want %v", got, want)
 	}
-	// The attention store's snapshot stays keyed by the caller's bridge
-	// key: it resolves the owner itself as it applies the counts.
-	if _, snap := obs.DispatchSnapshot(); !reflect.DeepEqual(snap, map[string]int{"k-old": 1, "k-gone": 1}) {
-		t.Fatalf("DispatchSnapshot = %v; want counts by bridge key", snap)
+	// The attention store's snapshot stays keyed by the caller's launch:
+	// it resolves the owner itself as it applies the counts.
+	if _, snap := obs.DispatchSnapshot(); !reflect.DeepEqual(snap, map[string]int{"k-old@1": 1, "k-gone@1": 1}) {
+		t.Fatalf("DispatchSnapshot = %v; want counts by caller launch", snap)
 	}
 }
 

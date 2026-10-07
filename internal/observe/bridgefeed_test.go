@@ -28,7 +28,7 @@ func newFeedHarness(t *testing.T, keys staticKeys) *feedHarness {
 	h := &feedHarness{pub: &syncRecorder{}, clock: newFakeClock(time.Date(2026, 10, 6, 12, 0, 0, 0, time.UTC)), connected: map[string]bool{}}
 	h.store = NewAttentionStore(h.pub)
 	for key, name := range keys {
-		h.store.BindBridgeKey(key, name)
+		h.store.BindBridgeKey(key, key+"-launch", name)
 	}
 	h.store.Set("alice", AttentionUnknown)
 	h.feed = NewBridgeFeed(keys, h.pub,
@@ -668,7 +668,7 @@ func TestBridgeFeedTransitionsResolvedBeforeARenameReachTheRenamedAgent(t *testi
 		t.Run(name, func(t *testing.T) {
 			keys := &hookedKeys{keys: staticKeys{"k": "old"}}
 			store := NewAttentionStore(nil)
-			store.BindBridgeKey("k", "old")
+			store.BindBridgeKey("k", "k-launch", "old")
 			store.Set("old", AttentionWorking)
 			feed := NewBridgeFeed(keys, nil, WithFeedAttention(store), WithFeedClock(newFakeClock(time.Now())))
 			keys.during = func() {

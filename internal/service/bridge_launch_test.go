@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -157,6 +158,8 @@ type bridgeTestOpts struct {
 	adoptions []string
 	// attention is the store the supervisor drives (default none).
 	attention *observe.AttentionStore
+	// onOpen runs as each launch's key is opened on the hub, before it is.
+	onOpen func(key string)
 	// isDurable keeps agent delivers in an outbox under home, as the
 	// daemon does (see mailStore).
 	isDurable bool
@@ -203,6 +206,14 @@ func startBridged(t *testing.T, tmuxPath, version string, connectTimeout time.Du
 	}
 	if o.attention != nil {
 		sv.SetAttention(o.attention)
+	}
+	if o.onOpen != nil {
+		w := sv.bridgeWiring()
+		open := w.open
+		w.open = func(key, launch string) (bridge.Target, error) {
+			o.onOpen(key)
+			return open(key, launch)
+		}
 	}
 	id := newProcIdentity(spec.Name, spec.ClaudeArgs)
 	sv.mu.Lock()
@@ -496,28 +507,46 @@ func TestLegacyLaunchPastesAnOversizedOpening(t *testing.T) {
 	}
 }
 
-// A bridged launch files its agent's attention under its bridge key, so
-// children the bridge counts by key hold that agent's finished turn.
-func TestBridgedLaunchBindsItsKeyForAttention(t *testing.T) {
-	tmuxPath, _ := statefulTmux(t, "")
-	store := observe.NewAttentionStore(nil)
-	f := startBridged(t, tmuxPath, "2.1.289", time.Minute, claudeSpec(t, "alpha"),
-		func(o *bridgeTestOpts) { o.attention = store })
-
-	deadline := time.Now().Add(5 * time.Second)
-	for {
-		if key, ok := f.sv.BridgeKey("alpha"); ok {
-			store.SetOutstandingSubagents(key, 1)
-			// The launch may drop alpha's attention (it has no hooks here).
-			if att := store.Set("alpha", observe.AttentionWorking); att.Outstanding != nil && att.Outstanding.Subagents == 1 {
-				return
+// A bridged launch files its agent's attention under its key before the
+// key is opened, on a fresh launch and on adopting a surviving session
+// (whose mod reconnects and reports at once): children the bridge counts
+// by key hold that agent's finished turn from its first report.
+func TestBridgedLaunchBindsItsKeyBeforeOpeningIt(t *testing.T) {
+	for _, adopt := range []bool{false, true} {
+		t.Run(fmt.Sprintf("adopt=%v", adopt), func(t *testing.T) {
+			env := ""
+			spec := claudeSpec(t, "alpha")
+			if adopt {
+				env = "LEO_BRIDGE_AGENT=alpha.0a1b2c\nLEO_BRIDGE_LAUNCH=launch-old"
+				origHas := tmuxHasSession
+				tmuxHasSession = func(_, _ string) bool { return true }
+				t.Cleanup(func() { tmuxHasSession = origHas })
+				spec.Adopt = true
 			}
-		}
-		if time.Now().After(deadline) {
-			att, _ := store.Get("alpha")
-			t.Fatalf("the launch's key never reached alpha's attention: %+v", att)
-		}
-		time.Sleep(10 * time.Millisecond)
+			tmuxPath, _ := statefulTmux(t, env)
+			store := observe.NewAttentionStore(nil)
+			boundAtOpen := make(chan bool, 1)
+			startBridged(t, tmuxPath, "2.1.289", time.Minute, spec,
+				func(o *bridgeTestOpts) {
+					o.attention = store
+					o.onOpen = func(key string) {
+						// The mod's first report, as early as it can come.
+						store.Set("alpha", observe.AttentionWorking)
+						store.SetOutstandingSubagents(key, 1)
+						att, _ := store.Get("alpha")
+						boundAtOpen <- att.Outstanding != nil && att.Outstanding.Subagents == 1
+					}
+				})
+
+			select {
+			case bound := <-boundAtOpen:
+				if !bound {
+					t.Fatal("the key was opened before alpha's launch was bound to it")
+				}
+			case <-time.After(5 * time.Second):
+				t.Fatal("the launch never opened its key")
+			}
+		})
 	}
 }
 

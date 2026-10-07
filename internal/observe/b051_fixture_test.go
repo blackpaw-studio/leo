@@ -77,7 +77,7 @@ func newB051Harness(t *testing.T) *b051Harness {
 	t.Helper()
 	pub := &syncRecorder{}
 	store := NewAttentionStore(pub)
-	store.BindBridgeKey("alice-key", "alice")
+	store.BindBridgeKey("alice-key", "alice-key-launch", "alice")
 	store.Set("alice", AttentionUnknown)
 	clock := newFakeClock(time.Date(2026, 10, 6, 12, 0, 0, 0, time.UTC))
 	feed := NewBridgeFeed(staticKeys{"alice-key": "alice"}, pub, WithFeedAttention(store), WithFeedClock(clock))
@@ -147,12 +147,12 @@ func TestB051OutstandingDispatchHoldsWorkingUntilItEnds(t *testing.T) {
 
 	h.send(bridge.Event{Name: bridge.ReportHello})
 	h.send(bridge.Event{Name: bridge.EventTurnStart, EventID: "ts1"})
-	setDispatches(h.store, "alice-key", 1)
+	setDispatches(h.store, "alice-key-launch", 1)
 	h.send(bridge.Event{Name: bridge.EventTurnComplete, EventID: "tc1", Message: "dispatched a reviewer"})
 
 	h.requireAttention(t, AttentionWorking, &Outstanding{Dispatches: 1})
 
-	setDispatches(h.store, "alice-key", 0)
+	setDispatches(h.store, "alice-key-launch", 0)
 
 	h.requireAttention(t, AttentionFinished, nil)
 	h.requireNoFlicker(t)
@@ -163,7 +163,7 @@ func TestB051StopHookDuringHoldDoesNotFinishEarly(t *testing.T) {
 
 	h.send(bridge.Event{Name: bridge.ReportHello})
 	h.send(bridge.Event{Name: bridge.EventTurnStart, EventID: "ts1"})
-	setDispatches(h.store, "alice-key", 1)
+	setDispatches(h.store, "alice-key-launch", 1)
 	h.send(bridge.Event{Name: bridge.EventSubagents, Subagents: &bridge.SubagentsReport{Running: 1}})
 	h.send(bridge.Event{Name: bridge.EventTurnComplete, EventID: "tc1"})
 	// The claude Stop hook lands after the bridge's turn.complete.
@@ -173,7 +173,7 @@ func TestB051StopHookDuringHoldDoesNotFinishEarly(t *testing.T) {
 	h.send(bridge.Event{Name: bridge.EventSubagents, Subagents: &bridge.SubagentsReport{Running: 0}})
 	h.requireAttention(t, AttentionWorking, &Outstanding{Dispatches: 1})
 
-	setDispatches(h.store, "alice-key", 0)
+	setDispatches(h.store, "alice-key-launch", 0)
 	h.requireAttention(t, AttentionFinished, nil)
 	h.requireNoFlicker(t)
 }
