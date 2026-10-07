@@ -232,17 +232,22 @@ orchestrator instead of leaving them in the pane. Leo merges a
 hands the request to the daemon and waits for an answer.
 
 Meanwhile the run's status is `needs_input`, and its record and wait entries
-carry `needs_input: {kind: "permission", tool, summary, request_id}`, where
-`summary` is the command, path, or URL the tool call acts on. `leo_wait`
+carry `needs_input: {kind: "permission", tool, summary, request_id, input,
+truncated}`. `summary` is the command, path, or URL the tool call acts on,
+cut to 200 characters; `input` is the tool input verbatim as single-line
+JSON, up to 4 KiB. When `truncated` is true, part of the call is not shown:
+deny it, or deny with a reason asking for a smaller command, rather than
+allowing it blind. `leo_wait`
 returns as soon as any waited dispatch enters `needs_input`, the same way it
 returns on a terminal state. A dispatch with notifications on also notifies
 its caller, unless a wait already covers it.
 
-Answer with `leo_send_dispatch {id, decision: "allow" | "deny", reason?,
-request_id?}` (HTTP: the same fields on `POST /api/dispatch/{id}/send`). A
-`deny` reason reaches the subagent as the denial's message. Without
-`request_id` the oldest pending request is answered; a `request_id` that is
-no longer pending is rejected as stale. A plain `message` sent to a
+Answer with `leo_send_dispatch {id, decision: "allow" | "deny", request_id,
+reason?}` (HTTP: the same fields on `POST /api/dispatch/{id}/send`).
+`request_id` is required, and one that is no longer pending is rejected as
+stale. A denial tells the subagent it was denied by the orchestrator (with
+the `reason`, when given), not to retry or route around it, and to report
+back. A plain `message` sent to a
 `needs_input` run is rejected with a hint to send a decision. A dispatch
 subagent cannot answer prompts itself: its leo MCP refuses `decision`.
 

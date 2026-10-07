@@ -324,8 +324,8 @@ func TestInteractiveNeedsInputDoesNotPullPaneBack(t *testing.T) {
 	// The user typed in the hidden pane and that turn hit a permission prompt.
 	_ = d.Report(id, hook(t, "UserPromptSubmit", "u"))
 	go d.RequestPermission(context.Background(), id, permissionPayload(t, "Bash", map[string]any{"command": "ls"}), time.Minute)
-	waitForStatus(t, d, id, StatusNeedsInput)
-	if _, err := d.Decide(id, Decision{Behavior: "allow"}); err != nil {
+	rec := waitForStatus(t, d, id, StatusNeedsInput)
+	if _, err := d.Decide(id, Decision{Behavior: "allow", RequestID: rec.NeedsInput.RequestID}); err != nil {
 		t.Fatal(err)
 	}
 	time.Sleep(20 * time.Millisecond)

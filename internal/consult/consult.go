@@ -642,6 +642,18 @@ func (d *Dispatcher) Wait(ctx context.Context, ids []string, timeout time.Durati
 	}
 	defer deadline.Stop()
 	for {
+		// Any waited run needing the orchestrator ends the wait, whatever
+		// the others are doing.
+		if waitNeedsInput(entries) {
+			d.mu.Lock()
+			for i := range entries {
+				if entries[i].Status == StatusNeedsInput {
+					d.suppressNeedsInputNotificationLocked(strings.SplitN(ids[i], "#", 2)[0], entries[i].NeedsInput)
+				}
+			}
+			d.mu.Unlock()
+			return entries
+		}
 		pending := false
 		interactivePending := false
 		cases := []reflect.SelectCase{{Dir: reflect.SelectRecv, Chan: reflect.ValueOf(ctx.Done())}}
@@ -658,13 +670,6 @@ func (d *Dispatcher) Wait(ctx context.Context, ids []string, timeout time.Durati
 			}
 		}
 		if !pending {
-			d.mu.Lock()
-			for i := range entries {
-				if entries[i].Status == StatusNeedsInput {
-					d.suppressNeedsInputNotificationLocked(strings.SplitN(ids[i], "#", 2)[0], entries[i].NeedsInput)
-				}
-			}
-			d.mu.Unlock()
 			return entries
 		}
 		// Interactive turns complete before their parent session does. Polling
@@ -703,6 +708,15 @@ func (d *Dispatcher) Wait(ctx context.Context, ids []string, timeout time.Durati
 			}
 		}
 	}
+}
+
+func waitNeedsInput(entries []Entry) bool {
+	for _, e := range entries {
+		if e.Status == StatusNeedsInput {
+			return true
+		}
+	}
+	return false
 }
 
 func (d *Dispatcher) lookup(id string) (Record, *runState, error) {

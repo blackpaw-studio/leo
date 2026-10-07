@@ -444,7 +444,7 @@ func newRegistry(client *daemonClient, processName string, perms leotools.Permis
 			"message":    map[string]any{"type": "string", "description": "Follow-up text. Omit when answering a needs_input permission request with decision."},
 			"decision":   map[string]any{"type": "string", "enum": []any{"allow", "deny"}, "description": "Answer a needs_input dispatch's pending permission request (leo_wait shows the tool and request). Use instead of message."},
 			"reason":     map[string]any{"type": "string", "description": "With decision deny: told to the subagent as why."},
-			"request_id": map[string]any{"type": "string", "description": "With decision: the request being answered, from leo_wait; a stale id is rejected. Omitted answers the oldest pending request."},
+			"request_id": map[string]any{"type": "string", "description": "Required with decision: the needs_input request_id from leo_wait; a stale id is rejected."},
 		}, "id"),
 	}, func(ctx context.Context, args map[string]any) (string, error) {
 		id, err := stringArg(args, "id")
@@ -461,6 +461,9 @@ func newRegistry(client *daemonClient, processName string, perms leotools.Permis
 			}
 			reason, _ := args["reason"].(string)
 			requestID, _ := args["request_id"].(string)
+			if requestID == "" {
+				return "", fmt.Errorf("request_id is required with a decision: pass the needs_input request_id leo_wait returned for %s", id)
+			}
 			answered, err := client.decideDispatch(ctx, id, consult.Decision{Behavior: decision, Reason: reason, RequestID: requestID})
 			if err != nil {
 				return "", err
@@ -533,7 +536,7 @@ func newRegistry(client *daemonClient, processName string, perms leotools.Permis
 				}
 			}
 			if need := entry.NeedsInput; need != nil {
-				body = fmt.Sprintf("needs_input: %s for %s: %s (request %s). Answer with leo_send_dispatch {id: %q, decision: allow|deny, reason?, request_id: %q}.", need.Kind, need.Tool, need.Summary, need.RequestID, entry.ID, need.RequestID)
+				body = fmt.Sprintf("needs_input: %s\nAnswer with leo_send_dispatch {id: %q, decision: allow|deny, request_id: %q, reason?}.", consult.DescribeNeedsInput(*need), entry.ID, need.RequestID)
 			}
 			blocks = append(blocks, fmt.Sprintf("[%s · %s · elapsed %.1fs · active %.1fs%s]\n%s", entry.ID, entry.Status, entry.Elapsed.Seconds(), entry.Active.Seconds(), extra, body))
 		}

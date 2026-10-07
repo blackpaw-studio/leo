@@ -83,7 +83,10 @@ func TestPermissionAllowRoundTrip(t *testing.T) {
 		t.Fatalf("wait did not return early on needs_input: %+v", entry)
 	}
 
-	if _, err := d.Decide(id, Decision{Behavior: "allow"}); err != nil {
+	if _, err := d.Decide(id, Decision{Behavior: "allow"}); err == nil || !strings.Contains(err.Error(), "request_id") || !strings.Contains(err.Error(), rec.NeedsInput.RequestID) {
+		t.Fatalf("decision without request_id err = %v, want a hint naming %s", err, rec.NeedsInput.RequestID)
+	}
+	if _, err := d.Decide(id, Decision{Behavior: "allow", RequestID: rec.NeedsInput.RequestID}); err != nil {
 		t.Fatal(err)
 	}
 	if got := receiveDecision(t, decision); got != (PermissionDecision{Behavior: "allow"}) {
@@ -102,8 +105,14 @@ func TestPermissionDenyCarriesReason(t *testing.T) {
 	if _, err := d.Decide(id, Decision{Behavior: "deny", Reason: "use make test", RequestID: rec.NeedsInput.RequestID}); err != nil {
 		t.Fatal(err)
 	}
-	if got := receiveDecision(t, decision); got != (PermissionDecision{Behavior: "deny", Message: "use make test"}) {
+	got := receiveDecision(t, decision)
+	if got.Behavior != "deny" {
 		t.Fatalf("decision = %+v", got)
+	}
+	for _, want := range []string{"denied by the orchestrator", "use make test", "Do not retry", "report back"} {
+		if !strings.Contains(got.Message, want) {
+			t.Fatalf("deny message %q lacks %q", got.Message, want)
+		}
 	}
 }
 
@@ -114,7 +123,7 @@ func TestPermissionTimeoutFallsBackAndLateDecisionIsStale(t *testing.T) {
 		t.Fatalf("timed-out request decided %+v, want no decision", got)
 	}
 	waitForStatus(t, d, id, StatusRunning)
-	if _, err := d.Decide(id, Decision{Behavior: "allow"}); err == nil || !strings.Contains(err.Error(), "no pending permission") {
+	if _, err := d.Decide(id, Decision{Behavior: "allow", RequestID: id + "#perm1"}); err == nil || !strings.Contains(err.Error(), "no pending permission") {
 		t.Fatalf("late decision err = %v, want stale rejection", err)
 	}
 }
@@ -136,7 +145,7 @@ func TestPermissionDecisionForAnotherRequestIsStale(t *testing.T) {
 	if _, err := d.Decide(id, Decision{Behavior: "allow", RequestID: id + "#perm99"}); err == nil || !strings.Contains(err.Error(), "stale") {
 		t.Fatalf("err = %v, want stale request id rejection", err)
 	}
-	if _, err := d.Decide(id, Decision{Behavior: "maybe"}); err == nil {
+	if _, err := d.Decide(id, Decision{Behavior: "maybe", RequestID: id + "#perm1"}); err == nil {
 		t.Fatal("unknown decision accepted")
 	}
 }
@@ -196,7 +205,7 @@ func TestPermissionRequestNotifiesCaller(t *testing.T) {
 	if !ok || n.Disposition != NotificationPending {
 		t.Fatalf("notifications = %+v, want a pending needs_input notification", rec.Notifications)
 	}
-	for _, want := range []string{started.ID, "needs_input", "Bash", "decision"} {
+	for _, want := range []string{started.ID, "needs_input", "Bash", "decision", rec.NeedsInput.RequestID, `"command":"go test ./..."`} {
 		if !strings.Contains(n.Message, want) {
 			t.Fatalf("notification %q lacks %q", n.Message, want)
 		}
@@ -214,5 +223,54 @@ func TestPermissionRequestForSettledRunReturnsAtOnce(t *testing.T) {
 	}()
 	if got := receiveDecision(t, done); got != (PermissionDecision{}) {
 		t.Fatalf("decision = %+v", got)
+	}
+}
+
+func TestPermissionExposesBoundedVerbatimInput(t *testing.T) {
+	d, id := startRunningClaude(t)
+	requestAsync(t, context.Background(), d, id, time.Minute)
+	rec, _ := d.Get(id)
+	if want := `{"command":"go test ./...","description":"run tests"}`; rec.NeedsInput.Input != want || rec.NeedsInput.Truncated {
+		t.Fatalf("input = %q truncated=%v, want %q", rec.NeedsInput.Input, rec.NeedsInput.Truncated, want)
+	}
+	if _, err := d.Decide(id, Decision{Behavior: "deny", RequestID: rec.NeedsInput.RequestID}); err != nil {
+		t.Fatal(err)
+	}
+
+	long := "echo ok && " + strings.Repeat("x", 5000) + " && rm -rf /"
+	go d.RequestPermission(context.Background(), id, permissionPayload(t, "Bash", map[string]any{"command": long}), time.Minute)
+	rec = waitForStatus(t, d, id, StatusNeedsInput)
+	in := rec.NeedsInput
+	if !in.Truncated || len(in.Input) > permissionInputBytes || !strings.HasPrefix(in.Input, `{"command":"echo ok && xxx`) {
+		t.Fatalf("long input: %d bytes truncated=%v prefix=%q", len(in.Input), in.Truncated, in.Input[:40])
+	}
+	n := rec.Notifications[in.RequestID]
+	if !strings.Contains(n.Message, "truncated") || !strings.Contains(n.Message, "deny") {
+		t.Fatalf("notification %q must flag the truncation and steer away from a blind allow", n.Message)
+	}
+}
+
+func TestWaitReturnsWhenAnyWaitedRunNeedsInput(t *testing.T) {
+	d, a := startRunningClaude(t)
+	rt := &fakeInteractiveRuntime{arm: true, empty: true}
+	d.SetInteractiveRuntime(rt)
+	b, err := d.Start(context.Background(), testConfig(), Request{Template: "claude", Prompt: "other", Cwd: t.TempDir(), Mode: ModeInteractive})
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitForArmed(t, d, b.ID)
+	_ = d.Report(b.ID, claudeHook(t, "submit-b", "UserPromptSubmit", dispatchPreamble+" other"))
+
+	done := make(chan []Entry, 1)
+	go func() { done <- d.Wait(context.Background(), []string{a, b.ID}, 5*time.Second) }()
+	time.Sleep(20 * time.Millisecond)
+	go d.RequestPermission(context.Background(), a, permissionPayload(t, "Bash", map[string]any{"command": "ls"}), time.Minute)
+	select {
+	case entries := <-done:
+		if entries[0].Status != StatusNeedsInput || entries[1].Status != StatusRunning {
+			t.Fatalf("entries = %+v / %+v, want needs_input and running", entries[0], entries[1])
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("wait on [needs_input, running] did not return early")
 	}
 }

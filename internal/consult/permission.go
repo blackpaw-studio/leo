@@ -1,10 +1,13 @@
 package consult
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
+	"unicode/utf8"
 )
 
 // StatusNeedsInput marks an interactive run blocked on its orchestrator: a
@@ -17,6 +20,11 @@ type NeedsInput struct {
 	Tool      string `json:"tool,omitempty"`
 	Summary   string `json:"summary,omitempty"`
 	RequestID string `json:"request_id"`
+	// Input is the tool input verbatim (as single-line JSON), cut to
+	// permissionInputBytes; Truncated marks a cut, which can hide part of
+	// what the tool would do.
+	Input     string `json:"input,omitempty"`
+	Truncated bool   `json:"truncated,omitempty"`
 }
 
 // PermissionDecision is the answer handed back to a PermissionRequest hook.
@@ -26,8 +34,8 @@ type PermissionDecision struct {
 	Message  string `json:"message,omitempty"`
 }
 
-// Decision is an orchestrator's answer to a run's pending request. An empty
-// RequestID answers the oldest pending one.
+// Decision is an orchestrator's answer to one pending request, named by
+// RequestID so an answer can never land on a request it was not meant for.
 type Decision struct {
 	Behavior  string `json:"decision"`
 	Reason    string `json:"reason,omitempty"`
@@ -35,8 +43,11 @@ type Decision struct {
 }
 
 const (
+	permissionInputBytes   = 4096
 	permissionSummaryRunes = 200
-	defaultDenyMessage     = "denied by the orchestrator"
+	// denyGuidance follows every denial: a model told only "no" tends to
+	// retry the same call or reach the same effect another way.
+	denyGuidance = "Do not retry it or route around it (no other command or tool for the same effect); stop and report back to the orchestrator."
 )
 
 type permissionRequest struct {
@@ -60,6 +71,7 @@ func (d *Dispatcher) RequestPermission(ctx context.Context, id string, payload j
 	if err != nil || s == nil {
 		return PermissionDecision{}
 	}
+	input, truncated := permissionInput(hook.ToolInput)
 	d.mu.Lock()
 	if s.record.Mode != ModeInteractive || s.record.Status.Terminal() || s.record.Status == StatusSettling || s.releasing || s.awaitingSlot {
 		d.mu.Unlock()
@@ -70,6 +82,7 @@ func (d *Dispatcher) RequestPermission(ctx context.Context, id string, payload j
 		info: NeedsInput{
 			Kind: "permission", Tool: sanitizeNotification(hook.ToolName), Summary: permissionSummary(hook.ToolInput),
 			RequestID: fmt.Sprintf("%s#perm%d", s.record.ID, s.permissionSeq),
+			Input:     input, Truncated: truncated,
 		},
 		decided: make(chan PermissionDecision, 1),
 	}
@@ -120,24 +133,21 @@ func (d *Dispatcher) Decide(id string, decision Decision) (NeedsInput, error) {
 	if len(s.permissions) == 0 {
 		return NeedsInput{}, fmt.Errorf("dispatch %s has no pending permission request (it timed out, was answered in its pane, or its turn ended)", s.record.ID)
 	}
-	index := 0
-	if decision.RequestID != "" {
-		index = -1
-		for i, req := range s.permissions {
-			if req.info.RequestID == decision.RequestID {
-				index = i
-			}
+	if decision.RequestID == "" {
+		return NeedsInput{}, invalidf("request_id is required with a decision; dispatch %s is waiting on %s", s.record.ID, s.permissions[0].info.RequestID)
+	}
+	index := -1
+	for i, req := range s.permissions {
+		if req.info.RequestID == decision.RequestID {
+			index = i
 		}
-		if index < 0 {
-			return NeedsInput{}, fmt.Errorf("stale permission request %s; dispatch %s is waiting on %s", decision.RequestID, s.record.ID, s.permissions[0].info.RequestID)
-		}
+	}
+	if index < 0 {
+		return NeedsInput{}, fmt.Errorf("stale permission request %s; dispatch %s is waiting on %s", decision.RequestID, s.record.ID, s.permissions[0].info.RequestID)
 	}
 	answer := PermissionDecision{Behavior: decision.Behavior}
 	if decision.Behavior == "deny" {
-		answer.Message = decision.Reason
-		if answer.Message == "" {
-			answer.Message = defaultDenyMessage
-		}
+		answer.Message = denyMessage(decision.Reason)
 	}
 	req := s.permissions[index]
 	req.decided <- answer
@@ -242,7 +252,53 @@ func needsInputNotification(rec Record, info NeedsInput) string {
 	if name == "" {
 		name = sanitizeNotification(rec.Template)
 	}
-	return fmt.Sprintf("[leo] dispatch %s (%s) needs_input: permission for %s (%s) — answer with leo_send_dispatch {id, decision: allow|deny, reason?}", rec.ID, name, info.Tool, info.Summary)
+	return fmt.Sprintf("[leo] dispatch %s (%s) needs_input: %s — answer with leo_send_dispatch {id: %q, decision: allow|deny, request_id: %q, reason?}", rec.ID, name, DescribeNeedsInput(info), rec.ID, info.RequestID)
+}
+
+// DescribeNeedsInput is one line for an orchestrator to decide on: the tool,
+// its summary, the request id, and its verbatim input, with a warning in
+// place of a blind allow when that input was cut.
+func DescribeNeedsInput(info NeedsInput) string {
+	line := fmt.Sprintf("%s for %s (%s), request %s; input: %s", info.Kind, info.Tool, info.Summary, info.RequestID, info.Input)
+	if info.Truncated {
+		line += fmt.Sprintf(" … [truncated at %d bytes: part of this call is not shown, so do not allow it blind; deny it, or deny with a reason asking the subagent for a smaller command]", permissionInputBytes)
+	}
+	return line
+}
+
+func denyMessage(reason string) string {
+	if reason == "" {
+		return "This tool call was denied by the orchestrator. " + denyGuidance
+	}
+	return "This tool call was denied by the orchestrator: " + reason + " " + denyGuidance
+}
+
+// permissionInput is the tool input as single-line JSON (control characters
+// and line separators escaped, so it is safe inside a notification line),
+// cut to permissionInputBytes on a rune boundary.
+func permissionInput(raw json.RawMessage) (string, bool) {
+	var value any
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	dec.UseNumber()
+	text := string(raw)
+	if dec.Decode(&value) == nil {
+		var buf bytes.Buffer
+		enc := json.NewEncoder(&buf)
+		enc.SetEscapeHTML(false)
+		if enc.Encode(value) == nil {
+			text = strings.TrimSuffix(buf.String(), "\n")
+		}
+	} else {
+		text = sanitizeNotification(text)
+	}
+	if len(text) <= permissionInputBytes {
+		return text, false
+	}
+	cut := permissionInputBytes
+	for cut > 0 && !utf8.RuneStart(text[cut]) {
+		cut--
+	}
+	return text[:cut], true
 }
 
 // permissionSummary is the one line an orchestrator needs to judge a tool

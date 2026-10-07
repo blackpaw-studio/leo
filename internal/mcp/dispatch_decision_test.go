@@ -31,6 +31,9 @@ func TestSendDispatchDecision(t *testing.T) {
 			t.Fatalf("reply %q lacks %q", got, want)
 		}
 	}
+	if _, err := callTool(reg, "leo_send_dispatch", map[string]any{"id": "d-test", "decision": "allow"}); err == nil || !strings.Contains(err.Error(), "request_id") {
+		t.Fatalf("decision without request_id err = %v", err)
+	}
 	if _, err := callTool(reg, "leo_send_dispatch", map[string]any{"id": "d-test"}); err == nil {
 		t.Fatal("send without message or decision accepted")
 	}
@@ -43,7 +46,7 @@ func TestSendDispatchDecisionRefusedInsideDispatch(t *testing.T) {
 	d := newFakeDaemon(func(string, string, []byte) (int, string) { return 500, `{"ok":false}` })
 	defer d.close()
 	reg := newRegistry(newDaemonClient(d.port(), "tok"), "assistant", leotools.Permissions{}, withDispatchID("d-self"))
-	if _, err := callTool(reg, "leo_send_dispatch", map[string]any{"id": "d-self", "decision": "allow"}); err == nil || !strings.Contains(err.Error(), "orchestrator") {
+	if _, err := callTool(reg, "leo_send_dispatch", map[string]any{"id": "d-self", "decision": "allow", "request_id": "d-self#perm1"}); err == nil || !strings.Contains(err.Error(), "orchestrator") {
 		t.Fatalf("err = %v, a subagent must not answer permission prompts", err)
 	}
 }
@@ -51,7 +54,7 @@ func TestSendDispatchDecisionRefusedInsideDispatch(t *testing.T) {
 func TestWaitRendersNeedsInput(t *testing.T) {
 	d := newFakeDaemon(func(method, path string, body []byte) (int, string) {
 		if method == "GET" && path == "/api/dispatch/wait" {
-			return 200, `{"ok":true,"data":[{"id":"d-test","status":"needs_input","elapsed_seconds":1,"active_seconds":1,"turn_id":"d-test#1","delivered":true,"needs_input":{"kind":"permission","tool":"Bash","summary":"go test ./...","request_id":"d-test#perm1"}}]}`
+			return 200, `{"ok":true,"data":[{"id":"d-test","status":"needs_input","elapsed_seconds":1,"active_seconds":1,"turn_id":"d-test#1","delivered":true,"needs_input":{"kind":"permission","tool":"Bash","summary":"go test ./...","request_id":"d-test#perm1","input":"{\"command\":\"go test ./... && rm -rf x\"}","truncated":true}}]}`
 		}
 		return 404, `{"ok":false,"error":"nope"}`
 	})
@@ -61,7 +64,7 @@ func TestWaitRendersNeedsInput(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"needs_input", "permission for Bash: go test ./...", "request d-test#perm1", "decision"} {
+	for _, want := range []string{"needs_input", "permission for Bash (go test ./...)", "request d-test#perm1", `input: {"command":"go test ./... && rm -rf x"}`, "truncated", "do not allow it blind", `request_id: "d-test#perm1"`} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("wait %q lacks %q", got, want)
 		}
