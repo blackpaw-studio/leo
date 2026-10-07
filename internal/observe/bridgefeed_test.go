@@ -479,9 +479,11 @@ func TestBridgeFeedStaleKeyMappingNeverMovesAnotherAgentsState(t *testing.T) {
 	keys["k2"] = "alice"
 	h.send(bridge.Event{Agent: "k2", Name: bridge.ReportHello, Gen: 1, SessionID: "s9"})
 	h.send(bridge.Event{Agent: "k2", Name: bridge.EventTurnComplete, EventID: "b", SessionID: "s9", Tokens: tokens(1, 1)})
-	// The old key is reused by an unrelated agent.
+	// The old key is reused by an unrelated agent: a new launch, so a new
+	// generation (generations are never reused) and its own session.
 	keys["k1"] = "carol"
-	h.send(bridge.Event{Agent: "k1", Name: bridge.EventTurnComplete, EventID: "c", Tokens: tokens(2, 2)})
+	h.send(bridge.Event{Agent: "k1", Name: bridge.ReportHello, Gen: 3, SessionID: "s7"})
+	h.send(bridge.Event{Agent: "k1", Name: bridge.EventTurnComplete, EventID: "c", Gen: 3, SessionID: "s7", Tokens: tokens(2, 2)})
 
 	agents := h.feed.BridgeAgents()
 	if u := agents["alice"].Usage; u == nil || u.SessionID != "s9" {
@@ -516,9 +518,9 @@ func TestBridgeFeedReconnectHelloKeepsTheModsSubagentCount(t *testing.T) {
 	}
 }
 
-// A snapshot taken right after a rename, before the agent's next event,
-// finds the state under the new name rather than losing it.
-func TestBridgeFeedSnapshotAfterRenameMigratesState(t *testing.T) {
+// A read right after a rename, before the agent's next event, finds the
+// state under the new name rather than losing it.
+func TestBridgeFeedReadAfterRenameShowsStateUnderNewName(t *testing.T) {
 	keys := staticKeys{"alice-key": "alice"}
 	h := newFeedHarness(t, keys)
 	h.send(bridge.Event{Name: bridge.EventTurnComplete, EventID: "a", Tokens: tokens(100, 20)})
@@ -559,5 +561,80 @@ func TestBridgeFeedSnapshotAfterANameSwapKeepsBothStates(t *testing.T) {
 	}
 	if u := after["alice"].Usage; u == nil || u.Session.Tokens != bobTokens {
 		t.Fatalf("alice (bob-key) usage = %+v; want %d", u, bobTokens)
+	}
+}
+
+// Two agents swap names and one of them reports before anything reads the
+// feed: each key keeps its own state, under its new owner's name.
+func TestBridgeFeedEventAfterANameSwapKeepsBothStates(t *testing.T) {
+	keys := staticKeys{"alice-key": "alice", "bob-key": "bob"}
+	h := newFeedHarness(t, keys)
+	h.send(bridge.Event{Name: bridge.EventTurnComplete, EventID: "a", Tokens: tokens(100, 20)})
+	h.send(bridge.Event{Agent: "bob-key", Name: bridge.EventTurnComplete, EventID: "b", Tokens: tokens(200, 40)})
+	before := h.feed.BridgeAgents()
+	aliceTokens, bobTokens := before["alice"].Usage.Session.Tokens, before["bob"].Usage.Session.Tokens
+
+	keys["alice-key"], keys["bob-key"] = "bob", "alice"
+	h.send(bridge.Event{Name: bridge.EventActivity, Activity: &bridge.ActivityReport{Tool: "Read"}})
+
+	after := h.feed.BridgeAgents()
+	if u := after["bob"].Usage; u == nil || u.Session.Tokens != aliceTokens {
+		t.Fatalf("bob (alice-key) usage = %+v; want %d", u, aliceTokens)
+	}
+	if u := after["alice"].Usage; u == nil || u.Session.Tokens != bobTokens {
+		t.Fatalf("alice (bob-key) usage = %+v; want %d", u, bobTokens)
+	}
+	if a := after["bob"].CurrentAction; a == nil || !strings.HasPrefix(a.Detail, "Read") {
+		t.Fatalf("bob (alice-key) action = %+v; want the Read it just reported", a)
+	}
+}
+
+// A trailing activity edge armed before a rename goes out under the name
+// the key resolves to when it fires.
+func TestBridgeFeedTrailingActivityEdgeUsesTheNameAtFireTime(t *testing.T) {
+	keys := staticKeys{"alice-key": "alice"}
+	h := newFeedHarness(t, keys)
+	h.send(bridge.Event{Name: bridge.EventActivity, Activity: &bridge.ActivityReport{Tool: "Read"}})
+	h.clock.Advance(100 * time.Millisecond)
+	h.send(bridge.Event{Name: bridge.EventActivity, Activity: &bridge.ActivityReport{Tool: "Edit"}})
+
+	keys["alice-key"] = "alicia"
+	h.clock.Advance(time.Second)
+
+	evs := h.ofType(EventAgentActivity)
+	if len(evs) != 2 {
+		t.Fatalf("published %d activity events; want leading + trailing", len(evs))
+	}
+	if p := evs[1].Payload.(*AgentActivityPayload); p.Agent != "alicia" || p.CurrentAction == nil || p.CurrentAction.Detail != "Edit" {
+		t.Fatalf("trailing edge = %+v; want Edit under alicia", p)
+	}
+}
+
+// A deleted agent's name and key taken by a new agent's launch start from
+// nothing, whether or not anything read the feed in between.
+func TestBridgeFeedRecreatedAgentDoesNotInheritState(t *testing.T) {
+	for _, readBetween := range []bool{false, true} {
+		t.Run(fmt.Sprintf("read between %v", readBetween), func(t *testing.T) {
+			keys := staticKeys{"alice-key": "alice"}
+			h := newFeedHarness(t, keys)
+			h.send(bridge.Event{Name: bridge.EventTurnComplete, EventID: "a", Tokens: tokens(100, 20)})
+			h.send(bridge.Event{Name: bridge.EventAttention, Attention: &bridge.AttentionReport{State: bridge.AttentionNeedsInput, Kind: "permission", Tool: "Bash"}})
+			h.send(bridge.Event{Name: bridge.EventActivity, Activity: &bridge.ActivityReport{Tool: "Bash"}})
+
+			delete(keys, "alice-key")
+			if readBetween {
+				h.feed.BridgeAgents()
+			}
+			keys["alice-key"] = "alice"
+			h.send(bridge.Event{Name: bridge.ReportHello, Gen: 2, SessionID: "s2"})
+
+			got := h.feed.BridgeAgents()["alice"]
+			if got.Reason != nil || got.CurrentAction != nil {
+				t.Fatalf("recreated alice = %+v; want no inherited prompt or tool", got)
+			}
+			if u := got.Usage; u != nil && (u.SessionID != "s2" || u.Session.Tokens != 0 || u.Incarnation.Tokens != 0) {
+				t.Fatalf("recreated alice usage = %+v; want none of the old agent's", u)
+			}
+		})
 	}
 }

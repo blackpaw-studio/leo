@@ -54,6 +54,11 @@ const maxFeedSeenEvents = 64
 // publishes the agent_turn_*, agent_session_ended, agent_compaction,
 // agent_usage and (coalesced) agent_activity events. All methods are
 // nil-safe and safe for concurrent use.
+//
+// State is kept by bridge key, which is fixed for a launch, never by the
+// agent's name, which a rename changes: a key's current name is resolved
+// only to publish an event and to read the state (BridgeAgents), so a
+// rename or a name swap can never file one agent's state under another.
 type BridgeFeed struct {
 	resolve   KeyResolver
 	publisher Publisher
@@ -63,13 +68,10 @@ type BridgeFeed struct {
 	connected func(key string) bool
 
 	mu     sync.Mutex
-	agents map[string]*feedAgent
-	// names maps each bridge key to the agent its state is filed under,
-	// so a rename moves the state instead of starting over.
-	names map[string]string
+	agents map[string]*feedAgent // by bridge key
 }
 
-// feedAgent is one agent's projection.
+// feedAgent is one bridge key's projection.
 type feedAgent struct {
 	key string
 	gen uint64
@@ -133,7 +135,6 @@ func NewBridgeFeed(resolve KeyResolver, publisher Publisher, opts ...BridgeFeedO
 		publisher: publisher,
 		clock:     realFeedClock{},
 		agents:    map[string]*feedAgent{},
-		names:     map[string]string{},
 	}
 	for _, opt := range opts {
 		opt(f)
@@ -141,27 +142,46 @@ func NewBridgeFeed(resolve KeyResolver, publisher Publisher, opts ...BridgeFeedO
 	return f
 }
 
-// BridgeAgents returns each bridged agent's projected state.
+// BridgeAgents returns each bridged agent's projected state, under the
+// name its key resolves to now. A key no agent holds is omitted and its
+// state dropped (the agent was deleted). Should two keys briefly resolve
+// to one name (its launch's key changed between the lookups), the newer
+// launch's state wins.
 func (f *BridgeFeed) BridgeAgents() map[string]BridgeAgentState {
 	out := map[string]BridgeAgentState{}
-	if f == nil {
+	if f == nil || f.resolve == nil {
 		return out
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.pruneLocked()
-	for name, st := range f.agents {
-		bs := BridgeAgentState{Bridge: BridgeAbsent, Subagents: st.subagents, Reason: cloneOf(st.reason), CurrentAction: cloneOf(st.action)}
-		if f.connected != nil && f.connected(st.key) {
-			bs.Bridge = BridgeConnected
+	owned := map[string]*feedAgent{}
+	for key, st := range f.agents {
+		name, ok := f.resolve.AgentForKey(key)
+		if !ok || name == "" {
+			st.cancelTrailing()
+			delete(f.agents, key)
+			continue
 		}
-		if st.hasUsage {
-			u := st.usage()
-			bs.Usage = &u
+		if cur, taken := owned[name]; !taken || st.gen > cur.gen {
+			owned[name] = st
 		}
-		out[name] = bs
+	}
+	for name, st := range owned {
+		out[name] = f.viewLocked(st)
 	}
 	return out
+}
+
+func (f *BridgeFeed) viewLocked(st *feedAgent) BridgeAgentState {
+	bs := BridgeAgentState{Bridge: BridgeAbsent, Subagents: st.subagents, Reason: cloneOf(st.reason), CurrentAction: cloneOf(st.action)}
+	if f.connected != nil && f.connected(st.key) {
+		bs.Bridge = BridgeConnected
+	}
+	if st.hasUsage {
+		u := st.usage()
+		bs.Usage = &u
+	}
+	return bs
 }
 
 // OnBridgeEvent folds one bridge event into the agent's projection.
@@ -179,7 +199,11 @@ func (f *BridgeFeed) OnBridgeEvent(ev bridge.Event) {
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	st := f.agentLocked(ev.Agent, name)
+	st, ok := f.agents[ev.Agent]
+	if !ok {
+		st = &feedAgent{key: ev.Agent}
+		f.agents[ev.Agent] = st
+	}
 	if ev.EventID != "" && st.replayed(sha256.Sum256([]byte(ev.Name+"\x00"+ev.EventID))) {
 		return
 	}
@@ -218,65 +242,6 @@ func (f *BridgeFeed) OnBridgeEvent(ev bridge.Event) {
 	if st.applyUsage(ev.Usage) || usageChanged {
 		f.publish(EventAgentUsage, &AgentUsagePayload{Agent: name, Usage: st.usage()})
 	}
-}
-
-// agentLocked returns the state filed for name, moving it from the agent
-// key was last filed under if that agent was renamed. A state moves only
-// while it still belongs to key: after a delete and recreate the old
-// name's state is another agent's. A name's state that last saw another
-// key is the same agent relaunched under a new one.
-func (f *BridgeFeed) agentLocked(key, name string) *feedAgent {
-	if prev, ok := f.names[key]; ok && prev != name {
-		if st, ok := f.agents[prev]; ok && st.key == key {
-			delete(f.agents, prev)
-			if _, taken := f.agents[name]; !taken {
-				f.agents[name] = st
-			}
-		}
-	}
-	f.names[key] = name
-	st, ok := f.agents[name]
-	if !ok {
-		st = &feedAgent{key: key}
-		f.agents[name] = st
-	}
-	if st.key != key {
-		delete(f.names, st.key)
-		st.key = key
-	}
-	return st
-}
-
-// pruneLocked re-files every state under the agent its key resolves to
-// now: a renamed agent's state moves to the new name (its totals carry
-// over), a deleted agent's is dropped. The maps are rebuilt in one pass,
-// so agents that swapped names each keep their own state. Two states whose
-// keys resolve to one agent keep the one already filed there.
-func (f *BridgeFeed) pruneLocked() {
-	if f.resolve == nil {
-		return
-	}
-	agents := make(map[string]*feedAgent, len(f.agents))
-	for name, st := range f.agents {
-		owner, ok := f.resolve.AgentForKey(st.key)
-		if !ok || owner == "" {
-			st.cancelTrailing()
-			continue
-		}
-		if cur, taken := agents[owner]; taken {
-			if name != owner {
-				st.cancelTrailing()
-				continue
-			}
-			cur.cancelTrailing()
-		}
-		agents[owner] = st
-	}
-	names := make(map[string]string, len(agents))
-	for name, st := range agents {
-		names[st.key] = name
-	}
-	f.agents, f.names = agents, names
 }
 
 func (f *BridgeFeed) turnCompleteLocked(name string, st *feedAgent, ev bridge.Event) {
@@ -329,17 +294,14 @@ func (f *BridgeFeed) throttleActivityLocked(name string, st *feedAgent) {
 	st.stopTrailing = f.clock.AfterFunc(st.lastActivity.Add(ActivityMinInterval).Sub(now), func() {
 		f.mu.Lock()
 		defer f.mu.Unlock()
-		if st.trailingGen != gen || st.stopTrailing == nil {
+		if st.trailingGen != gen || st.stopTrailing == nil || f.agents[st.key] != st {
 			return
 		}
-		// The agent may have been renamed since; publish under its
-		// current name, or not at all if its state is gone.
-		for current, s := range f.agents {
-			if s == st {
-				st.stopTrailing = nil
-				f.publishActivityLocked(current, st, f.clock.Now())
-				return
-			}
+		st.stopTrailing = nil
+		// The agent may have been renamed since: publish under the name
+		// its key resolves to now, or not at all if none holds it.
+		if current, ok := f.resolve.AgentForKey(st.key); ok && current != "" {
+			f.publishActivityLocked(current, st, f.clock.Now())
 		}
 	})
 }
@@ -427,14 +389,17 @@ func (st *feedAgent) replayed(id [sha256.Size]byte) bool {
 	return false
 }
 
-// observeLaunch resets the incarnation totals on a new generation (a
-// respawn) and the session totals on a new session id, reporting whether
-// usage already reported changed.
+// observeLaunch starts over on a new generation (a respawn, or a new
+// agent that took a deleted one's key): the incarnation totals, and the
+// prompt and tool the previous launch was blocked on or running, are
+// superseded. The session totals reset on a new session id. It reports
+// whether usage already reported changed.
 func (st *feedAgent) observeLaunch(ev bridge.Event) bool {
 	changed := false
 	if ev.Gen != 0 && ev.Gen != st.gen {
 		if st.gen != 0 {
 			st.incarnation = UsageTotals{}
+			st.reason, st.action = nil, nil
 			changed = st.hasUsage
 		}
 		st.gen = ev.Gen

@@ -484,9 +484,10 @@ func (s *AttentionStore) SetByToken(token string, state AttentionState, from ...
 
 // Move re-keys an agent's attention, tokens and bridge key binding after a
 // rename and announces the attention under the new name so a stream
-// consumer learns the carried state. The revision bumps past both names' counters: a consumer may
-// already have seen newName at its own (possibly higher) revision. Tokens
-// move even when oldName has no attention yet.
+// consumer learns the carried state. The revision bumps past both names'
+// counters: a consumer may already have seen newName at its own (possibly
+// higher) revision. Tokens and the binding move even when oldName has no
+// attention yet.
 func (s *AttentionStore) Move(oldName, newName string) {
 	if s == nil {
 		return
