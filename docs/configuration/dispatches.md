@@ -54,7 +54,7 @@ implementation, review, or exploration that can proceed while the caller does
 other work. The prompt must say exactly what the subagent should do; it has no
 access to the caller's conversation. `cwd` defaults to the caller's working
 directory. `mode` is `headless` by default; set it to `interactive` to start a
-steerable TUI (see [Interactive mode](#interactive-mode)).
+TUI the user may watch (see [Interactive mode](#interactive-mode)).
 
 Dispatch notifications default to enabled. Set `notify: false` (or CLI
 `--notify=false`) to disable the eventual completion wake-up. Synchronous
@@ -161,8 +161,10 @@ supported by the opencode harness.
 Leo opens a real Codex or Claude TUI, placed the same way as the viewer
 (usually a split pane in the caller's own tmux window, falling back to a
 separate window when the pane cap is reached or the caller can't be
-resolved), labeled `<label>·<hex4>`. The user can watch it and type directly
-into its composer. `leo_dispatch` reports back exactly where it landed
+resolved), labeled `<label>·<hex4>`. The pane is for the user to watch:
+follow-ups go through `leo_send_dispatch`, and an orchestrator never asks the
+user to type into it. Typing there still works and is recorded as a user turn
+(`steered`), but nothing depends on it. `leo_dispatch` reports back exactly where it landed
 (`pane <id> (title <label>)` or `window <label> (pane <id>)`). The opening prompt and each orchestrator follow-up are turns; their
 completion is reported by the harness hooks to `leo dispatch report`.
 Codex uses `user_prompt_submit`, `stop`, `interrupt`, and `session_end` hooks
