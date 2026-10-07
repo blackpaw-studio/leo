@@ -59,28 +59,45 @@ type transcriptTally struct {
 
 func (t *transcriptTally) totals() (input, output int64) { return t.input, t.output }
 
-// advance reads what was appended to the transcript at path since the last
-// call. A transcript that does not exist yet counts nothing.
+// advance reads one chunk of what was appended to the transcript at path
+// since the last call. A transcript that does not exist yet counts nothing.
 func (t *transcriptTally) advance(read TranscriptReader, path string) error {
+	_, err := t.step(read, path)
+	return err
+}
+
+// drain reads everything appended to the transcript at path, however many
+// chunks that takes. A trailing partial line stays held back.
+func (t *transcriptTally) drain(read TranscriptReader, path string) error {
+	for {
+		eof, err := t.step(read, path)
+		if err != nil || eof {
+			return err
+		}
+	}
+}
+
+// step reads one chunk and reports whether the transcript's end was reached.
+func (t *transcriptTally) step(read TranscriptReader, path string) (eof bool, err error) {
 	if path != t.path {
 		t.path, t.offset, t.partial = path, 0, nil
 	}
 	data, size, err := read(path, t.offset)
 	if errors.Is(err, fs.ErrNotExist) {
-		return nil
+		return true, nil
 	}
 	if err != nil {
-		return err
+		return false, err
 	}
 	if size < t.offset { // truncated or replaced: start over
 		t.offset, t.partial = 0, nil
 		if data, _, err = read(path, 0); err != nil {
-			return err
+			return false, err
 		}
 	}
 	t.offset += int64(len(data))
 	t.feed(data)
-	return nil
+	return len(data) == 0 || t.offset >= size, nil
 }
 
 // feed counts every complete line of data, holding back a trailing partial

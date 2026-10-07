@@ -3,6 +3,7 @@ package consult
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -157,5 +158,81 @@ func waitFor(t *testing.T, cond func() bool) {
 			t.Fatal("condition not met in time")
 		}
 		time.Sleep(time.Millisecond)
+	}
+}
+
+// A follow-up sent right after a turn completes can append its usage before
+// the turn's tokens are applied: the boundary is the transcript as it stood
+// before the run went idle, so the follow-up's usage is still shown live.
+func TestLiveUsageBoundaryIsTakenBeforeTheRunGoesIdle(t *testing.T) {
+	streamed := fixture(t, "streamed.jsonl")
+	files := &lockedTranscripts{files: memTranscripts{}}
+	files.set("/t.jsonl", streamed)
+	d, id := startLiveDispatch(t, files, time.Hour)
+	mustReport(t, d, id, liveHook(t, "s1", "UserPromptSubmit", "hello", "/t.jsonl"))
+
+	d.CatchUpLiveUsage(id) // as the bridge subscriber does ahead of the Stop
+	mustReport(t, d, id, liveHook(t, "c1", "Stop", "", "/t.jsonl"))
+	files.set("/t.jsonl", append(append([]byte(nil), streamed...), fixture(t, "next_turn.jsonl")...))
+	d.ApplyBridgeTokens(id, "turn.complete:1", &bridge.TurnTokens{Input: 2000, Output: 60})
+
+	mustReport(t, d, id, liveHook(t, "s2", "UserPromptSubmit", "follow up", "/t.jsonl"))
+	refreshLive(t, d, id)
+	wantTokens(t, recordOf(t, d, id), 2000+1323, 60+9, true)
+}
+
+// A catch-up that cannot read the transcript leaves the boundary where it
+// was rather than moving it to a partial read.
+func TestLiveUsageFailedCatchUpKeepsTheOldBoundary(t *testing.T) {
+	streamed := fixture(t, "streamed.jsonl")
+	files := &lockedTranscripts{files: memTranscripts{}}
+	files.set("/t.jsonl", streamed[:len(streamed)/2])
+	d, id := startLiveDispatch(t, files, time.Hour)
+	mustReport(t, d, id, liveHook(t, "s1", "UserPromptSubmit", "hello", "/t.jsonl"))
+	refreshLive(t, d, id)
+
+	d.liveUsage.read = func(string, int64) ([]byte, int64, error) { return nil, 0, errors.New("boom") }
+	d.ApplyBridgeTokens(id, "turn.complete:1", &bridge.TurnTokens{Input: 2000, Output: 60})
+	_, s, _ := d.lookup(id)
+	d.mu.Lock()
+	baseIn, baseOut := s.live.baseIn, s.live.baseOut
+	d.mu.Unlock()
+	if baseIn != 0 || baseOut != 0 {
+		t.Fatalf("boundary moved to %d/%d after a failed catch-up", baseIn, baseOut)
+	}
+}
+
+type liveOrderLog struct{ tokenLog }
+
+func (l *liveOrderLog) Report(id string, hr HookReport) error {
+	l.mu.Lock()
+	l.order = append(l.order, "report")
+	l.mu.Unlock()
+	return l.reportLog.Report(id, hr)
+}
+
+func (l *liveOrderLog) CatchUpLiveUsage(string) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.order = append(l.order, "catchup")
+}
+
+// The subscriber catches the live usage up before the Stop it reports can
+// let a follow-up in.
+func TestDispatchBridgeSubscriberCatchesUpLiveUsageBeforeReportingTurnComplete(t *testing.T) {
+	g := newBridgeRig(t, "2.1.289")
+	g.launch(t, "d-live", "claude", "brief")
+	var log liveOrderLog
+	g.hub.AddSubscriber(g.r.DispatchBridgeSubscriber(&log))
+	key := DispatchBridgeKey("d-live")
+	g.connectAndAckOpening(t, key)
+	if err := g.apply(t, key, bridge.Report{Type: bridge.ReportEvent, Name: bridge.EventTurnComplete, EventID: "turn.complete:t1"}); err != nil {
+		t.Fatal(err)
+	}
+	log.mu.Lock()
+	defer log.mu.Unlock()
+	want := []string{"catchup", "report", "tokens:turn.complete:t1"}
+	if len(log.order) != len(want) || log.order[0] != want[0] || log.order[1] != want[1] || log.order[2] != want[2] {
+		t.Fatalf("calls = %v, want %v", log.order, want)
 	}
 }

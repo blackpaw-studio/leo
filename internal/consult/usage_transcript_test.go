@@ -135,3 +135,40 @@ func TestReadTranscriptFromReadsTheTail(t *testing.T) {
 		t.Fatalf("got %q size=%d err=%v", data, size, err)
 	}
 }
+
+// chunked serves at most n bytes per read, as a capped disk read would.
+func chunked(files memTranscripts, n int) TranscriptReader {
+	return func(path string, offset int64) ([]byte, int64, error) {
+		data, size, err := files.read(path, offset)
+		if len(data) > n {
+			data = data[:n]
+		}
+		return data, size, err
+	}
+}
+
+// drain reads to the end of the transcript however many reads it takes,
+// leaving a trailing partial line uncounted until it is completed.
+func TestTranscriptTallyDrainReadsToTheEnd(t *testing.T) {
+	data := fixture(t, "streamed.jsonl")
+	files := memTranscripts{"/t.jsonl": data[:len(data)-15]}
+	var tally transcriptTally
+	if err := tally.drain(chunked(files, 7), "/t.jsonl"); err != nil {
+		t.Fatal(err)
+	}
+	wantTally(t, &tally, 1110, 50)
+	files["/t.jsonl"] = data
+	if err := tally.drain(chunked(files, 7), "/t.jsonl"); err != nil {
+		t.Fatal(err)
+	}
+	wantTally(t, &tally, 2312, 57)
+}
+
+// A failed read stops the drain and is reported.
+func TestTranscriptTallyDrainReportsReadErrors(t *testing.T) {
+	boom := errors.New("boom")
+	var tally transcriptTally
+	if err := tally.drain(func(string, int64) ([]byte, int64, error) { return nil, 0, boom }, "/x.jsonl"); !errors.Is(err, boom) {
+		t.Fatalf("err = %v, want boom", err)
+	}
+}

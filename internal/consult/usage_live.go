@@ -36,9 +36,13 @@ type liveUsage struct {
 	tally transcriptTally
 	// The rest is guarded by d.mu. transcriptPath and sessionID are the
 	// latest a hook reported; baseIn/baseOut are the tally's totals when
-	// the last turn report was applied.
+	// the last turn report was applied. boundaryIn/boundaryOut, while
+	// hasBoundary, are the totals a completed turn was caught up to, taken
+	// before the run went idle and could take a follow-up.
 	transcriptPath, sessionID string
 	baseIn, baseOut           int64
+	boundaryIn, boundaryOut   int64
+	hasBoundary               bool
 }
 
 // noteLiveTranscriptLocked records where a hook payload says the run's
@@ -146,8 +150,54 @@ func sameLiveUsage(cur InvocationUsage, u *harness.Usage) bool {
 		*cur.InputTokens == *u.InputTokens && *cur.OutputTokens == *u.OutputTokens
 }
 
-// rebaseLiveUsageLocked makes the tally's current totals the point live
-// counts start from, once a turn report has accounted for them.
-func rebaseLiveUsageLocked(s *runState, in, out int64) {
-	s.live.baseIn, s.live.baseOut = in, out
+// CatchUpLiveUsage reads a run's transcript to its end as a turn completes,
+// and holds the totals as the boundary its turn report will rebase on. The
+// bridge subscriber calls it before reporting the turn's Stop, so nothing a
+// follow-up adds can fall inside the boundary. A failed read holds none:
+// the base stays where it was and the watcher recovers on its next poll.
+func (d *Dispatcher) CatchUpLiveUsage(id string) {
+	_, s, err := d.lookup(id)
+	if err != nil || s == nil {
+		return
+	}
+	d.catchUpLive(s)
+}
+
+func (d *Dispatcher) catchUpLive(s *runState) {
+	d.mu.Lock()
+	path, ok := d.liveTranscriptPathLocked(s)
+	d.mu.Unlock()
+	s.live.mu.Lock()
+	var err error
+	if ok {
+		err = s.live.tally.drain(d.liveUsage.read, path)
+	}
+	in, out := s.live.tally.totals()
+	s.live.mu.Unlock()
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if err != nil {
+		s.live.hasBoundary = false
+		fmt.Fprintf(os.Stderr, "dispatch %s: catching up transcript for live usage: %v\n", s.record.ID, err)
+		return
+	}
+	s.live.boundaryIn, s.live.boundaryOut, s.live.hasBoundary = in, out, true
+}
+
+// liveBoundaryHeld reports whether a catch-up already holds a boundary for
+// the turn report about to be applied.
+func (d *Dispatcher) liveBoundaryHeld(s *runState) bool {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return s.live.hasBoundary
+}
+
+// rebaseLiveUsageLocked makes the held boundary the point live counts start
+// from, once a turn report has accounted for it. Without one (the catch-up
+// failed) the base stays put.
+func rebaseLiveUsageLocked(s *runState) {
+	if !s.live.hasBoundary {
+		return
+	}
+	s.live.baseIn, s.live.baseOut, s.live.hasBoundary = s.live.boundaryIn, s.live.boundaryOut, false
 }
