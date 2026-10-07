@@ -119,7 +119,7 @@ func (s *Server) typeSlashCommand(sessionName, verb, instructions string) error 
 	if err := s.typeKeys(sessionName, []string{"/" + verb}); err != nil {
 		return err
 	}
-	if line := strings.Join(strings.Fields(instructions), " "); line != "" {
+	if line := strings.Join(strings.Fields(stripControl(instructions, false)), " "); line != "" {
 		tmuxPath := findTmuxPath()
 		pane := s.resolvePaneTarget(tmuxPath, sessionName)
 		if err := s.execCommand(tmuxPath, tmux.Args("send-keys", "-t", pane, "-l", " "+line)...).Run(); err != nil {
@@ -143,7 +143,7 @@ func (s *Server) messageAgent(ctx context.Context, name, from, text string) cont
 	// never goes dormant (sweep skips non-claude records), so there is no
 	// wake-then-deliver branch to consider for it.
 	if harnessName, handle, ok := s.resolveMessageTarget(name); ok && harnessName != "" && harnessName != "claude" {
-		out := s.dispatchNonClaudeMessage(harnessName, handle, text)
+		out := s.dispatchNonClaudeMessage(harnessName, handle, stripControl(text, true))
 		if out.err == "" {
 			s.publishAgentMessage(from, name)
 		}
@@ -197,7 +197,7 @@ func (s *Server) wakeAndDeliver(ctx context.Context, name, from, text string) co
 	go func() {
 		ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), wakeDeliverTimeout)
 		defer cancel()
-		if err := s.injectPrompt(ctx, sessionName, text); err != nil {
+		if err := s.injectPrompt(ctx, sessionName, stripControl(text, true)); err != nil {
 			// #nosec G706 -- name matched an existing agentstore record
 			// (Wakeable returned true), so it is a validated identifier,
 			// not raw request input; no control chars can reach the log.
@@ -250,7 +250,7 @@ func (s *Server) deliverAgentMessageLegacy(ctx context.Context, name, from, text
 	pane := s.resolvePaneTarget(tmuxPath, sessionName)
 
 	// Literal paste of the message body.
-	if err := s.execCommand(tmuxPath, tmux.Args("send-keys", "-t", pane, "-l", text)...).Run(); err != nil {
+	if err := s.execCommand(tmuxPath, tmux.Args("send-keys", "-t", pane, "-l", stripControl(text, true))...).Run(); err != nil {
 		return controlFailed(http.StatusInternalServerError, transportLegacy, "send message failed: %v", err)
 	}
 
@@ -300,4 +300,24 @@ func (s *Server) processStates() map[string]ProcessStateInfo {
 		return map[string]ProcessStateInfo{}
 	}
 	return s.processes.States()
+}
+
+// stripControl drops the characters a terminal reads as keystrokes or
+// sequences rather than text: C0 controls, DEL and C1 controls. With
+// keepLayout, newline and tab survive (a message keeps its lines);
+// without, they fold to spaces. Text typed or pasted into tmux goes
+// through it, so a body cannot carry a Ctrl-C or end a bracketed paste.
+func stripControl(text string, keepLayout bool) string {
+	return strings.Map(func(r rune) rune {
+		switch {
+		case r == '\n' || r == '\t':
+			if keepLayout {
+				return r
+			}
+			return ' '
+		case r < 0x20, r == 0x7f, r >= 0x80 && r <= 0x9f:
+			return -1
+		}
+		return r
+	}, text)
 }

@@ -373,3 +373,32 @@ func TestAPIControlRejectsTrustedProxySSO(t *testing.T) {
 		}
 	}
 }
+
+// Control bytes reach tmux as keystrokes (\x03 is Ctrl-C, \x1b opens an
+// escape sequence), so the legacy paths drop them before typing.
+func TestAPIControlCompactWithoutABridgeDropsControlBytes(t *testing.T) {
+	s, _ := newTestServer(t)
+	calls := recordTmux(s)
+	w := postControl(s, "/api/v1/agents/assistant/compact", `{"instructions":"keep\u0003 the\u001b[201~ plan\u007f\u009b"}`)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", w.Code, w.Body.String())
+	}
+	got := sendKeys(calls())
+	if line := got[len(got)-2]; !reflect.DeepEqual(line, keys("-l", " keep the[201~ plan")) {
+		t.Fatalf("instructions argv = %q", line)
+	}
+}
+
+func TestAPIControlMessageWithoutABridgeDropsControlBytes(t *testing.T) {
+	s, _ := newTestServer(t)
+	shrinkMessagePoll(t)
+	calls := recordTmux(s)
+	w := postControl(s, "/api/v1/agents/assistant/message", `{"text":"hi\u0003\u001b[201~ there\nnext\tline\r"}`)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", w.Code, w.Body.String())
+	}
+	want := [][]string{keys("-l", "hi[201~ there\nnext\tline"), keys("Enter")}
+	if got := sendKeys(calls()); !reflect.DeepEqual(got, want) {
+		t.Fatalf("send-keys argv = %q, want %q", got, want)
+	}
+}
