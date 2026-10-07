@@ -53,6 +53,7 @@ import {
   FALLBACK_STREAM_DOWN,
   isAgentHidden,
   isFailedCall,
+  bandChrome,
   bandHeader,
   isRunning,
   lingerEnd,
@@ -846,7 +847,8 @@ function bandDispatches(now) {
 }
 
 // A gap and a dim header set the band apart from the spinner above it, then
-// one row per dispatch, Cancel beside the live ones.
+// one row per dispatch, Cancel beside the live ones. Rows come first: a band
+// too short for all of it drops the gap, then the header.
 function drawRoster($, e, dispatches, now) {
   const { Box, Text, Button } = $.ui.resolve(e)
   const rows = rosterRows(dispatches, roster.receivedAt, now).map((row) => {
@@ -857,9 +859,10 @@ function drawRoster($, e, dispatches, now) {
     const cancel = h(Button, { key: 'cancel-' + d.id, label: 'Cancel', onPress: () => cancelDispatch($, d) })
     return h(Box, { flexDirection: 'row', columnGap: 2 }, text, cancel)
   })
-  const gap = h(Text, null, ' ')
-  const header = h(Text, { dimColor: true, wrap: 'truncate-end' }, bandHeader(e.props.bodyColumns))
-  return h(Box, { flexDirection: 'column' }, gap, header, ...rows)
+  const chrome = bandChrome(rows.length, e.props.maxRows)
+  const gap = chrome.hasGap ? [h(Text, null, ' ')] : []
+  const header = chrome.hasHeader ? [h(Text, { dimColor: true, wrap: 'truncate-end' }, bandHeader(e.props.bodyColumns))] : []
+  return h(Box, { flexDirection: 'column' }, ...gap, ...header, ...rows)
 }
 
 // One try, not the retrying report chain: the person is waiting on it.

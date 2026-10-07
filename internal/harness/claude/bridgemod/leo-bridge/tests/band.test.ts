@@ -21,7 +21,7 @@ async function withState($: any, on: any, dispatches: object[], opts: object = {
   return { h, feed }
 }
 
-const mount = ($: any) => $.ui.mount({ plugin: 'leo-bridge', surface: 'terminal', ...BAND })
+const mount = ($: any, props: object = {}) => $.ui.mount({ plugin: 'leo-bridge', surface: 'terminal', ...BAND, props: { ...BAND.props, ...props } })
 
 test('the band draws a gap, a header, then a row per dispatch, with Cancel on live ones', async ($, on) => {
   await withState($, on, [RUNNING, IDLE, DONE])
@@ -41,6 +41,26 @@ test('the band draws a gap, a header, then a row per dispatch, with Cancel on li
   expect(await ui.find({ key: 'cancel-d1' })).toBeDefined()
   expect(await ui.find({ key: 'cancel-d2' })).toBeDefined()
   expect(await ui.find({ type: 'Text', text: /old/ })).toBeUndefined()
+  await ui.unmount()
+})
+
+test('a short band drops the gap, then the header, before any dispatch row', async ($, on) => {
+  await withState($, on, [RUNNING])
+  let ui = await mount($, { maxRows: 2 })
+  let tree: any = await ui.drawn()
+  expect(tree.children).toHaveLength(2)
+  expect((await ui.find({ type: 'Text', text: /^  leo dispatches/ }))).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /^ $/ })).toBeUndefined()
+  await ui.unmount()
+  ui = await mount($, { maxRows: 1 })
+  tree = await ui.drawn()
+  expect(tree.children).toHaveLength(1)
+  expect(await ui.find({ type: 'Text', text: /^  leo dispatches/ })).toBeUndefined()
+  expect(await ui.find({ type: 'Text', text: /impl-a/ })).toBeDefined()
+  await ui.unmount()
+  ui = await mount($, { maxRows: undefined })
+  tree = await ui.drawn()
+  expect(tree.children).toHaveLength(3)
   await ui.unmount()
 })
 

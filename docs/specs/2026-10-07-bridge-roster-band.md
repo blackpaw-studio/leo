@@ -40,6 +40,11 @@ prompt (`⚠ …`, `▸▸ auto mode on`); rows sit two further in, at column 4:
 - Rows are indented to column 4, beneath the header.
 - The blank row and header are part of the tree, drawn only when there are
   rows; they never appear on an empty band.
+- Dispatch rows come first when the band is short (`maxRows`, e.g. with the
+  dispatch viewer split under the caller): if rows + 2 > `maxRows` the blank
+  row is dropped; if rows + 1 > `maxRows` the header is dropped too, and the
+  rows scroll as the engine scrolls any tall band. An unknown `maxRows` is
+  unlimited.
 
 - Columns: glyph, label (`name || role || template || id`, truncated to 16),
   `model · effort` (effort omitted when empty), elapsed, tokens in/out, cost
@@ -82,7 +87,7 @@ web UI or `/api/v1`.
 
 - Mod (`claude plugin test`): status line empty with dispatches and no
   fallback; fallback text still shown; blank row + header present with rows
-  and absent without; row text, band padding (header at column 2, rows at 4) and column padding; effort
+  and absent without; gap then header dropped when `maxRows` is short; row text, band padding (header at column 2, rows at 4) and column padding; effort
   omitted when empty; stalled marker; terminal row shown then gone after 10 s
   (fake clock); terminal-at-load row not shown; ticker stops after the last
   terminal row expires.

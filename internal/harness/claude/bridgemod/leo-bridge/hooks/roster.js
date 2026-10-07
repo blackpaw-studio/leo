@@ -216,6 +216,17 @@ export function bandHeader(width) {
 }
 
 /**
+ * Which of the gap and header fit beside rowCount rows in maxRows (unknown:
+ * unlimited). The rows come first: the gap goes, then the header.
+ * @param {number} rowCount
+ * @param {number | undefined} maxRows
+ */
+export function bandChrome(rowCount, maxRows) {
+  const limit = typeof maxRows === 'number' && Number.isFinite(maxRows) ? maxRows : Infinity
+  return { hasGap: rowCount + 2 <= limit, hasHeader: rowCount + 1 <= limit }
+}
+
+/**
  * When each terminal dispatch was first seen terminal (ms), as a new map:
  * seen is the last one, or null for the first snapshot after a (re)load,
  * whose terminal dispatches count as long gone. Dispatches no longer
