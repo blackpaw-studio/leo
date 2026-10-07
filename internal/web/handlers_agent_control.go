@@ -75,14 +75,14 @@ func (s *Server) typeKeys(sessionName string, keys []string) error {
 	for _, key := range keys {
 		if needsCharSplit(key) {
 			for _, ch := range key {
-				if err := s.execCommand(tmuxPath, tmux.Args("send-keys", "-t", pane, string(ch))...).Run(); err != nil {
+				if err := s.execCommand(tmuxPath, tmux.Args("send-keys", "-t", pane, "--", string(ch))...).Run(); err != nil {
 					return fmt.Errorf("send-keys failed: %w", err)
 				}
 				time.Sleep(30 * time.Millisecond)
 			}
 			continue
 		}
-		if err := s.execCommand(tmuxPath, tmux.Args("send-keys", "-t", pane, key)...).Run(); err != nil {
+		if err := s.execCommand(tmuxPath, tmux.Args("send-keys", "-t", pane, "--", key)...).Run(); err != nil {
 			return fmt.Errorf("send-keys failed: %w", err)
 		}
 	}

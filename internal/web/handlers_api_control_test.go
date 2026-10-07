@@ -153,7 +153,7 @@ func TestAPIControlMessageWithoutABridgePastesIntoTmux(t *testing.T) {
 	if resp := decodeControl(t, w); !resp.OK || resp.Data.Transport != "legacy" {
 		t.Fatalf("response = %+v", resp)
 	}
-	want := [][]string{keys("-l", "Enter; C-c"), keys("Enter")}
+	want := [][]string{keys("-l", "--", "Enter; C-c"), keys("Enter")}
 	if got := sendKeys(calls()); !reflect.DeepEqual(got, want) {
 		t.Fatalf("send-keys argv = %q, want %q", got, want)
 	}
@@ -250,9 +250,9 @@ func TestAPIControlCompactWithoutABridgeTypesCommandAndInstructions(t *testing.T
 	}
 	var want [][]string
 	for _, ch := range "/compact" {
-		want = append(want, keys(string(ch)))
+		want = append(want, keys("--", string(ch)))
 	}
-	want = append(want, keys("-l", " keep the plan;"), keys("Enter"))
+	want = append(want, keys("-l", "--", " keep the plan;"), keys("--", "Enter"))
 	if got := sendKeys(calls()); !reflect.DeepEqual(got, want) {
 		t.Fatalf("send-keys argv = %q, want %q", got, want)
 	}
@@ -267,9 +267,9 @@ func TestAPIControlClearWithoutABridgeTypesTheCommand(t *testing.T) {
 	}
 	var want [][]string
 	for _, ch := range "/clear" {
-		want = append(want, keys(string(ch)))
+		want = append(want, keys("--", string(ch)))
 	}
-	want = append(want, keys("Enter"))
+	want = append(want, keys("--", "Enter"))
 	if got := sendKeys(calls()); !reflect.DeepEqual(got, want) {
 		t.Fatalf("send-keys argv = %q, want %q", got, want)
 	}
@@ -384,7 +384,7 @@ func TestAPIControlCompactWithoutABridgeDropsControlBytes(t *testing.T) {
 		t.Fatalf("status = %d, body = %s", w.Code, w.Body.String())
 	}
 	got := sendKeys(calls())
-	if line := got[len(got)-2]; !reflect.DeepEqual(line, keys("-l", " keep the[201~ plan")) {
+	if line := got[len(got)-2]; !reflect.DeepEqual(line, keys("-l", "--", " keep the[201~ plan")) {
 		t.Fatalf("instructions argv = %q", line)
 	}
 }
@@ -397,8 +397,32 @@ func TestAPIControlMessageWithoutABridgeDropsControlBytes(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Fatalf("status = %d, body = %s", w.Code, w.Body.String())
 	}
-	want := [][]string{keys("-l", "hi[201~ there\nnext\tline"), keys("Enter")}
+	want := [][]string{keys("-l", "--", "hi[201~ there\nnext\tline"), keys("Enter")}
 	if got := sendKeys(calls()); !reflect.DeepEqual(got, want) {
 		t.Fatalf("send-keys argv = %q, want %q", got, want)
+	}
+}
+
+// Text that starts with '-' once its control bytes are gone must reach tmux
+// as text, not as a send-keys flag: every literal follows "--".
+func TestAPIControlLegacyTextIsNeverParsedAsATmuxFlag(t *testing.T) {
+	s, _ := newTestServer(t)
+	shrinkMessagePoll(t)
+	calls := recordTmux(s)
+	if w := postControl(s, "/api/v1/agents/assistant/message", `{"text":"\u0003-R"}`); w.Code != http.StatusOK {
+		t.Fatalf("message: %d %s", w.Code, w.Body.String())
+	}
+	if w := postControl(s, "/api/v1/agents/assistant/compact", `{"instructions":"-R"}`); w.Code != http.StatusOK {
+		t.Fatalf("compact: %d %s", w.Code, w.Body.String())
+	}
+	got := sendKeys(calls())
+	for _, want := range [][]string{keys("-l", "--", "-R"), keys("-l", "--", " -R"), keys("--", "/")} {
+		found := false
+		for _, c := range got {
+			found = found || reflect.DeepEqual(c, want)
+		}
+		if !found {
+			t.Errorf("no send-keys %q in %q", want, got)
+		}
 	}
 }

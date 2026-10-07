@@ -122,7 +122,7 @@ func (s *Server) typeSlashCommand(sessionName, verb, instructions string) error 
 	if line := strings.Join(strings.Fields(stripControl(instructions, false)), " "); line != "" {
 		tmuxPath := findTmuxPath()
 		pane := s.resolvePaneTarget(tmuxPath, sessionName)
-		if err := s.execCommand(tmuxPath, tmux.Args("send-keys", "-t", pane, "-l", " "+line)...).Run(); err != nil {
+		if err := s.execCommand(tmuxPath, tmux.Args("send-keys", "-t", pane, "-l", "--", " "+line)...).Run(); err != nil {
 			return fmt.Errorf("send-keys failed: %w", err)
 		}
 	}
@@ -250,7 +250,7 @@ func (s *Server) deliverAgentMessageLegacy(ctx context.Context, name, from, text
 	pane := s.resolvePaneTarget(tmuxPath, sessionName)
 
 	// Literal paste of the message body.
-	if err := s.execCommand(tmuxPath, tmux.Args("send-keys", "-t", pane, "-l", stripControl(text, true))...).Run(); err != nil {
+	if err := s.execCommand(tmuxPath, tmux.Args("send-keys", "-t", pane, "-l", "--", stripControl(text, true))...).Run(); err != nil {
 		return controlFailed(http.StatusInternalServerError, transportLegacy, "send message failed: %v", err)
 	}
 
