@@ -330,3 +330,66 @@ type fixedSnapshot struct {
 }
 
 func (f fixedSnapshot) DispatchSnapshot() (uint64, map[string]int) { return f.gen, f.counts }
+
+// hookedSnapshot is a DispatchSnapshotter whose first read runs during
+// before returning, so another completion interleaves deterministically.
+type hookedSnapshot struct {
+	gen    uint64
+	counts map[string]int
+	during func()
+}
+
+func (h *hookedSnapshot) DispatchSnapshot() (uint64, map[string]int) {
+	h.gen++
+	gen := h.gen
+	if f := h.during; f != nil {
+		h.during = nil
+		f()
+	}
+	return gen, h.counts
+}
+
+// Concurrent completions for A and B: A reads gen 1, B reads gen 2 and
+// applies first, then A's gen 1 is rejected. Both snapshots count A's
+// dispatch, so A must still be held, not finished on a stale zero.
+func TestAttentionConcurrentCompletionsHoldEachAgentByTheNewestSnapshot(t *testing.T) {
+	s := NewAttentionStore(nil)
+	s.Set("a", AttentionWorking)
+	s.Set("b", AttentionWorking)
+	counter := &hookedSnapshot{counts: map[string]int{"a": 1}}
+	counter.during = func() { s.Set("b", AttentionFinished) }
+	s.SetDispatchCounter(counter)
+
+	s.Set("a", AttentionFinished)
+
+	if got, _ := s.Get("a"); got.State != AttentionWorking || got.Outstanding == nil || got.Outstanding.Dispatches != 1 {
+		t.Fatalf("a = %+v; want held by its dispatch", got)
+	}
+	if got, _ := s.Get("b"); got.State != AttentionFinished {
+		t.Fatalf("b = %+v; want finished", got)
+	}
+	if counter.gen != 2 {
+		t.Fatalf("snapshot reads = %d; want the interleaving to have run", counter.gen)
+	}
+}
+
+// A token transition skipped by its from filter still applies its
+// snapshot in full: a held agent whose last dispatch ended is released,
+// not left with a silently zeroed count no later tick would change.
+func TestAttentionSkippedTokenTransitionStillReleasesAHold(t *testing.T) {
+	counter := &staticCounter{counts: map[string]int{"a": 1}}
+	s := NewAttentionStore(nil)
+	s.SetDispatchCounter(counter)
+	s.RegisterToken("tok", "a")
+	s.Set("a", AttentionWorking)
+	s.Set("a", AttentionFinished) // held
+
+	counter.counts = map[string]int{}
+	if _, ok := s.SetByToken("tok", AttentionFinished, AttentionNeedsInput); ok {
+		t.Fatal("transition applied despite its from filter")
+	}
+
+	if got, _ := s.Get("a"); got.State != AttentionFinished {
+		t.Fatalf("a = %+v; want released to finished", got)
+	}
+}

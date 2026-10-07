@@ -113,7 +113,7 @@ func (s *AttentionStore) Set(agent string, state AttentionState) AgentAttention 
 	gen, counts := s.dispatchCounts(state)
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.applyDispatchCountsLocked(agent, gen, counts)
+	s.reconcileLocked(gen, counts, agent)
 	return s.setLocked(agent, state)
 }
 
@@ -200,7 +200,7 @@ func (s *AttentionStore) Advance(agent string, state AttentionState, from ...Att
 	if !tracked || len(from) > 0 && !slices.Contains(from, cur) {
 		return AgentAttention{}, false
 	}
-	s.applyDispatchCountsLocked(agent, gen, counts)
+	s.reconcileLocked(gen, counts, agent)
 	switch {
 	case state == AttentionWorking && cur == AttentionWorking:
 		delete(s.held, agent)
@@ -308,16 +308,44 @@ func (s *AttentionStore) ReconcileDispatches(gen uint64, counts map[string]int) 
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if !s.acceptDispatchGenLocked(gen) {
+	s.reconcileLocked(gen, counts, "")
+}
+
+// reconcileLocked applies a whole snapshot unless it is older than one
+// already applied; nil counts change nothing. quiet's count is recorded
+// without publishing or releasing a hold: its own transition follows. A
+// rejected snapshot leaves the newest applied one in place, which counts
+// every agent, so a completion never falls back on a stale count.
+func (s *AttentionStore) reconcileLocked(gen uint64, counts map[string]int, quiet string) {
+	if counts == nil || !s.acceptDispatchGenLocked(gen) {
 		return
+	}
+	set := func(agent string, n int) {
+		if agent == quiet {
+			s.setDispatchesQuietLocked(agent, n)
+			return
+		}
+		s.setOutstandingLocked(agent, func(o *Outstanding) { o.Dispatches = max(n, 0) })
 	}
 	for agent, o := range s.outstanding {
 		if _, named := counts[agent]; !named && o.Dispatches > 0 {
-			s.setOutstandingLocked(agent, func(o *Outstanding) { o.Dispatches = 0 })
+			set(agent, 0)
 		}
 	}
 	for agent, n := range counts {
-		s.setOutstandingLocked(agent, func(o *Outstanding) { o.Dispatches = max(n, 0) })
+		set(agent, n)
+	}
+}
+
+// setDispatchesQuietLocked records agent's outstanding dispatches without
+// publishing.
+func (s *AttentionStore) setDispatchesQuietLocked(agent string, n int) {
+	o := s.outstanding[agent]
+	o.Dispatches = max(n, 0)
+	if o.total() == 0 {
+		delete(s.outstanding, agent)
+	} else {
+		s.outstanding[agent] = o
 	}
 }
 
@@ -349,22 +377,6 @@ func (s *AttentionStore) acceptDispatchGenLocked(gen uint64) bool {
 	}
 	s.dispatchGen = gen
 	return true
-}
-
-// applyDispatchCountsLocked records agent's outstanding dispatches from
-// counts without publishing (the transition that follows publishes); nil
-// counts change nothing.
-func (s *AttentionStore) applyDispatchCountsLocked(agent string, gen uint64, counts map[string]int) {
-	if counts == nil || !s.acceptDispatchGenLocked(gen) {
-		return
-	}
-	o := s.outstanding[agent]
-	o.Dispatches = counts[agent]
-	if o.total() == 0 {
-		delete(s.outstanding, agent)
-	} else {
-		s.outstanding[agent] = o
-	}
 }
 
 // Remove drops agent's attention (the field becomes absent) and its tokens
@@ -435,8 +447,9 @@ func (s *AttentionStore) AgentForToken(token string) (string, bool) {
 // SetByToken is Set for the agent token routes to, resolved and applied
 // atomically so an unregister (stop, exit, delete) always wins over a late
 // hook. When from is non-empty the transition applies only while the
-// agent's current state is one of from; a skipped transition changes
-// nothing. ok=false means no transition was recorded.
+// agent's current state is one of from; a skipped transition records
+// only the dispatch snapshot it read. ok=false means no transition was
+// recorded.
 func (s *AttentionStore) SetByToken(token string, state AttentionState, from ...AttentionState) (AgentAttention, bool) {
 	if s == nil || token == "" {
 		return AgentAttention{}, false
@@ -448,10 +461,12 @@ func (s *AttentionStore) SetByToken(token string, state AttentionState, from ...
 	if !ok {
 		return AgentAttention{}, false
 	}
-	s.applyDispatchCountsLocked(agent, gen, counts)
 	if len(from) > 0 && !slices.Contains(from, s.states[agent]) {
+		// No transition follows: apply the snapshot as a tick would.
+		s.reconcileLocked(gen, counts, "")
 		return AgentAttention{}, false
 	}
+	s.reconcileLocked(gen, counts, agent)
 	return s.setLocked(agent, state), true
 }
 
