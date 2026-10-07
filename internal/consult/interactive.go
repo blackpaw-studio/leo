@@ -752,11 +752,6 @@ func (d *Dispatcher) Report(id string, r HookReport) error {
 		}
 		prompt := str(p, "prompt")
 		injected := s.record.Harness == "claude" && isHarnessInjection(prompt)
-		if !injected && prompt != "" && d.takeStopEchoLocked(s, prompt) {
-			fmt.Fprintf(os.Stderr, "dispatch %s: dropping late submit of a turn its Stop already confirmed\n", id)
-			d.persistLocked(s, "")
-			return nil
-		}
 		// Whatever woke a waiting run (its background work's notification,
 		// a wakeup, a human) carries its open turn on.
 		d.resumeWaitingLocked(s)
@@ -997,45 +992,25 @@ func (d *Dispatcher) waitOnBackgroundLocked(s *runState, w *PendingWork) {
 	}
 }
 
-// maxStopEchoes bounds stopEchoes; a Stop confirms at most one turn.
-const maxStopEchoes = 4
-
 // confirmArmedLocked marks the oldest open turn delivered when it is a sent
 // turn that was armed (its submit expected): a Stop can reach the
 // dispatcher before that turn's UserPromptSubmit. No age bound applies: an
 // id-less Stop with no working turn can only be the armed turn's, however
 // long it ran (replays are deduplicated by event id), and the turn would be
-// closed by the fallback anyway. Its submit, still to come, is noted as an
-// echo to drop.
+// closed by the fallback anyway. Its submit may still arrive late; see the
+// known limitations in docs/configuration/dispatches.md.
 func (d *Dispatcher) confirmArmedLocked(s *runState) {
 	for _, t := range s.record.Turns {
 		if t.Outcome != "" {
 			continue
 		}
 		if t.Source == TurnSourceOrchestrator && !t.Delivered && !t.armedAt.IsZero() {
-			s.stopEchoes = append(s.stopEchoes, normalizePrompt(t.Text))
-			if len(s.stopEchoes) > maxStopEchoes {
-				s.stopEchoes = s.stopEchoes[1:]
-			}
 			if delivered := d.deliverTurnLocked(s, t.TurnID, ""); delivered != nil {
 				d.persistTurnLocked(s, *delivered)
 			}
 		}
 		return
 	}
-}
-
-// takeStopEchoLocked reports whether prompt is the late submit of a turn a
-// Stop already confirmed, forgetting it if so.
-func (d *Dispatcher) takeStopEchoLocked(s *runState, prompt string) bool {
-	want := normalizePrompt(prompt)
-	for i, echo := range s.stopEchoes {
-		if echo == want {
-			s.stopEchoes = append(s.stopEchoes[:i:i], s.stopEchoes[i+1:]...)
-			return true
-		}
-	}
-	return false
 }
 
 // resumeWaitingLocked returns a waiting run to running as its session
