@@ -202,14 +202,17 @@ export const TERMINAL_LINGER_MS = 10_000
 const DEFAULT_BAND_WIDTH = 40
 const BAND_TITLE = 'leo dispatches '
 const LABEL_MAX = 16
-const INDENT = '  '
+// The band's left padding, in line with the engine's lines under the prompt;
+// rows sit a further two in, beneath the header.
+const BAND_PAD = '  '
+const INDENT = BAND_PAD + '  '
 const COLUMN_GAP = '  '
 const STALLED = 'stalled'
 
-/** The band's header: its title, then a rule to the band's width. */
+/** The band's header: padding, its title, then a rule to the band's width. */
 export function bandHeader(width) {
   const total = typeof width === 'number' && width > 0 ? width : DEFAULT_BAND_WIDTH
-  return BAND_TITLE + '─'.repeat(Math.max(0, total - BAND_TITLE.length))
+  return BAND_PAD + BAND_TITLE + '─'.repeat(Math.max(0, total - BAND_PAD.length - BAND_TITLE.length))
 }
 
 /**

@@ -22,18 +22,22 @@ thinking level.
 
 `ui.render` on `AbovePrompt` draws a section set apart from the spinner and
 tip above it: one blank row, a dim header rule, then one line per dispatch in
-the snapshot, oldest first, indented two columns and aligned in columns:
+the snapshot, oldest first, aligned in columns. The whole band is padded two
+columns from the left, in line with the lines Claude Code draws below the
+prompt (`⚠ …`, `▸▸ auto mode on`); rows sit two further in, at column 4:
 
 ```
 
-leo dispatches ──────────────────────────────────────────
-  ⟳ impl-auth     opus · high     4:10   182k/12.4k  $1.92   [Cancel]
-  ⏸ reviewer      sonnet · med    1:23    41k/3.1k   $0.31   [Cancel]
-  ✓ explore-db    haiku           0:41    20k/1.2k   $0.04
+  leo dispatches ────────────────────────────────────────
+    ⟳ impl-auth     opus · high     4:10   182k/12.4k  $1.92   [Cancel]
+    ⏸ reviewer      sonnet · med    1:23    41k/3.1k   $0.31   [Cancel]
+    ✓ explore-db    haiku           0:41    20k/1.2k   $0.04
 ```
 
-- The header is dim `leo dispatches ` followed by `─` to the band's width
-  (fall back to a fixed 40 when the width is unknown). No counts in it.
+- The header is dim, starts at column 2: `leo dispatches ` followed by `─`
+  to the band's width less the padding (the band's width falls back to a
+  fixed 40 when unknown). No counts in it.
+- Rows are indented to column 4, beneath the header.
 - The blank row and header are part of the tree, drawn only when there are
   rows; they never appear on an empty band.
 
@@ -78,7 +82,7 @@ web UI or `/api/v1`.
 
 - Mod (`claude plugin test`): status line empty with dispatches and no
   fallback; fallback text still shown; blank row + header present with rows
-  and absent without; row text, indent and column padding; effort
+  and absent without; row text, band padding (header at column 2, rows at 4) and column padding; effort
   omitted when empty; stalled marker; terminal row shown then gone after 10 s
   (fake clock); terminal-at-load row not shown; ticker stops after the last
   terminal row expires.

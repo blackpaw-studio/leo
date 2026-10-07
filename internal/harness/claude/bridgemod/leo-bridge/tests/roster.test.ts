@@ -65,24 +65,24 @@ test('rows are indented and padded into columns', () => {
     0,
   )
   expect(rows.map(rowText)).toEqual([
-    '  ⟳ impl-auth  opus · high   4:10  182.0k/12.4k  $1.92',
-    '  ⏸ reviewer   sonnet · med  1:23    41.0k/3.1k  $0.31',
+    '    ⟳ impl-auth  opus · high   4:10  182.0k/12.4k  $1.92',
+    '    ⏸ reviewer   sonnet · med  1:23    41.0k/3.1k  $0.31',
   ])
   expect(rows.map((r) => r.isLive)).toEqual([true, true])
 })
 
 test('a row falls back from name to role to template to id, omits empty effort and unknown cost', () => {
   const rows = rosterRows([row({ id: 'd9', template: 'codex', model: 'haiku', status: 'queued' })], 0, 0)
-  expect(rowText(rows[0])).toBe('  … codex  haiku  0:00  –/–')
+  expect(rowText(rows[0])).toBe('    … codex  haiku  0:00  –/–')
 })
 
 test('a long label is cut to 16 columns', () => {
-  expect(rowText(rosterRows([row({ name: 'a-very-long-dispatch-name' })], 0, 0)[0])).toBe('  ⟳ a-very-long-disp  0:00  –/–')
+  expect(rowText(rosterRows([row({ name: 'a-very-long-dispatch-name' })], 0, 0)[0])).toBe('    ⟳ a-very-long-disp  0:00  –/–')
 })
 
 test('a stalled row is marked after its elapsed time and its glyph is yellow', () => {
   const rows = rosterRows([row({ id: 'a', name: 'x', stalled: true }), row({ id: 'b', name: 'y' })], 0, 0)
-  expect(rows.map(rowText)).toEqual(['  ⟳ x  0:00 stalled  –/–', '  ⟳ y  0:00          –/–'])
+  expect(rows.map(rowText)).toEqual(['    ⟳ x  0:00 stalled  –/–', '    ⟳ y  0:00          –/–'])
   expect(rows[0].segments.find((s) => s.text === '⟳')?.color).toBe('warning')
 })
 
@@ -95,9 +95,9 @@ test('the glyph carries the status color; model, tokens and cost are dim', () =>
   expect(done.segments.filter((s) => s.dimColor).map((s) => s.text.trim())).toEqual(['m', '–/–', '$1.00'])
 })
 
-test('the header rule runs to the band width, or 40 when unknown', () => {
-  expect(bandHeader(30)).toBe('leo dispatches ' + '─'.repeat(15))
-  expect(bandHeader(undefined)).toBe('leo dispatches ' + '─'.repeat(25))
+test('the header is padded 2 and its rule runs to the band width, or 40 when unknown', () => {
+  expect(bandHeader(30)).toBe('  leo dispatches ' + '─'.repeat(13))
+  expect(bandHeader(undefined)).toBe('  leo dispatches ' + '─'.repeat(23))
 })
 
 test('a terminal dispatch shows for 10 s after first seen terminal; one terminal at load never shows', () => {
