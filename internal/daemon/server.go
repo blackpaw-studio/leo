@@ -120,6 +120,10 @@ type Server struct {
 	leoMCP       leomcp.Server
 	bridgeRouter *bridge.Router
 
+	// control serves the agent control routes; set by StartWeb (see
+	// setControl).
+	control atomic.Pointer[controlHolder]
+
 	// ready is reported on /health and set by MarkReady once startup has
 	// restored agents; until then agent queries (e.g. /agents/stale) answer
 	// from a partially populated supervisor.
@@ -258,6 +262,9 @@ func New(sockPath, configPath string, processes ProcessStateProvider, opts ...Op
 	mux.HandleFunc("GET /agents/{name}/logs", s.handleAgentLogs)
 	mux.HandleFunc("GET /agents/{name}/session", s.handleAgentSession)
 	mux.HandleFunc("GET /agents/{name}/attach-spec", s.handleAgentAttachSpec)
+	for _, verb := range controlVerbs {
+		mux.HandleFunc("POST /agents/{name}/"+verb, s.handleAgentControl)
+	}
 
 	// Claude mod bridge: the mod's `leo bridge` process holds the command
 	// stream open and posts acks/events back. The 0600 socket is the auth,
@@ -446,6 +453,7 @@ func (s *Server) StartWeb(cfg *config.Config, agentSvc web.AgentService) error {
 		ParentContext:   s.parentContext,
 		LeoMCP:          s.leoMCP,
 	}, observeOpts...)
+	s.setControl(s.webServer.ControlHandler())
 	bind := cfg.WebBind()
 	addr := fmt.Sprintf("%s:%d", bind, port)
 	if err := s.webServer.ListenAndServe(addr); err != nil {

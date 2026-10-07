@@ -609,6 +609,10 @@ func New(configPath string, processes ProcessStateProvider, scheduler SchedulerP
 	// auth mechanism, per the spec's Access section.
 	apiMux.HandleFunc("GET /api/v1/state", s.handleAPIState)
 	apiMux.HandleFunc("GET /api/v1/events", s.handleAPIEvents)
+	// Agent control (docs/specs/2026-10-06-bridge-observe.md): operator
+	// only. The agent token passes the bearer check below, so each route
+	// refuses it itself; agents drive one another through /web/agent/*.
+	s.registerControlRoutes(apiMux, "/api/v1/agents", s.requireOperator)
 	// /api/* is the agent-facing surface: both tokens work there.
 	protectedAPI := bearerAuthMiddleware([]string{s.apiToken, s.agentToken}, s.trustedProxies, apiMux)
 
