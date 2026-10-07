@@ -237,7 +237,9 @@ truncated}`. `summary` is the command, path, or URL the tool call acts on,
 cut to 200 characters; `input` is the tool input verbatim as single-line
 JSON, up to 4 KiB. When `truncated` is true, part of the call is not shown:
 deny it, or deny with a reason asking for a smaller command, rather than
-allowing it blind. `leo_wait`
+allowing it blind. Both come from the subagent, so `leo_wait` and the
+notification render `tool`, `summary`, and `input` as one quoted JSON value
+after an "untrusted tool call" marker, never as Leo's own text. `leo_wait`
 returns as soon as any waited dispatch enters `needs_input`, the same way it
 returns on a terminal state. A dispatch with notifications on also notifies
 its caller, unless a wait already covers it.
