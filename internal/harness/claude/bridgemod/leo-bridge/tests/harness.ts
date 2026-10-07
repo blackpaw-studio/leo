@@ -72,6 +72,7 @@ const CLASSIC_OBSERVED = [
   'classic.SubagentStart',
   'classic.SubagentStop',
   'classic.Notification',
+  'classic.Stop',
 ]
 
 export type SubmitResponder = (e: { text: string; asUser?: boolean }) => unknown

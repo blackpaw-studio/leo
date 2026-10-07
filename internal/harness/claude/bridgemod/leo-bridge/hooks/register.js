@@ -40,6 +40,7 @@ import {
   toolActivity,
   touchedEntry,
   turnTokens,
+  stopHookPending,
   withAcked,
   withInflight,
 } from './protocol.js'
@@ -173,6 +174,9 @@ let activitySentBody = null
 let activityChain = Promise.resolve()
 let attention = null
 let subagentIds = new Set()
+// The pending work the main loop's last Stop hook listed (see
+// stopHookPending), for its turn.complete; cleared as a turn starts.
+let stopPending = undefined
 
 function isBridging() {
   return config !== null && !isDormant
@@ -266,13 +270,15 @@ function defined(fields) {
 // The final assistant message is what a dispatch returns as its result.
 // Usage is a nice-to-have: a turn.complete without it still ends the turn
 // in the daemon, which a lost turn.complete would leave stuck busy.
-// tokens is the turn's own usage (TurnUsage) as the engine reported it.
-async function turnCompleteReport($, e, tokens) {
+// tokens is the turn's own usage (TurnUsage) as the engine reported it;
+// pending is the background work its Stop hook left in flight, if any.
+async function turnCompleteReport($, e, tokens, pending) {
   const fields = {
     event_id: eventId('turn.complete', e.turnId),
     message: reportText(e.answer),
     reason: e.isAborted === true ? 'aborted' : undefined,
     tokens: turnTokens(tokens),
+    pending,
   }
   try {
     const usage = await $.session.usage()
@@ -1026,6 +1032,7 @@ export function register(on) {
     // turn.start, but a subagent's must never pass for the main loop's.
     if (e.agentId) return next(e)
     markRunning(e.turnId)
+    stopPending = undefined
     if (isBridging()) {
       enqueueReport($, () => helloIfSessionChanged($))
       const fields = { event_id: eventId('turn.start', e.turnId), prompt: reportText(e.text) }
@@ -1041,11 +1048,19 @@ export function register(on) {
     clearAttention($)
     // The report is queued now, so it keeps its place among this process's
     // reports, and is built once next(e) says what the turn cost.
+    // Claude runs its Stop hooks before the turn completes, so by the time
+    // next(e) settles the Stop's pending work has been seen.
     let settleUsage = () => {}
-    const usage = new Promise((resolve) => {
-      settleUsage = resolve
+    const settled = new Promise((resolve) => {
+      settleUsage = (usage) => {
+        resolve({ usage, pending: stopPending })
+        stopPending = undefined
+      }
     })
-    enqueueReport($, async () => turnCompleteReport($, e, await usage))
+    enqueueReport($, async () => {
+      const { usage, pending } = await settled
+      return turnCompleteReport($, e, usage, pending)
+    })
     touchEntry($)
     // Reading what the session was told restamps its entry (at most hourly).
     withTold($, () => undefined)
@@ -1081,6 +1096,14 @@ export function register(on) {
 
   on('classic.SubagentStop', async ($, e, next) => {
     trackSubagent($, e.agent_id, false)
+    return next(e)
+  }).catch(observeFailed)
+
+  // A Stop that leaves background work in flight pauses the session rather
+  // than ending it: the turn.complete carries that work so leo keeps a
+  // dispatch's turn open until the work wakes the session.
+  on('classic.Stop', async ($, e, next) => {
+    if (!e.agent_id) stopPending = stopHookPending(e)
     return next(e)
   }).catch(observeFailed)
 

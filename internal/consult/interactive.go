@@ -964,6 +964,7 @@ func (d *Dispatcher) closeWorkingLocked(s *runState, o TurnOutcome, text string)
 		}
 	}
 }
+
 // waitOnBackgroundLocked handles a Stop that leaves background work pending:
 // the session is paused, not done, so the working turn stays open (leo_wait
 // keeps blocking) and the run reads waiting until that work wakes it.

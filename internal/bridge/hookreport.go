@@ -31,7 +31,8 @@ const bridgeEventIDPrefix = "bridge:"
 // never report, so an interrupted turn closes as interrupted.
 //
 // turn.start's prompt and turn.complete's final message travel under the
-// shell hooks' own keys (prompt, last_assistant_message), so a late-acked
+// shell hooks' own keys (prompt, last_assistant_message), as does
+// turn.complete's pending work (background_tasks, session_crons), so a late-acked
 // orchestrator turn is matched by its text (the prompt as leo sent it, out
 // of the envelope Claude wraps a non-user deliver in) and a dispatch's result is the
 // subagent's final message, exactly as on the hook path. Like the claude
@@ -51,7 +52,7 @@ func HookPayload(ev Event) (eventID string, payload json.RawMessage, ok bool) {
 		// The dispatcher's own name for a turn that ended early.
 		hookName = "Interrupt"
 	}
-	fields := map[string]string{"hook_event_name": hookName}
+	fields := map[string]any{"hook_event_name": hookName}
 	if ev.SessionID != "" {
 		fields["session_id"] = ev.SessionID
 	}
@@ -63,8 +64,11 @@ func HookPayload(ev Event) (eventID string, payload json.RawMessage, ok bool) {
 	case ev.Name == EventSessionEnd && ev.Reason != "":
 		fields["reason"] = ev.Reason
 	}
+	if ev.Name == EventTurnComplete && ev.Pending != nil {
+		fields["background_tasks"], fields["session_crons"] = ev.Pending.stopHookFields()
+	}
 	raw, err := json.Marshal(fields)
-	if err != nil { // unreachable for a map of strings
+	if err != nil { // unreachable for strings and string maps
 		return "", nil, false
 	}
 	if ev.EventID != "" {

@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/blackpaw-studio/leo/internal/bridge"
 )
 
 // claudeStop is a Stop hook report in the shape Claude Code posts it:
@@ -220,5 +222,24 @@ func TestObservedDispatchCarriesPendingSummary(t *testing.T) {
 		PendingWork: &PendingWork{Tasks: map[string]int{"shell": 1}}}
 	if got := observedDispatch(rec, now); got.Status != "waiting" || got.Pending != "1 shell" {
 		t.Fatalf("observed=%+v", got)
+	}
+}
+
+// A bridged dispatch reports its Stop as the mod's turn.complete; the
+// pending work the mod read off Claude's Stop hook rides along.
+func TestInteractiveBridgedTurnCompleteWithPendingWorkWaits(t *testing.T) {
+	now := time.Date(2026, time.October, 7, 12, 0, 0, 0, time.UTC)
+	d, _, id := startClaudeInteractive(t, &now)
+	eventID, payload, ok := bridge.HookPayload(bridge.Event{Name: bridge.EventTurnComplete, EventID: "turn.complete:t1", Message: "waiting on CI",
+		Pending: &bridge.PendingWork{Tasks: map[string]int{"shell": 1}, Wakeups: 1}})
+	if !ok {
+		t.Fatal("HookPayload not ok")
+	}
+	if err := d.Report(id, HookReport{EventID: eventID, Payload: payload}); err != nil {
+		t.Fatal(err)
+	}
+	rec, _ := d.Get(id)
+	if rec.Status != StatusWaiting || rec.Turns[0].Outcome != "" || rec.PendingWork.Summary() != "1 shell · 1 wakeup" {
+		t.Fatalf("record=%+v pending=%+v", rec, rec.PendingWork)
 	}
 }

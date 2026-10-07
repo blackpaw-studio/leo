@@ -323,6 +323,42 @@ export function turnTokens(usage) {
   return typeof u.model === 'string' && u.model !== '' ? { ...tokens, model: u.model } : tokens
 }
 
+// Background-task statuses that no longer wake the session; Claude lists
+// only in-flight work, so these are defensive.
+const SETTLED_TASK_STATUSES = ['completed', 'failed', 'killed', 'stopped', 'canceled', 'cancelled']
+// Bounds the daemon holds a pending report to.
+const MAX_PENDING_TYPES = 16
+const MAX_PENDING_TYPE_LEN = 32
+const MAX_PENDING_COUNT = 1000
+
+/**
+ * The pending work a turn.complete report carries, from Claude's Stop hook
+ * input: in-flight background tasks counted by type, and the session crons
+ * that will wake the session. Undefined when nothing is pending, as when an
+ * older claude sends neither list.
+ * @param {unknown} stop the classic.Stop input
+ * @returns {{ tasks: Record<string, number>, wakeups: number } | undefined}
+ */
+export function stopHookPending(stop) {
+  const s = isRecord(stop) ? stop : {}
+  const tasks = (Array.isArray(s.background_tasks) ? s.background_tasks : [])
+    .filter((t) => isRecord(t) && !SETTLED_TASK_STATUSES.includes(String(t.status).toLowerCase()))
+    .map((t) => pendingTaskType(t.type))
+    .reduce((counts, type) => {
+      if (!(type in counts) && Object.keys(counts).length >= MAX_PENDING_TYPES) return counts
+      return { ...counts, [type]: Math.min(MAX_PENDING_COUNT, (counts[type] ?? 0) + 1) }
+    }, {})
+  const wakeups = Math.min(MAX_PENDING_COUNT, (Array.isArray(s.session_crons) ? s.session_crons : []).filter(isRecord).length)
+  if (Object.keys(tasks).length === 0 && wakeups === 0) return undefined
+  return { tasks, wakeups }
+}
+
+// A task type as the daemon accepts it: [a-z0-9_-], at most 32 long.
+function pendingTaskType(type) {
+  const clean = (typeof type === 'string' ? type : '').trim().toLowerCase().replace(/ /g, '_').replace(/[^a-z0-9_-]/g, '').slice(0, MAX_PENDING_TYPE_LEN)
+  return clean === '' ? 'task' : clean
+}
+
 /**
  * How the mod answers a fork consult's tool call, from $.model.fork's
  * result: the reply under a header naming the model and its tokens
