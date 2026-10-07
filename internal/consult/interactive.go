@@ -727,6 +727,9 @@ func (d *Dispatcher) Report(id string, r HookReport) error {
 		s.record.SessionID = str(p, "session_id")
 	}
 	noteLiveTranscriptLocked(s, p)
+	if level := effortFromPayload(p); level != "" {
+		d.applyObservedEffortLocked(s, level)
+	}
 	switch event {
 	case "userpromptsubmit":
 		oldStatus := s.record.Status

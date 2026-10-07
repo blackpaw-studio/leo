@@ -89,6 +89,7 @@ function parseDispatch(d) {
     template: str(d.template),
     model: str(d.model),
     effort: str(d.effort),
+    observedEffort: str(d.observed_effort),
     status: str(d.status),
     stalled: d.stalled === true,
     activeSeconds: num(d.active_seconds) ?? 0,
@@ -271,11 +272,20 @@ function glyphStyle(d) {
   return {}
 }
 
+// The effort a row shows: the requested one; the observed one marked ~ when
+// none was requested (the model's default); both when they differ.
+function effortLabel(d) {
+  const observed = d.observedEffort ?? ''
+  if (d.effort !== '' && observed !== '' && observed !== d.effort) return d.effort + '→' + observed
+  if (d.effort !== '') return d.effort
+  return observed === '' ? '' : '~' + observed
+}
+
 // One row's column values, unpadded, in band order.
 function rowCells(d, receivedAt, now) {
   return [
     { text: Array.from(d.name || d.role || d.template || d.id).slice(0, LABEL_MAX).join(''), align: 'left', gap: COLUMN_GAP },
-    { text: [d.model, d.effort].filter((x) => x !== '').join(' · '), align: 'left', gap: COLUMN_GAP, dimColor: true },
+    { text: [d.model, effortLabel(d)].filter((x) => x !== '').join(' · '), align: 'left', gap: COLUMN_GAP, dimColor: true },
     { text: formatElapsed(elapsedSeconds(d, receivedAt, now)), align: 'right', gap: COLUMN_GAP },
     { text: d.stalled ? STALLED : '', align: 'left', gap: ' ' },
     { text: formatTokens(d.tokensIn) + '/' + formatTokens(d.tokensOut), align: 'right', gap: COLUMN_GAP, dimColor: true },

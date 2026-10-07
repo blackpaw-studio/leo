@@ -111,6 +111,9 @@ let runningTurn = null
 let isTurnKnown = false
 let idleWaiters = []
 
+// The effort last reported (see the turn.step hook), so only a change is sent.
+let reportedEffort = null
+
 // Whether a deliver's $.prompt.submit is in flight (it resolves once its
 // turn starts), and the interrupts waiting for the turn it starts.
 let isSubmitting = false
@@ -1057,6 +1060,16 @@ export function register(on) {
       settleUsage(e.usage)
       throw err
     }
+  })
+
+  // The effort each main-loop step asks for, reported when it changes.
+  on('turn.step', async function* ($, e, next) {
+    if (!e.agentId && isBridging() && typeof e.effort === 'string' && e.effort !== reportedEffort) {
+      reportedEffort = e.effort
+      const level = e.effort
+      enqueueReport($, () => eventReport('effort', { level }))
+    }
+    return yield* next(e)
   })
 
   on('classic.PermissionRequest', async ($, e, next) => {

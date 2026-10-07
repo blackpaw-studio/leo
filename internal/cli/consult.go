@@ -132,14 +132,14 @@ func listConsults(stateDir string, asJSON bool, out io.Writer) error {
 
 	now := time.Now()
 	w := tabwriter.NewWriter(out, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(w, "ID\tCALLER\tTEMPLATE\tMODEL\tMODE\tTURNS\tSTEERED\tELAPSED\tACTIVE\tSTATUS\tINPUT\tOUTPUT\tCOST_USD\tUSAGE_TURNS\tTOOLS\tPARTIAL")
+	fmt.Fprintln(w, "ID\tCALLER\tTEMPLATE\tMODEL\tEFFORT\tMODE\tTURNS\tSTEERED\tELAPSED\tACTIVE\tSTATUS\tINPUT\tOUTPUT\tCOST_USD\tUSAGE_TURNS\tTOOLS\tPARTIAL")
 	for _, record := range ordered {
 		mode := record.Mode
 		if mode == "" {
 			mode = consult.ModeHeadless
 		}
-		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%d\t%t\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%t\n",
-			record.ID, orDash(record.Caller), record.Template, record.Model,
+		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%d\t%t\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%t\n",
+			record.ID, orDash(record.Caller), record.Template, record.Model, orDash(record.EffortLabel()),
 			mode, len(record.Turns), record.Steered, formatOffset(record.Elapsed(now)),
 			formatOffset(secondsDuration(record.LiveActiveSeconds(now))), displayStatus(record, now), optionalInt64(record.InputTokens), optionalInt64(record.OutputTokens), optionalFloat(record.CostUSD), optionalInt(record.UsageTurns), optionalInt(record.ToolCalls), record.UsageIncomplete)
 	}

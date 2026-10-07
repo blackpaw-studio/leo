@@ -361,6 +361,12 @@ func (r *TmuxInteractiveRuntime) DispatchBridgeSubscriber(sink BridgeReportSink)
 		if !ok || !r.claimReport(id, ev) {
 			return
 		}
+		if ev.Name == bridge.EventEffort {
+			if effortSink, ok := sink.(ObservedEffortSink); ok {
+				effortSink.ApplyObservedEffort(id, ev.Effort)
+			}
+			return
+		}
 		eventID, payload, ok := bridge.HookPayload(ev)
 		if !ok {
 			return

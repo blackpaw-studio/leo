@@ -155,6 +155,8 @@ type Dispatch struct {
 	Role             string     `json:"role,omitempty"`
 	Template         string     `json:"template,omitempty"`
 	Model            string     `json:"model,omitempty"`
+	Effort           string     `json:"effort,omitempty"`
+	ObservedEffort   string     `json:"observed_effort,omitempty"`
 	Status           string     `json:"status"`
 	Stalled          bool       `json:"stalled"`
 	CallerAgent      string     `json:"caller_agent,omitempty"`

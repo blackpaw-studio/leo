@@ -35,6 +35,7 @@ type Event struct {
 	Attention *AttentionReport
 	Subagents *SubagentsReport
 	Compact   *CompactReport
+	Effort    string // effort: the level a main-loop step asked for
 	At        time.Time
 }
 
@@ -221,6 +222,7 @@ func (h *Hub) recordLocked(agent string, st *agentState, r Report) Event {
 		Attention:     cloneOf(r.Attention),
 		Subagents:     cloneOf(r.Subagents),
 		Compact:       cloneOf(r.Compact),
+		Effort:        r.Effort,
 		At:            now,
 	}
 }

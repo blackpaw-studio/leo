@@ -9,7 +9,7 @@ test('parseState coerces fields and drops dispatches without an id', () => {
   })
   expect(state).toEqual({
     delegation: { enabled: true, section: 's', hideAgents: ['Explore'] },
-    dispatches: [{ id: 'd1', name: '', role: '', template: '', model: '', effort: '', status: 'running', stalled: false, activeSeconds: 0, tokensIn: 5, tokensOut: undefined, costUsd: undefined }],
+    dispatches: [{ id: 'd1', name: '', role: '', template: '', model: '', effort: '', observedEffort: '', status: 'running', stalled: false, activeSeconds: 0, tokensIn: 5, tokensOut: undefined, costUsd: undefined }],
   })
 })
 
@@ -53,6 +53,27 @@ test('the status line says nothing of dispatches', () => {
 
 test('parseState reads effort as a string', () => {
   expect(parseState({ op: 'state', dispatches: [{ id: 'd1', effort: 'high' }] })?.dispatches[0].effort).toBe('high')
+})
+
+test('parseState reads the observed effort as a string', () => {
+  expect(parseState({ op: 'state', dispatches: [{ id: 'd1', observed_effort: 'medium' }] })?.dispatches[0].observedEffort).toBe('medium')
+})
+
+test('a requested effort shows as is; an observed default is marked; a downgrade shows both', () => {
+  const rows = rosterRows(
+    [
+      row({ id: 'a', name: 'a', model: 'opus', effort: 'high', observedEffort: 'high' }),
+      row({ id: 'b', name: 'b', model: 'opus', observedEffort: 'medium' }),
+      row({ id: 'c', name: 'c', model: 'opus', effort: 'xhigh', observedEffort: 'high' }),
+    ],
+    0,
+    0,
+  )
+  expect(rows.map(rowText)).toEqual([
+    '    ⟳ a  opus · high        0:00  –/–',
+    '    ⟳ b  opus · ~medium     0:00  –/–',
+    '    ⟳ c  opus · xhigh→high  0:00  –/–',
+  ])
 })
 
 test('rows are indented and padded into columns', () => {
