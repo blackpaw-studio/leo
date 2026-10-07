@@ -10,6 +10,7 @@ import (
 	"io"
 	"slices"
 	"strings"
+	"unicode"
 )
 
 // Command ops (daemon → mod). The wire shape of each is fixed by the mod
@@ -292,10 +293,38 @@ func ParseReport(body []byte) (Report, error) {
 	}
 }
 
+// Caps on mod-supplied identifiers. Both are stored (the session id per
+// agent, event ids in replay caches) and the session id is published, so a
+// report cannot make either arbitrarily large.
+const (
+	MaxSessionIDLen = 128
+	MaxEventIDLen   = 256
+)
+
+// ValidSessionID reports whether id is a session id the daemon stores and
+// publishes: non-empty, at most MaxSessionIDLen, of [A-Za-z0-9._:-] (a
+// claude session id is a UUID).
+func ValidSessionID(id string) bool {
+	if id == "" || len(id) > MaxSessionIDLen {
+		return false
+	}
+	for _, c := range []byte(id) {
+		switch {
+		case 'a' <= c && c <= 'z', 'A' <= c && c <= 'Z', '0' <= c && c <= '9', c == '.', c == '_', c == ':', c == '-':
+		default:
+			return false
+		}
+	}
+	return true
+}
+
 func parseHello(fields map[string]json.RawMessage) (Report, error) {
 	sessionID, err := stringField(fields, "session_id", true)
 	if err != nil {
 		return Report{}, err
+	}
+	if !ValidSessionID(sessionID) {
+		return Report{}, invalidReport("hello session_id must be at most %d of [A-Za-z0-9._:-]", MaxSessionIDLen)
 	}
 	version, err := stringField(fields, "claude_version", true)
 	if err != nil {
@@ -372,6 +401,9 @@ func parseEvent(fields map[string]json.RawMessage) (Report, error) {
 	eventID, err := stringField(fields, "event_id", false)
 	if err != nil {
 		return Report{}, err
+	}
+	if len(eventID) > MaxEventIDLen || strings.ContainsFunc(eventID, unicode.IsControl) {
+		return Report{}, invalidReport("event_id must be at most %d bytes with no control characters", MaxEventIDLen)
 	}
 	var usage json.RawMessage
 	if raw, present := fields["usage"]; present && !isNull(raw) {

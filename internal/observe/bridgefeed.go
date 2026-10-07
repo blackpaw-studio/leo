@@ -1,6 +1,7 @@
 package observe
 
 import (
+	"crypto/sha256"
 	"encoding/json"
 	"math"
 	"strings"
@@ -38,6 +39,10 @@ type KeyResolverFunc func(key string) (string, bool)
 
 // AgentForKey calls f.
 func (f KeyResolverFunc) AgentForKey(key string) (string, bool) { return f(key) }
+
+// MaxUsageCostUSD caps any one cost the bridge feed accepts or accumulates;
+// a reported total above it is treated as malformed.
+const MaxUsageCostUSD = 1e6
 
 // maxFeedSeenEvents bounds each agent's replay-dedup memory.
 const maxFeedSeenEvents = 64
@@ -82,8 +87,10 @@ type feedAgent struct {
 	reason    *AttentionReason
 	action    *Action
 
-	seen      map[string]bool
-	seenOrder []string
+	// seen holds digests, not the ids, so its size is fixed whatever the
+	// mod sends.
+	seen      map[[sha256.Size]byte]bool
+	seenOrder [][sha256.Size]byte
 
 	lastActivity time.Time
 	stopTrailing func() bool
@@ -162,10 +169,14 @@ func (f *BridgeFeed) OnBridgeEvent(ev bridge.Event) {
 	if !ok || name == "" {
 		return
 	}
+	if !bridge.ValidSessionID(ev.SessionID) {
+		// Mod-supplied and published: never store or echo a malformed one.
+		ev.SessionID = ""
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	st := f.agentLocked(ev.Agent, name)
-	if ev.EventID != "" && st.replayed(ev.Name+"\x00"+ev.EventID) {
+	if ev.EventID != "" && st.replayed(sha256.Sum256([]byte(ev.Name+"\x00"+ev.EventID))) {
 		return
 	}
 	usageChanged := st.observeLaunch(ev)
@@ -333,12 +344,12 @@ func (f *BridgeFeed) publish(typ EventType, p Payload) {
 }
 
 // replayed reports whether id was seen already, remembering it.
-func (st *feedAgent) replayed(id string) bool {
+func (st *feedAgent) replayed(id [sha256.Size]byte) bool {
 	if st.seen[id] {
 		return true
 	}
 	if st.seen == nil {
-		st.seen = map[string]bool{}
+		st.seen = map[[sha256.Size]byte]bool{}
 	}
 	st.seen[id] = true
 	st.seenOrder = append(st.seenOrder, id)
@@ -419,7 +430,7 @@ func (st *feedAgent) foldUsage(raw json.RawMessage) (changed bool, cost float64,
 		if total != st.sessionCost {
 			st.sessionCost = total
 			st.session.CostUSD = total
-			st.incarnation.CostUSD += cost
+			st.incarnation.CostUSD = min(st.incarnation.CostUSD+cost, MaxUsageCostUSD)
 			changed = true
 		}
 	}
@@ -441,7 +452,8 @@ func (st *feedAgent) usage() AgentUsage {
 	return AgentUsage{SessionID: st.sessionID, Session: st.session, Incarnation: st.incarnation, Context: cloneOf(st.context)}
 }
 
-func validAmount(v float64) bool { return v >= 0 && !math.IsNaN(v) && !math.IsInf(v, 0) }
+// validAmount reports whether v is a finite amount in [0, MaxUsageCostUSD].
+func validAmount(v float64) bool { return v >= 0 && v <= MaxUsageCostUSD }
 
 func addSaturating(a, b int64) int64 {
 	if b > 0 && a > math.MaxInt64-b {

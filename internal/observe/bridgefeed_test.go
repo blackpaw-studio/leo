@@ -2,6 +2,8 @@ package observe
 
 import (
 	"encoding/json"
+	"fmt"
+	"math"
 	"strings"
 	"testing"
 	"time"
@@ -383,5 +385,49 @@ func TestBridgeFeedNilSafe(t *testing.T) {
 	f.OnBridgeEvent(bridge.Event{Name: bridge.EventTurnStart})
 	if got := f.BridgeAgents(); len(got) != 0 {
 		t.Fatalf("nil feed BridgeAgents = %v", got)
+	}
+}
+
+func TestBridgeFeedDropsInvalidSessionIDs(t *testing.T) {
+	h := newFeedHarness(t, nil)
+	bad := "s1\x1b[2J" + strings.Repeat("x", 500)
+
+	h.send(bridge.Event{Name: bridge.EventTurnStart, EventID: "t1", SessionID: bad})
+	h.send(bridge.Event{Name: bridge.EventTurnComplete, EventID: "c1", SessionID: bad, Tokens: tokens(1, 1)})
+
+	started := h.ofType(EventAgentTurnStarted)
+	if len(started) != 1 || started[0].Payload.(*AgentTurnStartedPayload).SessionID != "" {
+		t.Fatalf("turn started = %+v; want the invalid session id dropped", started[0].Payload)
+	}
+	if u := h.feed.BridgeAgents()["alice"].Usage; u == nil || u.SessionID != "" {
+		t.Fatalf("usage = %+v; want no session id stored", u)
+	}
+}
+
+func TestBridgeFeedRejectsAbsurdOrNonFiniteCost(t *testing.T) {
+	h := newFeedHarness(t, nil)
+	raw := func(cost string) json.RawMessage { return json.RawMessage(`{"cost":{"usd":` + cost + `}}`) }
+
+	h.send(bridge.Event{Name: bridge.EventTurnComplete, EventID: "a", Usage: raw("1.5")})
+	h.send(bridge.Event{Name: bridge.EventTurnComplete, EventID: "b", Usage: raw("1e308")})
+	h.send(bridge.Event{Name: bridge.EventTurnComplete, EventID: "c", Usage: raw("-4")})
+	// A new session whose huge totals would push the incarnation past any
+	// float64 if summed unchecked.
+	for i := 0; i < 3; i++ {
+		h.send(bridge.Event{Name: bridge.ReportHello, SessionID: fmt.Sprintf("s%d", i+2)})
+		h.send(bridge.Event{Name: bridge.EventTurnComplete, EventID: fmt.Sprintf("d%d", i), SessionID: fmt.Sprintf("s%d", i+2), Usage: raw("999999")})
+	}
+
+	u := h.feed.BridgeAgents()["alice"].Usage
+	if u == nil || math.IsInf(u.Incarnation.CostUSD, 0) || u.Incarnation.CostUSD > MaxUsageCostUSD {
+		t.Fatalf("usage = %+v", u)
+	}
+	if _, err := json.Marshal(u); err != nil {
+		t.Fatalf("usage does not encode: %v", err)
+	}
+	for _, ev := range h.ofType(EventAgentTurnCompleted) {
+		if c := ev.Payload.(*AgentTurnCompletedPayload).CostUSD; c != nil && (*c < 0 || *c > MaxUsageCostUSD) {
+			t.Fatalf("turn cost = %v", *c)
+		}
 	}
 }
