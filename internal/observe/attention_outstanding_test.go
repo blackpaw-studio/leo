@@ -281,35 +281,6 @@ func TestAttentionFinishViaAdvanceAndTokenReadDispatchCounts(t *testing.T) {
 	}
 }
 
-// Dispatch records keep the caller's old name after a rename: counts under
-// it follow the agent until that name is taken by another.
-func TestAttentionDispatchCountsUnderARenamedAgentsOldNameFollowIt(t *testing.T) {
-	s := NewAttentionStore(nil)
-	s.Set("old", AttentionWorking)
-	s.ReconcileDispatches(1, map[string]int{"old": 1})
-	s.Set("old", AttentionFinished) // held
-
-	s.Move("old", "new")
-	s.ReconcileDispatches(2, map[string]int{"old": 1})
-	if got, _ := s.Get("new"); got.State != AttentionWorking || got.Outstanding == nil || got.Outstanding.Dispatches != 1 {
-		t.Fatalf("renamed agent while its dispatch runs: %+v; want held", got)
-	}
-	s.ReconcileDispatches(3, map[string]int{})
-	if got, _ := s.Get("new"); got.State != AttentionFinished {
-		t.Fatalf("renamed agent after its dispatch ended: %+v; want finished", got)
-	}
-
-	// A new agent takes the old name: its counts are its own.
-	s.Set("old", AttentionWorking)
-	s.ReconcileDispatches(4, map[string]int{"old": 2})
-	if got, _ := s.Get("new"); got.Outstanding != nil {
-		t.Fatalf("renamed agent picked up the new agent's dispatches: %+v", got.Outstanding)
-	}
-	if got, _ := s.Get("old"); got.Outstanding == nil || got.Outstanding.Dispatches != 2 {
-		t.Fatalf("new agent outstanding = %+v", got.Outstanding)
-	}
-}
-
 // R1: a tick reads its snapshot (no dispatch yet) and is preempted; a
 // dispatch starts and the turn completes, reading a newer snapshot and
 // holding. The tick's stale zero must not release the hold.

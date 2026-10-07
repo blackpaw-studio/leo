@@ -19,6 +19,8 @@ empty); background Bash job tracking (no hook exists).
 - **B-051:** after `turn.complete`, an agent stays `working` while it has outstanding
   leo dispatches or native background subagents. `finished` fires when the last child
   ends. No new attention state; an additive `outstanding` count explains the hold.
+  Only dispatches whose caller has a bridge key count, owned by the agent holding that
+  key; keyless dispatches still appear in `Snapshot.dispatches` but never hold attention.
 - **Content:** `agent_turn_completed` carries a 280-char sanitised preview of the final
   message, and tool activity carries a one-field summary. Always on, no config knob.
   Prompts, full tool inputs, and results are never sent.
@@ -94,6 +96,8 @@ route first, then the legacy inbox/tmux path. A missing agent returns 404.
 - `buildAgent` in `internal/web/handlers_observe.go` merges the feed's store.
 - Dispatch events come from a 1 s diff ticker over the dispatch store (same pattern as
   `consult/bridge_state.go`), which also exports per-agent outstanding dispatch counts.
+  Those counts cover only records with a `CallerBridgeKey`, resolved through
+  `bridgeKeyOwner`; no tmux lookup or rename alias is used for keyless records.
 
 ## Testing
 

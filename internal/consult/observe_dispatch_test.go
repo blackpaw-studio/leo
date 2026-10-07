@@ -54,17 +54,23 @@ func newObserveHarness(recs ...Record) *observeHarness {
 	h := &observeHarness{now: stateNow, records: &fakeRecords{recs: recs}, pub: &recordingPublisher{}}
 	h.obs = NewDispatchObserver(h.records.get, h.pub,
 		WithDispatchClock(func() time.Time { return h.now }),
+		WithDispatchOwner(ownKey),
 		WithOutstandingListener(func(agent string, n int) {
 			h.calls = append(h.calls, agent+"="+strconv.Itoa(n))
 		}))
 	return h
 }
 
+// agentDispatch is a dispatch by caller through its bridge, whose key is
+// its own name (see ownKey).
 func agentDispatch(id, caller string, status Status) Record {
 	rec := callerRecord(id, caller, status)
-	rec.Caller = caller
+	rec.Caller, rec.CallerBridgeKey = caller, caller
 	return rec
 }
+
+// ownKey resolves each bridge key to the agent of the same name.
+func ownKey(key string) (string, bool) { return key, true }
 
 func observedIDs(ds []observe.Dispatch) []string {
 	out := []string{}
@@ -223,7 +229,7 @@ func TestTickNotifiesZeroWhenAnAgentsRecordsDisappear(t *testing.T) {
 }
 
 func TestDispatchObserverWithoutListenerOrPublisher(t *testing.T) {
-	obs := NewDispatchObserver(func() []Record { return []Record{agentDispatch("a1", "alpha", StatusRunning)} }, nil)
+	obs := NewDispatchObserver(func() []Record { return []Record{agentDispatch("a1", "alpha", StatusRunning)} }, nil, WithDispatchOwner(ownKey))
 	obs.Tick()
 	if got := obs.OutstandingDispatches(); got["alpha"] != 1 {
 		t.Fatalf("got %v", got)
@@ -235,16 +241,15 @@ func TestDispatchObserverWithoutListenerOrPublisher(t *testing.T) {
 func TestOutstandingDispatchesFollowTheCallersBridgeKeyAcrossARename(t *testing.T) {
 	renamed := agentDispatch("d1", "old-name", StatusRunning)
 	renamed.CallerBridgeKey = "k-old"
-	unbridged := agentDispatch("d2", "gamma", StatusRunning)
 	orphaned := agentDispatch("d3", "delta", StatusRunning)
 	orphaned.CallerBridgeKey = "k-gone"
 	owners := map[string]string{"k-old": "new-name"}
-	obs := NewDispatchObserver(func() []Record { return []Record{renamed, unbridged, orphaned} }, nil,
+	obs := NewDispatchObserver(func() []Record { return []Record{renamed, orphaned} }, nil,
 		WithDispatchOwner(func(key string) (string, bool) { name, ok := owners[key]; return name, ok }))
 
 	got := obs.OutstandingDispatches()
 
-	if want := map[string]int{"new-name": 1, "gamma": 1, "delta": 1}; !reflect.DeepEqual(got, want) {
+	if want := map[string]int{"new-name": 1}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("OutstandingDispatches = %v, want %v", got, want)
 	}
 }
@@ -279,38 +284,22 @@ func TestDispatchSnapshotGenerationsFollowReadOrder(t *testing.T) {
 	}
 }
 
-// A caller without a bridge key is identified by its tmux session id,
-// which a live rename keeps and a recreated agent does not share.
-func TestOutstandingDispatchesFollowTheCallersTmuxSessionAcrossARename(t *testing.T) {
-	renamed := agentDispatch("d1", "old", StatusRunning)
-	renamed.CallerSessionID = "$3"
-	newcomer := agentDispatch("d2", "old", StatusRunning)
-	newcomer.CallerSessionID = "$9"
-	noSession := agentDispatch("d3", "solo", StatusRunning)
-	lookups := 0
-	obs := NewDispatchObserver(func() []Record { return []Record{renamed, newcomer, noSession} }, nil,
-		WithCallerSessionOwners(func() map[string]string {
-			lookups++
-			return map[string]string{"$3": "new", "$9": "old"}
-		}))
+// Only a dispatch whose caller has a bridge key holds that caller's
+// attention: a keyless one (a codex caller, the CLI, a claude without the
+// mod) still shows its caller but counts toward no agent.
+func TestKeylessDispatchesAreListedButNeverOutstanding(t *testing.T) {
+	keyless := agentDispatch("d1", "gamma", StatusRunning)
+	keyless.CallerBridgeKey = ""
+	h := newObserveHarness(keyless)
 
-	got := obs.OutstandingDispatches()
-
-	if want := map[string]int{"new": 1, "old": 1, "solo": 1}; !reflect.DeepEqual(got, want) {
-		t.Fatalf("OutstandingDispatches = %v, want %v", got, want)
+	if got := h.obs.OutstandingDispatches(); len(got) != 0 {
+		t.Fatalf("OutstandingDispatches = %v; want none", got)
 	}
-	if lookups != 1 {
-		t.Fatalf("session owners looked up %d times; want once per snapshot", lookups)
+	if _, got := h.obs.DispatchSnapshot(); len(got) != 0 {
+		t.Fatalf("DispatchSnapshot counts = %v; want none", got)
 	}
-}
-
-func TestOutstandingDispatchesSkipTheSessionLookupWhenEveryCallerHasAKey(t *testing.T) {
-	rec := agentDispatch("d1", "alpha", StatusRunning)
-	rec.CallerBridgeKey, rec.CallerSessionID = "k", "$1"
-	obs := NewDispatchObserver(func() []Record { return []Record{rec} }, nil,
-		WithDispatchOwner(func(string) (string, bool) { return "alpha", true }),
-		WithCallerSessionOwners(func() map[string]string { t.Fatal("looked up sessions"); return nil }))
-	if got := obs.OutstandingDispatches(); got["alpha"] != 1 {
-		t.Fatalf("counts = %v", got)
+	ds := h.obs.Dispatches(h.now)
+	if len(ds) != 1 || ds[0].CallerAgent != "gamma" {
+		t.Fatalf("Dispatches = %+v; want d1 with caller gamma", ds)
 	}
 }

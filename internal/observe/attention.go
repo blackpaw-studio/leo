@@ -72,10 +72,6 @@ type AttentionStore struct {
 	held        map[string]bool
 	// reasons holds what a needs_input agent is waiting on, when known.
 	reasons map[string]AttentionReason
-	// aliases maps a renamed agent's old name to its new one while no
-	// other agent holds the old name: dispatch records keep the name their
-	// caller had, so their counts follow it here.
-	aliases map[string]string
 	// dispatches is read for fresh dispatch counts whenever a turn
 	// finishes, outside mu (see dispatchCounts). dispatchGen is the newest
 	// snapshot generation applied; an older one arriving late is ignored.
@@ -94,7 +90,6 @@ func NewAttentionStore(publisher Publisher) *AttentionStore {
 		outstanding: make(map[string]Outstanding),
 		held:        make(map[string]bool),
 		reasons:     make(map[string]AttentionReason),
-		aliases:     make(map[string]string),
 	}
 }
 
@@ -157,11 +152,7 @@ func (s *AttentionStore) SetIfUntracked(agent string, state AttentionState) (Age
 // turn or a lifecycle transition drops the hold, but answering a prompt
 // raised during it (needs_input → working) keeps it.
 func (s *AttentionStore) setLocked(agent string, state AttentionState) AgentAttention {
-	prev, tracked := s.states[agent]
-	if !tracked {
-		// The name is an agent's again: counts under it are its own.
-		delete(s.aliases, agent)
-	}
+	prev := s.states[agent]
 	switch {
 	case state == AttentionFinished && s.outstanding[agent].total() > 0:
 		s.held[agent] = true
@@ -306,8 +297,8 @@ func (s *AttentionStore) SetDispatchCounter(c DispatchSnapshotter) {
 }
 
 // ReconcileDispatches sets every agent's outstanding dispatches from
-// counts (each caller's count of non-terminal dispatches), zeroing agents
-// it no longer names. A count under a renamed agent's old name follows it.
+// counts (each caller's count of non-terminal dispatches, keyed by the
+// agent's current name), zeroing agents it no longer names.
 // gen is the snapshot's generation (see DispatchSnapshotter): a snapshot
 // older than one already applied is ignored, so a tick preempted after
 // reading cannot undo what a turn completion read since.
@@ -320,13 +311,12 @@ func (s *AttentionStore) ReconcileDispatches(gen uint64, counts map[string]int) 
 	if !s.acceptDispatchGenLocked(gen) {
 		return
 	}
-	eff := s.effectiveCountsLocked(counts)
 	for agent, o := range s.outstanding {
-		if _, named := eff[agent]; !named && o.Dispatches > 0 {
+		if _, named := counts[agent]; !named && o.Dispatches > 0 {
 			s.setOutstandingLocked(agent, func(o *Outstanding) { o.Dispatches = 0 })
 		}
 	}
-	for agent, n := range eff {
+	for agent, n := range counts {
 		s.setOutstandingLocked(agent, func(o *Outstanding) { o.Dispatches = max(n, 0) })
 	}
 }
@@ -369,39 +359,12 @@ func (s *AttentionStore) applyDispatchCountsLocked(agent string, gen uint64, cou
 		return
 	}
 	o := s.outstanding[agent]
-	o.Dispatches = s.effectiveCountsLocked(counts)[agent]
+	o.Dispatches = counts[agent]
 	if o.total() == 0 {
 		delete(s.outstanding, agent)
 	} else {
 		s.outstanding[agent] = o
 	}
-}
-
-// effectiveCountsLocked re-keys counts from recorded caller names to the
-// agents holding them now, following renames.
-func (s *AttentionStore) effectiveCountsLocked(counts map[string]int) map[string]int {
-	eff := make(map[string]int, len(counts))
-	for name, n := range counts {
-		eff[s.currentNameLocked(name)] += n
-	}
-	return eff
-}
-
-// maxAliasHops bounds alias chains (a rename of a rename).
-const maxAliasHops = 16
-
-func (s *AttentionStore) currentNameLocked(name string) string {
-	for range maxAliasHops {
-		if _, tracked := s.states[name]; tracked {
-			return name
-		}
-		next, ok := s.aliases[name]
-		if !ok {
-			return name
-		}
-		name = next
-	}
-	return name
 }
 
 // Remove drops agent's attention (the field becomes absent) and its tokens
@@ -515,8 +478,6 @@ func (s *AttentionStore) Move(oldName, newName string) {
 	}
 	moveKey(s.held, oldName, newName)
 	moveKey(s.reasons, oldName, newName)
-	delete(s.aliases, newName)
-	s.aliases[oldName] = newName
 	rev := max(s.revisions[oldName], s.revisions[newName]) + 1
 	delete(s.states, oldName)
 	s.states[newName] = state
