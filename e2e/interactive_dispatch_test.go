@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -40,27 +41,39 @@ func TestInteractiveReleasePane(t *testing.T) {
 	before, _ := exec.Command(s.tmux, tmux.Args("display-message", "-p", "-t", other, "#{window_layout}")...).Output()
 	var started consult.Started
 	s.request(t, http.MethodPost, "/api/dispatch", map[string]string{"template": "interactive", "prompt": "release me", "cwd": s.ws, "mode": "interactive", "caller_pane_id": caller}, &started)
-	_ = s.wait(t, started.ID+"#1")
-	rec := s.record(t, started.ID)
-	paneWindow, err := exec.Command(s.tmux, tmux.Args("display-message", "-p", "-t", rec.PaneID, "#{window_id}")...).Output()
-	if err != nil || strings.TrimSpace(string(paneWindow)) != window {
-		t.Fatalf("pane window=%q want=%q err=%v", paneWindow, window, err)
+	if started.Placement != "split" || started.Pane == "" {
+		t.Fatalf("placement=%q pane=%q, want a split pane", started.Placement, started.Pane)
 	}
-	beforePanes, err := exec.Command(s.tmux, tmux.Args("list-panes", "-t", window, "-F", "#{pane_id}")...).Output()
-	if err != nil {
-		t.Fatal(err)
+	_ = s.wait(t, started.ID+"#1")
+	// An idle split pane is parked out of the caller's window (spec §5), so
+	// release kills it in its background window.
+	var rec consult.Record
+	s.waitFor(t, func() bool { rec = s.record(t, started.ID); return rec.ViewerKind == "hidden" })
+	paneWindow, err := exec.Command(s.tmux, tmux.Args("display-message", "-p", "-t", rec.PaneID, "#{window_id}")...).Output()
+	if hidden := strings.TrimSpace(string(paneWindow)); err != nil || hidden == window || hidden != rec.ViewerWindowID {
+		t.Fatalf("idle pane window=%q, want its own background window %q (caller window %s), err=%v", paneWindow, rec.ViewerWindowID, window, err)
+	}
+	callerPanes := func() []string {
+		out, err := exec.Command(s.tmux, tmux.Args("list-panes", "-t", window, "-F", "#{pane_id}")...).Output()
+		if err != nil {
+			t.Fatal(err)
+		}
+		return strings.Fields(string(out))
+	}
+	if got := callerPanes(); len(got) != 1 || got[0] != caller {
+		t.Fatalf("caller window panes=%v, want only the caller %s", got, caller)
 	}
 	s.request(t, http.MethodPost, "/api/dispatch/"+started.ID+"/release", nil, &struct{}{})
 	s.waitFor(t, func() bool { return !s.paneAlive(rec.PaneID) })
 	if got := s.record(t, started.ID); got.Status != consult.StatusReleased {
 		t.Fatalf("status=%s", got.Status)
 	}
-	afterPanes, err := exec.Command(s.tmux, tmux.Args("list-panes", "-t", window, "-F", "#{pane_id}")...).Output()
-	if err != nil {
-		t.Fatal(err)
+	windows, err := exec.Command(s.tmux, tmux.Args("list-windows", "-a", "-F", "#{window_id}")...).Output()
+	if err != nil || slices.Contains(strings.Fields(string(windows)), rec.ViewerWindowID) {
+		t.Fatalf("windows=%q err=%v: background window %s outlived its released pane", windows, err, rec.ViewerWindowID)
 	}
-	if strings.Contains(string(afterPanes), rec.PaneID) || len(strings.Fields(string(afterPanes))) != len(strings.Fields(string(beforePanes)))-1 {
-		t.Fatalf("release panes before=%q after=%q released=%q", beforePanes, afterPanes, rec.PaneID)
+	if got := callerPanes(); len(got) != 1 || got[0] != caller {
+		t.Fatalf("caller window panes=%v after release, want only the caller %s", got, caller)
 	}
 	after, _ := exec.Command(s.tmux, tmux.Args("display-message", "-p", "-t", other, "#{window_layout}")...).Output()
 	if string(after) != string(before) {
