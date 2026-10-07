@@ -53,17 +53,20 @@ import {
   FALLBACK_STREAM_DOWN,
   isAgentHidden,
   isFailedCall,
+  bandHeader,
   isRunning,
-  isTerminal,
+  lingerEnd,
   NO_DELEGATION,
   parseStateLine,
-  rosterRowText,
+  rosterRows,
   sameDelegationText,
+  shownDispatches,
   STATE_WAIT_MS,
   statusLine,
   TOLD_KEY_PREFIX,
   toldEntry,
   toldFromEntry,
+  trackTerminal,
 } from './roster.js'
 
 const REPORT_TIMEOUT_MS = 15_000
@@ -151,6 +154,9 @@ let toldStamped = null
 let isToldForgotten = false
 let shownStatus = undefined
 let ticker = null
+// When each terminal dispatch was first seen terminal; null until the first
+// snapshot after a (re)load.
+let terminalSeen = null
 
 // Observe state: the home directory tool summaries abbreviate; the main
 // loop's running tool calls, oldest first ({ activity }); the activity
@@ -666,11 +672,13 @@ function streamDown($) {
 async function applyState($, state, epoch) {
   try {
     const previous = roster === null ? null : roster.state.delegation
-    roster = { state, receivedAt: await $.clock.now() }
+    const now = await $.clock.now()
+    roster = { state, receivedAt: now }
+    terminalSeen = trackTerminal(terminalSeen, state.dispatches, now)
     if (epoch === streamEpoch) fallback = null
     if (!sameDelegationText(previous, state.delegation)) $.ui.invalidate('prompt.section')
     await noteIfToldOtherwise($, state.delegation)
-    refreshRoster($)
+    refreshRoster($, now)
   } catch (err) {
     $.ui.log('applying leo state failed: ' + errorText(err))
   }
@@ -803,37 +811,55 @@ function refreshStatus($) {
   $.ui.status(text)
 }
 
-// Redraws the band now, and every second while a dispatch runs so its
-// elapsed time counts between snapshots.
-function refreshRoster($) {
+// Redraws the band now, and every second while a dispatch runs (its
+// elapsed time counts between snapshots) or an ended one lingers (it
+// leaves the band when its time is up).
+function refreshRoster($, now) {
   refreshStatus($)
   $.ui.invalidate('ui.render')
-  const isTicking = isRunning(roster.state.dispatches)
-  if (isTicking && ticker === null) ticker = $.clock.every(ROSTER_TICK_MS, () => $.ui.invalidate('ui.render'))
-  if (!isTicking && ticker !== null) {
-    ticker.cancel()
-    ticker = null
-  }
+  if (isBandTicking(now)) {
+    if (ticker === null) ticker = $.clock.every(ROSTER_TICK_MS, () => rosterTick($))
+  } else stopTicker()
+}
+
+async function rosterTick($) {
+  $.ui.invalidate('ui.render')
+  if (!isBandTicking(await $.clock.now())) stopTicker()
+}
+
+function isBandTicking(now) {
+  return roster !== null && (isRunning(roster.state.dispatches) || now < lingerEnd(terminalSeen))
+}
+
+function stopTicker() {
+  if (ticker === null) return
+  ticker.cancel()
+  ticker = null
 }
 
 function isFallback() {
   return fallback !== null
 }
 
-function rosterDispatches() {
-  return roster === null ? [] : roster.state.dispatches
+function bandDispatches(now) {
+  return roster === null ? [] : shownDispatches(roster.state.dispatches, terminalSeen, now)
 }
 
-async function drawRoster($, e) {
+// A gap and a dim header set the band apart from the spinner above it, then
+// one row per dispatch, Cancel beside the live ones.
+function drawRoster($, e, dispatches, now) {
   const { Box, Text, Button } = $.ui.resolve(e)
-  const now = await $.clock.now()
-  const rows = rosterDispatches().map((d) => {
-    const text = h(Text, null, rosterRowText(d, roster.receivedAt, now))
-    if (isTerminal(d.status)) return h(Box, { flexDirection: 'row' }, text)
+  const rows = rosterRows(dispatches, roster.receivedAt, now).map((row) => {
+    const parts = row.segments.map((s) => (s.color || s.dimColor ? h(Text, { color: s.color, dimColor: s.dimColor }, s.text) : s.text))
+    const text = h(Text, { wrap: 'truncate-end' }, ...parts)
+    if (!row.isLive) return h(Box, { flexDirection: 'row' }, text)
+    const d = dispatches.find((x) => x.id === row.id)
     const cancel = h(Button, { key: 'cancel-' + d.id, label: 'Cancel', onPress: () => cancelDispatch($, d) })
     return h(Box, { flexDirection: 'row', columnGap: 2 }, text, cancel)
   })
-  return h(Box, { flexDirection: 'column' }, ...rows)
+  const gap = h(Text, null, ' ')
+  const header = h(Text, { dimColor: true, wrap: 'truncate-end' }, bandHeader(e.props.bodyColumns))
+  return h(Box, { flexDirection: 'column' }, gap, header, ...rows)
 }
 
 // One try, not the retrying report chain: the person is waiting on it.
@@ -1131,7 +1157,10 @@ export function register(on) {
   }).catch(observeFailed)
 
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
-    if (rosterDispatches().length === 0 || e.props.hasSurvey) return next(e)
-    return drawRoster($, e)
+    if (e.props.hasSurvey) return next(e)
+    const now = await $.clock.now()
+    const dispatches = bandDispatches(now)
+    if (dispatches.length === 0) return next(e)
+    return drawRoster($, e, dispatches, now)
   })
 }

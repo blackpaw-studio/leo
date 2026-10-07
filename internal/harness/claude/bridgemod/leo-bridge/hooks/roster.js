@@ -88,6 +88,7 @@ function parseDispatch(d) {
     role: str(d.role),
     template: str(d.template),
     model: str(d.model),
+    effort: str(d.effort),
     status: str(d.status),
     stalled: d.stalled === true,
     activeSeconds: num(d.active_seconds) ?? 0,
@@ -160,18 +161,14 @@ export function isRunning(dispatches) {
 }
 
 /**
- * The status line: dispatch counts, then why delegation fell back, if it
- * did. Undefined clears the line.
- * @param {{ delegation: { enabled: boolean }, dispatches: Array<{ status: string }> } | null | undefined} state
+ * The status line, for problems only: why delegation fell back, if it did
+ * and delegation could be on. Undefined clears the line.
+ * @param {{ delegation: { enabled: boolean } } | null | undefined} state
  * @param {string | null} fallback
  */
 export function statusLine(state, fallback) {
-  const dispatches = state?.dispatches ?? []
-  const running = dispatches.filter((d) => d.status === RUNNING).length
-  const idle = dispatches.filter((d) => d.status === IDLE).length
-  const parts = running + idle > 0 ? ['⇢ ' + running + ' running · ' + idle + ' idle'] : []
-  if (fallback !== null && state?.delegation.enabled !== false) parts.push('native agents allowed: ' + fallback)
-  return parts.length > 0 ? parts.join(' · ') : undefined
+  if (fallback === null || state?.delegation.enabled === false) return undefined
+  return 'native agents allowed: ' + fallback
 }
 
 /**
@@ -198,6 +195,50 @@ function formatTokens(n) {
   return String(n)
 }
 
+// How long a dispatch stays in the band after the mod first sees it end.
+export const TERMINAL_LINGER_MS = 10_000
+
+// The band's header rule width when the band's own is unknown.
+const DEFAULT_BAND_WIDTH = 40
+const BAND_TITLE = 'leo dispatches '
+const LABEL_MAX = 16
+const INDENT = '  '
+const COLUMN_GAP = '  '
+const STALLED = 'stalled'
+
+/** The band's header: its title, then a rule to the band's width. */
+export function bandHeader(width) {
+  const total = typeof width === 'number' && width > 0 ? width : DEFAULT_BAND_WIDTH
+  return BAND_TITLE + '─'.repeat(Math.max(0, total - BAND_TITLE.length))
+}
+
+/**
+ * When each terminal dispatch was first seen terminal (ms), as a new map:
+ * seen is the last one, or null for the first snapshot after a (re)load,
+ * whose terminal dispatches count as long gone. Dispatches no longer
+ * terminal, or no longer in the snapshot, drop out.
+ * @param {Map<string, number> | null} seen
+ * @param {Array<{ id: string, status: string }>} dispatches
+ * @param {number} now
+ */
+export function trackTerminal(seen, dispatches, now) {
+  return new Map(
+    dispatches
+      .filter((d) => isTerminal(d.status))
+      .map((d) => [d.id, seen === null ? -Infinity : (seen.get(d.id) ?? now)]),
+  )
+}
+
+/** The dispatches the band shows: live ones, and terminal ones still lingering. */
+export function shownDispatches(dispatches, seen, now) {
+  return dispatches.filter((d) => !isTerminal(d.status) || now - (seen.get(d.id) ?? -Infinity) < TERMINAL_LINGER_MS)
+}
+
+/** When the last lingering terminal dispatch leaves the band (ms), or -Infinity. */
+export function lingerEnd(seen) {
+  return Math.max(-Infinity, ...[...seen.values()].map((at) => at + TERMINAL_LINGER_MS))
+}
+
 function glyph(status) {
   if (status === IDLE || status === 'settling') return '⏸'
   if (status === 'done' || status === 'closed') return '✓'
@@ -206,22 +247,59 @@ function glyph(status) {
   return '⟳'
 }
 
+// The glyph's Text props: the status color.
+function glyphStyle(d) {
+  if (d.stalled) return { color: 'warning' }
+  if (['idle', 'settling', 'queued'].includes(d.status)) return { dimColor: true }
+  if (d.status === 'done' || d.status === 'closed') return { color: 'success' }
+  if (['failed', 'canceled', 'timeout'].includes(d.status)) return { color: 'error' }
+  if (d.status === RUNNING) return { color: 'cyan' }
+  return {}
+}
+
+// One row's column values, unpadded, in band order.
+function rowCells(d, receivedAt, now) {
+  return [
+    { text: (d.name || d.role || d.template || d.id).slice(0, LABEL_MAX), align: 'left', gap: COLUMN_GAP },
+    { text: [d.model, d.effort].filter((x) => x !== '').join(' · '), align: 'left', gap: COLUMN_GAP, dimColor: true },
+    { text: formatElapsed(elapsedSeconds(d, receivedAt, now)), align: 'right', gap: COLUMN_GAP },
+    { text: d.stalled ? STALLED : '', align: 'left', gap: ' ' },
+    { text: formatTokens(d.tokensIn) + '/' + formatTokens(d.tokensOut), align: 'right', gap: COLUMN_GAP, dimColor: true },
+    { text: d.costUsd === undefined ? '' : '$' + d.costUsd.toFixed(2), align: 'right', gap: COLUMN_GAP, dimColor: true },
+  ]
+}
+
 /**
- * One roster row's text (the Cancel button aside).
- * @param {ReturnType<typeof parseDispatch>} d
+ * The band's rows, oldest first: each the dispatch id, whether it is live
+ * (Cancel applies), and its styled segments, every column padded to the
+ * widest value in the band. A column empty in every row is left out.
+ * @param {Array<ReturnType<typeof parseDispatch>>} dispatches
  * @param {number} receivedAt when the snapshot arrived (ms)
  * @param {number} now (ms)
  */
-export function rosterRowText(d, receivedAt, now) {
-  const parts = [
-    glyph(d.status) + ' ' + (d.name || d.role || d.template || d.id),
-    d.model,
-    d.status + (d.stalled ? ' · stalled' : ''),
-    formatElapsed(elapsedSeconds(d, receivedAt, now)),
-    formatTokens(d.tokensIn) + '/' + formatTokens(d.tokensOut),
-  ]
-  if (d.costUsd !== undefined) parts.push('$' + d.costUsd.toFixed(2))
-  return parts.filter((p) => p !== '').join('  ')
+export function rosterRows(dispatches, receivedAt, now) {
+  const cells = dispatches.map((d) => rowCells(d, receivedAt, now))
+  const widths = (cells[0] ?? []).map((_, i) => Math.max(...cells.map((row) => [...row[i].text].length)))
+  return dispatches.map((d, r) => ({
+    id: d.id,
+    isLive: !isTerminal(d.status),
+    segments: [
+      { text: INDENT },
+      { text: glyph(d.status), ...glyphStyle(d) },
+      ...cells[r].flatMap((cell, i) => (widths[i] === 0 ? [] : [{ text: i === 0 ? ' ' : cell.gap }, padded(cell, widths[i])])),
+    ],
+  }))
+}
+
+function padded(cell, width) {
+  const pad = ' '.repeat(width - [...cell.text].length)
+  const text = cell.align === 'right' ? pad + cell.text : cell.text + pad
+  return cell.dimColor ? { text, dimColor: true } : { text }
+}
+
+/** A row's text as drawn. */
+export function rowText(row) {
+  return row.segments.map((s) => s.text).join('')
 }
 
 /** The request report that cancels dispatch id. */
