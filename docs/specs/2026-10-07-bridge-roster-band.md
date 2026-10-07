@@ -20,14 +20,22 @@ thinking level.
 
 ### 2. The band is the roster
 
-`ui.render` on `AbovePrompt` draws one line per dispatch in the snapshot,
-oldest first, aligned in columns:
+`ui.render` on `AbovePrompt` draws a section set apart from the spinner and
+tip above it: one blank row, a dim header rule, then one line per dispatch in
+the snapshot, oldest first, indented two columns and aligned in columns:
 
 ```
-⟳ impl-auth     opus · high     4:10   182k/12.4k  $1.92   [Cancel]
-⏸ reviewer      sonnet · med    1:23    41k/3.1k   $0.31   [Cancel]
-✓ explore-db    haiku           0:41    20k/1.2k   $0.04
+
+leo dispatches ──────────────────────────────────────────
+  ⟳ impl-auth     opus · high     4:10   182k/12.4k  $1.92   [Cancel]
+  ⏸ reviewer      sonnet · med    1:23    41k/3.1k   $0.31   [Cancel]
+  ✓ explore-db    haiku           0:41    20k/1.2k   $0.04
 ```
+
+- The header is dim `leo dispatches ` followed by `─` to the band's width
+  (fall back to a fixed 40 when the width is unknown). No counts in it.
+- The blank row and header are part of the tree, drawn only when there are
+  rows; they never appear on an empty band.
 
 - Columns: glyph, label (`name || role || template || id`, truncated to 16),
   `model · effort` (effort omitted when empty), elapsed, tokens in/out, cost
@@ -62,13 +70,15 @@ oldest first, aligned in columns:
 
 ## Out of scope
 
-Steering from the band, a separate pane, a band header row, changes to the
+Steering from the band, a separate pane, drawing below the prompt (no mod
+slot exists there; `PromptHint` would replace the mode line), changes to the
 web UI or `/api/v1`.
 
 ## Testing
 
 - Mod (`claude plugin test`): status line empty with dispatches and no
-  fallback; fallback text still shown; row text and column padding; effort
+  fallback; fallback text still shown; blank row + header present with rows
+  and absent without; row text, indent and column padding; effort
   omitted when empty; stalled marker; terminal row shown then gone after 10 s
   (fake clock); terminal-at-load row not shown; ticker stops after the last
   terminal row expires.
