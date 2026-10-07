@@ -49,7 +49,21 @@ func (d *Dispatcher) releaseLocked(id string, layout func(string) error) (Record
 		if layout == nil {
 			layout = runtimeLayout(rt)
 		}
-		rec, closeErr = d.closeRecordedPane(rec, rec.PaneID, rt.Kill, layout)
+		if state != nil {
+			// Ordered with the run's other pane ops, and killing whatever
+			// pane the run has when it runs.
+			d.mu.Lock()
+			closed := d.enqueuePaneOpLocked(state, paneOpKill, func() {
+				d.mu.Lock()
+				current := cloneRecord(state.record)
+				d.mu.Unlock()
+				rec, closeErr = d.closeRecordedPane(current, current.PaneID, rt.Kill, layout)
+			})
+			d.mu.Unlock()
+			<-closed
+		} else {
+			rec, closeErr = d.closeRecordedPane(rec, rec.PaneID, rt.Kill, layout)
+		}
 		if closeErr != nil {
 			return rec, fmt.Errorf("release dispatch %s: %w", id, closeErr)
 		}

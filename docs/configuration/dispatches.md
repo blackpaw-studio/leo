@@ -54,7 +54,7 @@ implementation, review, or exploration that can proceed while the caller does
 other work. The prompt must say exactly what the subagent should do; it has no
 access to the caller's conversation. `cwd` defaults to the caller's working
 directory. `mode` is `headless` by default; set it to `interactive` to start a
-steerable TUI (see [Interactive mode](#interactive-mode)).
+TUI the user may watch (see [Interactive mode](#interactive-mode)).
 
 Dispatch notifications default to enabled. Set `notify: false` (or CLI
 `--notify=false`) to disable the eventual completion wake-up. Synchronous
@@ -65,6 +65,22 @@ committed changes and reports their path and branch when the result is collected
 unchanged worktrees are removed while their branches remain available.
 A subagent that deliberately daemonizes a writer outside its process group can
 outlive collection; such writes after a clean removal are lost.
+
+A template can make this the default with `isolation: worktree` (see
+[templates](config-reference.md#templates)); an explicit `isolation` argument
+still wins. An isolated run's prompt names its worktree and states that
+uncommitted changes in the caller's tree are not visible, so commit before
+dispatching a review. A reviewer that must run tests can pair it with a
+writable sandbox without risking the real tree:
+
+```yaml
+templates:
+  codex-reviewer:
+    harness: codex
+    isolation: worktree
+    harness_options:
+      permission_mode: workspace-write
+```
 
 One notification is considered for each completed headless run or interactive
 turn. A covering `leo_wait` suppresses it, including a wait registered after
@@ -145,8 +161,10 @@ supported by the opencode harness.
 Leo opens a real Codex or Claude TUI, placed the same way as the viewer
 (usually a split pane in the caller's own tmux window, falling back to a
 separate window when the pane cap is reached or the caller can't be
-resolved), labeled `<label>·<hex4>`. The user can watch it and type directly
-into its composer. `leo_dispatch` reports back exactly where it landed
+resolved), labeled `<label>·<hex4>`. The pane is for the user to watch:
+follow-ups go through `leo_send_dispatch`, and an orchestrator never asks the
+user to type into it. Typing there still works and is recorded as a user turn
+(`steered`), but nothing depends on it. `leo_dispatch` reports back exactly where it landed
 (`pane <id> (title <label>)` or `window <label> (pane <id>)`). The opening prompt and each orchestrator follow-up are turns; their
 completion is reported by the harness hooks to `leo dispatch report`.
 Codex uses `user_prompt_submit`, `stop`, `interrupt`, and `session_end` hooks
@@ -159,8 +177,19 @@ flag in `~/.claude.json`.
 | --- | --- | --- | --- |
 | Prompt submitted | `UserPromptSubmit` | `UserPromptSubmit` | Acknowledges an armed orchestrator turn; if that acknowledgement is late, Leo matches normalized prompt text to the oldest undelivered orchestrator turn before opening a user turn. |
 
-Interactive statuses are `queued`, `running`, `idle`, `settling`, `closed`,
-`failed`, `canceled`, and `timeout`. Turn outcomes are `finished`,
+A pane split into the caller's window stays there only while the
+orchestrator has work in it. When an orchestrator turn ends and the run goes
+`idle`, Leo moves the pane out with `break-pane -d` into a background window
+named `<label>·<hex4>` in the same tmux session (the record's `viewer_kind`
+becomes `hidden`). A `leo_send_dispatch` follow-up moves it back with
+`join-pane -d`, split below the caller as at launch; if the caller's pane is
+gone, the pane stays in its own window instead. Turns the user types never
+move a pane, and panes that launched in a separate window stay there. Tmux
+pane ids (`%N`) survive both moves, so follow-ups keep addressing the same
+pane.
+
+Interactive statuses are `queued`, `running`, `needs_input`, `idle`,
+`settling`, `closed`, `failed`, `canceled`, and `timeout`. Turn outcomes are `finished`,
 `interrupted`, `lost`, and `rejected`. A user submission opens a free user
 turn and marks the record `steered: true`; orchestrator turns consume a
 concurrency slot until they settle. Slots are per orchestrator turn, so idle
@@ -193,6 +222,46 @@ leo_dispatch(..., mode: "interactive") → leo_wait(["d-…"])
 → leo_send_dispatch({id: "d-…", message: "Follow up"})
 → leo_wait(["d-…#2"]) → leo_cancel({id: "d-…"})
 ```
+
+## Permission prompts
+
+An interactive claude dispatch routes its tool permission prompts to the
+orchestrator instead of leaving them in the pane. Leo merges a
+`PermissionRequest` hook (`leo dispatch permission`) into the dispatch's
+`--settings` next to its turn hooks. When claude is about to ask, the hook
+hands the request to the daemon and waits for an answer.
+
+Meanwhile the run's status is `needs_input`, and its record and wait entries
+carry `needs_input: {kind: "permission", tool, summary, request_id, input,
+truncated}`. `summary` is the command, path, or URL the tool call acts on,
+cut to 200 characters; `input` is the tool input verbatim as single-line
+JSON, up to 4 KiB. When `truncated` is true, part of the call is not shown:
+deny it, or deny with a reason asking for a smaller command, rather than
+allowing it blind. Both come from the subagent, so `leo_wait` and the
+notification render `tool`, `summary`, and `input` as one quoted JSON value
+after an "untrusted tool call" marker, never as Leo's own text. `leo_wait`
+returns as soon as any waited dispatch enters `needs_input`, the same way it
+returns on a terminal state. A dispatch with notifications on also notifies
+its caller, unless a wait already covers it.
+
+Answer with `leo_send_dispatch {id, decision: "allow" | "deny", request_id,
+reason?}` (HTTP: the same fields on `POST /api/dispatch/{id}/send`).
+`request_id` is required, and one that is no longer pending is rejected as
+stale. A denial tells the subagent it was denied by the orchestrator (with
+the `reason`, when given), not to retry or route around it, and to report
+back. A plain `message` sent to a
+`needs_input` run is rejected with a hint to send a decision. A dispatch
+subagent cannot answer prompts itself: its leo MCP refuses `decision`.
+
+If no decision arrives within `defaults.dispatch.approval_timeout` (default
+`30m`), the hook exits without one and claude shows its ordinary prompt in
+the pane; the run goes back to `running`, and a later decision is rejected as
+stale. The same happens if the prompt is answered in the pane first or the
+turn ends. When an orchestrator turn is `needs_input`, its split pane is
+parked in its background window (the decision is the orchestrator's) and
+returns once the turn runs again; a user-typed turn's prompt never moves
+the pane. Codex dispatches run with `-a never` and
+never prompt; claude elicitation and question dialogs are not routed.
 
 ## Headless continuation
 
@@ -245,8 +314,13 @@ directory:
   record turn and status transitions; malformed output is kept as raw text.
 
 Headless status moves through `queued → running → done | failed | timeout |
-canceled`. At most six headless runs execute at once; queued work remains
-cancellable. Interactive slots are instead held per orchestrator turn.
+canceled`. At most six runs execute at once; queued work remains
+cancellable. Interactive slots are instead held per orchestrator turn. An
+interactive dispatch started while every slot is busy is recorded `queued`
+with no pane (`leo_dispatch` says so) and launches, placed as usual, once a
+slot frees. `leo_cancel` on it finishes it `canceled` without opening a pane;
+`leo_send_dispatch` on it is rejected until it has started, so `leo_wait` on
+it first.
 Consult runs are capped at 30 minutes. Dispatch runs are unlimited unless
 `timeout_seconds` (or CLI `--timeout`) is set. Leo retains the 20 newest
 settled records and never prunes plausible in-flight runs.

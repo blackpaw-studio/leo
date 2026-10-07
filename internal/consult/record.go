@@ -156,7 +156,9 @@ type Record struct {
 	Notifications      map[string]Notification `json:"notifications,omitempty"`
 	Turns              []Turn                  `json:"turns,omitempty"`
 	Steered            bool                    `json:"steered,omitempty"`
-	HookActivity       time.Time               `json:"-"`
+	// NeedsInput is what a needs_input run waits on (see RequestPermission).
+	NeedsInput   *NeedsInput `json:"needs_input,omitempty"`
+	HookActivity time.Time   `json:"-"`
 }
 
 func (r *Record) startActive(now time.Time) {

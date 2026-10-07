@@ -345,7 +345,7 @@ func newRegistry(client *daemonClient, processName string, perms leotools.Permis
 	})
 
 	r.addContext(toolDef{
-		Name: "leo_dispatch", Description: allowNote("Run a subagent on the template's harness/model in your project directory. mode interactive runs a real TUI, usually split as a pane in your current tmux window (falling back to a separate window, or a background session if your caller can't be resolved), that the user can watch and type into; the result comes from the harness's own turn hooks; use leo_send_dispatch for follow-ups. Returns immediately; collect with leo_wait.", "dispatch to these templates", perms.CanConsult),
+		Name: "leo_dispatch", Description: allowNote("Run a subagent on the template's harness/model in your project directory. mode interactive runs a real TUI, usually split as a pane in your current tmux window (falling back to a separate window, or a background session if your caller can't be resolved), that the user may watch; the result comes from the harness's own turn hooks. Send every follow-up through leo_send_dispatch; never ask the user to type into the pane. Returns immediately; collect with leo_wait.", "dispatch to these templates", perms.CanConsult),
 		InputSchema: objectSchema(map[string]any{"template": map[string]any{"type": "string"}, "role": map[string]any{"type": "string"}, "prompt": map[string]any{"type": "string"}, "model": map[string]any{"type": "string"}, "effort": map[string]any{"type": "string"}, "cwd": map[string]any{"type": "string"}, "name": map[string]any{"type": "string"}, "mode": map[string]any{"type": "string", "enum": []string{"headless", "interactive"}}, "notify": map[string]any{"type": "boolean", "description": "notify the caller when complete; defaults to true"}, "isolation": map[string]any{"type": "string", "enum": []string{"worktree"}, "description": "run from a managed Git worktree created at the current committed HEAD"}, "timeout_seconds": map[string]any{"type": "number", "description": "optional run cap in seconds; unlimited when omitted"}}, "prompt"),
 	}, func(ctx context.Context, args map[string]any) (string, error) {
 		template, _ := args["template"].(string)
@@ -439,15 +439,43 @@ func newRegistry(client *daemonClient, processName string, perms leotools.Permis
 
 	r.addContext(toolDef{
 		Name: "leo_send_dispatch", Description: allowNote("Continue a terminal headless dispatch in its captured native session, or send a follow-up to an idle interactive dispatch. Never send while a turn is running. Returns a turn id to pass to leo_wait. Headless continuation requires a resumable session and available retained workspace; interactive delivery may be acknowledged asynchronously, so never re-send based on delivered alone — wait on the turn id. A rejection means nothing was sent.", "send to dispatched templates", perms.CanConsult),
-		InputSchema: objectSchema(map[string]any{"id": map[string]any{"type": "string"}, "message": map[string]any{"type": "string"}}, "id", "message"),
+		InputSchema: objectSchema(map[string]any{
+			"id":         map[string]any{"type": "string"},
+			"message":    map[string]any{"type": "string", "description": "Follow-up text. Omit when answering a needs_input permission request with decision."},
+			"decision":   map[string]any{"type": "string", "enum": []any{"allow", "deny"}, "description": "Answer a needs_input dispatch's pending permission request (leo_wait shows the tool and request). Use instead of message."},
+			"reason":     map[string]any{"type": "string", "description": "With decision deny: told to the subagent as why."},
+			"request_id": map[string]any{"type": "string", "description": "Required with decision: the needs_input request_id from leo_wait; a stale id is rejected."},
+		}, "id"),
 	}, func(ctx context.Context, args map[string]any) (string, error) {
 		id, err := stringArg(args, "id")
 		if err != nil {
 			return "", err
 		}
-		message, err := stringArg(args, "message")
-		if err != nil {
-			return "", err
+		message, _ := args["message"].(string)
+		if decision, _ := args["decision"].(string); decision != "" {
+			if message != "" {
+				return "", fmt.Errorf("send either a message or a decision, not both")
+			}
+			if r.dispatchID != "" {
+				return "", fmt.Errorf("permission decisions belong to the orchestrator; a leo_dispatch subagent (dispatch %s) cannot answer them", r.dispatchID)
+			}
+			reason, _ := args["reason"].(string)
+			requestID, _ := args["request_id"].(string)
+			if requestID == "" {
+				return "", fmt.Errorf("request_id is required with a decision: pass the needs_input request_id leo_wait returned for %s", id)
+			}
+			answered, err := client.decideDispatch(ctx, id, consult.Decision{Behavior: decision, Reason: reason, RequestID: requestID})
+			if err != nil {
+				return "", err
+			}
+			verb := "allowed"
+			if decision == "deny" {
+				verb = "denied"
+			}
+			return fmt.Sprintf("%s %s (%s) · request %s · leo_wait on %s", verb, answered.Tool, answered.Summary, answered.RequestID, id), nil
+		}
+		if message == "" {
+			return "", fmt.Errorf("message or decision is required")
 		}
 		result, err := client.sendDispatch(ctx, id, message)
 		if err != nil {
@@ -506,6 +534,9 @@ func newRegistry(client *daemonClient, processName string, perms leotools.Permis
 				if entry.Stalled {
 					extra += " · stalled"
 				}
+			}
+			if need := entry.NeedsInput; need != nil {
+				body = fmt.Sprintf("needs_input: %s\nAnswer with leo_send_dispatch {id: %q, decision: allow|deny, request_id: %q, reason?}.", consult.DescribeNeedsInput(*need), entry.ID, need.RequestID)
 			}
 			blocks = append(blocks, fmt.Sprintf("[%s · %s · elapsed %.1fs · active %.1fs%s]\n%s", entry.ID, entry.Status, entry.Elapsed.Seconds(), entry.Active.Seconds(), extra, body))
 		}
@@ -828,8 +859,11 @@ func (r *registry) callContext(ctx context.Context, name string, raw json.RawMes
 // formatDispatchPlacement describes where an interactive dispatch's TUI
 // actually landed, so the caller doesn't go hunting for a tmux window that
 // was really a split pane (or vice versa). Headless dispatches carry no
-// placement and render nothing.
+// placement and render nothing; a queued interactive dispatch has no pane yet.
 func formatDispatchPlacement(started consult.Started) string {
+	if started.Queued {
+		return " · queued: every slot is busy; it launches when one frees (leo_wait on it)"
+	}
 	switch started.Placement {
 	case "split":
 		if started.Pane == "" {

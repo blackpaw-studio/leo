@@ -1,6 +1,11 @@
 package consult
 
-import "time"
+import (
+	"fmt"
+	"time"
+
+	"github.com/blackpaw-studio/leo/internal/config"
+)
 
 const preamble = "You are a one-off consultant: another agent is asking for your independent opinion. Analyze and answer directly and completely in your final message. Do not modify any files or take actions beyond reading. The question follows."
 
@@ -59,6 +64,10 @@ type Started struct {
 	Placement string `json:"placement,omitempty"`
 	Pane      string `json:"pane,omitempty"`
 	Window    string `json:"window,omitempty"`
+	// Queued reports an interactive dispatch accepted while every
+	// concurrency slot was taken: it has no pane yet and launches, placed as
+	// usual, once a slot frees.
+	Queued bool `json:"queued,omitempty"`
 }
 
 func requestKind(req Request) string {
@@ -68,9 +77,29 @@ func requestKind(req Request) string {
 	return "dispatch"
 }
 
-func requestPrompt(req Request) string {
-	if req.Preamble {
-		return preamble + "\n\n" + req.Prompt
+// worktreeNotice tells a worktree-isolated run where it is and what it
+// cannot see. req.Cwd is the worktree path by the time a prompt is built.
+const worktreeNotice = "You are running in a throwaway Git worktree at %s, checked out at the caller's committed HEAD: uncommitted changes in the caller's tree are not visible here, and anything you write stays in this worktree."
+
+// withTemplateIsolation fills an unset request isolation from the
+// template's, so the dispatch argument wins whenever it is given.
+func withTemplateIsolation(cfg *config.Config, req Request) Request {
+	if req.Isolation == "" {
+		req.Isolation = cfg.Templates[req.Template].Isolation
 	}
-	return dispatchPreamble + " " + req.Prompt
+	return req
+}
+
+func requestPrompt(req Request) string {
+	lead := dispatchPreamble
+	if req.Preamble {
+		lead = preamble
+	}
+	if req.Isolation == "worktree" {
+		lead += " " + fmt.Sprintf(worktreeNotice, req.Cwd)
+	}
+	if req.Preamble {
+		return lead + "\n\n" + req.Prompt
+	}
+	return lead + " " + req.Prompt
 }

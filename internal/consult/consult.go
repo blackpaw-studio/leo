@@ -72,6 +72,12 @@ type Dispatcher struct {
 	beforeOpeningInject  func()
 	afterOpeningInject   func()
 	beforeSendInjectable func()
+	// paneOpWait bounds how long a cancellation waits for its queued pane
+	// kill (see defaultPaneOpWait).
+	paneOpWait time.Duration
+	// beforeCancelSettle runs after a cancellation's pane teardown, just
+	// before it settles the run. Tests use it to land work in that gap.
+	beforeCancelSettle   func()
 	notificationDelivery NotificationDelivery
 	closeFinishedViewer  func(Record, func(string) error) (Record, error)
 	// LeoMCP is the leo binary headless dispatches launch as their leo MCP
@@ -106,6 +112,28 @@ type runState struct {
 	// after Wait so worktree cleanup can prove no detached child remains.
 	pgid            int
 	headlessStarted bool
+	// awaitingSlot marks an interactive run accepted while the limiter was
+	// full: it has no pane until launchWhenSlotFree claims a slot.
+	awaitingSlot bool
+	// paneOps are the run's queued pane-affecting steps, run in order by a
+	// single worker while paneWorker is set (see enqueuePaneOpLocked).
+	paneOps    []paneOp
+	paneWorker bool
+	// killRequested marks a cancellation whose kill is queued: any later op
+	// kills the run's pane rather than publish or show it.
+	killRequested bool
+	// paneWant is where the latest turn event put a managed pane: "split"
+	// while an orchestrator turn works in it, viewerHidden once that work
+	// ends, and wherever the pane was when a user typed a turn into it
+	// (user-typed turns never move a pane). Empty until a turn sets it.
+	paneWant string
+	// reconcileQueued is the done channel of a queued, not yet started,
+	// placement reconcile, which further nudges coalesce into.
+	reconcileQueued <-chan struct{}
+	// permissions are the run's pending PermissionRequest hooks, oldest
+	// first; permissionSeq numbers their request ids.
+	permissions   []*permissionRequest
+	permissionSeq int
 	// bridgedUsage is a bridged interactive run's usage as its mod reports it.
 	bridgedUsage bridgedUsage
 }
@@ -183,6 +211,7 @@ func newID() string {
 // Request contexts govern only validation and the immediate caller, never the
 // lifetime of an accepted run.
 func (d *Dispatcher) Start(_ context.Context, cfg *config.Config, req Request) (Started, error) {
+	req = withTemplateIsolation(cfg, req)
 	if req.Isolation != "" && req.Isolation != "worktree" {
 		return Started{}, invalidf("isolation must be empty or \"worktree\"")
 	}
@@ -631,6 +660,18 @@ func (d *Dispatcher) Wait(ctx context.Context, ids []string, timeout time.Durati
 	}
 	defer deadline.Stop()
 	for {
+		// Any waited run needing the orchestrator ends the wait, whatever
+		// the others are doing.
+		if waitNeedsInput(entries) {
+			d.mu.Lock()
+			for i := range entries {
+				if entries[i].Status == StatusNeedsInput {
+					d.suppressNeedsInputNotificationLocked(strings.SplitN(ids[i], "#", 2)[0], entries[i].NeedsInput)
+				}
+			}
+			d.mu.Unlock()
+			return entries
+		}
 		pending := false
 		interactivePending := false
 		cases := []reflect.SelectCase{{Dir: reflect.SelectRecv, Chan: reflect.ValueOf(ctx.Done())}}
@@ -638,7 +679,7 @@ func (d *Dispatcher) Wait(ctx context.Context, ids []string, timeout time.Durati
 			cases = append(cases, reflect.SelectCase{Dir: reflect.SelectRecv, Chan: reflect.ValueOf(deadline.C)})
 		}
 		for i, state := range states {
-			if state != nil && !entries[i].Status.Terminal() && entries[i].Outcome == "" {
+			if state != nil && !entries[i].Status.Terminal() && entries[i].Outcome == "" && entries[i].Status != StatusNeedsInput {
 				pending = true
 				if d.stateRecord(state).Mode == ModeInteractive {
 					interactivePending = true
@@ -685,6 +726,15 @@ func (d *Dispatcher) Wait(ctx context.Context, ids []string, timeout time.Durati
 			}
 		}
 	}
+}
+
+func waitNeedsInput(entries []Entry) bool {
+	for _, e := range entries {
+		if e.Status == StatusNeedsInput {
+			return true
+		}
+	}
+	return false
 }
 
 func (d *Dispatcher) lookup(id string) (Record, *runState, error) {
@@ -810,23 +860,24 @@ func (d *Dispatcher) terminate(id string, status Status) (Record, error) {
 func (d *Dispatcher) terminateState(state *runState, status Status) Record {
 	d.mu.Lock()
 	if state.record.Mode == ModeInteractive {
-		pane, rt, paneRec := state.record.PaneID, d.interactiveRuntime, cloneRecord(state.record)
-		d.mu.Unlock()
 		// Cancellation kills first. Publishing settling first would allow a
-		// concurrent hook to observe a partially torn-down session.
-		if pane != "" && rt != nil && rt.Alive(pane) {
-			paneRec, _ = d.closeRecordedPane(paneRec, pane, rt.Kill, runtimeLayout(rt))
+		// concurrent hook to observe a partially torn-down session. The kill
+		// queues behind any pane op under way, and killRequested makes every
+		// later one (a launch still publishing, say) kill instead, so the
+		// bounded wait cannot leave a canceled run with a live pane.
+		state.killRequested = true
+		killed := d.enqueuePaneOpLocked(state, paneOpKill, func() { d.killRunPane(state) })
+		d.mu.Unlock()
+		d.awaitPaneOp(killed)
+		if d.beforeCancelSettle != nil {
+			d.beforeCancelSettle()
 		}
 		d.mu.Lock()
-		if state.record.Status.Terminal() {
-			d.mu.Unlock()
-			return paneRec
-		}
 		if !state.record.Status.Terminal() {
 			d.beginSettlementLocked(state, status, 0)
 			d.finishInteractiveLocked(state, status)
 		}
-		rec := state.record
+		rec := cloneRecord(state.record)
 		d.mu.Unlock()
 		return rec
 	}
@@ -867,6 +918,7 @@ func (d *Dispatcher) currentInvocationCancelLocked(state *runState, done chan st
 // Consult preserves the synchronous one-off consultant API over dispatch.
 func (d *Dispatcher) Consult(ctx context.Context, cfg *config.Config, req Request) (Result, error) {
 	req.Kind, req.Preamble = "consult", true
+	req = withTemplateIsolation(cfg, req)
 	started, err := d.Start(ctx, cfg, req)
 	if err != nil {
 		return Result{}, err

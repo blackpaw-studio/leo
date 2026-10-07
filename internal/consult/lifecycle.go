@@ -28,6 +28,7 @@ func cloneRecord(record Record) Record {
 	record.CostUSD = clonePtr(record.CostUSD)
 	record.UsageTurns = clonePtr(record.UsageTurns)
 	record.ToolCalls = clonePtr(record.ToolCalls)
+	record.NeedsInput = clonePtr(record.NeedsInput)
 	if record.RunningSince != nil {
 		runningSince := *record.RunningSince
 		record.RunningSince = &runningSince
@@ -102,6 +103,7 @@ func interactiveEntry(rec Record, turnID string, now time.Time) Entry {
 	e := Entry{ID: rec.ID, Status: rec.Status, Elapsed: rec.Elapsed(now), Active: secondsDuration(rec.LiveActiveSeconds(now)), Err: rec.Error, TurnID: turnID, InputTokens: clonePtr(rec.InputTokens), OutputTokens: clonePtr(rec.OutputTokens), CostUSD: clonePtr(rec.CostUSD), UsageTurns: clonePtr(rec.UsageTurns), ToolCalls: clonePtr(rec.ToolCalls), UsageIncomplete: rec.UsageIncomplete, Worktree: rec.Worktree, Branch: rec.Branch}
 	t := turnByID(rec, turnID)
 	e.Outcome, e.Delivered, e.Text = t.Outcome, t.Delivered, t.Text
+	e.NeedsInput = clonePtr(rec.NeedsInput)
 	activity := rec.HookActivity
 	if activity.IsZero() {
 		activity = t.StartedAt

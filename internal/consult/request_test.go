@@ -19,6 +19,10 @@ func TestRequestPrompt(t *testing.T) {
 	}{
 		{name: "dispatch", req: Request{Prompt: "implement it"}, want: dispatchPreamble + " implement it"},
 		{name: "consult retains existing preamble", req: Request{Prompt: "inspect it", Preamble: true}, want: preamble + "\n\ninspect it"},
+		{name: "isolated dispatch names its worktree", req: Request{Prompt: "review it", Cwd: "/wt/d-1", Isolation: "worktree"},
+			want: dispatchPreamble + " You are running in a throwaway Git worktree at /wt/d-1, checked out at the caller's committed HEAD: uncommitted changes in the caller's tree are not visible here, and anything you write stays in this worktree. review it"},
+		{name: "isolated consult names its worktree", req: Request{Prompt: "inspect it", Cwd: "/wt/d-2", Isolation: "worktree", Preamble: true},
+			want: preamble + " You are running in a throwaway Git worktree at /wt/d-2, checked out at the caller's committed HEAD: uncommitted changes in the caller's tree are not visible here, and anything you write stays in this worktree.\n\ninspect it"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

@@ -169,6 +169,15 @@ func (r *TmuxInteractiveRuntime) Launch(ctx context.Context, req LaunchRequest) 
 	if err != nil {
 		return "", "", err
 	}
+	if h.Name() == "claude" {
+		// Permission prompts go to the orchestrator (see
+		// Dispatcher.RequestPermission) before they ever show in the pane.
+		permission, err := claudeharness.PermissionHooks([]string{r.leoPath, "--config", r.configPath, "dispatch", "permission"}, cfg.DispatchApprovalTimeout())
+		if err != nil {
+			return "", "", err
+		}
+		hooks = append(hooks, permission...)
+	}
 	args, err = claudeharness.MergeSettingsArgs(args, hooks, claudeharness.MergeOptions{BaseDir: req.Cwd, SpillPath: dispatchSpillPath(cfg.HomePath, req.ID)})
 	if err != nil {
 		return "", "", err
@@ -475,7 +484,17 @@ func (r *TmuxInteractiveRuntime) SessionAlive(session string) (bool, error) {
 	return false, fmt.Errorf("probe tmux session %q: %w: %s", session, err, strings.TrimSpace(string(out)))
 }
 func (r *TmuxInteractiveRuntime) ViewerOverrides(ctx context.Context, session string) ViewerOverrides {
-	return ReadViewerSessionOverrides(ctx, r.tmuxPath, session, r.ExecCommandContext)
+	timeout := r.Timeout
+	if timeout <= 0 {
+		timeout = interactiveCommandTimeout
+	}
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	return ReadViewerSessionOverrides(ctx, r.tmuxPath, session, func(ctx context.Context, name string, args ...string) *exec.Cmd {
+		cmd := r.ExecCommandContext(ctx, name, args...)
+		cmd.WaitDelay = interactiveWaitDelay
+		return cmd
+	})
 }
 func (r *TmuxInteractiveRuntime) FindPaneByDispatchID(windowID, dispatchID string) (string, error) {
 	out, err := r.output(context.Background(), "list-panes", "-t", windowID, "-F", "#{pane_id}\t#{pane_start_command}")
@@ -607,4 +626,34 @@ func sortedKeys(m map[string]string) []string {
 	}
 	sort.Strings(keys)
 	return keys
+}
+
+// HidePane breaks pane out of its window into a detached window named name
+// in the pane's own session and returns the new window's id. The session is
+// named explicitly: an untargeted break-pane lands in tmux's most recently
+// used session, not the pane's.
+func (r *TmuxInteractiveRuntime) HidePane(ctx context.Context, pane, name string) (string, error) {
+	session, err := r.output(ctx, "display-message", "-p", "-t", pane, "#{session_id}")
+	if err != nil {
+		return "", fmt.Errorf("resolve session of pane %s: %w", pane, err)
+	}
+	sessionID := strings.TrimSpace(string(session))
+	if sessionID == "" {
+		return "", fmt.Errorf("resolve session of pane %s: empty", pane)
+	}
+	out, err := r.output(ctx, "break-pane", "-d", "-P", "-F", "#{window_id}", "-s", pane, "-t", sessionID+":", "-n", name)
+	if err != nil {
+		return "", fmt.Errorf("break pane %s out: %w", pane, err)
+	}
+	return strings.TrimSpace(string(out)), nil
+}
+
+// ShowPane joins pane back below targetPane, the same split a launch makes,
+// and re-tiles window.
+func (r *TmuxInteractiveRuntime) ShowPane(ctx context.Context, pane, targetPane, window string) error {
+	if err := r.run(ctx, "join-pane", "-d", "-v", "-s", pane, "-t", targetPane); err != nil {
+		return fmt.Errorf("join pane %s below %s: %w", pane, targetPane, err)
+	}
+	_ = r.run(ctx, "select-layout", "-t", window, "main-horizontal")
+	return nil
 }

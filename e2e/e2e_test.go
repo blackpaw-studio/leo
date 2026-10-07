@@ -16,6 +16,7 @@ import (
 
 	"github.com/blackpaw-studio/leo/internal/config"
 	"github.com/blackpaw-studio/leo/internal/daemon"
+	leoenv "github.com/blackpaw-studio/leo/internal/env"
 	"github.com/blackpaw-studio/leo/internal/tmux"
 )
 
@@ -54,7 +55,24 @@ func isolateFromCaller() string {
 	if err := os.Setenv("TMUX_TMPDIR", dir); err != nil {
 		panic(err)
 	}
+	ensureUTF8Locale()
 	return dir
+}
+
+// ensureUTF8Locale gives the test process the UTF-8 locale the daemon
+// guarantees itself (env.EnsureUTF8Locale): tests that drive a Viewer
+// in-process run tmux with this environment, and without a UTF-8 locale
+// the tmux client prints tabs as "_", so its tab-separated listings never
+// parse. A clean `env -i` run has no locale at all.
+func ensureUTF8Locale() {
+	for _, kv := range leoenv.EnsureUTF8Locale(os.Environ()) {
+		key, value, _ := strings.Cut(kv, "=")
+		if _, set := os.LookupEnv(key); !set {
+			if err := os.Setenv(key, value); err != nil {
+				panic(err)
+			}
+		}
+	}
 }
 
 func TestMain(m *testing.M) {

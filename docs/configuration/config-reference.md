@@ -19,6 +19,7 @@ Settings inherited by all tasks and templates unless overridden.
 | `harness_options` | map | No | Adapter-specific options, strictly validated by the resolved harness. For `claude`: `permission_mode`, `bypass_permissions`, `remote_control`, `agent`, `allowed_tools`, `disallowed_tools`, `append_system_prompt`. For `codex`: `permission_mode`. For `opencode`: `permission`. See [Harnesses](harnesses.md) for the full reference and merge rules. |
 | `idle_suspend_after` | string | No | Idle interval (Go duration, e.g. `24h`) after which an ephemeral agent is auto-stopped (dormant, auto-wakes on the next message). Empty/unset disables it. See [Idle-suspend](#idle-suspend). |
 | `dispatch.viewer` | map | No | Dispatch viewer settings: `placement` (`pane` or `window`, default `pane`), `max_panes` (1–6, default 3), and `main_pane_height` (20–90 percent, default 60). |
+| `dispatch.approval_timeout` | string | No | How long an interactive claude dispatch's permission prompt waits for the orchestrator's decision (Go duration, positive, at most `24h`; default `30m`) before the prompt falls back to the dispatch's pane. See [Dispatches → Permission prompts](dispatches.md#permission-prompts). |
 
 Custom Anthropic-compatible endpoints (z.ai GLM, OpenRouter, Moonshot, DeepSeek, MiniMax, …) are configured via each scope's own `env:` map (`ANTHROPIC_BASE_URL`, `ANTHROPIC_AUTH_TOKEN`) — see [Harnesses → providers is gone](harnesses.md#providers-is-gone).
 
@@ -269,6 +270,7 @@ templates:
 | `add_dirs` | list | No | -- | Additional directories. |
 | `env` | map | No | -- | Environment variables. |
 | `idle_suspend_after` | string | No | `defaults.idle_suspend_after` | Idle interval (Go duration) before agents from this template are auto-stopped (dormant, auto-wakes on the next message). Empty inherits the default. |
+| `isolation` | string | No | -- | `worktree` runs every dispatch and consult of this template from a throwaway managed Git worktree at the caller's committed HEAD — the same as passing `isolation: "worktree"` to `leo_dispatch`, which takes precedence when given. The subagent's prompt names the worktree and warns that uncommitted changes in the caller's tree are not visible. Lets a reviewer run tests with a writable sandbox (e.g. codex `permission_mode: workspace-write`) without touching the real tree. See [Dispatches](dispatches.md). |
 | `permissions` | map | No | -- | Narrows the leo MCP tool surface for agents spawned from this template (`deny_tools`) and which agents/templates they may message, spawn, or consult (`can_message`, `can_spawn`, `can_consult`). See [Permissions](permissions.md). |
 
 When dispatching with a repo (`/agent coding owner/repo` via a channel plugin, or `leo agent spawn coding --repo owner/repo`), Leo clones the repo into `<workspace>/<repo>` using `gh`. The agent session is named `leo-<template>-<owner>-<repo>`. A repo is optional — `leo agent spawn coding` with no repo runs the template as-is directly in `workspace`, and the agent is named after the template (`coding` in this example).

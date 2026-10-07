@@ -220,7 +220,40 @@ type DefaultsConfig struct {
 
 type DispatchConfig struct {
 	Viewer DispatchViewerConfig `yaml:"viewer,omitempty"`
+	// ApprovalTimeout is how long a dispatched claude's permission prompt
+	// waits for the orchestrator's decision before falling back to the
+	// prompt in its pane, as a Go duration. Empty means 30m.
+	ApprovalTimeout string `yaml:"approval_timeout,omitempty"`
 }
+
+const (
+	defaultDispatchApprovalTimeout = 30 * time.Minute
+	maxDispatchApprovalTimeout     = 24 * time.Hour
+)
+
+// DispatchApprovalTimeout is the parsed approval_timeout; Validate rejects
+// an unusable value, which otherwise reads as the default.
+func (c *Config) DispatchApprovalTimeout() time.Duration {
+	if d, err := parseApprovalTimeout(c.Defaults.Dispatch.ApprovalTimeout); err == nil && d > 0 {
+		return d
+	}
+	return defaultDispatchApprovalTimeout
+}
+
+func parseApprovalTimeout(raw string) (time.Duration, error) {
+	if raw == "" {
+		return defaultDispatchApprovalTimeout, nil
+	}
+	d, err := time.ParseDuration(raw)
+	if err != nil {
+		return 0, err
+	}
+	if d <= 0 || d > maxDispatchApprovalTimeout {
+		return 0, fmt.Errorf("must be positive and at most %s", maxDispatchApprovalTimeout)
+	}
+	return d, nil
+}
+
 type DispatchViewerConfig struct {
 	Placement      string `yaml:"placement,omitempty"`
 	MaxPanes       *int   `yaml:"max_panes,omitempty"`
@@ -284,6 +317,11 @@ type TemplateConfig struct {
 	IdleSuspendAfter string         `yaml:"idle_suspend_after,omitempty"`
 	Harness          string         `yaml:"harness,omitempty"`
 	HarnessOptions   map[string]any `yaml:"harness_options,omitempty"`
+	// Isolation runs dispatches and consults of this template from a
+	// managed Git worktree at the caller's committed HEAD ("worktree"),
+	// exactly as the leo_dispatch isolation argument does. Empty runs in
+	// the caller's tree; a dispatch's own isolation argument wins.
+	Isolation string `yaml:"isolation,omitempty"`
 	// Permissions constrains the leo MCP tool surface agents spawned from
 	// this template see, and which agents/templates they may message, spawn,
 	// or consult. The zero value is unrestricted — exactly the behavior
@@ -425,6 +463,9 @@ func (c *Config) Validate() error {
 	if n := c.DispatchViewerMainPaneHeight(); n < 20 || n > 90 {
 		errs = append(errs, "defaults.dispatch.viewer.main_pane_height must be between 20 and 90")
 	}
+	if _, err := parseApprovalTimeout(c.Defaults.Dispatch.ApprovalTimeout); err != nil {
+		errs = append(errs, fmt.Sprintf("defaults.dispatch.approval_timeout %q: %v", c.Defaults.Dispatch.ApprovalTimeout, err))
+	}
 
 	// resolveHarness returns the adapter for a scope, emitting at most one
 	// error per bad name: defaults errors at defaults.harness; a scope only
@@ -551,6 +592,9 @@ func (c *Config) Validate() error {
 			if d, err := time.ParseDuration(tmpl.IdleSuspendAfter); err != nil || d <= 0 {
 				errs = append(errs, fmt.Sprintf("templates.%s.idle_suspend_after %q must be a positive duration", name, tmpl.IdleSuspendAfter))
 			}
+		}
+		if tmpl.Isolation != "" && tmpl.Isolation != "worktree" {
+			errs = append(errs, fmt.Sprintf("templates.%s.isolation %q must be empty or \"worktree\"", name, tmpl.Isolation))
 		}
 		errs = append(errs, validatePermissions(name, tmpl.Permissions, c.Templates)...)
 	}

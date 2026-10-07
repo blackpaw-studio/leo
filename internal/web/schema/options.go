@@ -41,6 +41,8 @@ func (o OptionSources) TryFor(name string) []Option {
 			{"dontAsk", "dontAsk"}, {"plan", "plan"}}
 	case "runtimes":
 		return []Option{{"oneshot", "oneshot"}, {"persistent", "persistent"}}
+	case "isolations":
+		return []Option{{"", "none"}, {"worktree", "worktree"}}
 	case "templates":
 		return namedKeys(keysOf(o.Cfg.Templates), "none")
 	case "agents":
