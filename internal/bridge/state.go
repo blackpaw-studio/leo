@@ -56,6 +56,9 @@ type DispatchState struct {
 	TokensIn      *int64   `json:"tokens_in,omitempty"`
 	TokensOut     *int64   `json:"tokens_out,omitempty"`
 	CostUSD       *float64 `json:"cost_usd,omitempty"`
+	// Pending summarizes the background work a waiting dispatch is paused
+	// on, e.g. "1 shell · 1 monitor"; empty otherwise.
+	Pending string `json:"pending,omitempty"`
 }
 
 // DispatchRunning is the status whose working time keeps counting.

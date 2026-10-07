@@ -175,6 +175,9 @@ func displayStatus(record consult.Record, now time.Time) string {
 	if record.Stale(now) {
 		return "abandoned"
 	}
+	if record.Status == consult.StatusWaiting && record.PendingWork != nil {
+		return fmt.Sprintf("%s (%s)", record.Status, record.PendingWork.Summary())
+	}
 	return string(record.Status)
 }
 

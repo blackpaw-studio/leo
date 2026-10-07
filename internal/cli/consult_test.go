@@ -139,6 +139,23 @@ func TestDispatchListInteractive(t *testing.T) {
 	}
 }
 
+func TestDispatchListShowsWaitingPendingWork(t *testing.T) {
+	state := t.TempDir()
+	dir := filepath.Join(state, "dispatches")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	writeTestRecord(t, dir, consult.Record{ID: "d-wait", Template: "coding", Harness: "claude", Model: "opus", Mode: consult.ModeInteractive, Status: consult.StatusWaiting, StartedAt: time.Now(),
+		PendingWork: &consult.PendingWork{Tasks: map[string]int{"shell": 1}, Wakeups: 2}})
+	var out bytes.Buffer
+	if err := listConsults(state, false, &out); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "waiting (1 shell · 2 wakeups)") {
+		t.Errorf("list missing waiting summary: %s", out.String())
+	}
+}
+
 func TestDispatchListMarksIncompleteUsage(t *testing.T) {
 	state := t.TempDir()
 	dir := filepath.Join(state, "dispatches")

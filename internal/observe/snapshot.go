@@ -150,13 +150,16 @@ const DispatchLinger = 60 * time.Second
 // own vocabulary; ParentDispatchID is set when the caller is itself a
 // dispatch.
 type Dispatch struct {
-	ID               string     `json:"id"`
-	Name             string     `json:"name,omitempty"`
-	Role             string     `json:"role,omitempty"`
-	Template         string     `json:"template,omitempty"`
-	Model            string     `json:"model,omitempty"`
-	Status           string     `json:"status"`
-	Stalled          bool       `json:"stalled"`
+	ID       string `json:"id"`
+	Name     string `json:"name,omitempty"`
+	Role     string `json:"role,omitempty"`
+	Template string `json:"template,omitempty"`
+	Model    string `json:"model,omitempty"`
+	Status   string `json:"status"`
+	Stalled  bool   `json:"stalled"`
+	// Pending summarizes the background work a waiting dispatch is paused
+	// on, e.g. "1 shell · 1 monitor"; empty otherwise.
+	Pending          string     `json:"pending,omitempty"`
 	CallerAgent      string     `json:"caller_agent,omitempty"`
 	ParentDispatchID string     `json:"parent_dispatch_id,omitempty"`
 	StartedAt        time.Time  `json:"started_at"`

@@ -25,6 +25,8 @@ type Entry struct {
 	Worktree        string        `json:"worktree,omitempty"`
 	Branch          string        `json:"branch,omitempty"`
 	NeedsInput      *NeedsInput   `json:"needs_input,omitempty"`
+	// Pending summarizes the background work a waiting run is paused on.
+	Pending string `json:"pending,omitempty"`
 }
 
 // MarshalJSON exposes elapsed and active time in seconds for API clients.
@@ -49,7 +51,8 @@ func (e Entry) MarshalJSON() ([]byte, error) {
 		Worktree        string      `json:"worktree,omitempty"`
 		Branch          string      `json:"branch,omitempty"`
 		NeedsInput      *NeedsInput `json:"needs_input,omitempty"`
-	}{e.ID, e.Status, e.Elapsed.Seconds(), e.Active.Seconds(), e.Text, e.Err, e.TurnID, e.Outcome, e.Delivered, e.Stalled, e.InputTokens, e.OutputTokens, e.CostUSD, e.UsageTurns, e.ToolCalls, e.UsageIncomplete, e.Worktree, e.Branch, e.NeedsInput})
+		Pending         string      `json:"pending,omitempty"`
+	}{e.ID, e.Status, e.Elapsed.Seconds(), e.Active.Seconds(), e.Text, e.Err, e.TurnID, e.Outcome, e.Delivered, e.Stalled, e.InputTokens, e.OutputTokens, e.CostUSD, e.UsageTurns, e.ToolCalls, e.UsageIncomplete, e.Worktree, e.Branch, e.NeedsInput, e.Pending})
 }
 
 // UnmarshalJSON restores the durations used by CLI and MCP clients.
@@ -74,6 +77,7 @@ func (e *Entry) UnmarshalJSON(data []byte) error {
 		Worktree        string      `json:"worktree"`
 		Branch          string      `json:"branch"`
 		NeedsInput      *NeedsInput `json:"needs_input"`
+		Pending         string      `json:"pending"`
 	}
 	if err := json.Unmarshal(data, &wire); err != nil {
 		return err
@@ -85,6 +89,6 @@ func (e *Entry) UnmarshalJSON(data []byte) error {
 	e.Outcome, e.Delivered, e.Stalled = wire.Outcome, wire.Delivered, wire.Stalled
 	e.InputTokens, e.OutputTokens, e.CostUSD = wire.InputTokens, wire.OutputTokens, wire.CostUSD
 	e.UsageTurns, e.ToolCalls, e.UsageIncomplete, e.Worktree, e.Branch = wire.UsageTurns, wire.ToolCalls, wire.UsageIncomplete, wire.Worktree, wire.Branch
-	e.NeedsInput = wire.NeedsInput
+	e.NeedsInput, e.Pending = wire.NeedsInput, wire.Pending
 	return nil
 }

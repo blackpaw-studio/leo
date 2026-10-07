@@ -34,7 +34,7 @@ func RenderRoster(records []Record, now time.Time) string {
 	entries := make([]string, 0, len(eligible))
 	for _, rec := range eligible {
 		glyph, style := rosterAppearance(rec.Status)
-		entries = append(entries, fmt.Sprintf("%s%s %s %s%s%s", style, glyph, rosterLabel(rec), formatActiveSeconds(rec.LiveActiveSeconds(now)), rosterUsage(rec), rosterDefaultStyle))
+		entries = append(entries, fmt.Sprintf("%s%s %s %s%s%s", style, glyph, rosterLabel(rec), formatActiveSeconds(rec.LiveActiveSeconds(now)), rosterPending(rec)+rosterUsage(rec), rosterDefaultStyle))
 	}
 	return strings.Join(entries, "   ")
 }
@@ -61,6 +61,8 @@ func rosterAppearance(status Status) (string, string) {
 	switch status {
 	case StatusIdle, StatusSettling:
 		return "⏸", rosterIdleStyle
+	case StatusWaiting:
+		return "⧗", rosterIdleStyle
 	case StatusDone, StatusClosed:
 		return "✓", rosterDoneStyle
 	case StatusFailed, StatusCanceled, StatusTimeout:
@@ -70,6 +72,14 @@ func rosterAppearance(status Status) (string, string) {
 	default:
 		return "⟳", rosterDefaultStyle
 	}
+}
+
+// rosterPending is a waiting dispatch's pending work, e.g. " · 1 shell".
+func rosterPending(rec Record) string {
+	if rec.Status != StatusWaiting || rec.PendingWork == nil {
+		return ""
+	}
+	return " · " + strings.ReplaceAll(rec.PendingWork.Summary(), "#", "##")
 }
 
 func rosterLabel(rec Record) string {

@@ -188,8 +188,8 @@ move a pane, and panes that launched in a separate window stay there. Tmux
 pane ids (`%N`) survive both moves, so follow-ups keep addressing the same
 pane.
 
-Interactive statuses are `queued`, `running`, `needs_input`, `idle`,
-`settling`, `closed`, `failed`, `canceled`, and `timeout`. Turn outcomes are `finished`,
+Interactive statuses are `queued`, `running`, `needs_input`, `waiting`,
+`idle`, `settling`, `closed`, `failed`, `canceled`, and `timeout`. Turn outcomes are `finished`,
 `interrupted`, `lost`, and `rejected`. A user submission opens a free user
 turn and marks the record `steered: true`; orchestrator turns consume a
 concurrency slot until they settle. Slots are per orchestrator turn, so idle
@@ -207,6 +207,17 @@ the moment the wait starts, or on an explicit turn ID such as `d-…#2` to wait
 for that turn. Wait results include `turn_id`, `outcome`, `delivered`, and
 `stalled`; a turn with no hook activity for ten minutes is reported stalled on
 wait timeout, not forcibly closed.
+
+A claude turn that stops while its own background work is still in flight
+(a `run_in_background` shell, a Monitor, a subagent, or a scheduled wakeup)
+is not finished: the run goes `waiting`, the turn stays open, and `leo_wait`
+keeps blocking. The record's `pending_work` (and `pending` on wait results,
+the roster, and `/api/v1`) counts what it waits on, e.g. `1 shell · 1 monitor`.
+When that work wakes the session (a task notification or the wakeup's
+prompt), the same turn continues, and its next Stop with nothing pending
+finishes it with that final message. A `waiting` run is never reported
+stalled or idle-closed, and a send to it is rejected like a send to a running
+one; cancel works as usual.
 
 An interactive dispatch is bound to its caller's tmux session. It closes on
 cancel, TUI exit, one hour of empty-composer idle time, or the session timeout.

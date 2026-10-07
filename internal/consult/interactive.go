@@ -564,6 +564,9 @@ func (d *Dispatcher) hasWorkingTurnLocked(s *runState) bool {
 func (d *Dispatcher) interactiveStatusLocked(s *runState, boundary time.Time) Status {
 	for _, t := range s.record.Turns {
 		if t.Outcome == "" {
+			if s.record.PendingWork != nil {
+				return StatusWaiting
+			}
 			return StatusRunning
 		}
 	}
@@ -596,6 +599,11 @@ func (d *Dispatcher) Send(ctx context.Context, id, message string) (SendResult, 
 		need := *s.record.NeedsInput
 		d.mu.Unlock()
 		return SendResult{}, fmt.Errorf("dispatch is waiting on a permission decision (%s: %s, request %s); answer with decision allow|deny (and an optional reason) instead of a message", need.Tool, need.Summary, need.RequestID)
+	}
+	if s.record.Status == StatusWaiting {
+		pending := s.record.PendingWork.Summary()
+		d.mu.Unlock()
+		return SendResult{}, fmt.Errorf("dispatch is waiting on background work (%s) and will continue its turn when it finishes; leo_wait on it first", pending)
 	}
 	if s.record.Status != StatusIdle {
 		st := s.record.Status
@@ -739,6 +747,9 @@ func (d *Dispatcher) Report(id string, r HookReport) error {
 		}
 		prompt := str(p, "prompt")
 		injected := s.record.Harness == "claude" && isHarnessInjection(prompt)
+		// Whatever woke a waiting run (its background work's notification,
+		// a wakeup, a human) carries its open turn on.
+		d.resumeWaitingLocked(s)
 		var delivered *Turn
 		if !injected && s.armedTurn != "" && d.now().Before(s.armedUntil) {
 			delivered = d.deliverTurnLocked(s, s.armedTurn, hid)
@@ -756,7 +767,11 @@ func (d *Dispatcher) Report(id string, r HookReport) error {
 				// Fold into the working turn, however long it was hook-silent:
 				// a separate turn would never close (#211), and closing this
 				// one would report it lost while it is still working.
-				d.persistLocked(s, "")
+				if s.record.Status != oldStatus {
+					d.persistLocked(s, "status")
+				} else {
+					d.persistLocked(s, "")
+				}
 				return nil
 			}
 			var t *Turn
@@ -798,6 +813,13 @@ func (d *Dispatcher) Report(id string, r HookReport) error {
 			return nil
 		}
 		text := str(p, "last_assistant_message")
+		if event == "stop" && hid == "" && hasWorkingTurnLocked(s) {
+			if w := pendingWorkFromStop(p); w != nil {
+				d.waitOnBackgroundLocked(s, w)
+				break
+			}
+		}
+		s.record.PendingWork = nil
 		if hid == "" {
 			d.closeWorkingLocked(s, out, text)
 		} else if !d.closeHarnessLocked(s, hid, out, text) {
@@ -942,6 +964,36 @@ func (d *Dispatcher) closeWorkingLocked(s *runState, o TurnOutcome, text string)
 		}
 	}
 }
+// waitOnBackgroundLocked handles a Stop that leaves background work pending:
+// the session is paused, not done, so the working turn stays open (leo_wait
+// keeps blocking) and the run reads waiting until that work wakes it.
+func (d *Dispatcher) waitOnBackgroundLocked(s *runState, w *PendingWork) {
+	old := s.record.Status
+	s.record.PendingWork = w
+	s.record.foldActive(d.now())
+	if s.record.Status != StatusNeedsInput {
+		s.record.Status = StatusWaiting
+	}
+	if s.record.Status != old {
+		d.persistLocked(s, "status")
+	} else {
+		d.persistLocked(s, "")
+	}
+}
+
+// resumeWaitingLocked returns a waiting run to running as its session
+// starts working again; the caller persists the change.
+func (d *Dispatcher) resumeWaitingLocked(s *runState) {
+	if s.record.PendingWork == nil && s.record.Status != StatusWaiting {
+		return
+	}
+	s.record.PendingWork = nil
+	if s.record.Status == StatusWaiting {
+		s.record.Status = StatusRunning
+	}
+	s.record.startActive(d.now())
+}
+
 func turnByID(r Record, id string) Turn {
 	for _, t := range r.Turns {
 		if t.TurnID == id {
@@ -957,6 +1009,7 @@ func (d *Dispatcher) beginSettlementLocked(s *runState, status Status, grace tim
 	}
 	d.dropPermissionsLocked(s)
 	boundary := d.now()
+	s.record.PendingWork = nil
 	s.record.Status = StatusSettling
 	s.record.foldActive(boundary)
 	s.settleStatus = status
@@ -969,6 +1022,7 @@ func (d *Dispatcher) finishInteractiveLocked(s *runState, status Status) {
 	}
 	d.dropPermissionsLocked(s)
 	s.record.foldActive(d.now())
+	s.record.PendingWork = nil
 	for _, t := range s.record.Turns {
 		if t.Outcome == "" {
 			o := TurnLost

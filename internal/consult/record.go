@@ -157,8 +157,10 @@ type Record struct {
 	Turns              []Turn                  `json:"turns,omitempty"`
 	Steered            bool                    `json:"steered,omitempty"`
 	// NeedsInput is what a needs_input run waits on (see RequestPermission).
-	NeedsInput   *NeedsInput `json:"needs_input,omitempty"`
-	HookActivity time.Time   `json:"-"`
+	NeedsInput *NeedsInput `json:"needs_input,omitempty"`
+	// PendingWork is the background work a waiting run is paused on.
+	PendingWork  *PendingWork `json:"pending_work,omitempty"`
+	HookActivity time.Time    `json:"-"`
 }
 
 func (r *Record) startActive(now time.Time) {

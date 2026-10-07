@@ -1,0 +1,224 @@
+package consult
+
+import (
+	"context"
+	"encoding/json"
+	"strings"
+	"testing"
+	"time"
+)
+
+// claudeStop is a Stop hook report in the shape Claude Code posts it:
+// pending work rides along as background_tasks and session_crons, either
+// of which an older claude leaves out.
+func claudeStop(t *testing.T, eventID, message string, extra map[string]any) HookReport {
+	t.Helper()
+	payload := map[string]any{"hook_event_name": "Stop", "stop_hook_active": false, "session_id": "s-1"}
+	if message != "" {
+		payload["last_assistant_message"] = message
+	}
+	for k, v := range extra {
+		payload[k] = v
+	}
+	b, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return HookReport{EventID: eventID, Payload: b}
+}
+
+// A run_in_background Bash plus a Monitor, as Claude Code lists them.
+var shellAndMonitor = map[string]any{
+	"background_tasks": []any{
+		map[string]any{"id": "b1", "type": "shell", "status": "running", "description": "go build ./...", "command": "go build ./..."},
+		map[string]any{"id": "m1", "type": "monitor", "status": "running", "description": "watch build", "server": "x", "tool": "y"},
+	},
+	"session_crons": []any{},
+}
+
+const taskNotification = "<task-notification>\n<task-id>b1</task-id>\n<status>completed</status>\n</task-notification>"
+
+func TestInteractiveStopWithBackgroundTasksWaitsInsteadOfFinishing(t *testing.T) {
+	now := time.Date(2026, time.October, 7, 12, 0, 0, 0, time.UTC)
+	d, _, id := startClaudeInteractive(t, &now)
+	now = now.Add(time.Second)
+	if err := d.Report(id, claudeStop(t, "stop-1", "I'll wait for the build.", shellAndMonitor)); err != nil {
+		t.Fatal(err)
+	}
+	rec, _ := d.Get(id)
+	if rec.Status != StatusWaiting || len(rec.Turns) != 1 || rec.Turns[0].Outcome != "" {
+		t.Fatalf("stop with pending work: record=%+v", rec)
+	}
+	if rec.PendingWork == nil || rec.PendingWork.Tasks["shell"] != 1 || rec.PendingWork.Tasks["monitor"] != 1 || rec.PendingWork.Wakeups != 0 {
+		t.Fatalf("pending work=%+v", rec.PendingWork)
+	}
+	if got := rec.PendingWork.Summary(); got != "1 shell · 1 monitor" {
+		t.Fatalf("summary=%q", got)
+	}
+	entry := d.Wait(context.Background(), []string{id + "#1"}, 20*time.Millisecond)[0]
+	if entry.Outcome != "" || entry.Status != StatusWaiting || entry.Pending != "1 shell · 1 monitor" {
+		t.Fatalf("wait resolved on a waiting run: %+v", entry)
+	}
+}
+
+// The task-notification Claude injects once the shell finishes continues
+// the same logical turn: its Stop with nothing pending finishes the turn the
+// orchestrator is waiting on, with that final message.
+func TestInteractiveWaitingTurnFinishesAfterNotificationContinuation(t *testing.T) {
+	now := time.Date(2026, time.October, 7, 12, 0, 0, 0, time.UTC)
+	d, _, id := startClaudeInteractive(t, &now)
+	done := make(chan []Entry, 1)
+	go func() { done <- d.Wait(context.Background(), []string{id + "#1"}, time.Minute) }()
+	if err := d.Report(id, claudeStop(t, "stop-1", "I'll wait for the build.", shellAndMonitor)); err != nil {
+		t.Fatal(err)
+	}
+	now = now.Add(time.Minute)
+	if err := d.Report(id, claudeHook(t, "submit-2", "UserPromptSubmit", taskNotification)); err != nil {
+		t.Fatal(err)
+	}
+	rec, _ := d.Get(id)
+	if rec.Status != StatusRunning || rec.PendingWork != nil || len(rec.Turns) != 1 || rec.Steered {
+		t.Fatalf("after notification: record=%+v", rec)
+	}
+	now = now.Add(time.Second)
+	if err := d.Report(id, claudeStop(t, "stop-2", "Build passed.", map[string]any{"background_tasks": []any{}, "session_crons": []any{}})); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case entries := <-done:
+		if len(entries) != 1 || entries[0].Outcome != TurnFinished || entries[0].Text != "Build passed." || entries[0].Status != StatusIdle {
+			t.Fatalf("entries=%+v", entries)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("wait did not resolve once the continuation stopped with nothing pending")
+	}
+	rec, _ = d.Get(id)
+	if len(rec.Turns) != 1 || rec.Turns[0].TurnID != id+"#1" {
+		t.Fatalf("continuation opened another turn: %+v", rec.Turns)
+	}
+}
+
+func TestInteractiveStopWithSessionCronWaits(t *testing.T) {
+	now := time.Date(2026, time.October, 7, 12, 0, 0, 0, time.UTC)
+	d, _, id := startClaudeInteractive(t, &now)
+	crons := map[string]any{"session_crons": []any{
+		map[string]any{"id": "c1", "schedule": "5 12 7 10 *", "recurring": false, "prompt": "check CI"},
+		map[string]any{"id": "c2", "schedule": "*/5 * * * *", "recurring": true, "prompt": "poll"},
+	}}
+	if err := d.Report(id, claudeStop(t, "stop-1", "Scheduled a check.", crons)); err != nil {
+		t.Fatal(err)
+	}
+	rec, _ := d.Get(id)
+	if rec.Status != StatusWaiting || rec.PendingWork == nil || rec.PendingWork.Wakeups != 2 || rec.PendingWork.Summary() != "2 wakeups" {
+		t.Fatalf("record=%+v pending=%+v", rec, rec.PendingWork)
+	}
+}
+
+func TestInteractiveStopWithoutPendingWorkFinishes(t *testing.T) {
+	for name, extra := range map[string]map[string]any{
+		"absent fields (older claude)": nil,
+		"empty lists":                  {"background_tasks": []any{}, "session_crons": []any{}},
+		"only settled tasks":           {"background_tasks": []any{map[string]any{"id": "b1", "type": "shell", "status": "completed"}}},
+		"malformed":                    {"background_tasks": "nope", "session_crons": 3},
+	} {
+		t.Run(name, func(t *testing.T) {
+			now := time.Date(2026, time.October, 7, 12, 0, 0, 0, time.UTC)
+			d, _, id := startClaudeInteractive(t, &now)
+			if err := d.Report(id, claudeStop(t, "stop-1", "done", extra)); err != nil {
+				t.Fatal(err)
+			}
+			rec, _ := d.Get(id)
+			if rec.Status != StatusIdle || rec.PendingWork != nil || rec.Turns[0].Outcome != TurnFinished || rec.Turns[0].Text != "done" {
+				t.Fatalf("record=%+v", rec)
+			}
+		})
+	}
+}
+
+// An interrupted turn ends whatever is still running in the background.
+func TestInteractiveInterruptWithBackgroundTasksStillCloses(t *testing.T) {
+	now := time.Date(2026, time.October, 7, 12, 0, 0, 0, time.UTC)
+	d, _, id := startClaudeInteractive(t, &now)
+	payload := map[string]any{"hook_event_name": "Interrupt"}
+	for k, v := range shellAndMonitor {
+		payload[k] = v
+	}
+	b, _ := json.Marshal(payload)
+	if err := d.Report(id, HookReport{EventID: "int-1", Payload: b}); err != nil {
+		t.Fatal(err)
+	}
+	rec, _ := d.Get(id)
+	if rec.Status != StatusIdle || rec.Turns[0].Outcome != TurnInterrupted {
+		t.Fatalf("record=%+v", rec)
+	}
+}
+
+func TestInteractiveWaitingRunIsNotStalledOrIdleClosed(t *testing.T) {
+	now := time.Date(2026, time.October, 7, 12, 0, 0, 0, time.UTC)
+	d, rt, id := startClaudeInteractive(t, &now)
+	if err := d.Report(id, claudeStop(t, "stop-1", "waiting", shellAndMonitor)); err != nil {
+		t.Fatal(err)
+	}
+	now = now.Add(idleCloseAfter + stalledAfter)
+	d.Sweep(now)
+	rec, _ := d.Get(id)
+	if rec.Status != StatusWaiting {
+		t.Fatalf("sweep moved a waiting run to %s", rec.Status)
+	}
+	if got := rt.killCount(); got != 0 {
+		t.Fatalf("waiting run's pane killed: %d", got)
+	}
+	entry := d.Wait(context.Background(), []string{id + "#1"}, time.Millisecond)[0]
+	if entry.Stalled {
+		t.Fatalf("waiting run reported stalled: %+v", entry)
+	}
+	if isStalled(rec, now) {
+		t.Fatal("bridge state reports a waiting run stalled")
+	}
+}
+
+func TestInteractiveSendRejectedWhileWaiting(t *testing.T) {
+	now := time.Date(2026, time.October, 7, 12, 0, 0, 0, time.UTC)
+	d, _, id := startClaudeInteractive(t, &now)
+	if err := d.Report(id, claudeStop(t, "stop-1", "waiting", shellAndMonitor)); err != nil {
+		t.Fatal(err)
+	}
+	_, err := d.Send(context.Background(), id, "next")
+	if err == nil || !strings.Contains(err.Error(), "waiting on background work (1 shell · 1 monitor)") {
+		t.Fatalf("Send while waiting err=%v", err)
+	}
+}
+
+func TestInteractiveCancelWhileWaiting(t *testing.T) {
+	now := time.Date(2026, time.October, 7, 12, 0, 0, 0, time.UTC)
+	d, _, id := startClaudeInteractive(t, &now)
+	if err := d.Report(id, claudeStop(t, "stop-1", "waiting", shellAndMonitor)); err != nil {
+		t.Fatal(err)
+	}
+	rec, err := d.Cancel(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rec.Status != StatusCanceled && rec.Status != StatusSettling {
+		t.Fatalf("cancel of a waiting run: status=%s", rec.Status)
+	}
+}
+
+func TestBridgeDispatchStateCarriesPendingSummary(t *testing.T) {
+	now := time.Date(2026, time.October, 7, 12, 0, 0, 0, time.UTC)
+	rec := Record{ID: "d-1", Kind: "dispatch", Status: StatusWaiting, CallerBridgeKey: "k", StartedAt: now,
+		PendingWork: &PendingWork{Tasks: map[string]int{"shell": 2, "monitor": 1}, Wakeups: 1}}
+	states := BridgeDispatchStates([]Record{rec}, "k", now)
+	if len(states) != 1 || states[0].Status != "waiting" || states[0].Pending != "2 shells · 1 monitor · 1 wakeup" {
+		t.Fatalf("states=%+v", states)
+	}
+}
+
+func TestObservedDispatchCarriesPendingSummary(t *testing.T) {
+	now := time.Date(2026, time.October, 7, 12, 0, 0, 0, time.UTC)
+	rec := Record{ID: "d-1", Kind: "dispatch", Status: StatusWaiting, StartedAt: now,
+		PendingWork: &PendingWork{Tasks: map[string]int{"shell": 1}}}
+	if got := observedDispatch(rec, now); got.Status != "waiting" || got.Pending != "1 shell" {
+		t.Fatalf("observed=%+v", got)
+	}
+}

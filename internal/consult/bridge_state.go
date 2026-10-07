@@ -54,13 +54,15 @@ func bridgeDispatchState(rec Record, now time.Time) bridge.DispatchState {
 		ID: rec.ID, Name: rec.Name, Role: rec.Role, Template: rec.Template, Model: rec.Model, Effort: rec.Effort,
 		Status: string(rec.Status), Stalled: isStalled(rec, now), ActiveSeconds: rec.LiveActiveSeconds(now),
 		TokensIn: clonePtr(rec.InputTokens), TokensOut: clonePtr(rec.OutputTokens), CostUSD: clonePtr(rec.CostUSD),
+		Pending: rec.PendingWork.Summary(),
 	}
 }
 
 // isStalled reports whether rec's latest turn is still open with no sign of
 // life for stalledAfter, as leo_wait reports it.
 func isStalled(rec Record, now time.Time) bool {
-	if rec.Status.Terminal() || len(rec.Turns) == 0 {
+	// A waiting run is quiet by design: its background work wakes it.
+	if rec.Status.Terminal() || rec.Status == StatusWaiting || len(rec.Turns) == 0 {
 		return false
 	}
 	t := rec.Turns[len(rec.Turns)-1]
