@@ -339,3 +339,80 @@ export function forkConsultAnswer(fork, model) {
   const detail = isRecord(fork) && reason === 'api-error' ? ` (${fork.status ?? 'no status'} ${fork.error ?? 'unknown'})` : ''
   return { deny: `fork consult failed: ${reason}${detail}` }
 }
+
+// ---- observe reports -----------------------------------------------------
+
+// The least time between two activity reports: activity is latest-wins, so
+// what changes faster than this is replaced before it is sent.
+export const ACTIVITY_MIN_INTERVAL_MS = 1000
+// Caps every field of an observe report; the daemon clamps again.
+export const MAX_SUMMARY_CHARS = 200
+
+const PATH_TOOLS = ['Read', 'Edit', 'Write']
+const PATTERN_TOOLS = ['Grep', 'Glob']
+// scheme://[userinfo@]host — the host alone, never credentials or a path.
+const URL_HOST = /^[a-z][a-z0-9+.-]*:\/\/(?:[^@/?#]*@)?(\[[^\]/?#]*\]|[^:/?#]+)/i
+
+/**
+ * @param {unknown} value
+ * @returns {string | undefined} the string capped at MAX_SUMMARY_CHARS, or
+ *   undefined for an empty or non-string value
+ */
+export function capField(value) {
+  if (typeof value !== 'string' || value.trim() === '') return undefined
+  return value.length > MAX_SUMMARY_CHARS ? value.slice(0, MAX_SUMMARY_CHARS) : value
+}
+
+/**
+ * path with the home directory spelled `~`.
+ * @param {string} path
+ * @param {string} home
+ */
+export function abbreviateHome(path, home) {
+  const base = home.endsWith('/') ? home.slice(0, -1) : home
+  if (base === '') return path
+  if (path === base) return '~'
+  return path.startsWith(base + '/') ? '~' + path.slice(base.length) : path
+}
+
+/**
+ * The one-field summary of a tool call's input: never the input itself.
+ * @param {string} tool
+ * @param {unknown} input the tool's arguments
+ * @param {string} home
+ * @returns {string | undefined}
+ */
+function toolSummary(tool, input, home) {
+  if (!isRecord(input)) return undefined
+  if (tool === 'Bash') return typeof input.command === 'string' ? input.command.trim().split(/\s+/)[0] : undefined
+  if (PATH_TOOLS.includes(tool)) return typeof input.file_path === 'string' ? abbreviateHome(input.file_path, home) : undefined
+  if (PATTERN_TOOLS.includes(tool)) return typeof input.pattern === 'string' ? input.pattern : undefined
+  if (tool === 'WebFetch') return typeof input.url === 'string' ? URL_HOST.exec(input.url)?.[1] : undefined
+  return undefined
+}
+
+/**
+ * What an activity or attention report says of a tool call: its name and a
+ * summary of its input, each capped; keys without a value are left out.
+ * @param {string} tool
+ * @param {unknown} input
+ * @param {string} home
+ * @returns {{ tool?: string, summary?: string }}
+ */
+export function toolActivity(tool, input, home) {
+  const fields = { tool: capField(tool), summary: capField(toolSummary(tool, input, home)) }
+  return Object.fromEntries(Object.entries(fields).filter(([, v]) => v !== undefined))
+}
+
+/**
+ * A session.compact trigger as a compact report names it: a plugin's
+ * compaction (leo's own command) counts as manual; a precompute installs
+ * nothing, so it is not reported (null).
+ * @param {unknown} trigger
+ * @returns {'manual' | 'auto' | null}
+ */
+export function compactTrigger(trigger) {
+  if (trigger === 'auto') return 'auto'
+  if (trigger === 'manual' || trigger === 'plugin') return 'manual'
+  return null
+}

@@ -15,9 +15,12 @@ import {
   ACKED_KEY_PREFIX,
   ackedFromStore,
   ackReport,
+  ACTIVITY_MIN_INTERVAL_MS,
   appendAcked,
   BACKOFF_INITIAL_MS,
   BACKOFF_RESET_AFTER_MS,
+  capField,
+  compactTrigger,
   describeExit,
   DISPATCH_KEY_PREFIX,
   errorText,
@@ -34,6 +37,7 @@ import {
   reportText,
   splitLines,
   STALE_LAUNCH_EXIT_CODE,
+  toolActivity,
   touchedEntry,
   turnTokens,
   withAcked,
@@ -147,6 +151,21 @@ let toldStamped = null
 let isToldForgotten = false
 let shownStatus = undefined
 let ticker = null
+
+// Observe state: the home directory tool summaries abbreviate; the main
+// loop's running tool calls, oldest first ({ activity }); the activity
+// waiting to be sent (latest wins), whether a send is scheduled, and when
+// and what was last sent; the attention kind awaiting the person, or null;
+// the ids of the subagents running.
+let home = ''
+let mainCalls = []
+let pendingActivity = null
+let isActivityScheduled = false
+let activitySentAt = -Infinity
+let activitySentBody = null
+let activityChain = Promise.resolve()
+let attention = null
+let subagentIds = new Set()
 
 function isBridging() {
   return config !== null && !isDormant
@@ -459,7 +478,9 @@ async function runCompact($, command) {
   for (let attempt = 0; attempt < COMPACT_ATTEMPTS; attempt++) {
     await waitForIdle()
     try {
-      const result = await $.session.compact(args)
+      // The engine skips the caller's own session.compact hook, so this
+      // compaction's phases are reported here.
+      const result = await observeCompact($, 'manual', () => $.session.compact(args))
       if (result && typeof result.skip === 'string') return { ok: false, error: result.skip }
       return { ok: true }
     } catch (err) {
@@ -854,6 +875,99 @@ async function forkConsult($, e) {
   }
 }
 
+// ---- observe reports -----------------------------------------------------
+
+// What the main loop is doing: its most recently started tool call still
+// running, or nothing.
+function currentActivity() {
+  const last = mainCalls[mainCalls.length - 1]
+  return last === undefined ? {} : last.activity
+}
+
+// Activity is latest-wins: the report waiting to be sent is replaced, at
+// most one goes out per ACTIVITY_MIN_INTERVAL_MS, and a failed one is not
+// retried (the next change says more than a stale retry would).
+function reportActivity($) {
+  if (!isBridging()) return
+  pendingActivity = currentActivity()
+  if (isActivityScheduled) return
+  isActivityScheduled = true
+  activityChain = activityChain.then(() => flushActivity($))
+}
+
+async function flushActivity($) {
+  try {
+    const wait = activitySentAt + ACTIVITY_MIN_INTERVAL_MS - (await $.clock.now())
+    if (wait > 0) await $.clock.sleep(wait)
+    isActivityScheduled = false
+    const body = JSON.stringify(eventReport('activity', pendingActivity))
+    pendingActivity = null
+    if (body === activitySentBody) return
+    activitySentAt = await $.clock.now()
+    activitySentBody = body
+    const why = await tryReport($, bridgeArgv('report'), body)
+    if (why === null) return
+    activitySentBody = null
+    reportFailed($, why)
+  } catch (err) {
+    isActivityScheduled = false
+    reportFailed($, errorText(err))
+  }
+}
+
+// Observing fails open, as the delegation guards do: a broken observe
+// hook passes the event on rather than blocking a tool call or compaction.
+function observeFailed($, e, next) {
+  if (next.error.kind !== 're-entry') $.ui.log('observe hook failed: ' + (next.error.message ?? next.error.kind))
+  return next(e)
+}
+
+// fields: { kind, tool?, summary? }.
+function raiseAttention($, fields) {
+  if (!isBridging()) return
+  attention = fields.kind
+  enqueueReport($, () => eventReport('attention', { state: 'needs_input', ...fields }))
+}
+
+function clearAttention($) {
+  if (attention === null || !isBridging()) return
+  attention = null
+  enqueueReport($, () => eventReport('attention', { state: 'cleared' }))
+}
+
+// A main-loop tool settled one way or another: whatever prompt it raised
+// is answered.
+function onToolSettled($, e, next) {
+  if (!e.agent_id) clearAttention($)
+  return next(e)
+}
+
+function trackSubagent($, id, isRunning) {
+  if (!isBridging() || typeof id !== 'string' || id === '' || subagentIds.has(id) === isRunning) return
+  subagentIds = isRunning ? new Set([...subagentIds, id]) : new Set([...subagentIds].filter((x) => x !== id))
+  const running = subagentIds.size
+  enqueueReport($, () => eventReport('subagents', { running }))
+}
+
+function reportCompact($, phase, trigger, error) {
+  enqueueReport($, () => eventReport('compact', defined({ phase, trigger, error: capField(error) })))
+}
+
+// Runs a compaction, reporting it started and how it ended: a skip (a
+// hook's veto) or a throw is a failure.
+async function observeCompact($, trigger, run) {
+  reportCompact($, 'started', trigger)
+  try {
+    const result = await run()
+    if (result && typeof result.skip === 'string') reportCompact($, 'failed', trigger, result.skip)
+    else reportCompact($, 'completed', trigger)
+    return result
+  } catch (err) {
+    reportCompact($, 'failed', trigger, errorText(err))
+    throw err
+  }
+}
+
 // ---- hooks ---------------------------------------------------------------
 
 async function onSessionStart($) {
@@ -864,6 +978,7 @@ async function onSessionStart($) {
     $.ui.log('LEO_BRIDGE_BIN, LEO_BRIDGE_AGENT or LEO_BRIDGE_LAUNCH is unset; bridge disabled')
     return
   }
+  home = (await $.env.get('HOME')) ?? ''
   touchEntry($)
   $.clock.after(0, () => pruneAcked($))
   $.clock.after(0, () => pruneTold($))
@@ -894,6 +1009,7 @@ export function register(on) {
     if (e.agentId) return next(e)
     markIdle()
     if (!isBridging()) return next(e)
+    clearAttention($)
     // The report is queued now, so it keeps its place among this process's
     // reports, and is built once next(e) says what the turn cost.
     let settleUsage = () => {}
@@ -913,6 +1029,37 @@ export function register(on) {
       throw err
     }
   })
+
+  on('classic.PermissionRequest', async ($, e, next) => {
+    if (!e.agent_id) raiseAttention($, { kind: 'permission', ...toolActivity(e.tool_name, e.tool_input, home) })
+    return next(e)
+  }).catch(observeFailed)
+
+  on('classic.Elicitation', async ($, e, next) => {
+    if (!e.agent_id) raiseAttention($, defined({ kind: 'elicitation', summary: capField(e.mcp_server_name) }))
+    return next(e)
+  }).catch(observeFailed)
+
+  on('classic.PostToolUse', async ($, e, next) => onToolSettled($, e, next)).catch(observeFailed)
+  on('classic.PostToolUseFailure', async ($, e, next) => onToolSettled($, e, next)).catch(observeFailed)
+  on('classic.PermissionDenied', async ($, e, next) => onToolSettled($, e, next)).catch(observeFailed)
+
+  // Every subagent counts, background or not; the count outlives the turn.
+  on('classic.SubagentStart', async ($, e, next) => {
+    trackSubagent($, e.agent_id, true)
+    return next(e)
+  }).catch(observeFailed)
+
+  on('classic.SubagentStop', async ($, e, next) => {
+    trackSubagent($, e.agent_id, false)
+    return next(e)
+  }).catch(observeFailed)
+
+  on('session.compact', async ($, e, next) => {
+    const trigger = e.agentId ? null : compactTrigger(e.trigger)
+    if (trigger === null || !isBridging()) return next(e)
+    return observeCompact($, trigger, () => next(e))
+  }).catch(observeFailed)
 
   // A fork consult is answered here, in the session, and never reaches the
   // leo daemon (whose handler refuses one): see forkConsult.
@@ -963,6 +1110,25 @@ export function register(on) {
     else clearDispatchFallback($)
     return result
   }).catch(guardFailed)
+
+  // Main-loop tool activity, and an AskUserQuestion awaiting the person.
+  // Registered after the delegation guards so their .catch, not this one's,
+  // answers a guard that throws.
+  on('tool.call', async ($, e, next) => {
+    if (e.agentId || !isBridging()) return next(e)
+    const call = { activity: toolActivity(e.tool, e, home) }
+    const isQuestion = e.tool === 'AskUserQuestion'
+    mainCalls = [...mainCalls, call]
+    reportActivity($)
+    if (isQuestion) raiseAttention($, { kind: 'question', tool: e.tool })
+    try {
+      return await next(e)
+    } finally {
+      mainCalls = mainCalls.filter((c) => c !== call)
+      reportActivity($)
+      if (isQuestion) clearAttention($)
+    }
+  }).catch(observeFailed)
 
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
     if (rosterDispatches().length === 0 || e.props.hasSurvey) return next(e)
