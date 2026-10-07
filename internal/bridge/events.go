@@ -8,7 +8,7 @@ import (
 	"time"
 )
 
-// Event is a hello or turn/session event as seen by a Subscriber. Name is
+// Event is a hello, turn/session, or observe event as seen by a Subscriber. Name is
 // ReportHello or one of the Event* names. SessionID and ClaudeVersion come
 // from the agent's latest hello (the event's own, for a hello).
 type Event struct {
@@ -24,7 +24,13 @@ type Event struct {
 	Message       string      // turn.complete
 	EventID       string      // stable across retries of one event; may be empty
 	Tokens        *TurnTokens // turn.complete: the turn's own token counts
-	At            time.Time
+	// Observe event payloads (see Report): exactly the one matching Name is
+	// set. The observability projection reads these; nothing else does.
+	Activity  *ActivityReport
+	Attention *AttentionReport
+	Subagents *SubagentsReport
+	Compact   *CompactReport
+	At        time.Time
 }
 
 // Subscriber is told about every hello and turn/session event: the seam
@@ -206,8 +212,21 @@ func (h *Hub) recordLocked(agent string, st *agentState, r Report) Event {
 		Message:       r.Message,
 		EventID:       r.EventID,
 		Tokens:        cloneTokens(r.Tokens),
+		Activity:      cloneOf(r.Activity),
+		Attention:     cloneOf(r.Attention),
+		Subagents:     cloneOf(r.Subagents),
+		Compact:       cloneOf(r.Compact),
 		At:            now,
 	}
+}
+
+// cloneOf returns a copy of the flat struct p points to, or nil.
+func cloneOf[T any](p *T) *T {
+	if p == nil {
+		return nil
+	}
+	c := *p
+	return &c
 }
 
 func cloneRaw(raw json.RawMessage) json.RawMessage {

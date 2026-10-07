@@ -895,3 +895,42 @@ func TestProjectAgentsCarriesSurfacedFiles(t *testing.T) {
 		t.Fatalf("surfaced files = %+v", got[0].SurfacedFiles)
 	}
 }
+
+// fakeDispatchProvider is a test double for dispatchProvider.
+type fakeDispatchProvider struct {
+	dispatches []observe.Dispatch
+	gotNow     time.Time
+}
+
+func (f *fakeDispatchProvider) Dispatches(now time.Time) []observe.Dispatch {
+	f.gotNow = now
+	return f.dispatches
+}
+
+func (f *fakeDispatchProvider) OutstandingDispatches() map[string]int { return nil }
+
+func TestBuildSnapshotWithoutBridgeOrDispatchSourcesIsUnchanged(t *testing.T) {
+	snap := buildSnapshot(snapshotInput{Records: []agent.Record{{Name: "agent-a"}}, Now: time.Now()})
+	raw, err := json.Marshal(snap)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, key := range []string{`"dispatches"`, `"usage"`, `"outstanding"`, `"bridge"`, `"reason"`} {
+		if bytes.Contains(raw, []byte(key)) {
+			t.Fatalf("snapshot %s carries %s with no source wired", raw, key)
+		}
+	}
+}
+
+func TestBuildSnapshotDispatchesFromProvider(t *testing.T) {
+	now := time.Unix(1000, 0)
+	want := []observe.Dispatch{{ID: "d-1", Status: "running", CallerAgent: "agent-a", StartedAt: now}}
+	p := &fakeDispatchProvider{dispatches: want}
+	snap := buildSnapshot(snapshotInput{Dispatches: p, Now: now})
+	if len(snap.Dispatches) != 1 || snap.Dispatches[0].ID != "d-1" {
+		t.Fatalf("dispatches = %+v, want %+v", snap.Dispatches, want)
+	}
+	if !p.gotNow.Equal(now) {
+		t.Fatalf("provider asked for now=%v, want %v", p.gotNow, now)
+	}
+}

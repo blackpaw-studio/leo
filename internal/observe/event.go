@@ -29,7 +29,42 @@ const (
 	// EventFileSurfaced announces a file an agent pushed to the user's attention
 	// (leo_surface_file). Its payload is FileSurfacedPayload.
 	EventFileSurfaced EventType = "file_surfaced"
+	// EventAgentTurnStarted announces a bridged agent beginning a turn.
+	EventAgentTurnStarted EventType = "agent_turn_started"
+	// EventAgentTurnCompleted announces a bridged agent's turn ending, with
+	// a clamped preview of its final message and the turn's usage.
+	EventAgentTurnCompleted EventType = "agent_turn_completed"
+	// EventAgentSessionEnded announces a bridged agent's Claude session ending.
+	EventAgentSessionEnded EventType = "agent_session_ended"
+	// EventAgentCompaction reports one phase of a conversation compaction.
+	EventAgentCompaction EventType = "agent_compaction"
+	// EventAgentUsage reports a usage change outside a turn completion.
+	EventAgentUsage EventType = "agent_usage"
+	// EventDispatchChanged carries a dispatch's full record whenever it
+	// changes; a terminal Status marks the end.
+	EventDispatchChanged EventType = "dispatch_changed"
 )
+
+// Features are the optional capabilities this daemon's API offers,
+// advertised on the hello so a client can tell a field that is empty from
+// one this daemon never sends.
+const (
+	FeatureBridgeTurns     = "bridge_turns"
+	FeatureAttentionReason = "attention_reason"
+	FeatureDispatchTree    = "dispatch_tree"
+	FeatureAgentUsage      = "agent_usage"
+	FeatureAgentControl    = "agent_control"
+)
+
+// Features returns the hello's features list, a fresh copy each call.
+func Features() []string {
+	return []string{FeatureBridgeTurns, FeatureAttentionReason, FeatureDispatchTree, FeatureAgentUsage, FeatureAgentControl}
+}
+
+// ActivityMinInterval is the most often agent_activity is published per
+// agent (the trailing edge always is), and the most often the mod sends an
+// activity report.
+const ActivityMinInterval = time.Second
 
 // Meta is the sequence number and timestamp carried by every event payload. The bus
 // stamps it at publish time; producers leave it zero.
@@ -71,6 +106,9 @@ type HelloPayload struct {
 	// BootID is random per daemon process. Attention revisions restart with
 	// the daemon, so a consumer that sees BootID change must re-baseline.
 	BootID string `json:"boot_id"`
+	// Features lists the optional capabilities this daemon offers (see
+	// Features). Consumers ignore names they do not recognise.
+	Features []string `json:"features"`
 }
 
 // AgentSpawnedPayload carries the whole agent, since the consumer has never seen it.
@@ -137,6 +175,92 @@ type AgentMessagePayload struct {
 	Meta
 	From string `json:"from,omitempty"`
 	To   string `json:"to"`
+}
+
+// TurnOutcome is how a bridged agent's turn ended.
+type TurnOutcome string
+
+const (
+	TurnCompleted TurnOutcome = "completed"
+	TurnAborted   TurnOutcome = "aborted"
+)
+
+// TurnTokens is one turn's own token counts.
+type TurnTokens struct {
+	Input         int64 `json:"input"`
+	Output        int64 `json:"output"`
+	CacheRead     int64 `json:"cache_read"`
+	CacheCreation int64 `json:"cache_creation"`
+}
+
+// AgentTurnStartedPayload announces a turn beginning. Never carries the prompt.
+type AgentTurnStartedPayload struct {
+	Meta
+	Agent     string `json:"agent"`
+	SessionID string `json:"session_id"`
+}
+
+// AgentTurnCompletedPayload announces a turn ending. Preview is the final
+// message clamped by ClampPreview: display text, never parse it.
+type AgentTurnCompletedPayload struct {
+	Meta
+	Agent     string        `json:"agent"`
+	SessionID string        `json:"session_id"`
+	Outcome   TurnOutcome   `json:"outcome"`
+	Preview   string        `json:"preview"`
+	Tokens    TurnTokens    `json:"tokens"`
+	CostUSD   *float64      `json:"cost_usd,omitempty"`
+	Context   *ContextUsage `json:"context,omitempty"`
+}
+
+// AgentSessionEndedPayload announces a Claude session ending. Reason is the
+// mod's, clamped by ClampDetail.
+type AgentSessionEndedPayload struct {
+	Meta
+	Agent     string `json:"agent"`
+	SessionID string `json:"session_id"`
+	Reason    string `json:"reason"`
+}
+
+// CompactionPhase is one step of a compaction.
+type CompactionPhase string
+
+const (
+	CompactionStarted   CompactionPhase = "started"
+	CompactionCompleted CompactionPhase = "completed"
+	CompactionFailed    CompactionPhase = "failed"
+)
+
+// CompactionTrigger says who asked for a compaction.
+type CompactionTrigger string
+
+const (
+	CompactionManual CompactionTrigger = "manual"
+	CompactionAuto   CompactionTrigger = "auto"
+)
+
+// AgentCompactionPayload reports one compaction phase. ContextPercent is the
+// context window fill when known.
+type AgentCompactionPayload struct {
+	Meta
+	Agent          string            `json:"agent"`
+	Phase          CompactionPhase   `json:"phase"`
+	Trigger        CompactionTrigger `json:"trigger"`
+	ContextPercent *float64          `json:"context_percent,omitempty"`
+}
+
+// AgentUsagePayload reports an agent's usage when it changes outside a turn
+// completion (which already carries it).
+type AgentUsagePayload struct {
+	Meta
+	Agent string     `json:"agent"`
+	Usage AgentUsage `json:"usage"`
+}
+
+// DispatchChangedPayload carries a dispatch's whole current record.
+type DispatchChangedPayload struct {
+	Meta
+	Dispatch Dispatch `json:"dispatch"`
 }
 
 // Publisher is the seam producers publish through — the supervisor for agent events, the

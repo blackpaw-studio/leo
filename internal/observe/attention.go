@@ -23,6 +23,29 @@ const (
 type AgentAttention struct {
 	State    AttentionState `json:"state"`
 	Revision uint64         `json:"revision"`
+	// Reason says what a needs_input agent is waiting on; absent otherwise
+	// or when the source cannot tell.
+	Reason *AttentionReason `json:"reason,omitempty"`
+	// Outstanding explains a working state held after the turn completed
+	// (B-051); absent when nothing is outstanding.
+	Outstanding *Outstanding `json:"outstanding,omitempty"`
+}
+
+// AttentionReasonKind is what a needs_input agent is waiting on.
+type AttentionReasonKind string
+
+const (
+	AttentionReasonPermission  AttentionReasonKind = "permission"
+	AttentionReasonQuestion    AttentionReasonKind = "question"
+	AttentionReasonElicitation AttentionReasonKind = "elicitation"
+)
+
+// AttentionReason details a needs_input state. Tool and Detail are
+// mod-supplied display text, clamped by ClampAttentionReason.
+type AttentionReason struct {
+	Kind   AttentionReasonKind `json:"kind"`
+	Tool   string              `json:"tool,omitempty"`
+	Detail string              `json:"detail,omitempty"`
 }
 
 // AttentionStore holds every agent's attention state. Each Set is a semantic

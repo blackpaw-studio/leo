@@ -27,6 +27,10 @@ type Snapshot struct {
 	// conversation can seed what it missed rather than waiting for the next
 	// message. Bounded by MaxRecentMessages and RecentMessageWindow.
 	RecentMessages []AgentMessage `json:"recent_messages"`
+	// Dispatches are live leo dispatches plus those ended within
+	// DispatchLinger, flat: clients build the tree from ParentDispatchID.
+	// Absent when the daemon has no dispatch source.
+	Dispatches []Dispatch `json:"dispatches,omitempty"`
 }
 
 // Status is an agent's lifecycle state, mirroring the supervisor's own vocabulary.
@@ -88,6 +92,78 @@ type Agent struct {
 	// attention (leo_surface_file), oldest first, capped at
 	// MaxSurfacedFiles. Absent when there are none.
 	SurfacedFiles []SurfacedFile `json:"surfaced_files,omitempty"`
+
+	// Usage is the bridged agent's token and cost totals; absent without a
+	// bridge feed reading for it.
+	Usage *AgentUsage `json:"usage,omitempty"`
+	// Outstanding counts the children still running for this agent; absent
+	// when nothing reports any.
+	Outstanding *Outstanding `json:"outstanding,omitempty"`
+	// Bridge is the claude mod bridge's link state; empty (omitted) for
+	// non-claude harnesses.
+	Bridge BridgeState `json:"bridge,omitempty"`
+}
+
+// BridgeState is whether a claude agent's mod bridge is connected.
+type BridgeState string
+
+const (
+	BridgeConnected BridgeState = "connected"
+	BridgeAbsent    BridgeState = "absent"
+)
+
+// Outstanding counts an agent's still-running children: leo dispatches it
+// called and native background subagents. While either is non-zero after a
+// turn completes, the agent's attention stays working (B-051).
+type Outstanding struct {
+	Dispatches int `json:"dispatches"`
+	Subagents  int `json:"subagents"`
+}
+
+// UsageTotals is accumulated tokens and cost over some span.
+type UsageTotals struct {
+	Tokens  int64   `json:"tokens"`
+	CostUSD float64 `json:"cost_usd"`
+}
+
+// ContextUsage is how full the model's context window is.
+type ContextUsage struct {
+	Tokens  int64   `json:"tokens"`
+	Window  int64   `json:"window"`
+	Percent float64 `json:"percent"`
+}
+
+// AgentUsage is a bridged agent's usage. Session resets when SessionID
+// changes; Incarnation resets when the agent respawns.
+type AgentUsage struct {
+	SessionID   string        `json:"session_id"`
+	Session     UsageTotals   `json:"session"`
+	Incarnation UsageTotals   `json:"incarnation"`
+	Context     *ContextUsage `json:"context,omitempty"`
+}
+
+// DispatchLinger is how long a finished dispatch stays in
+// Snapshot.Dispatches after it ends.
+const DispatchLinger = 60 * time.Second
+
+// Dispatch is one leo subagent dispatch. Status uses the dispatch store's
+// own vocabulary; ParentDispatchID is set when the caller is itself a
+// dispatch.
+type Dispatch struct {
+	ID               string     `json:"id"`
+	Name             string     `json:"name,omitempty"`
+	Role             string     `json:"role,omitempty"`
+	Template         string     `json:"template,omitempty"`
+	Model            string     `json:"model,omitempty"`
+	Status           string     `json:"status"`
+	Stalled          bool       `json:"stalled"`
+	CallerAgent      string     `json:"caller_agent,omitempty"`
+	ParentDispatchID string     `json:"parent_dispatch_id,omitempty"`
+	StartedAt        time.Time  `json:"started_at"`
+	EndedAt          *time.Time `json:"ended_at,omitempty"`
+	TokensIn         int64      `json:"tokens_in"`
+	TokensOut        int64      `json:"tokens_out"`
+	CostUSD          float64    `json:"cost_usd"`
 }
 
 // ActionKind names the provenance of an Action's detail, so consumers can tell how much
@@ -99,8 +175,13 @@ type Agent struct {
 // older consumer's display.
 type ActionKind string
 
-// ActionKindPane marks detail scraped from the agent's tmux pane.
-const ActionKindPane ActionKind = "pane"
+const (
+	// ActionKindPane marks detail scraped from the agent's tmux pane.
+	ActionKindPane ActionKind = "pane"
+	// ActionKindTool marks detail from the claude mod bridge: the running
+	// tool's one-field summary, clamped by ClampDetail.
+	ActionKindTool ActionKind = "tool"
+)
 
 // Action is a best-effort hint at what an agent is doing right now.
 //
@@ -114,6 +195,9 @@ type Action struct {
 
 // MaxActionDetail is the character budget for Action.Detail after sanitizing.
 const MaxActionDetail = 120
+
+// MaxTurnPreview is the character budget for a turn-completed preview.
+const MaxTurnPreview = 280
 
 // Task is a configured scheduled task.
 type Task struct {
@@ -208,4 +292,22 @@ type ActivityProvider interface {
 	// Activities returns the latest reading for every agent the tracker knows about.
 	// Agents absent from the map have no measurement; treat them as ActivityUnknown.
 	Activities() map[string]AgentActivity
+}
+
+// BridgeAgentState is the bridge feed's projection for one agent, merged
+// into its Agent row. Zero fields mean the feed has no reading for them.
+type BridgeAgentState struct {
+	Bridge    BridgeState
+	Usage     *AgentUsage
+	Subagents int
+	// Reason is set while the agent is blocked on the user.
+	Reason *AttentionReason
+}
+
+// DispatchCounter is the seam the bridge feed and the snapshot read
+// outstanding leo dispatches through (the dispatch store provides it).
+// Implementations must be safe for concurrent use.
+type DispatchCounter interface {
+	// OutstandingDispatches returns each caller agent's count of non-terminal dispatches, keyed by agent name.
+	OutstandingDispatches() map[string]int
 }

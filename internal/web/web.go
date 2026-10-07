@@ -228,6 +228,13 @@ type Server struct {
 	// supported default: recent_messages is then empty, as with runLog.
 	messageLog messageProvider
 
+	// bridgeFeed and dispatches are the read seams onto the bridge feed and
+	// the dispatch store's projection, wired via WithBridgeFeed and
+	// WithDispatches. nil is a supported default: the snapshot then carries
+	// none of the bridge or dispatch fields.
+	bridgeFeed bridgeFeedProvider
+	dispatches dispatchProvider
+
 	// version is reported as Snapshot.LeoVersion. Wired via WithVersion;
 	// empty means the caller didn't provide one.
 	version string
@@ -298,6 +305,18 @@ func WithAttention(a *observe.AttentionStore) Option {
 // POST /api/agent/{name}/surface-file and read by GET /api/v1/state. Optional.
 func WithSurfacedFiles(store *observe.SurfacedFileStore) Option {
 	return func(s *Server) { s.surfacedFiles = store }
+}
+
+// WithBridgeFeed wires the bridge feed GET /api/v1/state merges per-agent
+// usage, bridge state, and attention reasons from. Optional.
+func WithBridgeFeed(p bridgeFeedProvider) Option {
+	return func(s *Server) { s.bridgeFeed = p }
+}
+
+// WithDispatches wires the dispatch projection GET /api/v1/state reads
+// dispatches and outstanding dispatch counts from. Optional.
+func WithDispatches(p dispatchProvider) Option {
+	return func(s *Server) { s.dispatches = p }
 }
 
 // WithEventSource wires the event bus that GET /api/v1/events streams from.

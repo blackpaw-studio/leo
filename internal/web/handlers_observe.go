@@ -67,6 +67,8 @@ func (s *Server) handleAPIState(w http.ResponseWriter, r *http.Request) {
 			SurfacedFiles: s.surfacedFiles,
 			RunLog:        s.runLog,
 			MessageLog:    s.messageLog,
+			BridgeFeed:    s.bridgeFeed,
+			Dispatches:    s.dispatches,
 			LeoVersion:    s.version,
 			Now:           time.Now(),
 		}), nil
@@ -106,8 +108,28 @@ type snapshotInput struct {
 	// MessageLog is the agent-message log's read seam (observe.MessageLog
 	// satisfies it). Optional: nil yields an empty recent_messages.
 	MessageLog messageProvider
+	// BridgeFeed is the bridge feed's read seam. Optional: nil leaves usage,
+	// bridge, and attention reasons absent. Merged per agent by buildAgent.
+	BridgeFeed bridgeFeedProvider
+	// Dispatches is the dispatch store's read seam. Optional: nil leaves
+	// dispatches and outstanding dispatch counts absent.
+	Dispatches dispatchProvider
 	LeoVersion string
 	Now        time.Time
+}
+
+// bridgeFeedProvider is the narrow read seam onto observe.BridgeFeed.
+type bridgeFeedProvider interface {
+	// BridgeAgents returns each bridged agent's projected state, keyed by agent name.
+	BridgeAgents() map[string]observe.BridgeAgentState
+}
+
+// dispatchProvider is the narrow read seam onto the dispatch store's
+// observability projection.
+type dispatchProvider interface {
+	observe.DispatchCounter
+	// Dispatches returns live dispatches plus those ended within observe.DispatchLinger of now.
+	Dispatches(now time.Time) []observe.Dispatch
 }
 
 // buildSnapshot assembles an observe.Snapshot from raw state. It is pure
@@ -160,7 +182,16 @@ func buildSnapshot(in snapshotInput) observe.Snapshot {
 		Tasks:          tasks,
 		RecentRuns:     buildRecentRuns(in.History, liveRuns),
 		RecentMessages: recentMessages,
+		Dispatches:     dispatchSnapshot(in.Dispatches, in.Now),
 	}
+}
+
+// dispatchSnapshot reads the dispatch list once, nil-safe.
+func dispatchSnapshot(p dispatchProvider, now time.Time) []observe.Dispatch {
+	if p == nil {
+		return nil
+	}
+	return p.Dispatches(now)
 }
 
 // buildAgent maps one agent.Record to its observe.Agent view. Status,
