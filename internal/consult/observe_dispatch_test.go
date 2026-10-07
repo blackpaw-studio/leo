@@ -228,3 +228,22 @@ func TestDispatchObserverWithoutListenerOrPublisher(t *testing.T) {
 		t.Fatalf("got %v", got)
 	}
 }
+
+// A caller's bridge key is fixed at launch, so it names the agent across a
+// rename while Record.Caller keeps the old name.
+func TestOutstandingDispatchesFollowTheCallersBridgeKeyAcrossARename(t *testing.T) {
+	renamed := agentDispatch("d1", "old-name", StatusRunning)
+	renamed.CallerBridgeKey = "k-old"
+	unbridged := agentDispatch("d2", "gamma", StatusRunning)
+	orphaned := agentDispatch("d3", "delta", StatusRunning)
+	orphaned.CallerBridgeKey = "k-gone"
+	owners := map[string]string{"k-old": "new-name"}
+	obs := NewDispatchObserver(func() []Record { return []Record{renamed, unbridged, orphaned} }, nil,
+		WithDispatchOwner(func(key string) (string, bool) { name, ok := owners[key]; return name, ok }))
+
+	got := obs.OutstandingDispatches()
+
+	if want := map[string]int{"new-name": 1, "gamma": 1, "delta": 1}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("OutstandingDispatches = %v, want %v", got, want)
+	}
+}

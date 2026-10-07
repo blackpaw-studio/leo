@@ -227,3 +227,73 @@ func TestAttentionMoveCarriesOutstandingAndHold(t *testing.T) {
 		t.Fatalf("state = %s; want the deferred finish under the new name", got.State)
 	}
 }
+
+// staticCounter is a DispatchCounter returning a settable map.
+type staticCounter struct{ counts map[string]int }
+
+func (c *staticCounter) OutstandingDispatches() map[string]int { return c.counts }
+
+// A dispatch started just before the turn ends is counted when the finish
+// lands, not a tick later.
+func TestAttentionFinishReadsDispatchCountsSynchronously(t *testing.T) {
+	counter := &staticCounter{counts: map[string]int{"a": 1}}
+	s := NewAttentionStore(nil)
+	s.SetDispatchCounter(counter)
+	s.Set("a", AttentionWorking)
+
+	s.Set("a", AttentionFinished)
+	if got, _ := s.Get("a"); got.State != AttentionWorking || got.Outstanding == nil || got.Outstanding.Dispatches != 1 {
+		t.Fatalf("after finish with a fresh dispatch: %+v; want held", got)
+	}
+
+	// It ended before any tick saw it: the next reconcile releases it.
+	counter.counts = map[string]int{}
+	s.ReconcileDispatches(counter.counts)
+	if got, _ := s.Get("a"); got.State != AttentionFinished {
+		t.Fatalf("after reconcile: %+v; want finished", got)
+	}
+}
+
+func TestAttentionFinishViaAdvanceAndTokenReadDispatchCounts(t *testing.T) {
+	counter := &staticCounter{counts: map[string]int{"a": 1}}
+	s := NewAttentionStore(nil)
+	s.SetDispatchCounter(counter)
+	s.RegisterToken("tok", "a")
+	s.Set("a", AttentionWorking)
+
+	s.Advance("a", AttentionFinished)
+	s.SetByToken("tok", AttentionFinished)
+
+	if got, _ := s.Get("a"); got.State != AttentionWorking {
+		t.Fatalf("state = %s; want held", got.State)
+	}
+}
+
+// Dispatch records keep the caller's old name after a rename: counts under
+// it follow the agent until that name is taken by another.
+func TestAttentionDispatchCountsUnderARenamedAgentsOldNameFollowIt(t *testing.T) {
+	s := NewAttentionStore(nil)
+	s.Set("old", AttentionWorking)
+	s.ReconcileDispatches(map[string]int{"old": 1})
+	s.Set("old", AttentionFinished) // held
+
+	s.Move("old", "new")
+	s.ReconcileDispatches(map[string]int{"old": 1})
+	if got, _ := s.Get("new"); got.State != AttentionWorking || got.Outstanding == nil || got.Outstanding.Dispatches != 1 {
+		t.Fatalf("renamed agent while its dispatch runs: %+v; want held", got)
+	}
+	s.ReconcileDispatches(map[string]int{})
+	if got, _ := s.Get("new"); got.State != AttentionFinished {
+		t.Fatalf("renamed agent after its dispatch ended: %+v; want finished", got)
+	}
+
+	// A new agent takes the old name: its counts are its own.
+	s.Set("old", AttentionWorking)
+	s.ReconcileDispatches(map[string]int{"old": 2})
+	if got, _ := s.Get("new"); got.Outstanding != nil {
+		t.Fatalf("renamed agent picked up the new agent's dispatches: %+v", got.Outstanding)
+	}
+	if got, _ := s.Get("old"); got.Outstanding == nil || got.Outstanding.Dispatches != 2 {
+		t.Fatalf("new agent outstanding = %+v", got.Outstanding)
+	}
+}

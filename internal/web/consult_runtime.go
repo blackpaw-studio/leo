@@ -85,9 +85,13 @@ func (s *Server) setupConsultRuntime(opts Options, resolveCallerSession func(str
 		hub.AddSubscriber(feed)
 		s.bridgeFeed = feed
 	}
-	// Outstanding dispatch counts hold a finished turn at working (B-051).
+	// Outstanding dispatch counts hold a finished turn at working (B-051):
+	// read when a turn finishes (so a just-started dispatch counts) and
+	// reconciled every state tick (so one that ended between ticks is
+	// released). Counting by the caller's bridge key follows a rename.
 	dispatchObserver := consult.NewDispatchObserver(s.consults.RunRecords, s.publisher,
-		consult.WithOutstandingListener(s.attention.SetOutstandingDispatches))
+		consult.WithDispatchOwner(s.dispatchCallerOwner))
+	s.attention.SetDispatchCounter(dispatchObserver)
 	if s.dispatches == nil {
 		s.dispatches = dispatchObserver
 	}
@@ -141,6 +145,7 @@ func (s *Server) setupConsultRuntime(opts Options, resolveCallerSession func(str
 					pusher.Tick()
 				}
 				dispatchObserver.Tick()
+				s.attention.ReconcileDispatches(dispatchObserver.OutstandingDispatches())
 			}
 		}
 	}()
@@ -176,4 +181,13 @@ func (s *Server) agentForBridgeKey(router *bridge.Router) func(key string) (stri
 		}
 		return "", false
 	}
+}
+
+// dispatchCallerOwner returns the agent holding a dispatch caller's bridge
+// key now; a calling dispatch's key belongs to no agent.
+func (s *Server) dispatchCallerOwner(key string) (string, bool) {
+	if _, isDispatch := consult.DispatchIDFromBridgeKey(key); isDispatch {
+		return "", false
+	}
+	return s.bridgeKeyOwner(key)
 }

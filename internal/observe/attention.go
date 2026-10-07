@@ -72,6 +72,13 @@ type AttentionStore struct {
 	held        map[string]bool
 	// reasons holds what a needs_input agent is waiting on, when known.
 	reasons map[string]AttentionReason
+	// aliases maps a renamed agent's old name to its new one while no
+	// other agent holds the old name: dispatch records keep the name their
+	// caller had, so their counts follow it here.
+	aliases map[string]string
+	// dispatches is read for fresh dispatch counts whenever a turn
+	// finishes, outside mu (see dispatchCounts).
+	dispatches DispatchCounter
 }
 
 // NewAttentionStore creates an empty store. publisher may be nil.
@@ -85,6 +92,7 @@ func NewAttentionStore(publisher Publisher) *AttentionStore {
 		outstanding: make(map[string]Outstanding),
 		held:        make(map[string]bool),
 		reasons:     make(map[string]AttentionReason),
+		aliases:     make(map[string]string),
 	}
 }
 
@@ -105,8 +113,10 @@ func (s *AttentionStore) Set(agent string, state AttentionState) AgentAttention 
 	if s == nil {
 		return AgentAttention{}
 	}
+	counts := s.dispatchCounts(state)
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.applyDispatchCountsLocked(agent, counts)
 	return s.setLocked(agent, state)
 }
 
@@ -145,7 +155,11 @@ func (s *AttentionStore) SetIfUntracked(agent string, state AttentionState) (Age
 // turn or a lifecycle transition drops the hold, but answering a prompt
 // raised during it (needs_input → working) keeps it.
 func (s *AttentionStore) setLocked(agent string, state AttentionState) AgentAttention {
-	prev := s.states[agent]
+	prev, tracked := s.states[agent]
+	if !tracked {
+		// The name is an agent's again: counts under it are its own.
+		delete(s.aliases, agent)
+	}
 	switch {
 	case state == AttentionFinished && s.outstanding[agent].total() > 0:
 		s.held[agent] = true
@@ -186,12 +200,14 @@ func (s *AttentionStore) Advance(agent string, state AttentionState, from ...Att
 	if s == nil {
 		return AgentAttention{}, false
 	}
+	counts := s.dispatchCounts(state)
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	cur, tracked := s.states[agent]
 	if !tracked || len(from) > 0 && !slices.Contains(from, cur) {
 		return AgentAttention{}, false
 	}
+	s.applyDispatchCountsLocked(agent, counts)
 	switch {
 	case state == AttentionWorking && cur == AttentionWorking:
 		delete(s.held, agent)
@@ -246,6 +262,10 @@ func (s *AttentionStore) setOutstanding(agent string, apply func(*Outstanding)) 
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.setOutstandingLocked(agent, apply)
+}
+
+func (s *AttentionStore) setOutstandingLocked(agent string, apply func(*Outstanding)) {
 	prev := s.outstanding[agent]
 	next := prev
 	apply(&next)
@@ -269,6 +289,102 @@ func (s *AttentionStore) setOutstanding(agent string, apply func(*Outstanding)) 
 }
 
 func (o Outstanding) total() int { return o.Dispatches + o.Subagents }
+
+// SetDispatchCounter wires the dispatch store read whenever a turn
+// finishes, so a dispatch started just before is counted at once rather
+// than at the next ReconcileDispatches. The counter must not call back into
+// the store; it is read without the store's lock held.
+func (s *AttentionStore) SetDispatchCounter(c DispatchCounter) {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	s.dispatches = c
+	s.mu.Unlock()
+}
+
+// ReconcileDispatches sets every agent's outstanding dispatches from
+// counts (each caller's count of non-terminal dispatches), zeroing agents
+// it no longer names. A count under a renamed agent's old name follows it.
+func (s *AttentionStore) ReconcileDispatches(counts map[string]int) {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	eff := s.effectiveCountsLocked(counts)
+	for agent, o := range s.outstanding {
+		if _, named := eff[agent]; !named && o.Dispatches > 0 {
+			s.setOutstandingLocked(agent, func(o *Outstanding) { o.Dispatches = 0 })
+		}
+	}
+	for agent, n := range eff {
+		s.setOutstandingLocked(agent, func(o *Outstanding) { o.Dispatches = max(n, 0) })
+	}
+}
+
+// dispatchCounts reads the counter for a finished transition; nil
+// otherwise or without a counter. Called without mu held: the counter may
+// take locks (the supervisor's) whose holders call into this store.
+func (s *AttentionStore) dispatchCounts(state AttentionState) map[string]int {
+	if state != AttentionFinished {
+		return nil
+	}
+	s.mu.Lock()
+	c := s.dispatches
+	s.mu.Unlock()
+	if c == nil {
+		return nil
+	}
+	counts := c.OutstandingDispatches()
+	if counts == nil {
+		counts = map[string]int{}
+	}
+	return counts
+}
+
+// applyDispatchCountsLocked records agent's outstanding dispatches from
+// counts without publishing (the transition that follows publishes); nil
+// counts change nothing.
+func (s *AttentionStore) applyDispatchCountsLocked(agent string, counts map[string]int) {
+	if counts == nil {
+		return
+	}
+	o := s.outstanding[agent]
+	o.Dispatches = s.effectiveCountsLocked(counts)[agent]
+	if o.total() == 0 {
+		delete(s.outstanding, agent)
+	} else {
+		s.outstanding[agent] = o
+	}
+}
+
+// effectiveCountsLocked re-keys counts from recorded caller names to the
+// agents holding them now, following renames.
+func (s *AttentionStore) effectiveCountsLocked(counts map[string]int) map[string]int {
+	eff := make(map[string]int, len(counts))
+	for name, n := range counts {
+		eff[s.currentNameLocked(name)] += n
+	}
+	return eff
+}
+
+// maxAliasHops bounds alias chains (a rename of a rename).
+const maxAliasHops = 16
+
+func (s *AttentionStore) currentNameLocked(name string) string {
+	for range maxAliasHops {
+		if _, tracked := s.states[name]; tracked {
+			return name
+		}
+		next, ok := s.aliases[name]
+		if !ok {
+			return name
+		}
+		name = next
+	}
+	return name
+}
 
 // Remove drops agent's attention (the field becomes absent) and its tokens
 // while keeping its revision counter, so a later Set under the same name
@@ -344,12 +460,14 @@ func (s *AttentionStore) SetByToken(token string, state AttentionState, from ...
 	if s == nil || token == "" {
 		return AgentAttention{}, false
 	}
+	counts := s.dispatchCounts(state)
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	agent, ok := s.tokens[token]
 	if !ok {
 		return AgentAttention{}, false
 	}
+	s.applyDispatchCountsLocked(agent, counts)
 	if len(from) > 0 && !slices.Contains(from, s.states[agent]) {
 		return AgentAttention{}, false
 	}
@@ -379,6 +497,8 @@ func (s *AttentionStore) Move(oldName, newName string) {
 	}
 	moveKey(s.held, oldName, newName)
 	moveKey(s.reasons, oldName, newName)
+	delete(s.aliases, newName)
+	s.aliases[oldName] = newName
 	rev := max(s.revisions[oldName], s.revisions[newName]) + 1
 	delete(s.states, oldName)
 	s.states[newName] = state

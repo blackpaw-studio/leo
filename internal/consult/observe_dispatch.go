@@ -16,6 +16,7 @@ type DispatchObserver struct {
 	publisher     observe.Publisher
 	now           func() time.Time
 	onOutstanding func(agent string, outstanding int)
+	owner         func(key string) (agent string, ok bool)
 
 	mu     sync.Mutex
 	last   map[string]observe.Dispatch
@@ -34,6 +35,14 @@ func WithDispatchClock(now func() time.Time) DispatchObserverOption {
 // outstanding dispatches changes, including when it drops to 0.
 func WithOutstandingListener(fn func(agent string, outstanding int)) DispatchObserverOption {
 	return func(o *DispatchObserver) { o.onOutstanding = fn }
+}
+
+// WithDispatchOwner resolves a caller's bridge key to the agent holding it
+// now. A record keeps its caller's name from when it started, but the key
+// is fixed at the caller's launch, so counting by it follows a renamed
+// caller. Records whose key does not resolve count under Record.Caller.
+func WithDispatchOwner(fn func(key string) (agent string, ok bool)) DispatchObserverOption {
+	return func(o *DispatchObserver) { o.owner = fn }
 }
 
 // NewDispatchObserver observes the records records returns, publishing
@@ -62,7 +71,7 @@ func (o *DispatchObserver) Dispatches(now time.Time) []observe.Dispatch {
 // non-terminal dispatches. A dispatch's dispatches count toward that
 // dispatch, not the agent above it.
 func (o *DispatchObserver) OutstandingDispatches() map[string]int {
-	return outstandingCounts(o.records())
+	return o.outstandingCounts(o.records())
 }
 
 // Tick publishes dispatch_changed for each dispatch whose record changed
@@ -74,7 +83,7 @@ func (o *DispatchObserver) Tick() {
 	o.mu.Lock()
 	defer o.mu.Unlock()
 	o.publishChangesLocked(records, now)
-	o.notifyCountsLocked(outstandingCounts(records))
+	o.notifyCountsLocked(o.outstandingCounts(records))
 }
 
 func (o *DispatchObserver) publishChangesLocked(records []Record, now time.Time) {
@@ -114,15 +123,28 @@ func (o *DispatchObserver) notifyCountsLocked(counts map[string]int) {
 	}
 }
 
-func outstandingCounts(records []Record) map[string]int {
+func (o *DispatchObserver) outstandingCounts(records []Record) map[string]int {
 	counts := map[string]int{}
 	for _, rec := range records {
-		if rec.Kind != "dispatch" || rec.Caller == "" || rec.Status.Terminal() || parentDispatchID(rec) != "" {
+		if rec.Kind != "dispatch" || rec.Status.Terminal() || parentDispatchID(rec) != "" {
 			continue
 		}
-		counts[rec.Caller]++
+		if caller := o.callerAgent(rec); caller != "" {
+			counts[caller]++
+		}
 	}
 	return counts
+}
+
+// callerAgent is the agent rec's dispatch counts toward: whoever holds its
+// caller's bridge key now, else the caller's recorded name.
+func (o *DispatchObserver) callerAgent(rec Record) string {
+	if o.owner != nil && rec.CallerBridgeKey != "" {
+		if agent, ok := o.owner(rec.CallerBridgeKey); ok && agent != "" {
+			return agent
+		}
+	}
+	return rec.Caller
 }
 
 func withinLinger(rec Record, now time.Time) bool {
