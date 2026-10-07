@@ -74,7 +74,7 @@ func TestInteractiveWaitingTurnFinishesAfterNotificationContinuation(t *testing.
 	if err := d.Report(id, claudeStop(t, "stop-1", "I'll wait for the build.", shellAndMonitor)); err != nil {
 		t.Fatal(err)
 	}
-	now = now.Add(time.Minute)
+	advanceClock(&now, time.Minute)
 	if err := d.Report(id, claudeHook(t, "submit-2", "UserPromptSubmit", taskNotification)); err != nil {
 		t.Fatal(err)
 	}
@@ -82,7 +82,7 @@ func TestInteractiveWaitingTurnFinishesAfterNotificationContinuation(t *testing.
 	if rec.Status != StatusRunning || rec.PendingWork != nil || len(rec.Turns) != 1 || rec.Steered {
 		t.Fatalf("after notification: record=%+v", rec)
 	}
-	now = now.Add(time.Second)
+	advanceClock(&now, time.Second)
 	if err := d.Report(id, claudeStop(t, "stop-2", "Build passed.", map[string]any{"background_tasks": []any{}, "session_crons": []any{}})); err != nil {
 		t.Fatal(err)
 	}
