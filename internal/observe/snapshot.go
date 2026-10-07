@@ -302,6 +302,9 @@ type BridgeAgentState struct {
 	Subagents int
 	// Reason is set while the agent is blocked on the user.
 	Reason *AttentionReason
+	// CurrentAction is the main loop's running tool (kind "tool"); nil
+	// between tool calls.
+	CurrentAction *Action
 }
 
 // DispatchCounter is the seam the bridge feed and the snapshot read
