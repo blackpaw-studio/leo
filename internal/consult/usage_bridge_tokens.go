@@ -77,6 +77,9 @@ func (d *Dispatcher) ApplyBridgeTokens(id, eventID string, tokens *bridge.TurnTo
 	if err != nil || s == nil {
 		return
 	}
+	// The turn's own lines may not have been polled yet; read them now, so
+	// the next turn's live counts start after them.
+	liveIn, liveOut, _ := d.advanceLiveTally(s)
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	if s.record.Mode != ModeInteractive || s.record.Status.Terminal() || s.bridgedUsage.isReplay(eventID) {
@@ -87,6 +90,7 @@ func (d *Dispatcher) ApplyBridgeTokens(id, eventID string, tokens *bridge.TurnTo
 	} else {
 		s.bridgedUsage.add(*tokens)
 	}
+	rebaseLiveUsageLocked(s, liveIn, liveOut)
 	d.applyBridgedUsageLocked(s)
 }
 

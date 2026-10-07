@@ -292,6 +292,9 @@ func (d *Dispatcher) launchInteractive(ctx context.Context, s *runState, req Req
 	if !published {
 		return Started{}, context.Canceled
 	}
+	if harnessName == "claude" {
+		go d.watchLiveUsage(s)
+	}
 	go d.injectOpening(ctx, s, rt, harnessName, turnID, pane, prompt)
 	return Started{ID: s.record.ID, Harness: harnessName, Model: model, Cwd: req.Cwd, Placement: placement.Kind, Pane: pane, Window: window}, nil
 }
@@ -723,6 +726,7 @@ func (d *Dispatcher) Report(id string, r HookReport) error {
 	if s.record.SessionID == "" {
 		s.record.SessionID = str(p, "session_id")
 	}
+	noteLiveTranscriptLocked(s, p)
 	switch event {
 	case "userpromptsubmit":
 		oldStatus := s.record.Status

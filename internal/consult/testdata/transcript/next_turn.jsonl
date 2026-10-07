@@ -1,0 +1,2 @@
+{"type":"user","message":{"role":"user","content":"follow up"},"uuid":"u3"}
+{"type":"assistant","message":{"id":"msg_c","role":"assistant","usage":{"input_tokens":3,"cache_creation_input_tokens":20,"cache_read_input_tokens":1300,"output_tokens":9}},"uuid":"c1"}
