@@ -51,7 +51,7 @@ func isBridgeRosterRecord(rec Record, key string, now time.Time) bool {
 
 func bridgeDispatchState(rec Record, now time.Time) bridge.DispatchState {
 	return bridge.DispatchState{
-		ID: rec.ID, Name: rec.Name, Role: rec.Role, Template: rec.Template, Model: rec.Model,
+		ID: rec.ID, Name: rec.Name, Role: rec.Role, Template: rec.Template, Model: rec.Model, Effort: rec.Effort,
 		Status: string(rec.Status), Stalled: isStalled(rec, now), ActiveSeconds: rec.LiveActiveSeconds(now),
 		TokensIn: clonePtr(rec.InputTokens), TokensOut: clonePtr(rec.OutputTokens), CostUSD: clonePtr(rec.CostUSD),
 	}
