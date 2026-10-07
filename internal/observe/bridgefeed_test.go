@@ -453,3 +453,38 @@ func TestBridgeFeedImmediateEdgeCancelsALateTrailingCallback(t *testing.T) {
 		t.Fatalf("second event = %q", got)
 	}
 }
+
+func TestBridgeFeedDropsAgentsWhoseKeyNoLongerResolves(t *testing.T) {
+	keys := staticKeys{"alice-key": "alice"}
+	h := newFeedHarness(t, keys)
+	h.send(bridge.Event{Name: bridge.EventTurnComplete, EventID: "a", Tokens: tokens(1, 1)})
+
+	delete(keys, "alice-key") // alice was deleted
+
+	if agents := h.feed.BridgeAgents(); len(agents) != 0 {
+		t.Fatalf("BridgeAgents = %+v; want the deleted agent gone", agents)
+	}
+}
+
+func TestBridgeFeedStaleKeyMappingNeverMovesAnotherAgentsState(t *testing.T) {
+	keys := staticKeys{"k1": "alice"}
+	h := newFeedHarness(t, keys)
+	h.send(bridge.Event{Agent: "k1", Name: bridge.EventTurnComplete, EventID: "a", Tokens: tokens(100, 20)})
+
+	// alice is deleted and recreated under a new launch key.
+	delete(keys, "k1")
+	keys["k2"] = "alice"
+	h.send(bridge.Event{Agent: "k2", Name: bridge.ReportHello, Gen: 1, SessionID: "s9"})
+	h.send(bridge.Event{Agent: "k2", Name: bridge.EventTurnComplete, EventID: "b", SessionID: "s9", Tokens: tokens(1, 1)})
+	// The old key is reused by an unrelated agent.
+	keys["k1"] = "carol"
+	h.send(bridge.Event{Agent: "k1", Name: bridge.EventTurnComplete, EventID: "c", Tokens: tokens(2, 2)})
+
+	agents := h.feed.BridgeAgents()
+	if u := agents["alice"].Usage; u == nil || u.SessionID != "s9" {
+		t.Fatalf("alice usage = %+v; want the recreated alice's", u)
+	}
+	if u := agents["carol"].Usage; u == nil || u.Session.Tokens != 19 {
+		t.Fatalf("carol usage = %+v; want only carol's own turn", u)
+	}
+}

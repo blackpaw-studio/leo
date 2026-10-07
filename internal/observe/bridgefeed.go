@@ -149,6 +149,7 @@ func (f *BridgeFeed) BridgeAgents() map[string]BridgeAgentState {
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	f.pruneLocked()
 	for name, st := range f.agents {
 		bs := BridgeAgentState{Bridge: BridgeAbsent, Subagents: st.subagents, Reason: cloneOf(st.reason), CurrentAction: cloneOf(st.action)}
 		if f.connected != nil && f.connected(st.key) {
@@ -213,13 +214,18 @@ func (f *BridgeFeed) OnBridgeEvent(ev bridge.Event) {
 	}
 }
 
-// agentLocked returns the state filed for key, moving it to name if the
-// key's agent was renamed.
+// agentLocked returns the state filed for name, moving it from the agent
+// key was last filed under if that agent was renamed. A state moves only
+// while it still belongs to key: after a delete and recreate the old
+// name's state is another agent's. A name's state that last saw another
+// key is the same agent relaunched under a new one.
 func (f *BridgeFeed) agentLocked(key, name string) *feedAgent {
 	if prev, ok := f.names[key]; ok && prev != name {
-		if st, ok := f.agents[prev]; ok {
+		if st, ok := f.agents[prev]; ok && st.key == key {
 			delete(f.agents, prev)
-			f.agents[name] = st
+			if _, taken := f.agents[name]; !taken {
+				f.agents[name] = st
+			}
 		}
 	}
 	f.names[key] = name
@@ -228,8 +234,28 @@ func (f *BridgeFeed) agentLocked(key, name string) *feedAgent {
 		st = &feedAgent{key: key}
 		f.agents[name] = st
 	}
-	st.key = key
+	if st.key != key {
+		delete(f.names, st.key)
+		st.key = key
+	}
 	return st
+}
+
+// pruneLocked drops every state whose key no longer resolves to the agent
+// it is filed under (a deleted agent, or a key reused by another).
+func (f *BridgeFeed) pruneLocked() {
+	if f.resolve == nil {
+		return
+	}
+	for name, st := range f.agents {
+		if owner, ok := f.resolve.AgentForKey(st.key); !ok || owner != name {
+			st.cancelTrailing()
+			delete(f.agents, name)
+			if f.names[st.key] == name {
+				delete(f.names, st.key)
+			}
+		}
+	}
 }
 
 func (f *BridgeFeed) turnCompleteLocked(name string, st *feedAgent, ev bridge.Event) {
