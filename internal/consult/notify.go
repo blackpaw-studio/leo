@@ -28,6 +28,9 @@ func (d *Dispatcher) SetNotificationDelivery(delivery NotificationDelivery) {
 	d.mu.Lock()
 	d.notificationDelivery = delivery
 	d.mu.Unlock()
+	if acker, ok := delivery.(interface{ OnAcked(func(Record, string)) }); ok {
+		acker.OnAcked(d.collectAcked)
+	}
 }
 
 func sanitizeNotification(value string) string {
@@ -296,7 +299,13 @@ func (d *Dispatcher) deliverNotification(ctx context.Context, delivery Notificat
 	switch {
 	case err == nil:
 		n.Disposition, n.DeliveredAt = NotificationDelivered, d.now()
-		collect = carriesResultInline(rec, transport)
+		// The Claude inbox socket has no ack, so a successful write counts as
+		// delivered. That is safe enough to collect on: collection removes
+		// only a clean, fully merged worktree and closes a viewer, and the
+		// recorded result stays readable by leo_wait and leo_dispatch_output.
+		// A bridge delivery collects when the mod acks it instead (see
+		// collectAcked).
+		collect = carriesResultInline(rec, transport) && transport != NotificationTransportBridge
 	case errors.Is(err, ErrNotificationNotSent):
 		// Nothing was sent or queued, so the next sweep may pick again.
 		n.Disposition, n.ClaimedAt, n.Transport = NotificationPending, time.Time{}, ""
@@ -321,20 +330,11 @@ func (d *Dispatcher) redeliverBridgeClaim(ctx context.Context, delivery Notifica
 	if errors.Is(err, ErrNotificationNotSent) {
 		return
 	}
-	if d.settleBridgeClaim(item, err) && err == nil {
-		// Outside d.mu: collecting takes it again.
-		d.collectDelivered(ctx, item)
-	}
-}
-
-// settleBridgeClaim records the outcome of redelivering a bridge claim; it
-// reports whether item's claim was still the bridge's to settle.
-func (d *Dispatcher) settleBridgeClaim(item pendingNotification, err error) bool {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	n := item.state.record.Notifications[item.key]
 	if n.Disposition != NotificationClaimed || n.Transport != NotificationTransportBridge {
-		return false
+		return
 	}
 	if err == nil {
 		n.Disposition, n.DeliveredAt = NotificationDelivered, d.now()
@@ -343,7 +343,6 @@ func (d *Dispatcher) settleBridgeClaim(item pendingNotification, err error) bool
 	}
 	item.state.record.Notifications[item.key] = n
 	_ = d.persistNotificationRecordLocked(item.state)
-	return true
 }
 
 func notificationMessage(rec Record, key string, n Notification) string {

@@ -69,31 +69,17 @@ func inlineBody(e Entry) string {
 	var parts []string
 	switch {
 	case e.Err != "":
-		parts = append(parts, "error: "+cleanInlineText(e.Err))
+		parts = append(parts, "error: "+sanitizeSubagentText(e.Err))
 	case e.Outcome != "" && e.Outcome != TurnFinished:
 		parts = append(parts, "outcome: "+string(e.Outcome))
 	}
-	if text := cleanInlineText(e.Text); strings.TrimSpace(text) != "" {
+	if text := sanitizeSubagentText(e.Text); strings.TrimSpace(text) != "" {
 		parts = append(parts, text)
 	}
 	if len(parts) == 0 {
 		return noResultText
 	}
 	return strings.ReplaceAll(strings.Join(parts, "\n"), inlineEnd, inlineEndDefanged)
-}
-
-// cleanInlineText drops terminal escape sequences and control characters
-// from subagent text, keeping its line breaks and tabs.
-func cleanInlineText(s string) string {
-	lines := strings.Split(strings.ReplaceAll(s, "\r\n", "\n"), "\n")
-	for i, line := range lines {
-		cells := strings.Split(line, "\t")
-		for j, cell := range cells {
-			cells[j] = StripControlSequences(cell)
-		}
-		lines[i] = strings.Join(cells, "\t")
-	}
-	return strings.Join(lines, "\n")
 }
 
 func capUTF8(s string, limit int) (string, bool) {
@@ -110,19 +96,38 @@ func tokenCount(p *int64) int64 {
 	return *p
 }
 
+// ackCollectTimeout bounds the wait for a run's done channel when an ack
+// triggers collection.
+const ackCollectTimeout = 15 * time.Second
+
+// collectAcked collects the run whose notification key the caller's mod acked.
+func (d *Dispatcher) collectAcked(rec Record, key string) {
+	d.mu.Lock()
+	state := d.runs[rec.ID]
+	d.mu.Unlock()
+	if state == nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), ackCollectTimeout)
+	defer cancel()
+	d.collectDelivered(ctx, pendingNotification{state: state, record: rec, key: key})
+}
+
 // collectDelivered collects the run after its result was delivered inline,
 // as leo_wait would have on the same result: the entry leo_wait returns for
 // this notification's turn must be terminal, and a result for an older turn
-// of a headless run that has moved on collects nothing.
+// of a headless run that has moved on (a follow-up already started) collects
+// nothing. Both are judged under the run's serial lock, which a follow-up
+// also takes, so the two cannot interleave.
 func (d *Dispatcher) collectDelivered(ctx context.Context, item pendingNotification) {
+	unlock := d.serialLocks([]string{item.record.ID})
+	defer unlock()
 	d.mu.Lock()
 	rec, done := cloneRecord(item.state.record), item.state.done
 	d.mu.Unlock()
 	if !waitEntryFor(rec, item.key).Status.Terminal() || isSupersededHeadlessTurn(rec, item.key) {
 		return
 	}
-	unlock := d.serialLocks([]string{rec.ID})
-	defer unlock()
 	d.collectRun(ctx, rec.ID, item.state, done)
 }
 

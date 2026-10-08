@@ -4,8 +4,11 @@ import (
 	"context"
 	"errors"
 	"os"
+	"os/exec"
 	"testing"
 	"time"
+
+	"github.com/blackpaw-studio/leo/internal/bridge"
 )
 
 // startIsolatedNotifying starts a worktree-isolated headless run that
@@ -134,29 +137,146 @@ func TestInlineDeliveryOfAnIdleInteractiveTurnCollectsNothing(t *testing.T) {
 	}
 }
 
-// A bridge claim a restart interrupted is redelivered, then collected: the
-// collection takes the dispatcher lock, so the claim's bookkeeping must have
-// released it first.
-func TestRedeliveredBridgeClaimCollectsWithoutDeadlock(t *testing.T) {
+// bridgedIsolatedRun starts a finished worktree-isolated run whose caller is
+// the bridged agent "orch", with a delivery that queues over its bridge.
+func bridgedIsolatedRun(t *testing.T) (*Dispatcher, *bridgedCaller, Record) {
+	t.Helper()
+	repo := gitTestRepo(t)
+	d := worktreeDispatcher(t, t.TempDir(), "")
+	rec := startIsolatedNotifying(t, d, repo, "claude")
+	d.mu.Lock()
+	d.runs[rec.ID].record.Caller, d.runs[rec.ID].record.CallerPaneID = "orch", "%4"
+	d.mu.Unlock()
 	c := newBridgedCaller(t, "orch", "%4")
-	d := NewDispatcher(nil)
-	collected := make(chan string, 2)
-	d.onCollect = func(r Record) { collected <- r.ID }
 	d.SetNotificationDelivery(c.delivery(&fakeNotificationDelivery{ready: true}))
-	rec := notifyRecord()
-	rec.Kind, rec.Status = "dispatch", StatusDone
-	rec.Notifications = map[string]Notification{"d-7": {Disposition: NotificationClaimed, Transport: NotificationTransportBridge, ClaimedAt: d.now(), Message: "line"}}
-	d.runs["d-7"] = &runState{record: rec, handle: &durableTestHandle{}, done: func() chan struct{} { c := make(chan struct{}); close(c); return c }()}
+	return d, c, rec
+}
+
+func ackBridge(t *testing.T, c *bridgedCaller, id string, ok bool) {
+	t.Helper()
+	if err := c.hub.Apply("orch", notifyLaunch, bridge.Report{Type: bridge.ReportAck, ID: id, OK: ok, Error: "no"}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func eventually(t *testing.T, what string, cond func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for !cond() {
+		if time.Now().After(deadline) {
+			t.Fatalf("timed out waiting for %s", what)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
+func TestBridgedInlineDeliveryCollectsOnlyWhenTheModAcks(t *testing.T) {
+	d, c, rec := bridgedIsolatedRun(t)
+	d.SweepNotifications(context.Background())
+	cmd := c.next(t)
+	if got, _ := d.Get(rec.ID); got.WorktreeState == WorktreeRemoved || !worktreePresent(got) {
+		t.Fatal("collected when the deliver was only queued")
+	}
+	ackBridge(t, c, cmd.ID, true)
+	eventually(t, "collection after the ok ack", func() bool { got, _ := d.Get(rec.ID); return got.WorktreeState == WorktreeRemoved })
+	if entry := d.Wait(context.Background(), []string{rec.ID}, RunTimeout)[0]; entry.Text != "ok" || entry.Err != "" {
+		t.Fatalf("leo_wait after the ack = %+v", entry)
+	}
+}
+
+func TestBridgedInlineDeliveryRejectedByTheModDoesNotCollect(t *testing.T) {
+	d, c, rec := bridgedIsolatedRun(t)
+	d.SweepNotifications(context.Background())
+	ackBridge(t, c, c.next(t).ID, false)
+	time.Sleep(20 * time.Millisecond) // a collection would be asynchronous: give it the chance
+	if got, _ := d.Get(rec.ID); got.WorktreeState == WorktreeRemoved || !worktreePresent(got) {
+		t.Fatalf("a rejected deliver collected the run (state %q)", got.WorktreeState)
+	}
+}
+
+// --- a follow-up racing the collection ---
+
+func isolatedSessionDispatcher(t *testing.T) *Dispatcher {
+	t.Helper()
+	t.Setenv("HOME", t.TempDir())
+	d := NewDispatcher(NewFileRecorder(t.TempDir()))
+	d.ProcessCommand = func(ctx context.Context, name string, args ...string) *exec.Cmd {
+		return exec.CommandContext(ctx, "printf", "1 1 0\n")
+	}
+	d.ExecCommandContext = func(ctx context.Context, name string, args ...string) *exec.Cmd {
+		if name == "ps" {
+			return exec.CommandContext(ctx, name, args...)
+		}
+		return exec.CommandContext(ctx, "printf", "%s", `{"type":"result","session_id":"sid-1","result":"ok","is_error":false}`)
+	}
+	return d
+}
+
+func pendingItem(t *testing.T, d *Dispatcher, id string) pendingNotification {
+	t.Helper()
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	s := d.runs[id]
+	return pendingNotification{state: s, record: cloneRecord(s.record), key: id + "#1"}
+}
+
+// The caller got the inline result and sent a follow-up before collection
+// ran: the continuation takes the run's still-present worktree, and the late
+// collection of the first turn then leaves it alone.
+func TestFollowUpBeforeCollectionKeepsTheWorktree(t *testing.T) {
+	repo := gitTestRepo(t)
+	d := isolatedSessionDispatcher(t)
+	rec := startIsolatedNotifying(t, d, repo, "claude")
+	item := pendingItem(t, d, rec.ID)
+	if rec.WorktreeState == WorktreeRemoved {
+		t.Fatal("setup: already collected")
+	}
+	sent, err := d.SendWithConfig(context.Background(), testConfig(), rec.ID, "follow up")
+	if err != nil {
+		t.Fatalf("a follow-up on a finished run whose worktree is still present: %v", err)
+	}
+	d.collectDelivered(context.Background(), item)
+	got, _ := d.Get(rec.ID)
+	if got.WorktreeState == WorktreeRemoved || !worktreePresent(got) {
+		t.Fatalf("the first turn's collection removed a worktree the follow-up uses (state %q)", got.WorktreeState)
+	}
+	d.Wait(context.Background(), []string{sent.TurnID}, RunTimeout) // let the follow-up finish before the temp dirs go
+}
+
+// Collection won the race: the follow-up recreates the removed worktree.
+func TestFollowUpAfterCollectionRecreatesTheWorktree(t *testing.T) {
+	repo := gitTestRepo(t)
+	d := isolatedSessionDispatcher(t)
+	rec := startIsolatedNotifying(t, d, repo, "claude")
+	d.collectDelivered(context.Background(), pendingItem(t, d, rec.ID))
+	if got, _ := d.Get(rec.ID); got.WorktreeState != WorktreeRemoved {
+		t.Fatalf("setup: state %q", got.WorktreeState)
+	}
+	sent, err := d.SendWithConfig(context.Background(), testConfig(), rec.ID, "follow up")
+	if err != nil {
+		t.Fatalf("a follow-up after collection: %v", err)
+	}
+	d.Wait(context.Background(), []string{sent.TurnID}, RunTimeout)
+}
+
+// A bridge claim a restart interrupted is queued again; the new deliver's ack
+// collects the run like a first delivery's.
+func TestRedeliveredBridgeClaimCollectsOnceAcked(t *testing.T) {
+	d, c, rec := bridgedIsolatedRun(t)
+	key := rec.Turns[len(rec.Turns)-1].TurnID
+	d.mu.Lock()
+	s := d.runs[rec.ID]
+	n := s.record.Notifications[key]
+	n.Disposition, n.Transport, n.ClaimedAt = NotificationClaimed, NotificationTransportBridge, d.now()
+	s.record.Notifications[key] = n
+	d.mu.Unlock()
 	swept := make(chan struct{})
 	go func() { d.SweepNotifications(context.Background()); close(swept) }()
 	select {
 	case <-swept:
 	case <-time.After(5 * time.Second):
-		t.Fatal("SweepNotifications deadlocked collecting a redelivered bridge claim")
+		t.Fatal("SweepNotifications hung redelivering a bridge claim")
 	}
-	select {
-	case <-collected:
-	default:
-		t.Fatal("the redelivered claim was not collected")
-	}
+	ackBridge(t, c, c.next(t).ID, true)
+	eventually(t, "collection after the redelivered deliver's ack", func() bool { got, _ := d.Get(rec.ID); return got.WorktreeState == WorktreeRemoved })
 }

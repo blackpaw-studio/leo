@@ -212,7 +212,9 @@ func (d *Dispatcher) resumeWorkspace(rec Record) (string, bool, error) {
 		return rec.Cwd, false, nil
 	}
 	switch rec.WorktreeState {
-	case WorktreeKept:
+	case WorktreeKept, WorktreePresent:
+		// A completed run's worktree not yet collected is as good as a kept
+		// one: its caller can follow up before the collection runs.
 		if info, err := os.Stat(rec.Worktree); err != nil || !info.IsDir() {
 			return "", false, errors.New("retained worktree is unavailable")
 		}

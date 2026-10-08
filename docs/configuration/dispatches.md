@@ -95,8 +95,14 @@ reads as data. The result is capped at 8 KiB on a UTF-8 boundary; when cut, the
 notification ends with `… truncated; full output: leo_dispatch_output <id>`.
 Codex and opencode callers get a single pointer line directing them to collect
 with `leo_wait`, since large multiline tmux pastes are refused or hit tmux's
-command-size limit. Delivering a notification does not collect the dispatch:
-`leo_wait` still returns the result afterwards. So with notifications on, a
+command-size limit. An inline delivery collects the dispatch once it is
+confirmed (a bridged caller's mod acks the deliver; the Claude inbox socket has
+no ack, so a successful write counts): a clean isolated worktree is removed
+(a dirty or unmerged one is kept) and a successful headless run's viewer is
+closed. The recorded result stays readable by `leo_wait` and
+`leo_dispatch_output` afterwards, and a follow-up recreates a removed worktree
+or uses one not yet collected. A rejected or unacked deliver, a pointer-only
+notification, and a failed delivery collect nothing. So with notifications on, a
 claude orchestrator can dispatch and end its turn; reach for `leo_wait` only to
 block on a result within the same turn or to wait on a follow-up turn id.
 
@@ -325,8 +331,8 @@ template otherwise; labels replace whitespace, `:`, and `.` with `-` and are
 truncated to 24 characters. It runs `leo dispatch watch <id>` with
 `remain-on-exit` enabled. The pane or window closes when a successful result
 is collected: via `leo_wait`, `leo dispatch run`, or web `/api/dispatch/wait`,
-or when its completion notification is delivered inline (claude callers; a
-pointer-only codex/opencode notification collects nothing). Collection also
+or when its completion notification is delivered inline and confirmed (claude
+callers; a pointer-only codex/opencode notification collects nothing). Collection also
 removes a clean isolated worktree, keeping a dirty or unmerged one, and a
 second collection is a no-op; `leo_dispatch_output` keeps working afterwards.
 An interactive dispatch's pane is never closed by collection. Failed, canceled, and timed-out runs remain open for
