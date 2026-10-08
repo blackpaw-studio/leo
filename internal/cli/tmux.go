@@ -5,7 +5,9 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"os/signal"
 	"strings"
+	"syscall"
 
 	"github.com/blackpaw-studio/leo/internal/config"
 	"github.com/blackpaw-studio/leo/internal/harness"
@@ -63,6 +65,46 @@ type attachOptions struct {
 	// status passed through) instead of replacing leo with tmux, for callers
 	// that must clean up after the client leaves or fails to start.
 	asChild bool
+}
+
+// attachSignalSource is the testability seam for the signals leo forwards to
+// an attach child: it returns the delivery channel and a func that stops
+// delivery.
+var attachSignalSource = func() (<-chan os.Signal, func()) {
+	ch := make(chan os.Signal, 1)
+	signal.Notify(ch, syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP)
+	return ch, func() { signal.Stop(ch) }
+}
+
+// runForwardingSignals runs c to completion, forwarding SIGINT, SIGTERM and
+// SIGHUP to it meanwhile. leo keeps waiting for the child to exit, so the
+// caller's cleanup runs and no tmux client is orphaned.
+func runForwardingSignals(c *exec.Cmd) error {
+	sigs, stop := attachSignalSource()
+	defer stop()
+	if err := c.Start(); err != nil {
+		return err
+	}
+	done := make(chan error, 1)
+	go func() { done <- c.Wait() }()
+	for {
+		select {
+		case sig := <-sigs:
+			// Fails harmlessly once the child has exited.
+			_ = c.Process.Signal(sig)
+		case err := <-done:
+			return err
+		}
+	}
+}
+
+// childExitCode is the status leo exits with for a finished child: its own
+// exit code, or 128+N when signal N killed it (ExitCode reports -1 then).
+func childExitCode(e *exec.ExitError) int {
+	if ws, ok := e.Sys().(syscall.WaitStatus); ok && ws.Signaled() {
+		return 128 + int(ws.Signal())
+	}
+	return e.ExitCode()
 }
 
 // attachArgs is the `attach` subcommand argv for target under opts.
@@ -139,10 +181,10 @@ func attachTmuxSession(res config.HostResolution, session string, opts attachOpt
 		c.Stdin = os.Stdin
 		c.Stdout = agentStdout
 		c.Stderr = agentStderr
-		err := c.Run()
+		err := runForwardingSignals(c)
 		var exitErr *exec.ExitError
 		if errors.As(err, &exitErr) {
-			return exitCodeError{code: exitErr.ExitCode(), err: errors.New("")}
+			return exitCodeError{code: childExitCode(exitErr), err: errors.New("")}
 		}
 		return err
 	}

@@ -3,9 +3,11 @@ package cli
 import (
 	"context"
 	"errors"
+	"os"
 	"os/exec"
 	"reflect"
 	"strings"
+	"syscall"
 	"testing"
 
 	"github.com/blackpaw-studio/leo/internal/config"
@@ -335,4 +337,46 @@ func containsString(list []string, want string) bool {
 		}
 	}
 	return false
+}
+
+// stubAttachSignals replaces the signal source with a channel the test feeds.
+func stubAttachSignals(t *testing.T) chan os.Signal {
+	t.Helper()
+	ch := make(chan os.Signal, 1)
+	old := attachSignalSource
+	attachSignalSource = func() (<-chan os.Signal, func()) { return ch, func() {} }
+	t.Cleanup(func() { attachSignalSource = old })
+	return ch
+}
+
+func TestDispatchAttachForwardsSignalToClientAndStillCleansUp(t *testing.T) {
+	for _, sig := range []syscall.Signal{syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP} {
+		t.Run(sig.String(), func(t *testing.T) {
+			f := newAttachFixture(t)
+			f.attachCmd = func() *exec.Cmd { return exec.Command("sleep", "30") }
+			stubAttachSignals(t) <- sig
+
+			err := f.run(t, "d-abc123")
+
+			if want := 128 + int(sig); ExitCode(err) != want {
+				t.Fatalf("exit code %d (err %v), want %d", ExitCode(err), err, want)
+			}
+			last := f.tmux[len(f.tmux)-1]
+			if !reflect.DeepEqual(last, []string{"/tmux", "-L", "leo", "kill-session", "-t", "$9"}) {
+				t.Fatalf("watch session not cleaned up after the signal; last tmux call %q", last)
+			}
+		})
+	}
+}
+
+func TestDispatchAttachReportsSignalledClientAs128PlusSignal(t *testing.T) {
+	f := newAttachFixture(t)
+	f.attachCmd = func() *exec.Cmd { return exec.Command("sh", "-c", "kill -KILL $$") }
+	stubAttachSignals(t)
+
+	err := f.run(t, "d-abc123")
+
+	if ExitCode(err) != 128+int(syscall.SIGKILL) {
+		t.Fatalf("exit code %d (err %v), want 137", ExitCode(err), err)
+	}
 }
