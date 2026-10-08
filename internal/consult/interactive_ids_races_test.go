@@ -2,6 +2,7 @@ package consult
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"testing"
 	"time"
@@ -180,5 +181,61 @@ func TestPromptIDHeldStopIsDroppedWhenAnotherIDSubmitDeliversTheArmedTurn(t *tes
 	reportAll(t, d, id, idStop(t, "s3", "z", "follow up done"))
 	if got := turnByID(idleRecord(t, d, id), sent.TurnID); got.Outcome != TurnFinished || got.Text != "follow up done" {
 		t.Fatalf("sent turn = %+v", got)
+	}
+}
+
+// Pending work belongs to the turn whose Stop carried it. A turn of leo's
+// own that stops with nothing pending (a stale-stamped start) leaves the
+// waiting turn waiting, and the wake still finds it.
+func TestBridgedTurnStoppingWithNothingPendingLeavesTheWaitingTurnWaiting(t *testing.T) {
+	d, rt, id := startBridgedIdle(t)
+	waiting, err := d.Send(context.Background(), id, "build it")
+	if err != nil {
+		t.Fatal(err)
+	}
+	pending, _ := json.Marshal(map[string]any{"hook_event_name": "Stop", "bridge_turn_id": "t2", "last_assistant_message": "waiting", "background_tasks": shellAndMonitor["background_tasks"], "session_crons": []any{}})
+	reportAll(t, d, id, bridgeStart(t, "e1", "t2", "build it", rt.lastCommandID()), HookReport{EventID: "e2", Payload: pending})
+	reportAll(t, d, id, bridgeStart(t, "e3", "t3", "stale", "cmd-nobody-holds"), bridgeStop(t, "e4", "t3", "stale done"))
+	rec := idleRecord(t, d, id)
+	if w := turnByID(rec, waiting.TurnID); w.Outcome != "" || rec.Status != StatusWaiting || rec.PendingWork == nil {
+		t.Fatalf("the stale turn's stop ended the wait: status=%s pending=%v turn=%+v", rec.Status, rec.PendingWork, w)
+	}
+	reportAll(t, d, id, bridgeWake(t, "e5", "t4", taskNotification), bridgeStop(t, "e6", "t4", "Build passed."))
+	rec = idleRecord(t, d, id)
+	if w := turnByID(rec, waiting.TurnID); w.Outcome != TurnFinished || w.Text != "Build passed." || rec.Status != StatusIdle || rec.PendingWork != nil || len(rec.Turns) != 3 {
+		t.Fatalf("the wake did not finish the waiting turn: %+v", rec)
+	}
+	if d.slots.InUse() != 0 {
+		t.Fatalf("slots in use = %d", d.slots.InUse())
+	}
+}
+
+// A turn that stops is the only turn whose pending work its Stop settles:
+// another turn's wait, and the run's waiting status, stay.
+func TestPendingWorkIsOnlyClearedByItsOwnTurnsStop(t *testing.T) {
+	now := time.Date(2026, time.October, 8, 12, 0, 0, 0, time.UTC)
+	d := NewDispatcher(nil)
+	d.now = sharedClock(&now)
+	s := &runState{record: Record{ID: "d-two", Harness: "claude", Mode: ModeInteractive, Status: StatusRunning}, handle: nopHandle{}, done: make(chan struct{}), pendingCloses: map[string]pendingClose{}}
+	d.mu.Lock()
+	d.runs[s.record.ID] = s
+	waitingID := d.openTurnLocked(s, TurnSourceUser, "", false).TurnID
+	d.bindKeyLocked(s, waitingID, "p:a")
+	otherID := d.openTurnLocked(s, TurnSourceUser, "", false).TurnID
+	d.bindKeyLocked(s, otherID, "p:h")
+	d.waitOnBackgroundLocked(s, pendingWorkFromStop(shellAndMonitor), &s.record.Turns[turnIndexByID(s.record.Turns, waitingID)])
+	d.mu.Unlock()
+
+	reportAll(t, d, s.record.ID, idStop(t, "s1", "h", "human done"))
+	rec := idleRecord(t, d, s.record.ID)
+	if w := turnByID(rec, waitingID); w.Outcome != "" || rec.Status != StatusWaiting || rec.PendingWork == nil {
+		t.Fatalf("another turn's stop ended the wait: status=%s pending=%v", rec.Status, rec.PendingWork)
+	}
+	if o := turnByID(rec, otherID); o.Outcome != TurnFinished {
+		t.Fatalf("the stopped turn = %+v", o)
+	}
+	reportAll(t, d, s.record.ID, idStop(t, "s2", "a", "all done"))
+	if rec = idleRecord(t, d, s.record.ID); rec.Status != StatusIdle || rec.PendingWork != nil {
+		t.Fatalf("its own stop did not settle the wait: %+v", rec)
 	}
 }

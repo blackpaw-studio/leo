@@ -533,6 +533,7 @@ func (d *Dispatcher) closeTurnLocked(s *runState, id string, outcome TurnOutcome
 			continue
 		}
 		t.Outcome = outcome
+		t.Pending = nil
 		t.EndedAt = boundary
 		if text != "" {
 			t.Text = text
@@ -600,7 +601,22 @@ func (d *Dispatcher) hasWorkingTurnLocked(s *runState) bool {
 	return false
 }
 
+// openPendingWork is the background work the run waits on: the first open
+// turn's, or nil when no open turn waits.
+func openPendingWork(s *runState) *PendingWork {
+	for i := range s.record.Turns {
+		if t := &s.record.Turns[i]; t.Outcome == "" && t.Pending != nil {
+			return t.Pending
+		}
+	}
+	return nil
+}
+
+// interactiveStatusLocked derives the run's status from its turns: waiting
+// when an open turn waits on background work, running when one is open,
+// idle when none is. It also refreshes the run's PendingWork from them.
 func (d *Dispatcher) interactiveStatusLocked(s *runState, boundary time.Time) Status {
+	s.record.PendingWork = openPendingWork(s)
 	for _, t := range s.record.Turns {
 		if t.Outcome == "" {
 			if s.record.PendingWork != nil {
@@ -981,11 +997,15 @@ func (d *Dispatcher) closeWorkingLocked(s *runState, o TurnOutcome, text string)
 }
 
 // waitOnBackgroundLocked handles a Stop that leaves background work pending:
-// the session is paused, not done, so the working turn stays open (leo_wait
-// keeps blocking) and the run reads waiting until that work wakes it.
-func (d *Dispatcher) waitOnBackgroundLocked(s *runState, w *PendingWork) {
+// the session is paused, not done, so the turns the Stop ended stay open
+// (leo_wait keeps blocking), each holding that work, and the run reads
+// waiting until it wakes them.
+func (d *Dispatcher) waitOnBackgroundLocked(s *runState, w *PendingWork, turns ...*Turn) {
 	old := s.record.Status
-	s.record.PendingWork = w
+	for _, t := range turns {
+		t.Pending = w
+	}
+	s.record.PendingWork = openPendingWork(s)
 	s.record.foldActive(d.now())
 	if s.record.Status != StatusNeedsInput {
 		s.record.Status = StatusWaiting
@@ -1018,14 +1038,30 @@ func (d *Dispatcher) confirmArmedLocked(s *runState) {
 	}
 }
 
-// resumeWaitingLocked returns a waiting run to running as its session
-// starts working again; the caller persists the change.
+// resumeWaitingLocked returns every waiting turn, and so the run, to running
+// as its session starts working again, for payloads that name no turn; the
+// caller persists the change.
 func (d *Dispatcher) resumeWaitingLocked(s *runState) {
-	if s.record.PendingWork == nil && s.record.Status != StatusWaiting {
+	for i := range s.record.Turns {
+		s.record.Turns[i].Pending = nil
+	}
+	d.settleResumedLocked(s)
+}
+
+// resumeTurnLocked continues t, a turn paused on background work, as the
+// wake that carries it on arrives. Other turns' waits stand.
+func (d *Dispatcher) resumeTurnLocked(s *runState, t *Turn) {
+	t.Pending = nil
+	d.settleResumedLocked(s)
+}
+
+func (d *Dispatcher) settleResumedLocked(s *runState) {
+	still := openPendingWork(s)
+	if still == nil && s.record.PendingWork == nil && s.record.Status != StatusWaiting {
 		return
 	}
-	s.record.PendingWork = nil
-	if s.record.Status == StatusWaiting {
+	s.record.PendingWork = still
+	if still == nil && s.record.Status == StatusWaiting {
 		s.record.Status = StatusRunning
 	}
 	s.record.startActive(d.now())

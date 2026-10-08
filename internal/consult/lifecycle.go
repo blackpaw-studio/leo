@@ -30,6 +30,9 @@ func cloneRecord(record Record) Record {
 	record.ToolCalls = clonePtr(record.ToolCalls)
 	record.NeedsInput = clonePtr(record.NeedsInput)
 	record.PendingWork = clonePendingWork(record.PendingWork)
+	for i := range record.Turns {
+		record.Turns[i].Pending = clonePendingWork(record.Turns[i].Pending)
+	}
 	if record.RunningSince != nil {
 		runningSince := *record.RunningSince
 		record.RunningSince = &runningSince

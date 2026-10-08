@@ -126,16 +126,24 @@ func turnIndexByID(turns []Turn, id string) int {
 // waitingTurnLocked is the open turn a Stop with pending work left paused:
 // the one whose wake carries the session on.
 func waitingTurnLocked(s *runState) *Turn {
-	if s.record.PendingWork == nil {
-		return nil
-	}
 	for i := range s.record.Turns {
-		t := &s.record.Turns[i]
-		if t.Outcome == "" && (t.Source == TurnSourceUser || t.Delivered) {
+		if t := &s.record.Turns[i]; t.Outcome == "" && t.Pending != nil {
 			return t
 		}
 	}
 	return nil
+}
+
+// workingTurnsLocked are the open turns that are running: a user's, or a
+// sent one whose submit has arrived.
+func workingTurnsLocked(s *runState) []*Turn {
+	var turns []*Turn
+	for i := range s.record.Turns {
+		if t := &s.record.Turns[i]; t.Outcome == "" && !t.Queued && (t.Source == TurnSourceUser || t.Delivered) {
+			turns = append(turns, t)
+		}
+	}
+	return turns
 }
 
 // lastWorkingTurnLocked is the most recent open turn that is running: a
@@ -244,14 +252,13 @@ func (d *Dispatcher) startKeyedTurnLocked(s *runState, key, prompt string, injec
 		// Whatever woke the session (its background work's notification, a
 		// wakeup, a human) carries the waiting turn on under a new id.
 		id := w.TurnID
-		d.resumeWaitingLocked(s)
+		d.resumeTurnLocked(s, w)
 		d.bindKeyLocked(s, id, key)
 		if !injected {
 			s.record.Steered = true
 		}
 		return id
 	}
-	d.resumeWaitingLocked(s)
 	if injected {
 		// A wake that reaches leo before the Stop that leaves its turn
 		// waiting (that Stop is delayed) continues the turn all the same:
@@ -349,10 +356,9 @@ func (d *Dispatcher) stopKeyedLocked(s *runState, key, event string, p map[strin
 // pending only pauses it.
 func (d *Dispatcher) finishKeyedLocked(s *runState, t *Turn, out TurnOutcome, text string, work *PendingWork) {
 	if work != nil {
-		d.waitOnBackgroundLocked(s, work)
+		d.waitOnBackgroundLocked(s, work, t)
 		return
 	}
-	s.record.PendingWork = nil
 	d.closeTurnLocked(s, t.TurnID, out, text)
 }
 
@@ -452,11 +458,10 @@ func (d *Dispatcher) stopUnkeyedLocked(s *runState, event string, p map[string]a
 	if event == "stop" && hasWorkingTurnLocked(s) {
 		if w := pendingWorkFromStop(p); w != nil {
 			d.applyObservedEffortLocked(s, effort, currentTurnIndex(s.record.Turns))
-			d.waitOnBackgroundLocked(s, w)
+			d.waitOnBackgroundLocked(s, w, workingTurnsLocked(s)...)
 			return
 		}
 	}
-	s.record.PendingWork = nil
 	d.applyObservedEffortLocked(s, effort, currentTurnIndex(s.record.Turns))
 	d.closeWorkingLocked(s, out, text)
 }
