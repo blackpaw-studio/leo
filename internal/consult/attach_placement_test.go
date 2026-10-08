@@ -209,3 +209,67 @@ func mustRegister(t *testing.T, reg *AttachPlacements, session string, pid int, 
 		t.Fatalf("Register(%q, %d, %q): %v", session, pid, placement, err)
 	}
 }
+
+func TestAttachPlacementsRegisterPrunesDeadAndCapsTheRegistry(t *testing.T) {
+	now := attachEpoch
+	reg := newTestAttachPlacements(&now)
+	mustRegister(t, reg, "leo-a", 10, "pane")
+	deadPids[10] = true
+	mustRegister(t, reg, "leo-a", 11, "pane")
+	if reg.Len() != 1 {
+		t.Fatalf("dead pid kept on register: len=%d", reg.Len())
+	}
+
+	for pid := 1000; pid < 1000+maxAttachRegistrations+10; pid++ {
+		now = now.Add(time.Second)
+		mustRegister(t, reg, "leo-a", pid, "window")
+	}
+	if reg.Len() != maxAttachRegistrations {
+		t.Fatalf("len=%d, want the cap %d", reg.Len(), maxAttachRegistrations)
+	}
+	// The oldest were evicted: pid 11 and the first ten of the loop are gone.
+	got := reg.Resolve(context.Background(), "$1", ViewerOverrides{Placement: "background"}, &config.Config{}, listing(clientAt(11, attachEpoch), clientAt(1000, attachEpoch)))
+	if got.Placement != "background" {
+		t.Fatalf("evicted entries still count: %+v", got)
+	}
+	newest := 1000 + maxAttachRegistrations + 9
+	got = reg.Resolve(context.Background(), "$1", ViewerOverrides{Placement: "background"}, &config.Config{}, listing(clientAt(newest, attachEpoch.Add(time.Hour))))
+	if got.Placement != "window" {
+		t.Fatalf("newest entry lost: %+v", got)
+	}
+}
+
+func TestAttachPlacementsPrunesDeadEntriesWhenNoClientsAreAttached(t *testing.T) {
+	now := attachEpoch
+	reg := newTestAttachPlacements(&now)
+	mustRegister(t, reg, "leo-a", 10, "pane")
+	deadPids[10] = true
+	reg.Resolve(context.Background(), "$1", ViewerOverrides{}, &config.Config{}, listing())
+	if reg.Len() != 0 {
+		t.Fatalf("len=%d, want the dead entry pruned on a zero-client resolution", reg.Len())
+	}
+}
+
+// A listing is a snapshot from before a registration that raced it: the pid in
+// it still belongs to the previous owner, so it must neither delete the fresh
+// registration nor count for it.
+func TestAttachPlacementsListingTakenBeforeARegistrationDoesNotDeleteIt(t *testing.T) {
+	now := attachEpoch
+	reg := newTestAttachPlacements(&now)
+	staleListing := func(context.Context, string) ([]tmux.Client, error) {
+		now = attachEpoch.Add(5 * time.Second) // the attach registers while tmux is being asked
+		mustRegister(t, reg, "leo-a", 10, "background")
+		return []tmux.Client{clientAt(10, attachEpoch.Add(-time.Hour))}, nil
+	}
+	got := reg.Resolve(context.Background(), "$1", ViewerOverrides{Placement: "pane"}, &config.Config{}, staleListing)
+	if got.Placement != "pane" {
+		t.Fatalf("stale listing counted the new registration: %+v", got)
+	}
+	if reg.Len() != 1 {
+		t.Fatalf("fresh registration deleted by a stale listing: len=%d", reg.Len())
+	}
+	got = reg.Resolve(context.Background(), "$1", ViewerOverrides{Placement: "pane"}, &config.Config{}, listing(clientAt(10, attachEpoch.Add(5*time.Second))))
+	if got.Placement != "background" {
+		t.Fatalf("registration lost: %+v", got)
+	}
+}

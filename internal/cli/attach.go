@@ -158,13 +158,19 @@ while this client stays attached; see 'leo agent attach --help'.`,
 // ("attach", name) for top-level attach or ("agent", "attach", name) for
 // `leo agent attach`.
 func runRemoteAttach(res config.HostResolution, remoteArgs ...string) error {
+	return runRemoteAttachVia(res, res.Host.RemoteLeoPath(), remoteArgs...)
+}
+
+// runRemoteAttachVia is runRemoteAttach with the remote leo word already
+// shell-ready (see remoteLeoWord).
+func runRemoteAttachVia(res config.HostResolution, leoWord string, remoteArgs ...string) error {
 	// The remote leo will re-resolve to a local tmux attach, which inherits
 	// $TERM from this SSH session. Make sure the remote knows that terminal
 	// type — or fall back to xterm-256color on the remote command.
 	termOverride := ensureRemoteTerminfoFn(res)
 	sshArgs := append([]string{"-t", res.Host.SSH}, res.Host.SSHArgs...)
 	prefixLen := len(sshArgs)
-	sshArgs = append(sshArgs, res.Host.RemoteLeoPath())
+	sshArgs = append(sshArgs, leoWord)
 	sshArgs = append(sshArgs, remoteArgs...)
 	sshArgs = applyRemoteTermFallback(sshArgs, prefixLen, termOverride)
 	c := agentExecCommand("ssh", sshArgs...)

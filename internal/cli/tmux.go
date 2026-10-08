@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"syscall"
@@ -15,6 +16,7 @@ import (
 	"github.com/blackpaw-studio/leo/internal/config"
 	"github.com/blackpaw-studio/leo/internal/daemon"
 	"github.com/blackpaw-studio/leo/internal/harness"
+	"github.com/blackpaw-studio/leo/internal/service"
 	"github.com/blackpaw-studio/leo/internal/tmux"
 	"github.com/spf13/cobra"
 )
@@ -97,9 +99,33 @@ func registerAttachPlacement(opts attachOptions, session string) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), attachPlacementRegisterTimeout)
 	defer cancel()
-	if err := attachPlacementRegisterFn(ctx, opts.homePath, session, os.Getpid(), opts.dispatchPlacement); err != nil {
-		fmt.Fprintf(agentStderr, "warning: --dispatch-placement not registered (%v); attaching anyway\n", err)
+	err := attachPlacementRegisterFn(ctx, opts.homePath, session, os.Getpid(), opts.dispatchPlacement)
+	if err == nil {
+		return
 	}
+	msg := fmt.Sprintf("warning: --dispatch-placement not registered (%v); attaching anyway\n", err)
+	if opts.cc {
+		// ssh -tt merges stderr into the PTY a control-mode client reads, so
+		// nothing may reach stdout or stderr before the exec.
+		appendToServiceLog(opts.homePath, msg)
+		return
+	}
+	_, _ = fmt.Fprint(agentStderr, msg)
+}
+
+// appendToServiceLog appends a timestamped line to the leo service log. It is
+// best effort: a log that cannot be written costs the note, not the attach.
+func appendToServiceLog(homePath, msg string) {
+	path := service.LogPathFor(homePath)
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return
+	}
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600) //nolint:gosec // leo's own log path
+	if err != nil {
+		return
+	}
+	defer f.Close()
+	_, _ = fmt.Fprintf(f, "%s attach: %s", time.Now().Format(time.RFC3339), msg)
 }
 
 // validateDispatchPlacement checks a --dispatch-placement value; empty means
@@ -134,12 +160,12 @@ func runRemoteAttachPlaced(res config.HostResolution, opts attachOptions, head [
 	// shell would mangle.
 	remoteArgs = append(remoteArgs, "--", remoteShellWord(name))
 	if !opts.cc {
-		return runRemoteAttach(res, remoteArgs...)
+		return runRemoteAttachVia(res, remoteLeoWord(res.Host.RemoteLeoPath()), remoteArgs...)
 	}
 	sshArgs := []string{"-tt", "-e", "none", res.Host.SSH}
 	sshArgs = append(sshArgs, res.Host.SSHArgs...)
 	sshArgs = append(sshArgs, sshControlOpts(res)...)
-	sshArgs = append(sshArgs, res.Host.RemoteLeoPath())
+	sshArgs = append(sshArgs, remoteLeoWord(res.Host.RemoteLeoPath()))
 	sshArgs = append(sshArgs, remoteArgs...)
 	c := agentExecCommand("ssh", sshArgs...)
 	c.Stdin = os.Stdin
@@ -357,6 +383,19 @@ func utf8Locale(env []string) []string {
 		}
 	}
 	return append(out, "LC_CTYPE=UTF-8")
+}
+
+// remoteLeoWord quotes the remote leo path for the remote login shell. A
+// leading $HOME/ or ~/ is the one thing left for that shell to expand
+// ("$HOME"/'rest'); everything else is single-quoted whole, so a path with a
+// space, a quote or $() reaches the remote exec as one literal word.
+func remoteLeoWord(path string) string {
+	for _, prefix := range []string{"$HOME/", "~/"} {
+		if rest, ok := strings.CutPrefix(path, prefix); ok {
+			return `"$HOME"/` + shellQuoteArg(rest)
+		}
+	}
+	return shellQuoteArg(path)
 }
 
 // shellQuoteArg wraps a value in single quotes, escaping any embedded single

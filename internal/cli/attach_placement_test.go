@@ -5,11 +5,13 @@ import (
 	"context"
 	"errors"
 	"os"
+	"os/exec"
 	"strings"
 	"testing"
 
 	"github.com/blackpaw-studio/leo/internal/config"
 	"github.com/blackpaw-studio/leo/internal/daemon"
+	"github.com/blackpaw-studio/leo/internal/service"
 )
 
 type placementRegistration struct {
@@ -156,27 +158,27 @@ func TestAgentAttachRemoteForwardsPlacementThroughRemoteLeo(t *testing.T) {
 		"agent attach non-cc": {
 			[]string{"agent", "attach", "--dispatch-placement", "background", "scratch"},
 			func(string) []string {
-				return []string{"ssh", "-t", "user@prod.example.com", "-p", "2222", config.DefaultRemoteLeoPath, "agent", "attach", "--dispatch-placement", "background", "--", "scratch"}
+				return []string{"ssh", "-t", "user@prod.example.com", "-p", "2222", quotedDefaultRemoteLeo, "agent", "attach", "--dispatch-placement", "background", "--", "scratch"}
 			},
 		},
 		"agent attach cc": {
 			[]string{"agent", "attach", "--cc", "--dispatch-placement", "background", "scratch"},
 			func(home string) []string {
 				w := append([]string{"ssh", "-tt", "-e", "none", "user@prod.example.com", "-p", "2222"}, ctlOpts(home)...)
-				return append(w, config.DefaultRemoteLeoPath, "agent", "attach", "--cc", "--dispatch-placement", "background", "--", "scratch")
+				return append(w, quotedDefaultRemoteLeo, "agent", "attach", "--cc", "--dispatch-placement", "background", "--", "scratch")
 			},
 		},
 		"top-level attach non-cc": {
 			[]string{"attach", "--dispatch-placement", "window", "scratch"},
 			func(string) []string {
-				return []string{"ssh", "-t", "user@prod.example.com", "-p", "2222", config.DefaultRemoteLeoPath, "attach", "--dispatch-placement", "window", "--", "scratch"}
+				return []string{"ssh", "-t", "user@prod.example.com", "-p", "2222", quotedDefaultRemoteLeo, "attach", "--dispatch-placement", "window", "--", "scratch"}
 			},
 		},
 		"top-level attach cc": {
 			[]string{"attach", "--cc", "--dispatch-placement", "window", "scratch"},
 			func(home string) []string {
 				w := append([]string{"ssh", "-tt", "-e", "none", "user@prod.example.com", "-p", "2222"}, ctlOpts(home)...)
-				return append(w, config.DefaultRemoteLeoPath, "attach", "--cc", "--dispatch-placement", "window", "--", "scratch")
+				return append(w, quotedDefaultRemoteLeo, "attach", "--cc", "--dispatch-placement", "window", "--", "scratch")
 			},
 		},
 	} {
@@ -251,6 +253,10 @@ func captureProcessStdout(t *testing.T, fn func()) string {
 
 // runLocalCCAttach drives `leo agent attach --cc --dispatch-placement
 // background scratch` up to the exec seam and returns what reached stdout.
+// The remote leo path as the placed attach sends it: the default's $HOME is
+// left for the remote shell to expand, the rest single-quoted.
+const quotedDefaultRemoteLeo = `"$HOME"/'.local/bin/leo'`
+
 func runLocalCCAttach(t *testing.T, args ...string) (stdout string, err error) {
 	t.Helper()
 	stubTmuxLookPath(t, "/usr/bin/tmux", nil)
@@ -291,8 +297,16 @@ func TestCCAttachWithPlacementWritesNothingToStdoutBeforeExec(t *testing.T) {
 			if got != "" || stdout.Len() != 0 {
 				t.Fatalf("stdout = %q / %q, want empty", got, stdout.String())
 			}
-			if registerErr != nil && !strings.Contains(stderr.String(), "warning") {
-				t.Errorf("stderr = %q, want the warning on stderr", stderr.String())
+			// ssh -tt merges stderr into the PTY the control-mode client
+			// reads, so the warning must go to the leo log instead.
+			if stderr.Len() != 0 {
+				t.Errorf("stderr = %q, want nothing before the exec", stderr.String())
+			}
+			if registerErr != nil {
+				logged, _ := os.ReadFile(service.LogPathFor(homeFromConfigPath(path)))
+				if !strings.Contains(string(logged), "--dispatch-placement not registered") {
+					t.Errorf("service log = %q, want the warning", logged)
+				}
 			}
 		})
 	}
@@ -404,7 +418,7 @@ func TestAgentAttachPlacementBeforeDoubleDashRemoteForwardsQuotedRemoteCommand(t
 			if err := root.Execute(); err != nil {
 				t.Fatalf("execute: %v", err)
 			}
-			want := []string{"ssh", "-t", "user@prod.example.com", "-p", "2222", config.DefaultRemoteLeoPath, "agent", "attach", "--dispatch-placement", "background", "--", tc.agent}
+			want := []string{"ssh", "-t", "user@prod.example.com", "-p", "2222", quotedDefaultRemoteLeo, "agent", "attach", "--dispatch-placement", "background", "--", tc.agent}
 			if len(stub.calls) != 1 || !equalStrings(stub.calls[0], want) {
 				t.Fatalf("ssh calls = %v\nwant        %v", stub.calls, want)
 			}
@@ -460,5 +474,96 @@ func TestAttachExecEnsuresAUTF8Locale(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+func TestRemoteLeoWordRoundTripsThroughAShell(t *testing.T) {
+	const home = "/home/some one"
+	for _, path := range []string{
+		"leo",
+		"/opt/Leo Tools/leo",
+		"/opt/it's/leo",
+		"/opt/$(touch pwned)/`id`/leo",
+		"$HOME/.local/bin/leo",
+		"$HOME/Leo Tools/it's $(x)/leo",
+		"~/bin/le o",
+		"~/it's/leo",
+	} {
+		word := remoteLeoWord(path)
+		withHome, err := exec.Command("env", "HOME="+home, "sh", "-c", "printf %s "+word).Output()
+		if err != nil {
+			t.Fatalf("%q -> %s: %v", path, word, err)
+		}
+		want := path
+		switch {
+		case strings.HasPrefix(path, "$HOME/"):
+			want = home + strings.TrimPrefix(path, "$HOME")
+		case strings.HasPrefix(path, "~/"):
+			want = home + strings.TrimPrefix(path, "~")
+		}
+		if string(withHome) != want {
+			t.Errorf("%q -> %s -> %q, want %q", path, word, withHome, want)
+		}
+	}
+	if got := remoteLeoWord("$HOME/.local/bin/leo"); got != quotedDefaultRemoteLeo {
+		t.Errorf("default = %s, want %s", got, quotedDefaultRemoteLeo)
+	}
+	if got := remoteLeoWord("/opt/Leo Tools/leo"); got != "'/opt/Leo Tools/leo'" {
+		t.Errorf("spaced = %s", got)
+	}
+}
+
+func TestPlacedRemoteAttachQuotesAConfiguredLeoPath(t *testing.T) {
+	path := newAgentCLITestConfig(t)
+	cfg, err := config.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	host := cfg.Client.Hosts["prod"]
+	host.LeoPath = "/opt/Leo Tools/leo"
+	cfg.Client.Hosts["prod"] = host
+	if err := config.Save(path, cfg); err != nil {
+		t.Fatal(err)
+	}
+	for name, extra := range map[string][]string{"non-cc": nil, "cc": {"--cc"}} {
+		t.Run(name, func(t *testing.T) {
+			stub := withStubExec(t)
+			withStubStdio(t)
+			root := newRootCmd()
+			root.SetArgs(append(append([]string{"--config", path, "agent", "attach"}, extra...), "--dispatch-placement", "background", "--", "scratch"))
+			if err := root.Execute(); err != nil {
+				t.Fatalf("execute: %v", err)
+			}
+			if len(stub.calls) != 1 || !containsSeq(stub.calls[0], "'/opt/Leo Tools/leo'", "agent", "attach") {
+				t.Fatalf("ssh calls = %v, want the quoted leo path", stub.calls)
+			}
+		})
+	}
+}
+
+func containsSeq(haystack []string, seq ...string) bool {
+	for i := 0; i+len(seq) <= len(haystack); i++ {
+		if equalStrings(haystack[i:i+len(seq)], seq) {
+			return true
+		}
+	}
+	return false
+}
+
+func TestNonCCAttachKeepsTheStderrWarningWhenRegistrationFails(t *testing.T) {
+	stubTmuxLookPath(t, "/usr/bin/tmux", nil)
+	stubOutsideTmux(t)
+	_, stderr := withStubStdio(t)
+	stubPlacementRegistration(t, errors.New("daemon down"))
+	stubExecRecording(t)
+	home := t.TempDir()
+	if err := attachTmuxSession(config.HostResolution{Localhost: true}, "leo-foo", attachOptions{dispatchPlacement: "pane", homePath: home}); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(stderr.String(), "warning") {
+		t.Fatalf("stderr = %q, want the warning", stderr.String())
+	}
+	if _, err := os.Stat(service.LogPathFor(home)); err == nil {
+		t.Error("non-cc warning also went to the log file")
 	}
 }

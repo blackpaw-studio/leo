@@ -28,7 +28,7 @@ func TestAttachPlacementUsesTheCallersOwnSessionForARootDispatch(t *testing.T) {
 	mustRegister(t, reg, "$1", 10, "background")
 	root := startNested(t, d, Request{Caller: "alpha", CallerSessionID: "$1"})
 
-	got := d.ApplyAttachPlacement(context.Background(), root, ViewerOverrides{}, &config.Config{})
+	got := d.ApplyAttachPlacement(context.Background(), root, ViewerOverrides{}, &config.Config{}, nil)
 	if got.Placement != "background" || len(queried) != 1 || queried[0] != "$1" {
 		t.Fatalf("got %+v queried %v", got, queried)
 	}
@@ -45,7 +45,7 @@ func TestAttachPlacementResolvesNestedDispatchesAgainstTheRootCallersSession(t *
 
 	for name, rec := range map[string]Record{"child": child, "grandchild": grandchild} {
 		queried = nil
-		got := d.ApplyAttachPlacement(context.Background(), rec, ViewerOverrides{}, &config.Config{})
+		got := d.ApplyAttachPlacement(context.Background(), rec, ViewerOverrides{}, &config.Config{}, nil)
 		if got.Placement != "background" || len(queried) != 1 || queried[0] != "$1" {
 			t.Fatalf("%s: got %+v queried %v, want background resolved against $1", name, got, queried)
 		}
@@ -58,7 +58,7 @@ func TestAttachPlacementResolvesNestedDispatchesAgainstTheRootCallersSession(t *
 func TestAttachPlacementWithoutRegistryLeavesOverridesAlone(t *testing.T) {
 	d := newNestedDispatcher(t)
 	base := ViewerOverrides{Placement: "window"}
-	if got := d.ApplyAttachPlacement(context.Background(), Record{CallerSessionID: "$1"}, base, &config.Config{}); got != base {
+	if got := d.ApplyAttachPlacement(context.Background(), Record{CallerSessionID: "$1"}, base, &config.Config{}, nil); got != base {
 		t.Fatalf("got %+v", got)
 	}
 }
@@ -102,7 +102,7 @@ func TestViewerOnStartAppliesPlacementOverrides(t *testing.T) {
 		}
 		return exec.Command("true")
 	}}
-	v.PlacementOverrides = func(_ context.Context, rec Record, base ViewerOverrides, _ *config.Config) ViewerOverrides {
+	v.PlacementOverrides = func(_ context.Context, rec Record, base ViewerOverrides, _ *config.Config, _ func(context.Context, string) ViewerOverrides) ViewerOverrides {
 		base.Placement = "background"
 		return base
 	}
@@ -114,5 +114,33 @@ func TestViewerOnStartAppliesPlacementOverrides(t *testing.T) {
 		if containsArg(c, "=leo-caller") {
 			t.Fatalf("touched the caller session: %#v", c)
 		}
+	}
+}
+
+// An unregistered client of the root session contributes the ROOT session's
+// override, not the nested requester's own session.
+func TestAttachPlacementFallbackForNestedDispatchComesFromTheRootSession(t *testing.T) {
+	var queried []string
+	d, _ := newAttachDispatcher(t, &queried, clientAt(20, attachEpoch))
+	root := startNested(t, d, Request{Caller: "alpha", CallerSessionID: "$1"})
+	child := startNested(t, d, Request{ParentDispatchID: root.ID, CallerSessionID: "$7"})
+	var read []string
+	readOverrides := func(_ context.Context, session string) ViewerOverrides {
+		read = append(read, session)
+		if session == "$1" {
+			return ViewerOverrides{Placement: "background"}
+		}
+		return ViewerOverrides{}
+	}
+
+	got := d.ApplyAttachPlacement(context.Background(), child, ViewerOverrides{}, &config.Config{}, readOverrides)
+	if got.Placement != "background" {
+		t.Fatalf("got %+v (read %v), want the root's background override", got, read)
+	}
+	// A root dispatch uses the overrides it already has and reads nothing.
+	read = nil
+	got = d.ApplyAttachPlacement(context.Background(), root, ViewerOverrides{Placement: "window"}, &config.Config{}, readOverrides)
+	if got.Placement != "window" || len(read) != 0 {
+		t.Fatalf("root: got %+v read %v", got, read)
 	}
 }
