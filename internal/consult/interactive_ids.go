@@ -168,12 +168,12 @@ func (d *Dispatcher) submitKeyedLocked(s *runState, key string, p map[string]any
 	}
 	d.applyObservedEffortLocked(s, effortFromPayload(p), currentTurnIndex(s.record.Turns))
 	closed := false
+	// A Stop held for this id is this turn's, however long it waited: the
+	// grace bounds how long a Stop may wait unclaimed, not whose it is.
 	if pc, ok := s.pendingCloses[key]; ok {
-		if d.now().Before(pc.until) {
-			if t := turnForKeyLocked(s, key); t != nil {
-				d.finishKeyedLocked(s, t, pc.outcome, pc.text, pc.work)
-				closed = true
-			}
+		if t := turnForKeyLocked(s, key); t != nil {
+			d.finishKeyedLocked(s, t, pc.outcome, pc.text, pc.work)
+			closed = true
 		}
 		delete(s.pendingCloses, key)
 	}

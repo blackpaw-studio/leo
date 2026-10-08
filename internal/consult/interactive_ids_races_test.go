@@ -127,3 +127,58 @@ func TestPromptIDClosedIDsOutliveTheDedupWindow(t *testing.T) {
 		t.Fatalf("a replay of the oldest turn's id opened a turn: %d turns, want %d; status %s", len(rec.Turns), maxInteractiveDedup+1, rec.Status)
 	}
 }
+
+// A submit that names the held Stop's own id belongs to it, whenever it
+// arrives: the grace only bounds how long a Stop waits to be claimed, and a
+// submit past it but ahead of the Sweep still finds the Stop waiting.
+func TestPromptIDHeldStopIsAppliedWhenItsOwnSubmitComes(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		delay time.Duration
+	}{
+		{"before the grace ran out", unmatchedGrace - time.Second},
+		{"at the grace, before the sweep", unmatchedGrace},
+		{"long after the grace, before the sweep", 3 * unmatchedGrace},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			d, _, id, now := startArmedClaude(t)
+			reportAll(t, d, id, idSubmit(t, "u1", "a", openingText), idStop(t, "s1", "a", "opening"))
+			sent, err := d.Send(context.Background(), id, "follow up")
+			if err != nil {
+				t.Fatal(err)
+			}
+			reportAll(t, d, id, idStop(t, "s2", "y", "its result"))
+			advanceClock(now, tc.delay)
+			reportAll(t, d, id, idSubmit(t, "u2", "y", "follow up"))
+			d.Sweep(*now)
+			rec := idleRecord(t, d, id)
+			if got := turnByID(rec, sent.TurnID); got.Outcome != TurnFinished || got.Text != "its result" || rec.Status != StatusIdle {
+				t.Fatalf("the held stop was not applied to its turn: %+v", rec)
+			}
+		})
+	}
+}
+
+// A submit under another id, past the grace but ahead of the Sweep, delivers
+// the armed turn: the held Stop was somebody else's and the turn waits for
+// its own.
+func TestPromptIDHeldStopIsDroppedWhenAnotherIDSubmitDeliversTheArmedTurn(t *testing.T) {
+	d, _, id, now := startArmedClaude(t)
+	reportAll(t, d, id, idSubmit(t, "u1", "a", openingText), idStop(t, "s1", "a", "opening"))
+	sent, err := d.Send(context.Background(), id, "follow up")
+	if err != nil {
+		t.Fatal(err)
+	}
+	reportAll(t, d, id, idStop(t, "s2", "y", "B's output"))
+	advanceClock(now, 2*unmatchedGrace)
+	reportAll(t, d, id, idSubmit(t, "u2", "z", "follow up"))
+	d.Sweep(*now)
+	rec := idleRecord(t, d, id)
+	if got := turnByID(rec, sent.TurnID); got.Outcome != "" || !got.Delivered {
+		t.Fatalf("the sent turn did not wait for its own stop: %+v", rec)
+	}
+	reportAll(t, d, id, idStop(t, "s3", "z", "follow up done"))
+	if got := turnByID(idleRecord(t, d, id), sent.TurnID); got.Outcome != TurnFinished || got.Text != "follow up done" {
+		t.Fatalf("sent turn = %+v", got)
+	}
+}
