@@ -101,6 +101,8 @@ type StatePusher struct {
 	// Delegation returns the policy agents get (dispatches get it off).
 	Delegation func() bridge.DelegationState
 	Now        func() time.Time
+	// Cutoffs hides what a caller's /clear left finished; nil hides nothing.
+	Cutoffs *RosterCutoffs
 
 	mu   sync.Mutex
 	last map[string]pushedState
@@ -118,7 +120,7 @@ func (p *StatePusher) Tick() {
 		return
 	}
 	now := p.Now()
-	records := p.Records()
+	records := p.Cutoffs.Visible(p.Records())
 	delegation := p.Delegation()
 	p.mu.Lock()
 	defer p.mu.Unlock()

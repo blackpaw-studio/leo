@@ -54,6 +54,9 @@ type Viewer struct {
 	// bridged caller's band shows its dispatches, so the tmux roster leaves
 	// them out. Nil means no bridge: every dispatch is drawn.
 	BridgeConnected func(key string) bool
+	// Cutoffs hides the finished dispatches a caller's /clear left behind;
+	// nil hides nothing.
+	Cutoffs *RosterCutoffs
 }
 
 type handledWindow struct {
