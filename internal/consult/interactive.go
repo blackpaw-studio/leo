@@ -282,6 +282,7 @@ func (d *Dispatcher) launchInteractive(ctx context.Context, s *runState, req Req
 	d.mu.Lock()
 	placementRecord := cloneRecord(s.record)
 	d.mu.Unlock()
+	overrides = d.ApplyAttachPlacement(ctx, placementRecord, overrides, cfg)
 	placement := d.placement.Decide(placementRecord, overrides, cfg, d.Records)
 	d.mu.Lock()
 	s.record.ViewerKind = placement.Kind

@@ -57,6 +57,10 @@ type Viewer struct {
 	// Cutoffs hides the finished dispatches a caller's /clear left behind;
 	// nil hides nothing.
 	Cutoffs *RosterCutoffs
+	// PlacementOverrides refines the session overrides with what the
+	// attached clients ask for (see Dispatcher.ApplyAttachPlacement); nil
+	// leaves them as read.
+	PlacementOverrides func(ctx context.Context, rec Record, base ViewerOverrides, cfg *config.Config) ViewerOverrides
 }
 
 type handledWindow struct {
@@ -97,6 +101,9 @@ func (v *Viewer) OnStart(rec Record) string {
 				}
 				return v.ExecCommand(name, args...)
 			})
+		}
+		if v.PlacementOverrides != nil {
+			overrides = v.PlacementOverrides(context.Background(), rec, overrides, cfg)
 		}
 		if v.Coordinator == nil {
 			v.Coordinator = NewViewerPlacementCoordinator()
