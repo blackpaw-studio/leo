@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/blackpaw-studio/leo/internal/config"
+	"github.com/blackpaw-studio/leo/internal/daemon"
 )
 
 type placementRegistration struct {
@@ -214,5 +215,124 @@ func TestAttachRejectsInvalidDispatchPlacement(t *testing.T) {
 		if len(stub.calls) != 0 {
 			t.Errorf("%v: invalid flag still reached ssh: %v", args, stub.calls)
 		}
+	}
+}
+
+// captureProcessStdout redirects the real os.Stdout while fn runs and returns
+// what was written to it: the control-mode stream's channel, which nothing
+// before the tmux exec may touch.
+func captureProcessStdout(t *testing.T, fn func()) string {
+	t.Helper()
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	old := os.Stdout
+	os.Stdout = w
+	done := make(chan string)
+	go func() {
+		var buf bytes.Buffer
+		_, _ = buf.ReadFrom(r)
+		done <- buf.String()
+	}()
+	fn()
+	os.Stdout = old
+	_ = w.Close()
+	return <-done
+}
+
+// runLocalCCAttach drives `leo agent attach --cc --dispatch-placement
+// background scratch` up to the exec seam and returns what reached stdout.
+func runLocalCCAttach(t *testing.T, args ...string) (stdout string, err error) {
+	t.Helper()
+	stubTmuxLookPath(t, "/usr/bin/tmux", nil)
+	stubOutsideTmux(t)
+	stubAgentSession(t, func(_, name string) (string, error) { return "leo-" + name, nil })
+	oldSpec := agentAttachSpecFn
+	agentAttachSpecFn = func(context.Context, string, string) (daemon.AgentAttachSpecResponse, error) {
+		return daemon.AgentAttachSpecResponse{Name: "scratch", Harness: "claude"}, nil
+	}
+	t.Cleanup(func() { agentAttachSpecFn = oldSpec })
+	stubExecRecording(t)
+
+	root := newRootCmd()
+	var out bytes.Buffer
+	root.SetOut(&out)
+	root.SetArgs(append(args, "agent", "attach", "--cc", "--dispatch-placement", "background", "scratch"))
+	stdout = captureProcessStdout(t, func() { err = root.Execute() })
+	return stdout + out.String(), err
+}
+
+// leoterm parses the control-mode stream byte for byte, so the attach must
+// not print anything of its own before tmux takes over stdout, on the happy
+// path and when the daemon registration fails.
+func TestCCAttachWithPlacementWritesNothingToStdoutBeforeExec(t *testing.T) {
+	path := newAgentCLITestConfig(t)
+	for name, registerErr := range map[string]error{
+		"registered":         nil,
+		"daemon unreachable": errors.New("connecting to daemon: dial unix: no such file"),
+	} {
+		t.Run(name, func(t *testing.T) {
+			withStubStdio(t) // agentStdout/agentStderr into buffers
+			stdout, stderr := agentStdout.(*bytes.Buffer), agentStderr.(*bytes.Buffer)
+			stubPlacementRegistration(t, registerErr)
+			got, err := runLocalCCAttach(t, "--config", path, "--host", "localhost")
+			if err != nil {
+				t.Fatalf("attach: %v", err)
+			}
+			if got != "" || stdout.Len() != 0 {
+				t.Fatalf("stdout = %q / %q, want empty", got, stdout.String())
+			}
+			if registerErr != nil && !strings.Contains(stderr.String(), "warning") {
+				t.Errorf("stderr = %q, want the warning on stderr", stderr.String())
+			}
+		})
+	}
+}
+
+func TestCCAttachWithInvalidPlacementFailsOnStderrOnly(t *testing.T) {
+	path := newAgentCLITestConfig(t)
+	withStubStdio(t)
+	root := newRootCmd()
+	root.SetArgs([]string{"--config", path, "agent", "attach", "--cc", "--dispatch-placement", "sideways", "scratch"})
+	var err error
+	got := captureProcessStdout(t, func() { err = root.Execute() })
+	if err == nil || got != "" {
+		t.Fatalf("err = %v stdout = %q, want a non-zero failure with empty stdout", err, got)
+	}
+}
+
+// A non-interactive ssh command has HOME and nothing else: no $TMUX, no
+// profile PATH, no --config. The daemon socket must still resolve from the
+// default leo home (~/.leo), and the tmux path from tmuxLocate, not PATH.
+func TestCCAttachWithPlacementResolvesHomeFromAStrippedEnvironment(t *testing.T) {
+	home := t.TempDir()
+	leoHome := home + "/.leo"
+	if err := os.MkdirAll(leoHome, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := config.Save(leoHome+"/leo.yaml", &config.Config{HomePath: leoHome, Defaults: config.DefaultsConfig{Model: "sonnet", MaxTurns: 10}}); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("HOME", home)
+	t.Setenv("PATH", "")
+	t.Setenv("TMUX", "")
+	t.Setenv("LEO_HOME", "")
+	t.Chdir(home)
+	oldCfg := cfgFile
+	cfgFile = ""
+	t.Cleanup(func() { cfgFile = oldCfg })
+	withStubStdio(t)
+	regs := stubPlacementRegistration(t, nil)
+
+	stdout, err := runLocalCCAttach(t)
+	if err != nil {
+		t.Fatalf("attach: %v", err)
+	}
+	if stdout != "" {
+		t.Errorf("stdout = %q", stdout)
+	}
+	if len(*regs) != 1 || (*regs)[0].homePath != leoHome || (*regs)[0].session != "leo-scratch" {
+		t.Fatalf("registrations = %+v, want home %s session leo-scratch", *regs, leoHome)
 	}
 }
