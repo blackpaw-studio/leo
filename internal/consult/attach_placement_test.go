@@ -12,8 +12,14 @@ import (
 
 var attachEpoch = time.Unix(1_760_000_000, 0)
 
+// deadPids names the pids the test registry reports as exited.
+var deadPids = map[int]bool{}
+
 func newTestAttachPlacements(now *time.Time) *AttachPlacements {
-	return NewAttachPlacements(func() time.Time { return *now })
+	for pid := range deadPids {
+		delete(deadPids, pid)
+	}
+	return NewAttachPlacements(func() time.Time { return *now }, func(pid int) bool { return !deadPids[pid] })
 }
 
 func clientAt(pid int, created time.Time) tmux.Client {
@@ -120,21 +126,44 @@ func TestAttachPlacementsToleratesSecondGranularityClientCreated(t *testing.T) {
 	}
 }
 
-func TestAttachPlacementsPrunesDeadEntriesOnceOldEnough(t *testing.T) {
+func TestAttachPlacementsPrunesEntriesWhoseProcessIsGone(t *testing.T) {
 	now := attachEpoch
 	reg := newTestAttachPlacements(&now)
-	reg.Register("$1", 10, "background")
+	reg.Register("leo-a", 10, "background")
+	reg.Register("leo-a", 11, "window")
 	live := listing(clientAt(99, attachEpoch))
 
-	// A fresh entry survives: its client may not have attached yet.
+	// Both processes are alive (11 may be about to exec tmux): both kept.
+	reg.Resolve(context.Background(), "$1", ViewerOverrides{}, &config.Config{}, live)
+	if reg.Len() != 2 {
+		t.Fatalf("live entries pruned: len=%d", reg.Len())
+	}
+	deadPids[10] = true
 	reg.Resolve(context.Background(), "$1", ViewerOverrides{}, &config.Config{}, live)
 	if reg.Len() != 1 {
-		t.Fatalf("fresh entry pruned: len=%d", reg.Len())
-	}
-	now = attachEpoch.Add(time.Hour)
-	reg.Resolve(context.Background(), "$1", ViewerOverrides{}, &config.Config{}, live)
-	if reg.Len() != 0 {
 		t.Fatalf("dead entry kept: len=%d", reg.Len())
+	}
+}
+
+func TestAttachPlacementsPrunesReusedPidSeenInTheListing(t *testing.T) {
+	now := attachEpoch
+	reg := newTestAttachPlacements(&now)
+	reg.Register("leo-a", 10, "background")
+	reg.Resolve(context.Background(), "$1", ViewerOverrides{}, &config.Config{}, listing(clientAt(10, attachEpoch.Add(-time.Hour))))
+	if reg.Len() != 0 {
+		t.Fatalf("reused-pid entry kept: len=%d", reg.Len())
+	}
+}
+
+func TestAttachPlacementsMatchesByPidWhateverSessionNameWasRegistered(t *testing.T) {
+	// The attach registers the tmux session name; dispatches know the session
+	// id. The client list of the id is what scopes the match.
+	now := attachEpoch
+	reg := newTestAttachPlacements(&now)
+	reg.Register("leo-agent-foo", 10, "background")
+	got := reg.Resolve(context.Background(), "$4", ViewerOverrides{Placement: "pane"}, &config.Config{}, listing(clientAt(10, attachEpoch)))
+	if got.Placement != "background" {
+		t.Fatalf("got %+v", got)
 	}
 }
 

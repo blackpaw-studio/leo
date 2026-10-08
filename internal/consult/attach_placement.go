@@ -2,8 +2,10 @@ package consult
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/blackpaw-studio/leo/internal/config"
@@ -15,40 +17,42 @@ const (
 	// a client that attached just after a registration can read as created
 	// up to a second before it.
 	attachClockSlack = time.Second
-	// attachPruneGrace keeps an entry whose client has not shown up yet: leo
-	// registers just before it execs tmux, so a dispatch resolving in between
-	// must not discard it.
-	attachPruneGrace = time.Minute
 )
 
-type attachKey struct {
-	session string
-	pid     int
-}
-
 type attachEntry struct {
+	session      string
 	placement    string
 	registeredAt time.Time
 }
 
 // AttachPlacements remembers which dispatch viewer placement each `leo attach
 // --dispatch-placement` asked for. An entry is keyed by the attaching
-// process's pid, which exec hands on to the tmux client, and only counts
-// while a live client of that session still has the pid and attached no
-// earlier than the registration (a reused pid fails that check).
+// process's pid, which exec hands on to the tmux client. It only counts while
+// a live client in the session being resolved has that pid and attached no
+// earlier than the registration, so a reused pid never inherits it.
 type AttachPlacements struct {
-	mu      sync.Mutex
-	now     func() time.Time
-	entries map[attachKey]attachEntry
+	mu       sync.Mutex
+	now      func() time.Time
+	pidAlive func(pid int) bool
+	entries  map[int]attachEntry
 }
 
-// NewAttachPlacements returns an empty registry reading time from now.
-func NewAttachPlacements(now func() time.Time) *AttachPlacements {
-	return &AttachPlacements{now: now, entries: map[attachKey]attachEntry{}}
+// NewAttachPlacements returns an empty registry reading time from now and
+// asking pidAlive whether a registered process still exists.
+func NewAttachPlacements(now func() time.Time, pidAlive func(int) bool) *AttachPlacements {
+	return &AttachPlacements{now: now, pidAlive: pidAlive, entries: map[int]attachEntry{}}
+}
+
+// ProcessAlive reports whether pid names an existing process.
+func ProcessAlive(pid int) bool {
+	err := syscall.Kill(pid, 0)
+	return err == nil || errors.Is(err, syscall.EPERM)
 }
 
 // Register records that the process pid, about to become a tmux client of
-// session, wants dispatch viewers placed as placement.
+// session, wants dispatch viewers placed as placement. session is the tmux session
+// name it attaches to; it is kept for diagnosis, since matching goes through
+// the live client list of the session being resolved.
 func (a *AttachPlacements) Register(session string, pid int, placement string) error {
 	if session == "" {
 		return fmt.Errorf("session is required")
@@ -61,7 +65,7 @@ func (a *AttachPlacements) Register(session string, pid int, placement string) e
 	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	a.entries[attachKey{session, pid}] = attachEntry{placement: placement, registeredAt: a.now()}
+	a.entries[pid] = attachEntry{session: session, placement: placement, registeredAt: a.now()}
 	return nil
 }
 
@@ -93,23 +97,24 @@ func (a *AttachPlacements) Resolve(ctx context.Context, session string, base Vie
 
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	now := a.now()
-	matched := map[attachKey]bool{}
 	best := ""
 	for _, c := range clients {
 		placement := fallback
-		key := attachKey{session, c.PID}
-		if e, ok := a.entries[key]; ok && !c.Created.Add(attachClockSlack).Before(e.registeredAt) {
-			matched[key] = true
-			placement = e.placement
+		if e, ok := a.entries[c.PID]; ok {
+			if c.Created.Add(attachClockSlack).Before(e.registeredAt) {
+				// A different process now owns the pid.
+				delete(a.entries, c.PID)
+			} else {
+				placement = e.placement
+			}
 		}
 		if visibility(placement) > visibility(best) {
 			best = placement
 		}
 	}
-	for key, e := range a.entries {
-		if key.session == session && !matched[key] && now.Sub(e.registeredAt) > attachPruneGrace {
-			delete(a.entries, key)
+	for pid := range a.entries {
+		if !a.pidAlive(pid) {
+			delete(a.entries, pid)
 		}
 	}
 	base.Placement = best
