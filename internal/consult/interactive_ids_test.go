@@ -103,13 +103,6 @@ func TestPromptIDAttribution(t *testing.T) {
 			wantText: "done", turns: 1,
 		},
 		{
-			name: "a lost submit still closes the armed opening",
-			reports: func(t *testing.T) []HookReport {
-				return []HookReport{idStop(t, "s1", "a", "done")}
-			},
-			wantText: "done", turns: 1,
-		},
-		{
 			name: "a replayed submit under a new event id is not a second turn",
 			reports: func(t *testing.T) []HookReport {
 				return []HookReport{idSubmit(t, "u1", "a", openingText), idSubmit(t, "u2", "a", openingText), idStop(t, "s1", "a", "done")}

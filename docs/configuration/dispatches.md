@@ -291,9 +291,12 @@ because their result was collected.
 
 Known limitations: turns are attributed by the harness's own ids (claude's
 `prompt_id`, the bridge's turn id, codex's `turn_id`), not by arrival order
-or prompt text. A replayed or late hook for a finished turn is dropped, a Stop
-that beats its submit closes the right turn, and a bridged claude (the
-leo-bridge mod) claims each sent turn by the command id the mod stamps on it.
+or prompt text. A replayed or late hook for a finished turn is dropped for as
+long as the turn is in the run's record, a Stop that beats its submit closes
+the right turn, and a bridged claude (the leo-bridge mod) claims each sent
+turn by the command id the mod stamps on it. A Stop under an id no turn has
+seen waits a few seconds while a sent turn is still waiting for its submit,
+and closes that turn only if the submit never comes.
 What remains is the tmux-paste path (codex, or claude without the bridge): a
 submit that arrives after its send's ack window is matched to the send by
 prompt text, so a human prompt with identical text can be mistaken for it, and

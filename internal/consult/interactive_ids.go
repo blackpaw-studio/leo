@@ -289,7 +289,9 @@ func (d *Dispatcher) claimSentTurnLocked(s *runState, key, prompt, commandID str
 // never saw start (a queued prompt Claude ran after the previous Stop): it
 // adopts the turn it can only be (see adoptStopLocked) and otherwise waits,
 // briefly, for the submit that names it. It never closes a turn some other
-// id already names.
+// id already names. With a sent turn armed for a submit that has not
+// arrived, the Stop waits for that submit before it may close the turn (see
+// adoptHeldStopLocked): it could just as well end a turn a person queued.
 func (d *Dispatcher) stopKeyedLocked(s *runState, key, event string, p map[string]any, out TurnOutcome, text string) {
 	if isKeyClosedLocked(s, key) {
 		fmt.Fprintf(os.Stderr, "dispatch %s: ignoring close for closed harness turn %s\n", s.record.ID, key)
@@ -301,6 +303,10 @@ func (d *Dispatcher) stopKeyedLocked(s *runState, key, event string, p map[strin
 	}
 	t := turnForKeyLocked(s, key)
 	if t == nil {
+		if armed := armedUndeliveredLocked(s); armed != nil && !isBridgeKey(key) {
+			s.pendingCloses[key] = pendingClose{outcome: out, text: text, until: d.now().Add(unmatchedGrace), work: work, armed: armed.TurnID}
+			return
+		}
 		t = d.adoptStopLocked(s, key)
 	}
 	if t == nil {
@@ -323,28 +329,56 @@ func (d *Dispatcher) finishKeyedLocked(s *runState, t *Turn, out TurnOutcome, te
 	d.closeTurnLocked(s, t.TurnID, out, text)
 }
 
+// armedUndeliveredLocked is the sent turn armed for a submit that has not
+// arrived, or nil.
+func armedUndeliveredLocked(s *runState) *Turn {
+	for i := range s.record.Turns {
+		t := &s.record.Turns[i]
+		if t.Outcome == "" && !t.Queued && t.Source == TurnSourceOrchestrator && !t.Delivered && !t.armedAt.IsZero() {
+			return t
+		}
+	}
+	return nil
+}
+
+// adoptHeldStopLocked settles a Stop held for an armed turn's submit once
+// its grace has run out, and reports whether it closed that turn. A submit
+// for the turn under another id delivered it meanwhile: the Stop was some
+// other turn's and is dropped. With none seen the turn's submit was lost and
+// the Stop can only be its own.
+func (d *Dispatcher) adoptHeldStopLocked(s *runState, key string, pc pendingClose) bool {
+	i := turnIndexByID(s.record.Turns, pc.armed)
+	if pc.armed == "" || i < 0 {
+		return false
+	}
+	t := &s.record.Turns[i]
+	if t.Outcome != "" || t.Delivered {
+		return false
+	}
+	d.deliverTurnLocked(s, t.TurnID, keyID(key))
+	d.bindKeyLocked(s, t.TurnID, key)
+	d.finishKeyedLocked(s, t, pc.outcome, pc.text, pc.work)
+	return true
+}
+
 // adoptStopLocked binds key to the turn a Stop under an unseen id can only
-// belong to, or returns nil. In order: a sent turn armed for a submit that
-// has not arrived (the Stop overtook it), the waiting turn (the wake's
-// submit has not arrived), the single working turn no id names yet, the
-// oldest open turn no id names. A bridged run adopts nothing: its
-// turn.start always names the turn, so the Stop waits for it.
+// belong to, or returns nil. In order: the waiting turn (the wake's submit
+// has not arrived), the single working turn no id names yet, the oldest open
+// turn no id names. A bridged run adopts nothing: its turn.start always
+// names the turn, so the Stop waits for it. A sent turn armed for a submit
+// that has not arrived is not adopted here (see adoptHeldStopLocked).
 func (d *Dispatcher) adoptStopLocked(s *runState, key string) *Turn {
 	if isBridgeKey(key) {
 		return nil
 	}
-	var armed, working, oldest *Turn
+	var working, oldest *Turn
 	workingUnbound := 0
 	for i := range s.record.Turns {
 		t := &s.record.Turns[i]
 		if t.Outcome != "" || t.Queued {
 			continue
 		}
-		isWorking := t.Source == TurnSourceUser || t.Delivered
-		switch {
-		case armed == nil && t.Source == TurnSourceOrchestrator && !t.Delivered && !t.armedAt.IsZero():
-			armed = t
-		case !t.isBound() && isWorking:
+		if !t.isBound() && (t.Source == TurnSourceUser || t.Delivered) {
 			working = t
 			workingUnbound++
 		}
@@ -354,8 +388,6 @@ func (d *Dispatcher) adoptStopLocked(s *runState, key string) *Turn {
 	}
 	var t *Turn
 	switch {
-	case armed != nil:
-		t = d.deliverTurnLocked(s, armed.TurnID, keyID(key))
 	case waitingTurnLocked(s) != nil:
 		t = waitingTurnLocked(s)
 	case workingUnbound == 1:

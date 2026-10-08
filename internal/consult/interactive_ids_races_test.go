@@ -1,10 +1,77 @@
 package consult
 
 import (
+	"context"
 	"fmt"
 	"testing"
 	"time"
 )
+
+// A Stop under an id no turn answers to may end a turn this run never saw
+// start (a prompt a person queued under the previous turn, run after it).
+// While a sent turn waits for its submit, that Stop is held, not adopted:
+// the sent turn's own submit, under another id, may still arrive.
+func TestPromptIDUnknownStopDoesNotAdoptAnArmedTurnWhoseSubmitFollowsUnderAnotherID(t *testing.T) {
+	d, _, id, now := startArmedClaude(t)
+	reportAll(t, d, id, idSubmit(t, "u1", "a", openingText), idStop(t, "s1", "a", "opening"))
+	sent, err := d.Send(context.Background(), id, "follow up")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// B, queued by a person under the opening, ends: its Stop beats the sent turn's submit.
+	reportAll(t, d, id, idStop(t, "s2", "b", "B's output"))
+	if got := turnByID(idleRecord(t, d, id), sent.TurnID); got.Outcome != "" {
+		t.Fatalf("an unknown stop closed the armed turn at once: %+v", got)
+	}
+	reportAll(t, d, id, idSubmit(t, "u2", "z", "follow up"))
+	advanceClock(now, 2*unmatchedGrace)
+	d.Sweep(*now)
+	rec := idleRecord(t, d, id)
+	if got := turnByID(rec, sent.TurnID); got.Outcome != "" || !got.Delivered || rec.Status != StatusRunning {
+		t.Fatalf("B's stop was adopted by the sent turn: %+v", rec)
+	}
+	reportAll(t, d, id, idStop(t, "s3", "z", "follow up done"))
+	rec = idleRecord(t, d, id)
+	if got := turnByID(rec, sent.TurnID); got.Outcome != TurnFinished || got.Text != "follow up done" || rec.Status != StatusIdle {
+		t.Fatalf("sent turn did not close on its own stop: %+v", rec)
+	}
+}
+
+// The submit may also beat the stranger's Stop.
+func TestPromptIDUnknownStopAfterTheArmedTurnsSubmitClosesNothing(t *testing.T) {
+	d, _, id, _ := startArmedClaude(t)
+	reportAll(t, d, id, idSubmit(t, "u1", "a", openingText), idStop(t, "s1", "a", "opening"))
+	sent, err := d.Send(context.Background(), id, "follow up")
+	if err != nil {
+		t.Fatal(err)
+	}
+	reportAll(t, d, id, idSubmit(t, "u2", "z", "follow up"), idStop(t, "s2", "b", "B's output"))
+	rec := idleRecord(t, d, id)
+	if got := turnByID(rec, sent.TurnID); got.Outcome != "" || rec.Status != StatusRunning {
+		t.Fatalf("a stranger's stop closed the sent turn: %+v", rec)
+	}
+}
+
+// With no submit in sight the stop is the armed turn's after all (its
+// submit hook was lost), but only once the grace for that submit has run out.
+func TestPromptIDUnknownStopAdoptsTheArmedTurnOnceNoSubmitCameInTheGrace(t *testing.T) {
+	d, _, id, now := startArmedClaude(t)
+	reportAll(t, d, id, idStop(t, "s1", "a", "done"))
+	if rec := idleRecord(t, d, id); rec.Turns[0].Outcome != "" {
+		t.Fatalf("closed before the grace ran out: %+v", rec)
+	}
+	advanceClock(now, unmatchedGrace-time.Second)
+	d.Sweep(*now)
+	if rec := idleRecord(t, d, id); rec.Turns[0].Outcome != "" {
+		t.Fatalf("closed inside the grace: %+v", rec)
+	}
+	advanceClock(now, 2*time.Second)
+	d.Sweep(*now)
+	rec := idleRecord(t, d, id)
+	if got := rec.Turns[0]; !got.Delivered || got.Outcome != TurnFinished || got.Text != "done" || rec.Status != StatusIdle {
+		t.Fatalf("lost submit did not close the armed turn: %+v", rec)
+	}
+}
 
 // A wake (a background task's notification) that reaches leo before the
 // delayed Stop of the turn it continues is that turn's, not a new one.

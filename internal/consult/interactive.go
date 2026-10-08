@@ -117,6 +117,9 @@ type pendingClose struct {
 	until   time.Time
 	// work is the background work the held Stop left pending, if any.
 	work *PendingWork
+	// armed is the sent turn this Stop closes if its grace runs out with
+	// that turn's submit still unseen; empty for a Stop that adopts nothing.
+	armed string
 }
 
 const maxInteractiveDedup = 512
@@ -1149,6 +1152,9 @@ func (d *Dispatcher) Sweep(now time.Time) {
 			}
 			if !p.until.IsZero() && !now.Before(p.until) {
 				delete(s.pendingCloses, k)
+				if d.adoptHeldStopLocked(s, k, p) {
+					continue
+				}
 				fmt.Fprintf(os.Stderr, "dispatch %s: dropping unmatched harness turn %s after grace\n", s.record.ID, k)
 			}
 		}
