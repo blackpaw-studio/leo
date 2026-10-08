@@ -240,6 +240,7 @@ func (d *Dispatcher) launchWhenSlotFree(ctx context.Context, s *runState, req Re
 			d.persistTurnLocked(s, s.record.Turns[i])
 		}
 	}
+	d.admitLocked(s)
 	d.mu.Unlock()
 	if _, err := d.launchInteractive(ctx, s, req, harnessName, model, cfg, rt, turnID); err != nil {
 		fmt.Fprintf(os.Stderr, "dispatch %s: launching queued interactive dispatch: %v\n", s.record.ID, err)
@@ -381,7 +382,7 @@ func (d *Dispatcher) injectOpening(ctx context.Context, s *runState, rt Interact
 	settled := s.record.Status.Terminal() || s.record.Status == StatusSettling
 	paneChanged := s.record.PaneID != pane
 	t := turnByID(s.record, turnID)
-	injectable := !settled && !paneChanged && t.Outcome == "" && s.record.Status == StatusQueued
+	injectable := !settled && !paneChanged && t.Outcome == "" && s.record.Status != StatusNeedsInput && startPendingLocked(s)
 	d.mu.Unlock()
 	if !injectable {
 		// A hook can close the opening turn before this goroutine is scheduled.
@@ -613,30 +614,53 @@ func openPendingWork(s *runState) *PendingWork {
 
 // interactiveStatusLocked derives the run's status from its open turns:
 // running while one works, else waiting while one waits on background work,
-// else queued while a sent turn has yet to start, else idle. It also
-// refreshes the run's PendingWork from them.
+// else, with only sent turns that have yet to start, queued while one is
+// still in the slot line and running once the run holds its slot, else
+// idle. It also refreshes the run's PendingWork from them.
 func (d *Dispatcher) interactiveStatusLocked(s *runState, boundary time.Time) Status {
 	s.record.PendingWork = openPendingWork(s)
-	open, waiting := false, false
+	open, waiting, unadmitted := false, false, false
 	for _, t := range s.record.Turns {
 		if t.Outcome != "" {
 			continue
 		}
 		open = true
-		if t.Pending != nil {
+		switch {
+		case t.Pending != nil:
 			waiting = true
-		} else if t.Source == TurnSourceUser || t.Delivered {
+		case t.Source == TurnSourceUser || t.Delivered:
 			return StatusRunning
+		case !t.SlotHeld:
+			unadmitted = true
 		}
 	}
 	switch {
 	case waiting:
 		return StatusWaiting
-	case open:
+	case unadmitted:
 		return StatusQueued
+	case open:
+		return StatusRunning
 	}
 	s.idleSince = boundary
 	return StatusIdle
+}
+
+// startPendingLocked reports whether the run's open turns are all sent ones
+// not yet seen to start: none works and none waits. The injection gates ask
+// this, not the status label, which reads running once the run is admitted.
+func startPendingLocked(s *runState) bool {
+	open := false
+	for _, t := range s.record.Turns {
+		if t.Outcome != "" {
+			continue
+		}
+		if t.Pending != nil || t.Source == TurnSourceUser || t.Delivered {
+			return false
+		}
+		open = true
+	}
+	return open
 }
 
 // recomputeStatusLocked is the one place a live run's status changes after a
@@ -652,6 +676,16 @@ func (d *Dispatcher) recomputeStatusLocked(s *runState, boundary time.Time) {
 		return
 	}
 	s.record.Status = status
+}
+
+// admitLocked re-derives the status of a run whose turn has just taken its
+// slot: it leaves queued and persists the change.
+func (d *Dispatcher) admitLocked(s *runState) {
+	old := s.record.Status
+	d.recomputeStatusLocked(s, d.now())
+	if s.record.Status != old {
+		d.persistLocked(s, "status")
+	}
 }
 
 // clearPendingLocked ends every wait: each turn's and the run's.
@@ -788,7 +822,7 @@ func (d *Dispatcher) injectable(s *runState, turnID, pane string) bool {
 		return false
 	}
 	t := turnByID(s.record, turnID)
-	return t.Outcome == "" && s.record.Status == StatusQueued
+	return t.Outcome == "" && s.record.Status != StatusNeedsInput && startPendingLocked(s)
 }
 
 func (d *Dispatcher) Report(id string, r HookReport) error {

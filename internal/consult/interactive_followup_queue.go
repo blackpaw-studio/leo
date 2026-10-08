@@ -102,6 +102,7 @@ func (d *Dispatcher) runQueuedSend(s *runState, q *queuedSend, message string, w
 	}
 	s.paneWant = "split"
 	d.persistLocked(s, "turn")
+	d.admitLocked(s)
 	d.mu.Unlock()
 	if _, err := d.deliverSend(d.daemonCtx, s, q.turnID, message); err != nil {
 		fmt.Fprintf(os.Stderr, "dispatch %s: sending queued follow-up %s: %v\n", s.record.ID, q.turnID, err)

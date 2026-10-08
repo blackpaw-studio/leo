@@ -577,8 +577,8 @@ func TestInteractiveStartReturnsBeforeReady(t *testing.T) {
 		t.Fatal(err)
 	}
 	entry := d.Wait(context.Background(), []string{got.ID + "#1"}, time.Millisecond)[0]
-	if entry.Outcome != "" || entry.Status != StatusQueued {
-		t.Fatalf("opening entry = %+v, want open queued turn", entry)
+	if entry.Outcome != "" || entry.Status != StatusRunning {
+		t.Fatalf("opening entry = %+v, want open turn of an admitted, running dispatch", entry)
 	}
 	close(release)
 	deadline := time.After(time.Second)
@@ -1044,8 +1044,8 @@ func TestInteractiveWaitSnapshot(t *testing.T) {
 		t.Fatal(err)
 	}
 	got := d.Wait(context.Background(), []string{s.ID}, time.Millisecond)[0]
-	if got.TurnID == "" || got.Status != StatusQueued {
-		t.Fatalf("queued wait=%+v", got)
+	if got.TurnID == "" || got.Status != StatusRunning {
+		t.Fatalf("admitted wait=%+v", got)
 	}
 	b, _ := json.Marshal(map[string]string{"hook_event_name": "UserPromptSubmit", "turn_id": "a"})
 	_ = d.Report(s.ID, HookReport{EventID: "new-submit", Payload: b})

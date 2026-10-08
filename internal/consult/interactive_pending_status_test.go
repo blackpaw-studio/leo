@@ -116,3 +116,45 @@ func TestStalledLooksAtEveryOpenTurn(t *testing.T) {
 		t.Fatal("leo_wait does not report a waiting turn stalled past the waiting threshold")
 	}
 }
+
+// liveRun is an idle interactive run on pane %1.
+func liveRun() (*Dispatcher, *runState) {
+	now := time.Date(2026, time.October, 8, 12, 0, 0, 0, time.UTC)
+	d := NewDispatcher(newFakeRecorder())
+	d.now = sharedClock(&now)
+	s := &runState{record: Record{ID: "d-live", Harness: "claude", Mode: ModeInteractive, Status: StatusIdle, PaneID: "%1", StartedAt: now}, handle: nopHandle{}, done: make(chan struct{}), pendingCloses: map[string]pendingClose{}}
+	d.mu.Lock()
+	d.runs[s.record.ID] = s
+	d.mu.Unlock()
+	return d, s
+}
+
+// queued is reserved for a turn still in the slot line; once the run holds
+// its slot, a sent turn that has yet to start is running.
+func TestStatusOfASentTurnThatHasNotStartedFollowsAdmission(t *testing.T) {
+	d, s := liveRun()
+	d.mu.Lock()
+	admitted := d.buildTurnLocked(s, TurnSourceOrchestrator, "go", true).TurnID
+	d.mu.Unlock()
+	if s.record.Status != StatusRunning {
+		t.Fatalf("admitted run with an unstarted sent turn = %s, want running", s.record.Status)
+	}
+	if !d.injectable(s, admitted, "%1") {
+		t.Fatal("an admitted run's unstarted sent turn must still be injectable")
+	}
+
+	d, s = liveRun()
+	d.mu.Lock()
+	d.buildTurnLocked(s, TurnSourceOrchestrator, "go", false)
+	d.mu.Unlock()
+	if s.record.Status != StatusQueued {
+		t.Fatalf("run still in the slot line = %s, want queued", s.record.Status)
+	}
+	d.mu.Lock()
+	s.record.Turns[0].SlotHeld = true
+	d.recomputeStatusLocked(s, d.now())
+	d.mu.Unlock()
+	if s.record.Status != StatusRunning {
+		t.Fatalf("run admitted from the slot line = %s, want running", s.record.Status)
+	}
+}
