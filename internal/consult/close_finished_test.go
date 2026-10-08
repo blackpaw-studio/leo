@@ -53,7 +53,7 @@ func TestCloseFinishedSerializesWithSend(t *testing.T) {
 	}
 	close(releaseSend)
 	wg.Wait()
-	if closeErr != nil || sendErr != nil || d.runs["idle"].record.Status != StatusQueued {
+	if closeErr != nil || sendErr != nil || d.runs["idle"].record.Status != StatusRunning {
 		t.Fatalf("close=%v send=%v status=%s", closeErr, sendErr, d.runs["idle"].record.Status)
 	}
 }

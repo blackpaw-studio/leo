@@ -59,7 +59,6 @@ func TestInteractiveActiveTimeStartsOnDeliveryAndFreezesOnIdle(t *testing.T) {
 		handle: nopHandle{}, done: make(chan struct{}),
 		armedTurn: "d-x#1", armedUntil: now.Add(time.Minute),
 		pendingCloses: map[string]pendingClose{},
-		closedHarness: map[string]bool{},
 	}
 	s.record.Turns = []Turn{{TurnID: "d-x#1", Source: TurnSourceOrchestrator}}
 	d.mu.Lock()
@@ -251,7 +250,7 @@ func TestInteractiveActiveTimeSequence(t *testing.T) {
 	now := time.Date(2026, 9, 14, 12, 0, 0, 0, time.UTC)
 	d := NewDispatcher(nil)
 	d.now = func() time.Time { return now }
-	s := &runState{record: Record{ID: "d-seq", Mode: ModeInteractive, Status: StatusQueued}, handle: nopHandle{}, done: make(chan struct{}), pendingCloses: map[string]pendingClose{}, closedHarness: map[string]bool{}}
+	s := &runState{record: Record{ID: "d-seq", Mode: ModeInteractive, Status: StatusQueued}, handle: nopHandle{}, done: make(chan struct{}), pendingCloses: map[string]pendingClose{}}
 	d.mu.Lock()
 	d.runs[s.record.ID] = s
 	t1 := d.openTurnLocked(s, TurnSourceOrchestrator, "one", false)
@@ -280,7 +279,7 @@ func TestInteractiveReplaySubmitForClosedHarnessTurnDoesNotRestartActiveTime(t *
 	now := time.Date(2026, 9, 14, 12, 0, 0, 0, time.UTC)
 	d := NewDispatcher(nil)
 	d.now = func() time.Time { return now }
-	s := &runState{record: Record{ID: "d-replay", Mode: ModeInteractive, Status: StatusRunning}, handle: nopHandle{}, done: make(chan struct{}), pendingCloses: map[string]pendingClose{}, closedHarness: map[string]bool{}}
+	s := &runState{record: Record{ID: "d-replay", Mode: ModeInteractive, Status: StatusRunning}, handle: nopHandle{}, done: make(chan struct{}), pendingCloses: map[string]pendingClose{}}
 	d.mu.Lock()
 	d.runs[s.record.ID] = s
 	turn := d.openTurnLocked(s, TurnSourceUser, "", false)
@@ -338,7 +337,7 @@ func TestInteractiveAccountingReorderedRejectAndDefensiveSettlement(t *testing.T
 			now := t0
 			d := NewDispatcher(nil)
 			d.now = func() time.Time { return now }
-			s := &runState{record: Record{ID: "d-edge", Mode: ModeInteractive, Status: StatusIdle}, handle: nopHandle{}, done: make(chan struct{}), pendingCloses: map[string]pendingClose{}, closedHarness: map[string]bool{}}
+			s := &runState{record: Record{ID: "d-edge", Mode: ModeInteractive, Status: StatusIdle}, handle: nopHandle{}, done: make(chan struct{}), pendingCloses: map[string]pendingClose{}}
 			d.mu.Lock()
 			d.runs[s.record.ID] = s
 			d.mu.Unlock()

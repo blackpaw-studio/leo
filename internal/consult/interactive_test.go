@@ -29,6 +29,7 @@ type fakeInteractiveRuntime struct {
 	killErr      error
 	layouts      []string
 	layoutErr    map[string]error
+	commandIDs   []string
 }
 
 type recoveringInteractiveRuntime struct {
@@ -79,13 +80,25 @@ func (r *fakeInteractiveRuntime) ReapplyLayout(target string) error {
 	r.layouts = append(r.layouts, target)
 	return r.layoutErr[target]
 }
-func (r *fakeInteractiveRuntime) Inject(_ context.Context, _ string, text string, arm func() error) error {
+
+// lastCommandID is the command id the dispatcher handed the latest Inject.
+func (r *fakeInteractiveRuntime) lastCommandID() string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if len(r.commandIDs) == 0 {
+		return ""
+	}
+	return r.commandIDs[len(r.commandIDs)-1]
+}
+
+func (r *fakeInteractiveRuntime) Inject(ctx context.Context, _ string, text string, arm func() error) error {
 	if r.injectHook != nil {
 		r.injectHook()
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.injected = append(r.injected, text)
+	r.commandIDs = append(r.commandIDs, commandIDFrom(ctx))
 	if r.injectErr != nil {
 		return r.injectErr
 	}
@@ -564,8 +577,8 @@ func TestInteractiveStartReturnsBeforeReady(t *testing.T) {
 		t.Fatal(err)
 	}
 	entry := d.Wait(context.Background(), []string{got.ID + "#1"}, time.Millisecond)[0]
-	if entry.Outcome != "" || entry.Status != StatusQueued {
-		t.Fatalf("opening entry = %+v, want open queued turn", entry)
+	if entry.Outcome != "" || entry.Status != StatusRunning {
+		t.Fatalf("opening entry = %+v, want open turn of an admitted, running dispatch", entry)
 	}
 	close(release)
 	deadline := time.After(time.Second)
@@ -1031,8 +1044,8 @@ func TestInteractiveWaitSnapshot(t *testing.T) {
 		t.Fatal(err)
 	}
 	got := d.Wait(context.Background(), []string{s.ID}, time.Millisecond)[0]
-	if got.TurnID == "" || got.Status != StatusQueued {
-		t.Fatalf("queued wait=%+v", got)
+	if got.TurnID == "" || got.Status != StatusRunning {
+		t.Fatalf("admitted wait=%+v", got)
 	}
 	b, _ := json.Marshal(map[string]string{"hook_event_name": "UserPromptSubmit", "turn_id": "a"})
 	_ = d.Report(s.ID, HookReport{EventID: "new-submit", Payload: b})

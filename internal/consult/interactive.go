@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/blackpaw-studio/leo/internal/bridge"
 	"github.com/blackpaw-studio/leo/internal/config"
 )
 
@@ -114,6 +115,11 @@ type pendingClose struct {
 	outcome TurnOutcome
 	text    string
 	until   time.Time
+	// work is the background work the held Stop left pending, if any.
+	work *PendingWork
+	// armed is the sent turn this Stop closes if its grace runs out with
+	// that turn's submit still unseen; empty for a Stop that adopts nothing.
+	armed string
 }
 
 const maxInteractiveDedup = 512
@@ -234,6 +240,7 @@ func (d *Dispatcher) launchWhenSlotFree(ctx context.Context, s *runState, req Re
 			d.persistTurnLocked(s, s.record.Turns[i])
 		}
 	}
+	d.admitLocked(s)
 	d.mu.Unlock()
 	if _, err := d.launchInteractive(ctx, s, req, harnessName, model, cfg, rt, turnID); err != nil {
 		fmt.Fprintf(os.Stderr, "dispatch %s: launching queued interactive dispatch: %v\n", s.record.ID, err)
@@ -260,6 +267,11 @@ func (d *Dispatcher) launchInteractive(ctx context.Context, s *runState, req Req
 		// armed again by that paste.
 		d.mu.Lock()
 		d.armTurnLocked(s, turnID)
+		if bridgesOpening {
+			// The mod submits the opening under this id and names it on the
+			// turn.start, which is how the turn is claimed.
+			d.setCommandIDLocked(s, turnID, bridge.OpeningID(DispatchBridgeKey(s.record.ID), prompt))
+		}
 		d.persistLocked(s, "")
 		d.mu.Unlock()
 	}
@@ -370,7 +382,7 @@ func (d *Dispatcher) injectOpening(ctx context.Context, s *runState, rt Interact
 	settled := s.record.Status.Terminal() || s.record.Status == StatusSettling
 	paneChanged := s.record.PaneID != pane
 	t := turnByID(s.record, turnID)
-	injectable := !settled && !paneChanged && t.Outcome == "" && s.record.Status == StatusQueued
+	injectable := !settled && !paneChanged && t.Outcome == "" && s.record.Status != StatusNeedsInput && startPendingLocked(s)
 	d.mu.Unlock()
 	if !injectable {
 		// A hook can close the opening turn before this goroutine is scheduled.
@@ -495,9 +507,8 @@ func (d *Dispatcher) buildTurnLocked(s *runState, source TurnSource, text string
 	// run's last observed one.
 	t := Turn{TurnID: fmt.Sprintf("%s#%d", s.record.ID, len(s.record.Turns)+1), Source: source, StartedAt: d.now(), Text: text, SlotHeld: held, ObservedEffort: s.record.ObservedEffort}
 	s.record.Turns = append(s.record.Turns, t)
-	s.record.Status = StatusQueued
+	d.recomputeStatusLocked(s, d.now())
 	if source == TurnSourceUser {
-		s.record.Status = StatusRunning
 		s.record.startActive(d.now())
 		// A user-typed turn keeps the pane where the user typed it, even if
 		// a hide is already queued or under way.
@@ -522,6 +533,7 @@ func (d *Dispatcher) closeTurnLocked(s *runState, id string, outcome TurnOutcome
 			continue
 		}
 		t.Outcome = outcome
+		t.Pending = nil
 		t.EndedAt = boundary
 		if text != "" {
 			t.Text = text
@@ -539,7 +551,7 @@ func (d *Dispatcher) closeTurnLocked(s *runState, id string, outcome TurnOutcome
 			s.armedUntil = time.Time{}
 		}
 		if !s.record.Status.Terminal() && s.record.Status != StatusSettling {
-			s.record.Status = d.interactiveStatusLocked(s, boundary)
+			d.recomputeStatusLocked(s, boundary)
 			if s.record.Status == StatusIdle {
 				// A prompt still pending when its turn ended was answered in
 				// the pane or abandoned; either way nobody needs it now.
@@ -589,17 +601,99 @@ func (d *Dispatcher) hasWorkingTurnLocked(s *runState) bool {
 	return false
 }
 
-func (d *Dispatcher) interactiveStatusLocked(s *runState, boundary time.Time) Status {
-	for _, t := range s.record.Turns {
-		if t.Outcome == "" {
-			if s.record.PendingWork != nil {
-				return StatusWaiting
-			}
-			return StatusRunning
+// openPendingWork is the background work the run waits on: the first open
+// turn's, or nil when no open turn waits.
+func openPendingWork(s *runState) *PendingWork {
+	for i := range s.record.Turns {
+		if t := &s.record.Turns[i]; t.Outcome == "" && t.Pending != nil {
+			return t.Pending
 		}
+	}
+	return nil
+}
+
+// interactiveStatusLocked derives the run's status from its open turns:
+// running while one works, else waiting while one waits on background work,
+// else, with only sent turns that have yet to start, queued while one is
+// still in the slot line and running once the run holds its slot, else
+// idle. It also refreshes the run's PendingWork from them.
+func (d *Dispatcher) interactiveStatusLocked(s *runState, boundary time.Time) Status {
+	s.record.PendingWork = openPendingWork(s)
+	open, waiting, unadmitted := false, false, false
+	for _, t := range s.record.Turns {
+		if t.Outcome != "" {
+			continue
+		}
+		open = true
+		switch {
+		case t.Pending != nil:
+			waiting = true
+		case t.Source == TurnSourceUser || t.Delivered:
+			return StatusRunning
+		case !t.SlotHeld:
+			unadmitted = true
+		}
+	}
+	switch {
+	case waiting:
+		return StatusWaiting
+	case unadmitted:
+		return StatusQueued
+	case open:
+		return StatusRunning
 	}
 	s.idleSince = boundary
 	return StatusIdle
+}
+
+// startPendingLocked reports whether the run's open turns are all sent ones
+// not yet seen to start: none works and none waits. The injection gates ask
+// this, not the status label, which reads running once the run is admitted.
+func startPendingLocked(s *runState) bool {
+	open := false
+	for _, t := range s.record.Turns {
+		if t.Outcome != "" {
+			continue
+		}
+		if t.Pending != nil || t.Source == TurnSourceUser || t.Delivered {
+			return false
+		}
+		open = true
+	}
+	return open
+}
+
+// recomputeStatusLocked is the one place a live run's status changes after a
+// turn does: it re-derives it from the turns. A terminal or settling run
+// keeps its status, and one blocked on a permission stays needs_input until
+// its turns leave nothing to decide for.
+func (d *Dispatcher) recomputeStatusLocked(s *runState, boundary time.Time) {
+	if s.record.Status.Terminal() || s.record.Status == StatusSettling {
+		return
+	}
+	status := d.interactiveStatusLocked(s, boundary)
+	if s.record.Status == StatusNeedsInput && len(s.permissions) > 0 && status != StatusIdle {
+		return
+	}
+	s.record.Status = status
+}
+
+// admitLocked re-derives the status of a run whose turn has just taken its
+// slot: it leaves queued and persists the change.
+func (d *Dispatcher) admitLocked(s *runState) {
+	old := s.record.Status
+	d.recomputeStatusLocked(s, d.now())
+	if s.record.Status != old {
+		d.persistLocked(s, "status")
+	}
+}
+
+// clearPendingLocked ends every wait: each turn's and the run's.
+func clearPendingLocked(s *runState) {
+	for i := range s.record.Turns {
+		s.record.Turns[i].Pending = nil
+	}
+	s.record.PendingWork = nil
 }
 
 func (d *Dispatcher) Send(ctx context.Context, id, message string) (SendResult, error) {
@@ -666,11 +760,16 @@ func (d *Dispatcher) Send(ctx context.Context, id, message string) (SendResult, 
 // deliverSend injects message into the run's pane as turn turnID, which
 // already holds a slot. The slot is released by whatever closes the turn.
 func (d *Dispatcher) deliverSend(ctx context.Context, s *runState, turnID, message string) (SendResult, error) {
+	// The follow-up travels under a command id leo picks, so the turn the
+	// mod starts for it names that id and is claimed by it.
+	commandID := bridge.NewCommandID()
 	d.mu.Lock()
 	pane := s.record.PaneID
 	rt := d.interactiveRuntime
+	d.setCommandIDLocked(s, turnID, commandID)
 	shown := d.nudgePaneLocked(s)
 	d.mu.Unlock()
+	ctx = withCommandID(ctx, commandID)
 	if rt == nil {
 		d.mu.Lock()
 		d.closeTurnLocked(s, turnID, TurnRejected, "interactive runtime unavailable")
@@ -723,7 +822,7 @@ func (d *Dispatcher) injectable(s *runState, turnID, pane string) bool {
 		return false
 	}
 	t := turnByID(s.record, turnID)
-	return t.Outcome == "" && s.record.Status == StatusQueued
+	return t.Outcome == "" && s.record.Status != StatusNeedsInput && startPendingLocked(s)
 }
 
 func (d *Dispatcher) Report(id string, r HookReport) error {
@@ -750,9 +849,6 @@ func (d *Dispatcher) Report(id string, r HookReport) error {
 	if s.pendingCloses == nil {
 		s.pendingCloses = map[string]pendingClose{}
 	}
-	if s.closedHarness == nil {
-		s.closedHarness = map[string]bool{}
-	}
 	if r.EventID != "" { // keep a bounded dedup set in pending map namespace
 		key := "@" + r.EventID
 		if _, ok := s.pendingCloses[key]; ok {
@@ -778,18 +874,15 @@ func (d *Dispatcher) Report(id string, r HookReport) error {
 	effort := effortFromPayload(p)
 	switch event {
 	case "userpromptsubmit":
-		oldStatus := s.record.Status
 		if s.record.Status == StatusSettling {
 			return nil
 		}
-		hid := str(p, "turn_id")
-		if hid == "" {
-			hid = str(p, "harness_turn_id")
+		if key := harnessKey(p); key != "" {
+			s.idMode = true
+			d.submitKeyedLocked(s, key, p)
+			break
 		}
-		if hid != "" && s.closedHarness[hid] {
-			fmt.Fprintf(os.Stderr, "dispatch %s: ignoring submit for closed harness turn %s\n", id, hid)
-			return nil
-		}
+		oldStatus := s.record.Status
 		prompt := str(p, "prompt")
 		injected := s.record.Harness == "claude" && isHarnessInjection(prompt)
 		// Whatever woke a waiting run (its background work's notification,
@@ -797,8 +890,8 @@ func (d *Dispatcher) Report(id string, r HookReport) error {
 		d.resumeWaitingLocked(s)
 		var delivered *Turn
 		if !injected && s.armedTurn != "" && d.now().Before(s.armedUntil) {
-			delivered = d.deliverTurnLocked(s, s.armedTurn, hid)
-		} else if matched := d.matchSubmitLocked(s, prompt, hid, injected); matched != nil {
+			delivered = d.deliverTurnLocked(s, s.armedTurn, "")
+		} else if matched := d.matchSubmitLocked(s, prompt, "", injected); matched != nil {
 			delivered = matched
 		} else {
 			// Only a prompt a human typed steers the run; Claude Code's own
@@ -806,12 +899,13 @@ func (d *Dispatcher) Report(id string, r HookReport) error {
 			if !injected {
 				s.record.Steered = true
 			}
-			if hid == "" && hasWorkingTurnLocked(s) {
-				// Claude carries no turn id and drains queued prompts (typed
-				// or injected) inside the running turn, before a single Stop.
-				// Fold into the working turn, however long it was hook-silent:
-				// a separate turn would never close (#211), and closing this
-				// one would report it lost while it is still working.
+			if hasWorkingTurnLocked(s) {
+				// This payload carries no turn id and Claude drains queued
+				// prompts (typed or injected) inside the running turn, before
+				// a single Stop. Fold into the working turn, however long it
+				// was hook-silent: a separate turn would never close (#211),
+				// and closing this one would report it lost while it is still
+				// working.
 				d.applyObservedEffortLocked(s, effort, currentTurnIndex(s.record.Turns))
 				if s.record.Status != oldStatus {
 					d.persistLocked(s, "status")
@@ -820,27 +914,18 @@ func (d *Dispatcher) Report(id string, r HookReport) error {
 				}
 				return nil
 			}
-			var t *Turn
 			if injected {
 				// Claude started a turn on its own; a sent prompt still
 				// waiting to submit keeps waiting rather than being lost.
-				t = d.appendTurnLocked(s, TurnSourceUser, "", false)
+				d.appendTurnLocked(s, TurnSourceUser, "", false)
 			} else {
-				t = d.openTurnLocked(s, TurnSourceUser, "", false)
+				d.openTurnLocked(s, TurnSourceUser, "", false)
 			}
-			t.HarnessTurnID = hid
 		}
 		d.applyObservedEffortLocked(s, effort, currentTurnIndex(s.record.Turns))
-		closeApplied := false
-		if hid != "" {
-			if pc, ok := s.pendingCloses[hid]; ok && d.now().Before(pc.until) {
-				closeApplied = d.closeHarnessLocked(s, hid, pc.outcome, pc.text)
-			}
-			delete(s.pendingCloses, hid)
-		}
-		if delivered != nil && !closeApplied {
+		if delivered != nil {
 			d.persistTurnLocked(s, *delivered)
-		} else if !closeApplied {
+		} else {
 			d.persistLocked(s, "turn")
 		}
 		if s.record.Status != oldStatus {
@@ -851,37 +936,13 @@ func (d *Dispatcher) Report(id string, r HookReport) error {
 		if event == "interrupt" {
 			out = TurnInterrupted
 		}
-		hid := str(p, "turn_id")
-		if hid == "" {
-			hid = str(p, "harness_turn_id")
-		}
-		if hid != "" && s.closedHarness[hid] {
-			fmt.Fprintf(os.Stderr, "dispatch %s: ignoring close for closed harness turn %s\n", id, hid)
-			return nil
-		}
 		text := str(p, "last_assistant_message")
-		if event == "stop" && hid == "" && !hasWorkingTurnLocked(s) {
-			// The Stop overtook its turn's submit: it confirms the armed
-			// turn ran before anything else reads the turn as working.
-			d.confirmArmedLocked(s)
+		if key := harnessKey(p); key != "" {
+			s.idMode = true
+			d.stopKeyedLocked(s, key, event, p, out, text)
+			break
 		}
-		if event == "stop" && hid == "" && hasWorkingTurnLocked(s) {
-			if w := pendingWorkFromStop(p); w != nil {
-				d.applyObservedEffortLocked(s, effort, currentTurnIndex(s.record.Turns))
-				d.waitOnBackgroundLocked(s, w)
-				break
-			}
-		}
-		s.record.PendingWork = nil
-		switch {
-		case hid == "":
-			d.applyObservedEffortLocked(s, effort, currentTurnIndex(s.record.Turns))
-			d.closeWorkingLocked(s, out, text)
-		case d.closeHarnessLocked(s, hid, out, text):
-			d.applyObservedEffortLocked(s, effort, harnessTurnIndex(s.record.Turns, hid))
-		default:
-			s.pendingCloses[hid] = pendingClose{out, text, d.now().Add(unmatchedGrace)}
-		}
+		d.stopUnkeyedLocked(s, event, p, out, text, effort)
 	case "sessionend":
 		d.beginSettlementLocked(s, StatusClosed, finalReportGrace)
 	}
@@ -910,7 +971,7 @@ func (d *Dispatcher) deliverTurnLocked(s *runState, turnID, harnessTurnID string
 			s.record.Turns[i].HarnessTurnID = harnessTurnID
 			s.armedTurn = ""
 			s.armedUntil = time.Time{}
-			s.record.Status = StatusRunning
+			d.recomputeStatusLocked(s, d.now())
 			s.record.startActive(d.now())
 			return &s.record.Turns[i]
 		}
@@ -935,27 +996,6 @@ func (d *Dispatcher) deliverOldestMatchingTurnLocked(s *runState, prompt, harnes
 func normalizePrompt(text string) string { return strings.Join(strings.Fields(text), " ") }
 
 func str(p map[string]any, k string) string { v, _ := p[k].(string); return v }
-func (d *Dispatcher) closeHarnessLocked(s *runState, hid string, o TurnOutcome, text string) bool {
-	found := false
-	for i := range s.record.Turns {
-		if s.record.Turns[i].Outcome == "" && s.record.Turns[i].HarnessTurnID == hid {
-			d.closeTurnLocked(s, s.record.Turns[i].TurnID, o, text)
-			found = true
-		}
-	}
-	if found {
-		if s.closedHarness == nil {
-			s.closedHarness = map[string]bool{}
-		}
-		s.closedHarness[hid] = true
-		s.closedIDs = append(s.closedIDs, hid)
-		if len(s.closedIDs) > maxInteractiveDedup {
-			delete(s.closedHarness, s.closedIDs[0])
-			s.closedIDs = s.closedIDs[1:]
-		}
-	}
-	return found
-}
 
 // harnessInjectionMarkers are the envelope tags of prompts the harness
 // submits on its own, which fire UserPromptSubmit like a typed prompt.
@@ -1024,14 +1064,17 @@ func (d *Dispatcher) closeWorkingLocked(s *runState, o TurnOutcome, text string)
 }
 
 // waitOnBackgroundLocked handles a Stop that leaves background work pending:
-// the session is paused, not done, so the working turn stays open (leo_wait
-// keeps blocking) and the run reads waiting until that work wakes it.
-func (d *Dispatcher) waitOnBackgroundLocked(s *runState, w *PendingWork) {
+// the session is paused, not done, so the turns the Stop ended stay open
+// (leo_wait keeps blocking), each holding that work, and the run reads
+// waiting until it wakes them.
+func (d *Dispatcher) waitOnBackgroundLocked(s *runState, w *PendingWork, turns ...*Turn) {
 	old := s.record.Status
-	s.record.PendingWork = w
-	s.record.foldActive(d.now())
-	if s.record.Status != StatusNeedsInput {
-		s.record.Status = StatusWaiting
+	for _, t := range turns {
+		t.Pending = w
+	}
+	d.recomputeStatusLocked(s, d.now())
+	if s.record.Status != StatusRunning {
+		s.record.foldActive(d.now())
 	}
 	if s.record.Status != old {
 		d.persistLocked(s, "status")
@@ -1061,16 +1104,26 @@ func (d *Dispatcher) confirmArmedLocked(s *runState) {
 	}
 }
 
-// resumeWaitingLocked returns a waiting run to running as its session
-// starts working again; the caller persists the change.
+// resumeWaitingLocked returns every waiting turn, and so the run, to running
+// as its session starts working again, for payloads that name no turn; the
+// caller persists the change.
 func (d *Dispatcher) resumeWaitingLocked(s *runState) {
-	if s.record.PendingWork == nil && s.record.Status != StatusWaiting {
+	clearPendingLocked(s)
+	d.settleResumedLocked(s)
+}
+
+// resumeTurnLocked continues t, a turn paused on background work, as the
+// wake that carries it on arrives. Other turns' waits stand.
+func (d *Dispatcher) resumeTurnLocked(s *runState, t *Turn) {
+	t.Pending = nil
+	d.settleResumedLocked(s)
+}
+
+func (d *Dispatcher) settleResumedLocked(s *runState) {
+	if openPendingWork(s) == nil && s.record.PendingWork == nil && s.record.Status != StatusWaiting {
 		return
 	}
-	s.record.PendingWork = nil
-	if s.record.Status == StatusWaiting {
-		s.record.Status = StatusRunning
-	}
+	d.recomputeStatusLocked(s, d.now())
 	s.record.startActive(d.now())
 }
 
@@ -1089,7 +1142,7 @@ func (d *Dispatcher) beginSettlementLocked(s *runState, status Status, grace tim
 	}
 	d.dropPermissionsLocked(s)
 	boundary := d.now()
-	s.record.PendingWork = nil
+	clearPendingLocked(s)
 	s.record.Status = StatusSettling
 	s.record.foldActive(boundary)
 	s.settleStatus = status
@@ -1102,7 +1155,7 @@ func (d *Dispatcher) finishInteractiveLocked(s *runState, status Status) {
 	}
 	d.dropPermissionsLocked(s)
 	s.record.foldActive(d.now())
-	s.record.PendingWork = nil
+	clearPendingLocked(s)
 	for _, t := range s.record.Turns {
 		if t.Outcome == "" {
 			o := TurnLost
@@ -1195,6 +1248,9 @@ func (d *Dispatcher) Sweep(now time.Time) {
 			}
 			if !p.until.IsZero() && !now.Before(p.until) {
 				delete(s.pendingCloses, k)
+				if d.adoptHeldStopLocked(s, k, p) {
+					continue
+				}
 				fmt.Fprintf(os.Stderr, "dispatch %s: dropping unmatched harness turn %s after grace\n", s.record.ID, k)
 			}
 		}

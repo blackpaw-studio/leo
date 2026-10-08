@@ -115,11 +115,13 @@ type runState struct {
 	armedUntil     time.Time
 	pendingCloses  map[string]pendingClose
 	eventIDs       []string
-	closedHarness  map[string]bool
-	closedIDs      []string
-	idleSince      time.Time
-	killPending    bool
-	releasing      bool
+	// idMode latches once a hook payload carries a harness id: from then on
+	// attribution is by id, and an id-less payload never closes more than
+	// the one working turn. Runs whose payloads carry no ids never set it.
+	idMode      bool
+	idleSince   time.Time
+	killPending bool
+	releasing   bool
 	// pgid is the headless command's private process group. It is retained
 	// after Wait so worktree cleanup can prove no detached child remains.
 	pgid            int
@@ -1127,7 +1129,9 @@ func (d *Dispatcher) MarkInterrupted() {
 					rec.Turns[i].EndedAt = markedAt
 					rec.Turns[i].SlotHeld = false
 				}
+				rec.Turns[i].Pending = nil
 			}
+			rec.PendingWork = nil
 			if finished {
 				rec.Status = StatusClosed
 			} else {
