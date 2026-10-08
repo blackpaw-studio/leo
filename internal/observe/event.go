@@ -54,11 +54,12 @@ const (
 	FeatureDispatchTree    = "dispatch_tree"
 	FeatureAgentUsage      = "agent_usage"
 	FeatureAgentControl    = "agent_control"
+	FeatureDispatchAttach  = "dispatch_attach"
 )
 
 // Features returns the hello's features list, a fresh copy each call.
 func Features() []string {
-	return []string{FeatureBridgeTurns, FeatureAttentionReason, FeatureDispatchTree, FeatureAgentUsage, FeatureAgentControl}
+	return []string{FeatureBridgeTurns, FeatureAttentionReason, FeatureDispatchTree, FeatureAgentUsage, FeatureAgentControl, FeatureDispatchAttach}
 }
 
 // ActivityMinInterval is the most often agent_activity is published per

@@ -309,3 +309,60 @@ func TestKeylessDispatchesAreListedButNeverOutstanding(t *testing.T) {
 		t.Fatalf("Dispatches = %+v; want d1 with caller gamma", ds)
 	}
 }
+
+func TestAttachable(t *testing.T) {
+	live := Record{ID: "d-a", Kind: "dispatch", Mode: ModeInteractive, PaneID: "%7", ViewerKind: "window", Status: StatusRunning}
+	cases := map[string]func(*Record){
+		"running window pane": func(*Record) {},
+		"idle":                func(r *Record) { r.Status = StatusIdle },
+		"headless":            func(r *Record) { r.Mode = ModeHeadless },
+		"no pane yet":         func(r *Record) { r.PaneID = "" },
+		"done":                func(r *Record) { r.Status = StatusDone },
+		"failed":              func(r *Record) { r.Status = StatusFailed },
+		"closed":              func(r *Record) { r.Status = StatusClosed },
+		"released":            func(r *Record) { r.Status = StatusReleased },
+		"settling":            func(r *Record) { r.Status = StatusSettling },
+		"split pane":          func(r *Record) { r.ViewerKind = "split" },
+		"hidden pane":         func(r *Record) { r.ViewerKind = viewerHidden },
+		"no viewer kind":      func(r *Record) { r.ViewerKind = "" },
+	}
+	want := map[string]bool{"running window pane": true, "idle": true}
+	for name, mutate := range cases {
+		rec := live
+		mutate(&rec)
+		if got := Attachable(rec); got != want[name] {
+			t.Errorf("%s: Attachable=%v, want %v", name, got, want[name])
+		}
+	}
+}
+
+func TestObservedDispatchExposesAttachTarget(t *testing.T) {
+	rec := Record{ID: "d-a", Kind: "dispatch", Mode: ModeInteractive, PaneID: "%7", ViewerKind: "window", Status: StatusRunning, StartedAt: stateNow}
+	d := observedDispatch(rec, stateNow)
+	if !d.Attachable || d.TmuxTarget != "%7" {
+		t.Fatalf("window pane: attachable=%v target=%q", d.Attachable, d.TmuxTarget)
+	}
+	rec.ViewerKind = "split"
+	if d = observedDispatch(rec, stateNow); d.Attachable || d.TmuxTarget != "%7" {
+		t.Fatalf("split pane: attachable=%v target=%q; the target is still reported", d.Attachable, d.TmuxTarget)
+	}
+	rec.Mode, rec.PaneID = ModeHeadless, ""
+	if d = observedDispatch(rec, stateNow); d.Attachable || d.TmuxTarget != "" {
+		t.Fatalf("headless: attachable=%v target=%q", d.Attachable, d.TmuxTarget)
+	}
+}
+
+func TestDispatchChangedPublishesWhenAttachabilityChanges(t *testing.T) {
+	running := Record{ID: "d-a", Kind: "dispatch", Mode: ModeInteractive, PaneID: "%7", ViewerKind: "window", Status: StatusRunning, StartedAt: stateNow}
+	h := newObserveHarness(running)
+	h.obs.Tick()
+	h.pub.events = nil
+	moved := running
+	moved.ViewerKind = "split"
+	h.records.recs = []Record{moved}
+	h.obs.Tick()
+	got := h.pub.dispatches(t)
+	if len(got) != 1 || got[0].Attachable || got[0].TmuxTarget != "%7" {
+		t.Fatalf("events=%+v; a pane moving out of its window must republish", got)
+	}
+}

@@ -166,9 +166,15 @@ type Dispatch struct {
 	ParentDispatchID string     `json:"parent_dispatch_id,omitempty"`
 	StartedAt        time.Time  `json:"started_at"`
 	EndedAt          *time.Time `json:"ended_at,omitempty"`
-	TokensIn         int64      `json:"tokens_in"`
-	TokensOut        int64      `json:"tokens_out"`
-	CostUSD          float64    `json:"cost_usd"`
+	// Attachable is true while `leo dispatch attach <id>` can show the
+	// dispatch: an interactive dispatch whose TUI is alone in its own tmux
+	// window. TmuxTarget is its tmux pane id (%N) on Leo's tmux server,
+	// reported whenever the dispatch has a pane, attachable or not.
+	Attachable bool    `json:"attachable"`
+	TmuxTarget string  `json:"tmux_target,omitempty"`
+	TokensIn   int64   `json:"tokens_in"`
+	TokensOut  int64   `json:"tokens_out"`
+	CostUSD    float64 `json:"cost_usd"`
 }
 
 // ActionKind names the provenance of an Action's detail, so consumers can tell how much

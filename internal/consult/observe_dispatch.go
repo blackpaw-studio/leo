@@ -203,13 +203,27 @@ func observedDispatch(rec Record, now time.Time) observe.Dispatch {
 		Effort: rec.Effort, ObservedEffort: rec.ObservedEffort,
 		Status: string(rec.Status), Stalled: isStalled(rec, now), Pending: rec.PendingWork.Summary(),
 		CallerAgent: rec.Caller, ParentDispatchID: parentDispatchID(rec), StartedAt: rec.StartedAt,
-		TokensIn: valueOr(rec.InputTokens), TokensOut: valueOr(rec.OutputTokens), CostUSD: valueOr(rec.CostUSD),
+		Attachable: Attachable(rec),
+		TokensIn:   valueOr(rec.InputTokens), TokensOut: valueOr(rec.OutputTokens), CostUSD: valueOr(rec.CostUSD),
+	}
+	if rec.Mode == ModeInteractive {
+		d.TmuxTarget = rec.PaneID
 	}
 	if !rec.EndedAt.IsZero() {
 		ended := rec.EndedAt
 		d.EndedAt = &ended
 	}
 	return d
+}
+
+// Attachable reports whether `leo dispatch attach` can show rec: a live
+// interactive dispatch whose pane is recorded as sitting alone in its own
+// tmux window. A split pane shares its window with the caller and a hidden
+// one is parked, so attaching either would mean moving or exposing a
+// pane that is not the dispatch's own.
+func Attachable(rec Record) bool {
+	return rec.Mode == ModeInteractive && rec.PaneID != "" && rec.ViewerKind == "window" &&
+		!rec.Status.Terminal() && rec.Status != StatusSettling
 }
 
 func sameDispatch(a, b observe.Dispatch) bool {
