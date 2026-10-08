@@ -59,6 +59,10 @@ type attachOptions struct {
 	// readOnly attaches with `-r`: the client can look but its keystrokes
 	// never reach the session's panes.
 	readOnly bool
+	// asChild runs the local attach as a child process (stdio inherited, exit
+	// status passed through) instead of replacing leo with tmux, for callers
+	// that must clean up after the client leaves or fails to start.
+	asChild bool
 }
 
 // attachArgs is the `attach` subcommand argv for target under opts.
@@ -129,6 +133,18 @@ func attachTmuxSession(res config.HostResolution, session string, opts attachOpt
 		c.Stdout = agentStdout
 		c.Stderr = agentStderr
 		return c.Run()
+	}
+	if opts.asChild {
+		c := agentExecCommand(tmuxPath, tmux.Args(attachArgs(tmux.Target(session), opts)...)...)
+		c.Stdin = os.Stdin
+		c.Stdout = agentStdout
+		c.Stderr = agentStderr
+		err := c.Run()
+		var exitErr *exec.ExitError
+		if errors.As(err, &exitErr) {
+			return exitCodeError{code: exitErr.ExitCode(), err: errors.New("")}
+		}
+		return err
 	}
 	// Replace the CLI process so tmux owns the TTY cleanly. Returns an error
 	// only if exec itself fails; on success this call does not return.

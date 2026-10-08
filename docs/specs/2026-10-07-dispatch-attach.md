@@ -58,7 +58,11 @@ which the pane reconciler keeps current, so a move republishes
    the placeholder window `new-session` made, `set-option status off`.
 4. `tmux -L leo attach -r -t =_watch-…` (`-r`: keystrokes never reach the
    dispatch; popup variant inside tmux). Panes are never moved or broken out.
-5. Any failure before the attach kills the watch session.
+5. Outside tmux the client runs as a child process (stdio inherited, its exit
+   status becomes leo's), never an exec, so leo always gets to clean up. The
+   watch session is killed after the client returns and on any failure before
+   it, including a tmux that cannot start (such as stdin not a TTY), which
+   would never arm the hook.
 
 `destroy-unattached` is armed by a `client-attached` hook, not set up front.
 Verified against tmux 3.6a on an isolated `TMUX_TMPDIR` socket: setting
@@ -90,10 +94,12 @@ forever.
 - `GET /api/v1/state` gains `meta: {seq}`: the event bus's last `seq` read
   *before* the snapshot is built, the same counter every SSE payload and the
   `hello` frame carry. The snapshot reflects every event with `seq <= meta.seq`
-  and may already reflect later ones, so a client fetches `/state`, opens the
-  stream, and applies only events with `seq > meta.seq`; event payloads carry
-  whole entities, so re-applying one is harmless. `meta.seq` is `0` when the
-  daemon has no event source.
+  and may already reflect later ones. The bus has no replay, so a client must
+  subscribe first: open the SSE stream, then `GET /state`, and apply only
+  events with `seq > meta.seq` (event payloads carry whole entities, so
+  re-applying one is harmless). If the stream's `hello.seq` is greater than
+  `meta.seq`, events may have fallen between the two, so refetch `/state`.
+  `meta.seq` is `0` when the daemon has no event source.
 
 Advertised as the `dispatch_removed` and `state_seq` hello features.
 
@@ -108,9 +114,9 @@ dispatch just has no recorded parent) and then:
   too, which have no bridge key to derive it from;
 - sets the child's `Caller` to the parent's, so every dispatch in a tree has the
   root agent as its `caller_agent`, at every depth (a parent with no caller
-  leaves the child's own). Nested interactive dispatches are therefore placed
-  against the root agent's session like any other, unless the viewer placement
-  is `background`.
+  leaves the child's own). This is attribution only: viewer placement still
+  uses the requester's own caller, so a nested interactive dispatch with no
+  caller pane opens in the `leo-dispatch` session, never in the root agent's.
 
 `dispatches[].parent_dispatch_id` is the *immediate* parent, as before. Records
 written before this change still derive it from `caller_bridge_key`

@@ -97,3 +97,27 @@ func TestANestedDispatchNeverHoldsTheAgentAboveItsParent(t *testing.T) {
 		t.Fatalf("outstanding=%v", got)
 	}
 }
+
+func TestNestedInteractiveDispatchPlacesByItsOwnCallerNotTheInheritedRoot(t *testing.T) {
+	d := newNestedDispatcher(t)
+	rt := &fakeInteractiveRuntime{arm: true, empty: true}
+	d.SetInteractiveRuntime(rt)
+	root := startNested(t, d, Request{Caller: "alpha"})
+
+	started, err := d.Start(context.Background(), testConfig(), Request{Template: "codex", Prompt: "q", Cwd: t.TempDir(), Mode: ModeInteractive, ParentDispatchID: root.ID})
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	child, err := d.Get(started.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if child.Caller != "alpha" {
+		t.Fatalf("recorded caller=%q, want the root alpha for attribution", child.Caller)
+	}
+	rt.mu.Lock()
+	defer rt.mu.Unlock()
+	if len(rt.callers) != 1 || rt.callers[0] != "" {
+		t.Fatalf("launch callers=%q; the inherited root name must not pick the viewer session", rt.callers)
+	}
+}

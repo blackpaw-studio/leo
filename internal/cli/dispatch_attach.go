@@ -181,12 +181,12 @@ func runDispatchAttachLocal(ctx context.Context, cfg *config.Config, res config.
 			return fmt.Errorf("preparing watch session (%s): %w", args[0], err)
 		}
 	}
-	err = attachTmuxSession(res, name, attachOptions{readOnly: true})
-	// A successful exec never returns. A popup does, after the client left:
-	// the session is gone by then unless the attach never started.
-	if err != nil || tmuxEnv() != "" {
-		kill(sessionID)
-	}
+	// The client runs as a child, not an exec, so this cleanup always runs:
+	// a tmux that fails to start (no TTY) never arms destroy-unattached, and
+	// a popup returns after the client left. Killing an already-destroyed
+	// session fails harmlessly.
+	err = attachTmuxSession(res, name, attachOptions{readOnly: true, asChild: true})
+	kill(sessionID)
 	return err
 }
 

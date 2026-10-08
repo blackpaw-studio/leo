@@ -25,6 +25,8 @@ type attachFixture struct {
 	probe string
 	tmux  [][]string
 	execs [][]string
+	// attachCmd is the child process the tmux client runs as; nil succeeds.
+	attachCmd func() *exec.Cmd
 }
 
 func newAttachFixture(t *testing.T) *attachFixture {
@@ -33,19 +35,22 @@ func newAttachFixture(t *testing.T) *attachFixture {
 		record: consult.Record{ID: "d-abc123", Kind: "dispatch", Mode: consult.ModeInteractive, PaneID: "%7", ViewerKind: "window", Status: consult.StatusRunning},
 		probe:  "@3 1\n",
 	}
-	oldFetch, oldSuffix, oldLocate, oldExec, oldSys, oldTmuxLocate, oldTmuxEnv := dispatchRecordFn, watchSuffixFn, viewerLocateTmux, viewerExecCommandContext, agentSyscallExec, tmuxLocate, tmuxEnv
+	oldFetch, oldSuffix, oldLocate, oldExec, oldChild, oldTmuxLocate, oldTmuxEnv := dispatchRecordFn, watchSuffixFn, viewerLocateTmux, viewerExecCommandContext, agentExecCommand, tmuxLocate, tmuxEnv
 	dispatchRecordFn = func(context.Context, *config.Config, string) (consult.Record, error) { return f.record, f.fetchErr }
 	watchSuffixFn = func() string { return "1f2e" }
 	viewerLocateTmux = func() (string, error) { return "/tmux", nil }
 	tmuxLocate = func() (string, error) { return "/usr/bin/tmux", nil }
 	tmuxEnv = func() string { return "" }
 	viewerExecCommandContext = f.fakeTmux
-	agentSyscallExec = func(argv0 string, argv []string, _ []string) error {
-		f.execs = append(f.execs, append([]string{argv0}, argv...))
-		return nil
+	agentExecCommand = func(name string, args ...string) *exec.Cmd {
+		f.execs = append(f.execs, append([]string{name}, args...))
+		if f.attachCmd != nil {
+			return f.attachCmd()
+		}
+		return exec.Command("true")
 	}
 	t.Cleanup(func() {
-		dispatchRecordFn, watchSuffixFn, viewerLocateTmux, viewerExecCommandContext, agentSyscallExec, tmuxLocate, tmuxEnv = oldFetch, oldSuffix, oldLocate, oldExec, oldSys, oldTmuxLocate, oldTmuxEnv
+		dispatchRecordFn, watchSuffixFn, viewerLocateTmux, viewerExecCommandContext, agentExecCommand, tmuxLocate, tmuxEnv = oldFetch, oldSuffix, oldLocate, oldExec, oldChild, oldTmuxLocate, oldTmuxEnv
 	})
 	return f
 }
@@ -82,11 +87,12 @@ func TestDispatchAttachLinksWindowIntoReadOnlyWatchSession(t *testing.T) {
 		{"/tmux", "-L", "leo", "kill-window", "-t", "@10"},
 		{"/tmux", "-L", "leo", "set-option", "-t", "$9", "status", "off"},
 		{"/tmux", "-L", "leo", "set-hook", "-t", "$9", "client-attached", "set-option destroy-unattached on"},
+		{"/tmux", "-L", "leo", "kill-session", "-t", "$9"},
 	}
 	if !reflect.DeepEqual(f.tmux, wantTmux) {
 		t.Fatalf("tmux calls:\n got %q\nwant %q", f.tmux, wantTmux)
 	}
-	wantExec := [][]string{{"/usr/bin/tmux", "tmux", "-L", "leo", "attach", "-r", "-t", "=" + watchSession}}
+	wantExec := [][]string{{"/usr/bin/tmux", "-L", "leo", "attach", "-r", "-t", "=" + watchSession}}
 	if !reflect.DeepEqual(f.execs, wantExec) {
 		t.Fatalf("exec:\n got %q\nwant %q", f.execs, wantExec)
 	}
@@ -167,12 +173,25 @@ func TestDispatchAttachKillsWatchSessionOnAnyFailureBeforeAttach(t *testing.T) {
 	}
 }
 
-func TestDispatchAttachKillsWatchSessionWhenTheClientCannotStart(t *testing.T) {
+func TestDispatchAttachKillsWatchSessionWhenTheClientFails(t *testing.T) {
+	// Outside tmux the client is a child process, so a tmux that cannot start
+	// (stdin not a TTY) comes back here and the session is not leaked.
 	f := newAttachFixture(t)
-	agentSyscallExec = func(string, []string, []string) error { return errors.New("exec failed") }
+	f.attachCmd = func() *exec.Cmd { return exec.Command("sh", "-c", "exit 3") }
 	err := f.run(t, "d-abc123")
-	if err == nil || !strings.Contains(err.Error(), "exec failed") {
-		t.Fatalf("err=%v", err)
+	if ExitCode(err) != 3 {
+		t.Fatalf("err=%v exit=%d, want the client's status 3", err, ExitCode(err))
+	}
+	if last := f.tmux[len(f.tmux)-1]; !reflect.DeepEqual(last, []string{"/tmux", "-L", "leo", "kill-session", "-t", "$9"}) {
+		t.Fatalf("last tmux call %q", last)
+	}
+}
+
+func TestDispatchAttachKillsWatchSessionWhenTheClientCannotBeSpawned(t *testing.T) {
+	f := newAttachFixture(t)
+	f.attachCmd = func() *exec.Cmd { return exec.Command("/nonexistent/tmux") }
+	if err := f.run(t, "d-abc123"); err == nil {
+		t.Fatal("want error")
 	}
 	if last := f.tmux[len(f.tmux)-1]; !reflect.DeepEqual(last, []string{"/tmux", "-L", "leo", "kill-session", "-t", "$9"}) {
 		t.Fatalf("last tmux call %q", last)

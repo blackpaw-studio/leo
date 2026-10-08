@@ -18,8 +18,10 @@ const SnapshotVersion = 1
 type Snapshot struct {
 	// Meta orders the snapshot against the event stream: it reflects every
 	// event with seq <= Meta.Seq (and may already reflect later ones), so a
-	// client applies only events whose seq is greater. Advertised by the
-	// state_seq feature.
+	// client applies only events whose seq is greater. The bus has no replay,
+	// so a client subscribes to the stream first and fetches the snapshot
+	// second (refetching if hello.seq is greater than Meta.Seq). Advertised by
+	// the state_seq feature.
 	Meta       SnapshotMeta `json:"meta"`
 	Version    int          `json:"version"`
 	ServerTime time.Time    `json:"server_time"`

@@ -299,14 +299,15 @@ func (d *Dispatcher) Start(_ context.Context, cfg *config.Config, req Request) (
 		notify = *req.Notify
 	}
 	// A nested dispatch is filed under the root agent: whatever name the
-	// calling subagent inherited, its parent's caller is the root's.
+	// calling subagent inherited, its parent's caller is the root's. Only the
+	// record takes it; req.Caller stays the requester's own so viewer
+	// placement never resolves the root agent's tmux session for a subagent.
 	parentID, caller := d.resolveParent(req.ParentDispatchID)
 	if caller == "" {
 		caller = req.Caller
 	}
-	req.Caller = caller
 	rec := Record{
-		ID: newID(), Caller: req.Caller, ParentDispatchID: parentID, Template: req.Template, Role: req.Role, Profile: req.Profile,
+		ID: newID(), Caller: caller, ParentDispatchID: parentID, Template: req.Template, Role: req.Role, Profile: req.Profile,
 		Kind: kind, Harness: h.Name(), Model: model, Cwd: req.Cwd, Name: req.Name, Timeout: timeout,
 		Effort: req.Effort,
 		Prompt: req.Prompt, Status: StatusQueued, StartedAt: d.now(), Mode: mode,
