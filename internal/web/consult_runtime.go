@@ -16,6 +16,9 @@ import (
 // is how often the roster refreshes when no record is roster-eligible.
 type consultLoopIntervals struct {
 	sweep, roster, rosterIdle, viewer time.Duration
+	// placement paces the live placement watch (see Dispatcher.PollPlacement):
+	// one tmux list-clients per tick while a dispatch viewer is live.
+	placement time.Duration
 	// bridgeState paces the state pushed to bridged claudes' mods: at most
 	// one snapshot per key per tick.
 	bridgeState time.Duration
@@ -26,6 +29,7 @@ var defaultConsultLoopIntervals = consultLoopIntervals{
 	roster:      time.Second,
 	rosterIdle:  5 * time.Second,
 	viewer:      10 * time.Second,
+	placement:   time.Second,
 	bridgeState: time.Second,
 }
 
@@ -43,6 +47,7 @@ func (i consultLoopIntervals) withDefaults() consultLoopIntervals {
 		roster:      pick(i.roster, d.roster),
 		rosterIdle:  pick(i.rosterIdle, d.rosterIdle),
 		viewer:      pick(i.viewer, d.viewer),
+		placement:   pick(i.placement, d.placement),
 		bridgeState: pick(i.bridgeState, d.bridgeState),
 	}
 }
@@ -61,6 +66,9 @@ func (s *Server) setupConsultRuntime(opts Options, resolveCallerSession func(str
 	}
 	s.consults.SetAttachPlacements(opts.AttachPlacements, func(ctx context.Context, session string) ([]tmux.Client, error) {
 		return tmux.ListClients(ctx, findTmuxPath(), session)
+	})
+	s.consults.SetAllClientsLister(func(ctx context.Context) ([]tmux.SessionClient, error) {
+		return tmux.ListAllClients(ctx, findTmuxPath())
 	})
 	viewer.PlacementOverrides = s.consults.ApplyAttachPlacement
 	viewer.Coordinator = s.consults.PlacementCoordinator()
@@ -123,12 +131,33 @@ func (s *Server) setupConsultRuntime(opts Options, resolveCallerSession func(str
 	if updateRoster == nil {
 		updateRoster = viewer.UpdateRoster
 	}
+	pollPlacement := s.pollPlacement
+	if pollPlacement == nil {
+		pollPlacement = s.consults.PollPlacement
+	}
 	loopCtx, cancel := context.WithCancel(opts.ParentContext)
 	done := make(chan struct{})
+	placementDone := make(chan struct{})
 	s.stopConsultLoop = func() {
 		cancel()
 		<-done
+		<-placementDone
 	}
+	// A placement poll waits on tmux moves, so it gets a loop of its own
+	// rather than stalling the sweep and the roster.
+	go func() {
+		defer close(placementDone)
+		ticker := time.NewTicker(intervals.placement)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-loopCtx.Done():
+				return
+			case <-ticker.C:
+				pollPlacement(loopCtx)
+			}
+		}
+	}()
 	go func() {
 		defer close(done)
 		dispatcherTicker := time.NewTicker(intervals.sweep)

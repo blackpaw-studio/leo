@@ -119,7 +119,7 @@ func TestServeEventsHelloAdvertisesFeatures(t *testing.T) {
 	<-w.flushed
 	cancel()
 	<-done
-	want := `"features":["bridge_turns","attention_reason","dispatch_tree","agent_usage","agent_control","dispatch_attach","dispatch_removed","state_seq","attach_dispatch_placement"]`
+	want := `"features":["bridge_turns","attention_reason","dispatch_tree","agent_usage","agent_control","dispatch_attach","dispatch_removed","state_seq","attach_dispatch_placement","dispatch_placement_live"]`
 	if !strings.Contains(w.String(), want) {
 		t.Fatalf("hello = %q, want %s", w.String(), want)
 	}

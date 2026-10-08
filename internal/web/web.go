@@ -187,6 +187,9 @@ type Server struct {
 	// Both are test seams.
 	consultIntervals consultLoopIntervals
 	updateRoster     func([]consult.Record, time.Time)
+	// pollPlacement replaces the dispatcher's PollPlacement when set (a test
+	// seam).
+	pollPlacement func(context.Context)
 	// stopConsultLoop cancels the consult runtime loop and waits for it to
 	// exit. nil when no loop was started (no ParentContext).
 	stopConsultLoop func()

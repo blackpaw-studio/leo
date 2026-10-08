@@ -77,3 +77,33 @@ func TestShutdownStopsConsultRuntimeLoop(t *testing.T) {
 		t.Fatalf("roster updated %d times after Shutdown", got-after)
 	}
 }
+
+func TestConsultRuntimeLoopPollsLivePlacementUntilShutdown(t *testing.T) {
+	var polls atomic.Int32
+	s := &Server{
+		configPath:         "test.yaml",
+		leoPath:            "leo",
+		execCommand:        func(string, ...string) *exec.Cmd { return exec.Command("true") },
+		execCommandContext: func(ctx context.Context, _ string, _ ...string) *exec.Cmd { return exec.CommandContext(ctx, "true") },
+		consultIntervals:   consultLoopIntervals{placement: time.Millisecond},
+		updateRoster:       func([]consult.Record, time.Time) {},
+		pollPlacement:      func(context.Context) { polls.Add(1) },
+	}
+	s.setupConsultRuntime(Options{ParentContext: context.Background()}, func(string) (string, bool) { return "", false })
+
+	deadline := time.Now().Add(2 * time.Second)
+	for polls.Load() < 3 {
+		if time.Now().After(deadline) {
+			t.Fatal("placement watch never ticked")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	if err := s.Shutdown(); err != nil {
+		t.Fatalf("Shutdown: %v", err)
+	}
+	after := polls.Load()
+	time.Sleep(20 * time.Millisecond)
+	if got := polls.Load(); got != after {
+		t.Fatalf("placement polled %d more times after Shutdown", got-after)
+	}
+}

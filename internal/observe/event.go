@@ -63,11 +63,16 @@ const (
 	// FeatureAttachDispatchPlacement: `leo agent attach --dispatch-placement`
 	// steers where dispatch viewers open for the attached client.
 	FeatureAttachDispatchPlacement = "attach_dispatch_placement"
+	// FeatureDispatchPlacementLive: live interactive dispatch viewers follow
+	// their caller session's effective placement as clients attach and
+	// detach, moving between the caller's session and leo-dispatch (the
+	// `background` viewer_kind).
+	FeatureDispatchPlacementLive = "dispatch_placement_live"
 )
 
 // Features returns the hello's features list, a fresh copy each call.
 func Features() []string {
-	return []string{FeatureBridgeTurns, FeatureAttentionReason, FeatureDispatchTree, FeatureAgentUsage, FeatureAgentControl, FeatureDispatchAttach, FeatureDispatchRemoved, FeatureStateSeq, FeatureAttachDispatchPlacement}
+	return []string{FeatureBridgeTurns, FeatureAttentionReason, FeatureDispatchTree, FeatureAgentUsage, FeatureAgentControl, FeatureDispatchAttach, FeatureDispatchRemoved, FeatureStateSeq, FeatureAttachDispatchPlacement, FeatureDispatchPlacementLive}
 }
 
 // ActivityMinInterval is the most often agent_activity is published per
