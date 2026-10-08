@@ -15,7 +15,7 @@ The bus has no replay, so a client must order the two calls like this (the same 
 1. Subscribe to `GET /events` first and read `hello.seq`. Buffer the frames that arrive from here on.
 2. Then `GET /state`.
 3. Drop buffered events with `seq <= data.meta.seq` (the snapshot already reflects them) and apply the rest.
-4. If `hello.seq > data.meta.seq + 1` and the buffer holds no events covering the gap, events fell between the two calls: refetch `/state` and repeat step 3.
+4. Refetch `/state` under the condition `2026-10-07-dispatch-attach.md` section 4 gives (events may have fallen between the two calls), then repeat step 3.
 
 Event payloads carry whole entities, so re-applying one is harmless. A buffered event with `seq > meta.seq` can still briefly replay an older row state (for example `running` after the snapshot already shows `done`); the next `dispatch_changed` for that dispatch corrects it. `meta.seq` is `0` when the daemon has no event source.
 
