@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"regexp"
 	"strings"
 	"syscall"
 	"time"
@@ -128,7 +129,10 @@ func runRemoteAttachPlaced(res config.HostResolution, opts attachOptions, head [
 	if opts.dispatchPlacement != "" {
 		remoteArgs = append(remoteArgs, "--dispatch-placement", opts.dispatchPlacement)
 	}
-	remoteArgs = append(remoteArgs, name)
+	// "--" keeps a name that starts with "-" from being read as a flag, and
+	// the remote login shell re-parses everything ssh sends, so quote what a
+	// shell would mangle.
+	remoteArgs = append(remoteArgs, "--", remoteShellWord(name))
 	if !opts.cc {
 		return runRemoteAttach(res, remoteArgs...)
 	}
@@ -255,7 +259,7 @@ func attachTmuxSession(res config.HostResolution, session string, opts attachOpt
 		}
 		argv := append([]string{"tmux"}, tmux.Args(append([]string{"-CC"}, attachArgs(tmux.Target(session), opts)...)...)...)
 		registerAttachPlacement(opts, session)
-		return agentSyscallExec(tmuxPath, argv, os.Environ())
+		return agentSyscallExec(tmuxPath, argv, utf8Locale(os.Environ()))
 	}
 	if tmuxEnv() != "" {
 		inner := fmt.Sprintf("%s -L %s %s", shellQuoteArg(tmuxPath), tmux.SocketName, strings.Join(attachArgs(shellQuoteArg(tmux.Target(session)), opts), " "))
@@ -268,6 +272,7 @@ func attachTmuxSession(res config.HostResolution, session string, opts attachOpt
 	}
 	if opts.asChild {
 		c := agentExecCommand(tmuxPath, tmux.Args(attachArgs(tmux.Target(session), opts)...)...)
+		c.Env = utf8Locale(os.Environ())
 		c.Stdin = os.Stdin
 		c.Stdout = agentStdout
 		c.Stderr = agentStderr
@@ -282,7 +287,7 @@ func attachTmuxSession(res config.HostResolution, session string, opts attachOpt
 	// only if exec itself fails; on success this call does not return.
 	argv := append([]string{"tmux"}, tmux.Args(attachArgs(tmux.Target(session), opts)...)...)
 	registerAttachPlacement(opts, session)
-	return agentSyscallExec(tmuxPath, argv, os.Environ())
+	return agentSyscallExec(tmuxPath, argv, utf8Locale(os.Environ()))
 }
 
 // attachRemoteControlMode streams a remote agent's terminal over SSH using
@@ -315,6 +320,43 @@ func attachRemoteControlMode(res config.HostResolution, session string) error {
 	c.Stdout = agentStdout
 	c.Stderr = agentStderr
 	return hintRemoteTmuxMissing(res, c.Run())
+}
+
+var plainShellWord = regexp.MustCompile(`^[A-Za-z0-9_.,/:@%+-]+$`)
+
+// remoteShellWord quotes s for transit through a remote login shell, leaving
+// words that need no quoting as they are. A leading "=" is among the quoted
+// cases (see remoteShellTarget).
+func remoteShellWord(s string) string {
+	if plainShellWord.MatchString(s) {
+		return s
+	}
+	return shellQuoteArg(s)
+}
+
+// utf8Locale returns env with an LC_CTYPE that tmux accepts as UTF-8: without
+// one tmux replaces every non-ASCII byte it draws with "_". An env that
+// already names a UTF-8 locale in LC_ALL, LC_CTYPE or LANG is returned as it
+// is. A non-UTF-8 LC_CTYPE is replaced, not duplicated.
+func utf8Locale(env []string) []string {
+	isUTF8 := func(v string) bool {
+		v = strings.ToLower(strings.ReplaceAll(v, "-", ""))
+		return strings.Contains(v, "utf8")
+	}
+	for _, e := range env {
+		for _, k := range []string{"LC_ALL=", "LC_CTYPE=", "LANG="} {
+			if v, ok := strings.CutPrefix(e, k); ok && isUTF8(v) {
+				return env
+			}
+		}
+	}
+	out := make([]string, 0, len(env)+1)
+	for _, e := range env {
+		if !strings.HasPrefix(e, "LC_CTYPE=") {
+			out = append(out, e)
+		}
+	}
+	return append(out, "LC_CTYPE=UTF-8")
 }
 
 // shellQuoteArg wraps a value in single quotes, escaping any embedded single

@@ -36,15 +36,23 @@ var events []string
 
 func stubExecRecording(t *testing.T) *[]string {
 	t.Helper()
-	var argv []string
+	argv, _ := stubExecRecordingEnv(t)
+	return argv
+}
+
+// stubExecRecordingEnv is stubExecRecording that also returns the env the
+// tmux exec would receive.
+func stubExecRecordingEnv(t *testing.T) (argv, env *[]string) {
+	t.Helper()
+	argv, env = new([]string), new([]string)
 	old := agentSyscallExec
-	agentSyscallExec = func(_ string, a []string, _ []string) error {
+	agentSyscallExec = func(_ string, a []string, e []string) error {
 		events = append(events, "exec")
-		argv = a
+		*argv, *env = a, e
 		return nil
 	}
 	t.Cleanup(func() { agentSyscallExec = old })
-	return &argv
+	return argv, env
 }
 
 func TestAttachTmuxSessionLocalRegistersPlacementBeforeExec(t *testing.T) {
@@ -148,27 +156,27 @@ func TestAgentAttachRemoteForwardsPlacementThroughRemoteLeo(t *testing.T) {
 		"agent attach non-cc": {
 			[]string{"agent", "attach", "--dispatch-placement", "background", "scratch"},
 			func(string) []string {
-				return []string{"ssh", "-t", "user@prod.example.com", "-p", "2222", config.DefaultRemoteLeoPath, "agent", "attach", "--dispatch-placement", "background", "scratch"}
+				return []string{"ssh", "-t", "user@prod.example.com", "-p", "2222", config.DefaultRemoteLeoPath, "agent", "attach", "--dispatch-placement", "background", "--", "scratch"}
 			},
 		},
 		"agent attach cc": {
 			[]string{"agent", "attach", "--cc", "--dispatch-placement", "background", "scratch"},
 			func(home string) []string {
 				w := append([]string{"ssh", "-tt", "-e", "none", "user@prod.example.com", "-p", "2222"}, ctlOpts(home)...)
-				return append(w, config.DefaultRemoteLeoPath, "agent", "attach", "--cc", "--dispatch-placement", "background", "scratch")
+				return append(w, config.DefaultRemoteLeoPath, "agent", "attach", "--cc", "--dispatch-placement", "background", "--", "scratch")
 			},
 		},
 		"top-level attach non-cc": {
 			[]string{"attach", "--dispatch-placement", "window", "scratch"},
 			func(string) []string {
-				return []string{"ssh", "-t", "user@prod.example.com", "-p", "2222", config.DefaultRemoteLeoPath, "attach", "--dispatch-placement", "window", "scratch"}
+				return []string{"ssh", "-t", "user@prod.example.com", "-p", "2222", config.DefaultRemoteLeoPath, "attach", "--dispatch-placement", "window", "--", "scratch"}
 			},
 		},
 		"top-level attach cc": {
 			[]string{"attach", "--cc", "--dispatch-placement", "window", "scratch"},
 			func(home string) []string {
 				w := append([]string{"ssh", "-tt", "-e", "none", "user@prod.example.com", "-p", "2222"}, ctlOpts(home)...)
-				return append(w, config.DefaultRemoteLeoPath, "attach", "--cc", "--dispatch-placement", "window", "scratch")
+				return append(w, config.DefaultRemoteLeoPath, "attach", "--cc", "--dispatch-placement", "window", "--", "scratch")
 			},
 		},
 	} {
@@ -334,5 +342,123 @@ func TestCCAttachWithPlacementResolvesHomeFromAStrippedEnvironment(t *testing.T)
 	}
 	if len(*regs) != 1 || (*regs)[0].homePath != leoHome || (*regs)[0].session != "leo-scratch" {
 		t.Fatalf("registrations = %+v, want home %s session leo-scratch", *regs, leoHome)
+	}
+}
+
+// leoterm's exact form: no --cc, the flag before `--`, the agent after it.
+func TestAgentAttachPlacementBeforeDoubleDashLocalExecsTmuxKeepingThePid(t *testing.T) {
+	path := newAgentCLITestConfig(t)
+	stub := withStubExec(t)
+	withStubStdio(t)
+	stubTmuxLookPath(t, "/usr/bin/tmux", nil)
+	stubOutsideTmux(t)
+	stubAgentSession(t, func(_, name string) (string, error) { return "leo-" + name, nil })
+	oldSpec := agentAttachSpecFn
+	agentAttachSpecFn = func(context.Context, string, string) (daemon.AgentAttachSpecResponse, error) {
+		return daemon.AgentAttachSpecResponse{Name: "scratch", Harness: "claude"}, nil
+	}
+	t.Cleanup(func() { agentAttachSpecFn = oldSpec })
+	events = nil
+	regs := stubPlacementRegistration(t, nil)
+	argv := stubExecRecording(t)
+
+	root := newRootCmd()
+	root.SetArgs([]string{"--config", path, "agent", "attach", "--host", "localhost", "--dispatch-placement", "background", "--", "scratch"})
+	if err := root.Execute(); err != nil {
+		t.Fatalf("execute: %v", err)
+	}
+	if want := []string{"tmux", "-L", "leo", "attach", "-t", "=leo-scratch"}; !equalStrings(*argv, want) {
+		t.Errorf("exec argv = %v, want %v", *argv, want)
+	}
+	if want := (placementRegistration{homeFromConfigPath(path), "leo-scratch", "background", os.Getpid()}); len(*regs) != 1 || (*regs)[0] != want {
+		t.Errorf("registrations = %+v, want [%+v]", *regs, want)
+	}
+	if !equalStrings(events, []string{"register", "exec"}) {
+		t.Errorf("events = %v, want register before exec", events)
+	}
+	// exec replaces the process (same pid); a child process would break the
+	// registered pid, so no command may have been started.
+	if len(stub.calls) != 0 {
+		t.Errorf("attach started a child process: %v", stub.calls)
+	}
+}
+
+func TestAgentAttachPlacementBeforeDoubleDashRemoteForwardsQuotedRemoteCommand(t *testing.T) {
+	for name, tc := range map[string]struct {
+		args  []string
+		agent string
+	}{
+		"default host":             {[]string{"agent", "attach", "--dispatch-placement", "background", "--", "scratch"}, "scratch"},
+		"explicit host":            {[]string{"agent", "attach", "--host", "prod", "--dispatch-placement", "background", "--", "scratch"}, "scratch"},
+		"name needing quotes":      {[]string{"agent", "attach", "--dispatch-placement", "background", "--", "a b;$(x)'y"}, `'a b;$(x)'\''y'`},
+		"name with leading dash":   {[]string{"agent", "attach", "--dispatch-placement", "background", "--", "-rf"}, "-rf"},
+		"name with leading equals": {[]string{"agent", "attach", "--dispatch-placement", "background", "--", "=leo"}, "'=leo'"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			path := newAgentCLITestConfig(t)
+			stub := withStubExec(t)
+			withStubStdio(t)
+			regs := stubPlacementRegistration(t, nil)
+			root := newRootCmd()
+			root.SetArgs(append([]string{"--config", path}, tc.args...))
+			if err := root.Execute(); err != nil {
+				t.Fatalf("execute: %v", err)
+			}
+			want := []string{"ssh", "-t", "user@prod.example.com", "-p", "2222", config.DefaultRemoteLeoPath, "agent", "attach", "--dispatch-placement", "background", "--", tc.agent}
+			if len(stub.calls) != 1 || !equalStrings(stub.calls[0], want) {
+				t.Fatalf("ssh calls = %v\nwant        %v", stub.calls, want)
+			}
+			if len(*regs) != 0 {
+				t.Errorf("client registered against a remote host: %+v", *regs)
+			}
+		})
+	}
+}
+
+func TestAttachExecEnsuresAUTF8Locale(t *testing.T) {
+	for name, tc := range map[string]struct {
+		env  map[string]string
+		want string // expected LC_CTYPE entries in the exec env; "" means none
+	}{
+		"nothing set":       {nil, "LC_CTYPE=UTF-8"},
+		"non-utf8 LANG":     {map[string]string{"LANG": "C"}, "LC_CTYPE=UTF-8"},
+		"non-utf8 LC_CTYPE": {map[string]string{"LC_CTYPE": "C", "LANG": "C"}, "LC_CTYPE=UTF-8"},
+		"utf8 LANG":         {map[string]string{"LANG": "en_US.UTF-8"}, ""},
+		"utf8 LC_ALL":       {map[string]string{"LC_ALL": "C.UTF-8", "LANG": "C"}, ""},
+		"utf8 LC_CTYPE":     {map[string]string{"LC_CTYPE": "en_US.utf8"}, "LC_CTYPE=en_US.utf8"},
+	} {
+		for _, cc := range []bool{false, true} {
+			t.Run(name, func(t *testing.T) {
+				for _, k := range []string{"LC_ALL", "LC_CTYPE", "LANG"} {
+					t.Setenv(k, "")
+					os.Unsetenv(k)
+				}
+				for k, v := range tc.env {
+					t.Setenv(k, v)
+				}
+				stubTmuxLookPath(t, "/usr/bin/tmux", nil)
+				stubOutsideTmux(t)
+				_, env := stubExecRecordingEnv(t)
+				if err := attachTmuxSession(config.HostResolution{Localhost: true}, "leo-foo", attachOptions{cc: cc}); err != nil {
+					t.Fatalf("attach: %v", err)
+				}
+				var ctype []string
+				for _, e := range *env {
+					if strings.HasPrefix(e, "LC_CTYPE=") {
+						ctype = append(ctype, e)
+					}
+				}
+				want := tc.want
+				if want == "" {
+					if len(ctype) != 0 {
+						t.Fatalf("LC_CTYPE entries = %v, want the environment left alone", ctype)
+					}
+					return
+				}
+				if len(ctype) != 1 || ctype[0] != want {
+					t.Fatalf("LC_CTYPE entries = %v, want exactly [%s]", ctype, want)
+				}
+			})
+		}
 	}
 }
