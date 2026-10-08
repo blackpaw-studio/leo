@@ -77,6 +77,13 @@ type Turn struct {
 	// ObservedEffort is the latest effort the harness reported in the turn.
 	ObservedEffort string `json:"observed_effort,omitempty"`
 	armedAt        time.Time
+	// keys are the namespaced harness ids this turn answers to (see
+	// harnessKey); a wake adds a second. commandID is the bridge command a
+	// sent turn travels under, which its turn.start names. submitted is the
+	// normalized prompt of the submit that started it.
+	keys      []string
+	commandID string
+	submitted string
 }
 
 // InvocationUsage keeps a native invocation's provisional/final accounting

@@ -69,16 +69,6 @@ func currentTurnIndex(turns []Turn) int {
 	return -1
 }
 
-// harnessTurnIndex is the turn the harness knows as hid, or -1.
-func harnessTurnIndex(turns []Turn, hid string) int {
-	for i := len(turns) - 1; i >= 0; i-- {
-		if turns[i].HarnessTurnID == hid {
-			return i
-		}
-	}
-	return -1
-}
-
 // effortFromPayload reads the effort a claude hook payload reports, as
 // {"effort": {"level": "high"}}; "" when it reports none.
 func effortFromPayload(p map[string]any) string {

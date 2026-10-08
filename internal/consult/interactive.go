@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/blackpaw-studio/leo/internal/bridge"
 	"github.com/blackpaw-studio/leo/internal/config"
 )
 
@@ -114,6 +115,8 @@ type pendingClose struct {
 	outcome TurnOutcome
 	text    string
 	until   time.Time
+	// work is the background work the held Stop left pending, if any.
+	work *PendingWork
 }
 
 const maxInteractiveDedup = 512
@@ -260,6 +263,11 @@ func (d *Dispatcher) launchInteractive(ctx context.Context, s *runState, req Req
 		// armed again by that paste.
 		d.mu.Lock()
 		d.armTurnLocked(s, turnID)
+		if bridgesOpening {
+			// The mod submits the opening under this id and names it on the
+			// turn.start, which is how the turn is claimed.
+			d.setCommandIDLocked(s, turnID, bridge.OpeningID(DispatchBridgeKey(s.record.ID), prompt))
+		}
 		d.persistLocked(s, "")
 		d.mu.Unlock()
 	}
@@ -666,11 +674,16 @@ func (d *Dispatcher) Send(ctx context.Context, id, message string) (SendResult, 
 // deliverSend injects message into the run's pane as turn turnID, which
 // already holds a slot. The slot is released by whatever closes the turn.
 func (d *Dispatcher) deliverSend(ctx context.Context, s *runState, turnID, message string) (SendResult, error) {
+	// The follow-up travels under a command id leo picks, so the turn the
+	// mod starts for it names that id and is claimed by it.
+	commandID := bridge.NewCommandID()
 	d.mu.Lock()
 	pane := s.record.PaneID
 	rt := d.interactiveRuntime
+	d.setCommandIDLocked(s, turnID, commandID)
 	shown := d.nudgePaneLocked(s)
 	d.mu.Unlock()
+	ctx = withCommandID(ctx, commandID)
 	if rt == nil {
 		d.mu.Lock()
 		d.closeTurnLocked(s, turnID, TurnRejected, "interactive runtime unavailable")
@@ -778,18 +791,15 @@ func (d *Dispatcher) Report(id string, r HookReport) error {
 	effort := effortFromPayload(p)
 	switch event {
 	case "userpromptsubmit":
-		oldStatus := s.record.Status
 		if s.record.Status == StatusSettling {
 			return nil
 		}
-		hid := str(p, "turn_id")
-		if hid == "" {
-			hid = str(p, "harness_turn_id")
+		if key := harnessKey(p); key != "" {
+			s.idMode = true
+			d.submitKeyedLocked(s, key, p)
+			break
 		}
-		if hid != "" && s.closedHarness[hid] {
-			fmt.Fprintf(os.Stderr, "dispatch %s: ignoring submit for closed harness turn %s\n", id, hid)
-			return nil
-		}
+		oldStatus := s.record.Status
 		prompt := str(p, "prompt")
 		injected := s.record.Harness == "claude" && isHarnessInjection(prompt)
 		// Whatever woke a waiting run (its background work's notification,
@@ -797,8 +807,8 @@ func (d *Dispatcher) Report(id string, r HookReport) error {
 		d.resumeWaitingLocked(s)
 		var delivered *Turn
 		if !injected && s.armedTurn != "" && d.now().Before(s.armedUntil) {
-			delivered = d.deliverTurnLocked(s, s.armedTurn, hid)
-		} else if matched := d.matchSubmitLocked(s, prompt, hid, injected); matched != nil {
+			delivered = d.deliverTurnLocked(s, s.armedTurn, "")
+		} else if matched := d.matchSubmitLocked(s, prompt, "", injected); matched != nil {
 			delivered = matched
 		} else {
 			// Only a prompt a human typed steers the run; Claude Code's own
@@ -806,12 +816,13 @@ func (d *Dispatcher) Report(id string, r HookReport) error {
 			if !injected {
 				s.record.Steered = true
 			}
-			if hid == "" && hasWorkingTurnLocked(s) {
-				// Claude carries no turn id and drains queued prompts (typed
-				// or injected) inside the running turn, before a single Stop.
-				// Fold into the working turn, however long it was hook-silent:
-				// a separate turn would never close (#211), and closing this
-				// one would report it lost while it is still working.
+			if hasWorkingTurnLocked(s) {
+				// This payload carries no turn id and Claude drains queued
+				// prompts (typed or injected) inside the running turn, before
+				// a single Stop. Fold into the working turn, however long it
+				// was hook-silent: a separate turn would never close (#211),
+				// and closing this one would report it lost while it is still
+				// working.
 				d.applyObservedEffortLocked(s, effort, currentTurnIndex(s.record.Turns))
 				if s.record.Status != oldStatus {
 					d.persistLocked(s, "status")
@@ -820,27 +831,18 @@ func (d *Dispatcher) Report(id string, r HookReport) error {
 				}
 				return nil
 			}
-			var t *Turn
 			if injected {
 				// Claude started a turn on its own; a sent prompt still
 				// waiting to submit keeps waiting rather than being lost.
-				t = d.appendTurnLocked(s, TurnSourceUser, "", false)
+				d.appendTurnLocked(s, TurnSourceUser, "", false)
 			} else {
-				t = d.openTurnLocked(s, TurnSourceUser, "", false)
+				d.openTurnLocked(s, TurnSourceUser, "", false)
 			}
-			t.HarnessTurnID = hid
 		}
 		d.applyObservedEffortLocked(s, effort, currentTurnIndex(s.record.Turns))
-		closeApplied := false
-		if hid != "" {
-			if pc, ok := s.pendingCloses[hid]; ok && d.now().Before(pc.until) {
-				closeApplied = d.closeHarnessLocked(s, hid, pc.outcome, pc.text)
-			}
-			delete(s.pendingCloses, hid)
-		}
-		if delivered != nil && !closeApplied {
+		if delivered != nil {
 			d.persistTurnLocked(s, *delivered)
-		} else if !closeApplied {
+		} else {
 			d.persistLocked(s, "turn")
 		}
 		if s.record.Status != oldStatus {
@@ -851,37 +853,13 @@ func (d *Dispatcher) Report(id string, r HookReport) error {
 		if event == "interrupt" {
 			out = TurnInterrupted
 		}
-		hid := str(p, "turn_id")
-		if hid == "" {
-			hid = str(p, "harness_turn_id")
-		}
-		if hid != "" && s.closedHarness[hid] {
-			fmt.Fprintf(os.Stderr, "dispatch %s: ignoring close for closed harness turn %s\n", id, hid)
-			return nil
-		}
 		text := str(p, "last_assistant_message")
-		if event == "stop" && hid == "" && !hasWorkingTurnLocked(s) {
-			// The Stop overtook its turn's submit: it confirms the armed
-			// turn ran before anything else reads the turn as working.
-			d.confirmArmedLocked(s)
+		if key := harnessKey(p); key != "" {
+			s.idMode = true
+			d.stopKeyedLocked(s, key, event, p, out, text)
+			break
 		}
-		if event == "stop" && hid == "" && hasWorkingTurnLocked(s) {
-			if w := pendingWorkFromStop(p); w != nil {
-				d.applyObservedEffortLocked(s, effort, currentTurnIndex(s.record.Turns))
-				d.waitOnBackgroundLocked(s, w)
-				break
-			}
-		}
-		s.record.PendingWork = nil
-		switch {
-		case hid == "":
-			d.applyObservedEffortLocked(s, effort, currentTurnIndex(s.record.Turns))
-			d.closeWorkingLocked(s, out, text)
-		case d.closeHarnessLocked(s, hid, out, text):
-			d.applyObservedEffortLocked(s, effort, harnessTurnIndex(s.record.Turns, hid))
-		default:
-			s.pendingCloses[hid] = pendingClose{out, text, d.now().Add(unmatchedGrace)}
-		}
+		d.stopUnkeyedLocked(s, event, p, out, text, effort)
 	case "sessionend":
 		d.beginSettlementLocked(s, StatusClosed, finalReportGrace)
 	}
@@ -935,27 +913,6 @@ func (d *Dispatcher) deliverOldestMatchingTurnLocked(s *runState, prompt, harnes
 func normalizePrompt(text string) string { return strings.Join(strings.Fields(text), " ") }
 
 func str(p map[string]any, k string) string { v, _ := p[k].(string); return v }
-func (d *Dispatcher) closeHarnessLocked(s *runState, hid string, o TurnOutcome, text string) bool {
-	found := false
-	for i := range s.record.Turns {
-		if s.record.Turns[i].Outcome == "" && s.record.Turns[i].HarnessTurnID == hid {
-			d.closeTurnLocked(s, s.record.Turns[i].TurnID, o, text)
-			found = true
-		}
-	}
-	if found {
-		if s.closedHarness == nil {
-			s.closedHarness = map[string]bool{}
-		}
-		s.closedHarness[hid] = true
-		s.closedIDs = append(s.closedIDs, hid)
-		if len(s.closedIDs) > maxInteractiveDedup {
-			delete(s.closedHarness, s.closedIDs[0])
-			s.closedIDs = s.closedIDs[1:]
-		}
-	}
-	return found
-}
 
 // harnessInjectionMarkers are the envelope tags of prompts the harness
 // submits on its own, which fire UserPromptSubmit like a typed prompt.

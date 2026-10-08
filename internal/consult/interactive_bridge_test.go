@@ -434,6 +434,30 @@ func TestBridgedInjectDeliversOverTheBridge(t *testing.T) {
 	}
 }
 
+// The dispatcher picks the follow-up's command id so it can claim the turn
+// the mod stamps with it; the bridge sends the deliver under that id.
+func TestBridgedInjectSendsTheDeliverUnderTheDispatchersCommandID(t *testing.T) {
+	g := newBridgeRig(t, "2.1.289")
+	g.launch(t, "d-send", "claude", "brief")
+	stream := g.connectAndAckOpening(t, "dispatch.d-send")
+
+	done := make(chan error, 1)
+	go func() {
+		ctx := withCommandID(context.Background(), "cmd-chosen-by-dispatcher")
+		done <- g.r.Inject(ctx, rigPane, "next step", func() error { return nil })
+	}()
+	cmd := nextCommand(t, stream)
+	if cmd.ID != "cmd-chosen-by-dispatcher" {
+		t.Fatalf("deliver id = %q, want the dispatcher's", cmd.ID)
+	}
+	if err := g.apply(t, "dispatch.d-send", bridge.Report{Type: bridge.ReportAck, ID: cmd.ID, OK: true}); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-done; err != nil {
+		t.Fatalf("Inject = %v", err)
+	}
+}
+
 func TestBridgedInjectRejectionIsAnErrorNotAPaste(t *testing.T) {
 	g := newBridgeRig(t, "2.1.289")
 	g.launch(t, "d-rej", "claude", "brief")

@@ -29,6 +29,7 @@ type fakeInteractiveRuntime struct {
 	killErr      error
 	layouts      []string
 	layoutErr    map[string]error
+	commandIDs   []string
 }
 
 type recoveringInteractiveRuntime struct {
@@ -79,13 +80,25 @@ func (r *fakeInteractiveRuntime) ReapplyLayout(target string) error {
 	r.layouts = append(r.layouts, target)
 	return r.layoutErr[target]
 }
-func (r *fakeInteractiveRuntime) Inject(_ context.Context, _ string, text string, arm func() error) error {
+
+// lastCommandID is the command id the dispatcher handed the latest Inject.
+func (r *fakeInteractiveRuntime) lastCommandID() string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if len(r.commandIDs) == 0 {
+		return ""
+	}
+	return r.commandIDs[len(r.commandIDs)-1]
+}
+
+func (r *fakeInteractiveRuntime) Inject(ctx context.Context, _ string, text string, arm func() error) error {
 	if r.injectHook != nil {
 		r.injectHook()
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.injected = append(r.injected, text)
+	r.commandIDs = append(r.commandIDs, commandIDFrom(ctx))
 	if r.injectErr != nil {
 		return r.injectErr
 	}

@@ -32,10 +32,10 @@ const bridgeEventIDPrefix = "bridge:"
 //
 // turn.start's prompt and turn.complete's final message travel under the
 // shell hooks' own keys (prompt, last_assistant_message), as does
-// turn.complete's pending work (background_tasks, session_crons), so a late-acked
-// orchestrator turn is matched by its text (the prompt as leo sent it, out
-// of the envelope Claude wraps a non-user deliver in) and a dispatch's result is the
-// subagent's final message, exactly as on the hook path. Unlike the claude
+// turn.complete's pending work (background_tasks, session_crons), so a
+// dispatch's result is the subagent's final message, exactly as on the hook
+// path, and the prompt is as leo sent it, out of the envelope Claude wraps a
+// non-user deliver in. Unlike the claude
 // shell hooks, which identify a turn by prompt_id, the payload names the
 // engine's turn (bridge_turn_id) on both events, and turn.start names the
 // command and origin that submitted it (command_id, origin), so the
@@ -43,8 +43,7 @@ const bridgeEventIDPrefix = "bridge:"
 //
 // The mod retries a report the daemon may already have applied (its reply
 // lost); eventID, derived from the event's stable id, lets the dispatcher
-// drop the replay. A replayed id-less Stop would otherwise close the next
-// queued turn.
+// drop the replay.
 func HookPayload(ev Event) (eventID string, payload json.RawMessage, ok bool) {
 	hookName, ok := hookEventNames[ev.Name]
 	if !ok {

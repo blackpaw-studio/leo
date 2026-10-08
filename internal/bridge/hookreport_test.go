@@ -8,8 +8,9 @@ import (
 
 // The translation must reproduce what Claude Code's own shell hooks post to
 // /api/dispatch/{id}/report today (hook_event_name spelled as Claude spells
-// it, the prompt and last_assistant_message under the hook's own keys, no
-// turn id), so consult.Dispatcher.Report needs no bridge awareness.
+// it, the prompt and last_assistant_message under the hook's own keys; the
+// bridge's turn id travels as bridge_turn_id), so consult.Dispatcher.Report
+// needs little bridge awareness.
 func TestHookPayloadTranslation(t *testing.T) {
 	cases := []struct {
 		name        string

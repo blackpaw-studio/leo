@@ -319,7 +319,11 @@ func deliverOverBridge(ctx context.Context, hub *bridge.Hub, d bridgedDispatch, 
 	}
 	sendCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), timeout)
 	defer cancel()
-	err := hub.SendTo(sendCtx, d.target, bridge.Deliver(text, false))
+	cmd := bridge.Deliver(text, false)
+	// The dispatcher picked the command id so the turn this deliver starts,
+	// which the mod stamps with it, is claimed by id (see deliverSend).
+	cmd.ID = commandIDFrom(ctx)
+	err := hub.SendTo(sendCtx, d.target, cmd)
 	if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, bridge.ErrAckTimeout) {
 		fmt.Fprintf(os.Stderr, "dispatch %s: leo bridge has not acked the message within %s; it stays queued\n", d.id, timeout)
 		return nil
