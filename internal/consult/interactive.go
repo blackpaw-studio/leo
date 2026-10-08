@@ -275,18 +275,26 @@ func (d *Dispatcher) launchInteractive(ctx context.Context, s *runState, req Req
 		d.persistLocked(s, "")
 		d.mu.Unlock()
 	}
+	// The generation is read before anything is resolved: a flip of the root
+	// caller's effective placement that commits while the client list is
+	// being read leaves this launch holding a view that may predate it.
+	d.mu.Lock()
+	placementRecord := cloneRecord(s.record)
+	root := d.rootCallerSessionLocked(placementRecord)
+	gen0 := d.placementGenLocked(root)
+	d.mu.Unlock()
 	overrides := ViewerOverrides{}
 	if provider, ok := rt.(viewerOverridesRuntime); ok && req.CallerSessionID != "" {
 		overrides = provider.ViewerOverrides(ctx, req.CallerSessionID)
 	}
-	d.mu.Lock()
-	placementRecord := cloneRecord(s.record)
-	d.mu.Unlock()
 	var readOverrides func(context.Context, string) ViewerOverrides
 	if provider, ok := rt.(viewerOverridesRuntime); ok {
 		readOverrides = provider.ViewerOverrides
 	}
 	overrides = d.ApplyAttachPlacement(ctx, placementRecord, overrides, cfg, readOverrides)
+	d.mu.Lock()
+	overrides = d.settleLaunchPlacementLocked(s, root, gen0, cfg, overrides)
+	d.mu.Unlock()
 	placement := d.placement.Decide(placementRecord, overrides, cfg, d.Records)
 	d.mu.Lock()
 	s.record.ViewerKind = placement.Kind
@@ -345,8 +353,11 @@ func (d *Dispatcher) publishPane(s *runState, rt InteractiveRuntime, placement V
 		if placed, ok := rt.(interface{ ViewerKind(string) string }); ok {
 			placement.Kind = placed.ViewerKind(pane)
 		}
+		if placement.Kind == "window" && placement.Background {
+			placement.Kind = viewerBackground
+		}
 		s.record.ViewerKind = placement.Kind
-		if placement.Kind == "window" {
+		if placement.Kind == "window" || placement.Kind == viewerBackground {
 			s.record.ViewerWindowID = window
 			s.record.ViewerTitle = ""
 		}

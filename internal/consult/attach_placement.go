@@ -237,10 +237,29 @@ func (d *Dispatcher) ApplyAttachPlacement(ctx context.Context, rec Record, base 
 // dispatch tree. A nested dispatch is requested from a subagent whose own
 // session says nothing about who is watching; the root agent's does.
 func (d *Dispatcher) rootCallerSession(rec Record) string {
+	return rootCallerSessionOf(rec, func(id string) (Record, bool) {
+		parent, _, err := d.lookup(id)
+		return parent, err == nil
+	})
+}
+
+// rootCallerSessionLocked is rootCallerSession over the runs in memory, for
+// callers holding d.mu.
+func (d *Dispatcher) rootCallerSessionLocked(rec Record) string {
+	return rootCallerSessionOf(rec, func(id string) (Record, bool) {
+		parent := d.runs[id]
+		if parent == nil {
+			return Record{}, false
+		}
+		return parent.record, true
+	})
+}
+
+func rootCallerSessionOf(rec Record, parentOf func(id string) (Record, bool)) string {
 	seen := map[string]bool{rec.ID: true}
 	for i := 0; i < maxDispatchAncestry && rec.ParentDispatchID != "" && !seen[rec.ParentDispatchID]; i++ {
-		parent, _, err := d.lookup(rec.ParentDispatchID)
-		if err != nil {
+		parent, ok := parentOf(rec.ParentDispatchID)
+		if !ok {
 			break
 		}
 		seen[parent.ID] = true

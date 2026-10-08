@@ -52,24 +52,34 @@ func invalidf(format string, args ...any) error {
 }
 
 type Dispatcher struct {
-	slots                *slotLimiter
-	recorder             Recorder
-	ExecCommandContext   func(ctx context.Context, name string, args ...string) *exec.Cmd
-	ProcessCommand       func(ctx context.Context, name string, args ...string) *exec.Cmd
-	GitCommand           func(name string, args ...string) *exec.Cmd
-	WorktreeSuffix       func() string
-	daemonCtx            context.Context
-	mu                   sync.Mutex
-	runs                 map[string]*runState
-	onStart              func(Record) string
-	onCollect            func(Record)
-	interactiveRuntime   InteractiveRuntime
-	now                  func() time.Time
-	waits                map[string]int
-	serial               map[string]*serialLock
-	placement            *ViewerPlacementCoordinator
-	attachPlacements     *AttachPlacements
-	listClients          func(context.Context, string) ([]tmux.Client, error)
+	slots              *slotLimiter
+	recorder           Recorder
+	ExecCommandContext func(ctx context.Context, name string, args ...string) *exec.Cmd
+	ProcessCommand     func(ctx context.Context, name string, args ...string) *exec.Cmd
+	GitCommand         func(name string, args ...string) *exec.Cmd
+	WorktreeSuffix     func() string
+	daemonCtx          context.Context
+	mu                 sync.Mutex
+	runs               map[string]*runState
+	onStart            func(Record) string
+	onCollect          func(Record)
+	interactiveRuntime InteractiveRuntime
+	now                func() time.Time
+	waits              map[string]int
+	serial             map[string]*serialLock
+	placement          *ViewerPlacementCoordinator
+	attachPlacements   *AttachPlacements
+	listClients        func(context.Context, string) ([]tmux.Client, error)
+	// listAllClients lists the tmux clients of every session in one call; the
+	// live placement watch (see PollPlacement) reads it each tick.
+	listAllClients func(context.Context) ([]tmux.SessionClient, error)
+	// placementCfg is the config of the latest Start, for the placement
+	// decisions a live move has to make again.
+	placementCfg *config.Config
+	// rootPlacements holds the live placement watch's per-root-session state.
+	rootPlacements map[string]*rootPlacement
+	// watchMu keeps placement polls from overlapping.
+	watchMu              sync.Mutex
 	waitResolvedHook     func()
 	waitDoneHook         func(string)
 	beforeOpeningInject  func()
@@ -144,6 +154,14 @@ type runState struct {
 	// ends, and wherever the pane was when a user typed a turn into it
 	// (user-typed turns never move a pane). Empty until a turn sets it.
 	paneWant string
+	// wantPlacement is the placement ("pane", "window" or "background") the
+	// run's viewer was last steered to, by its launch or by a flip of its
+	// root caller's effective placement (see PollPlacement). Empty until
+	// launch decides it.
+	wantPlacement string
+	// pinned marks a viewer the user parked in a session of their own
+	// choosing: it is never moved again.
+	pinned bool
 	// queuedSend is the run's follow-up turn waiting for a slot, if any.
 	queuedSend *queuedSend
 	// reconcileQueued is the done channel of a queued, not yet started,
