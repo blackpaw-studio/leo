@@ -190,6 +190,9 @@ type Server struct {
 	// pollPlacement replaces the dispatcher's PollPlacement when set (a test
 	// seam).
 	pollPlacement func(context.Context)
+	// placementTicks replaces the placement loop's ticker when set (a test
+	// seam): one poll per value received.
+	placementTicks <-chan time.Time
 	// stopConsultLoop cancels the consult runtime loop and waits for it to
 	// exit. nil when no loop was started (no ParentContext).
 	stopConsultLoop func()

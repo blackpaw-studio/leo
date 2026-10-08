@@ -147,13 +147,17 @@ func (s *Server) setupConsultRuntime(opts Options, resolveCallerSession func(str
 	// rather than stalling the sweep and the roster.
 	go func() {
 		defer close(placementDone)
-		ticker := time.NewTicker(intervals.placement)
-		defer ticker.Stop()
+		ticks := s.placementTicks
+		if ticks == nil {
+			ticker := time.NewTicker(intervals.placement)
+			defer ticker.Stop()
+			ticks = ticker.C
+		}
 		for {
 			select {
 			case <-loopCtx.Done():
 				return
-			case <-ticker.C:
+			case <-ticks:
 				pollPlacement(loopCtx)
 			}
 		}
