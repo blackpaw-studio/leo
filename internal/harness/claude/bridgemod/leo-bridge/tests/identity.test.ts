@@ -306,9 +306,10 @@ test('prompts pending when a session starts are forgotten', async ($, on) => {
   ])
 })
 
-// The deliver's own submit is not a prompt typed in the old session: its
-// stamp stays until its turn starts or the submit settles.
-test('a deliver in flight across a clear keeps its stamp', async ($, on) => {
+// A clear ends the session the deliver was submitted in: its submit settling
+// later is no claim on the new session's turns, which are the people's and
+// the wakes' to start, and its own turn (if it still runs) goes unstamped.
+test('a deliver in flight across a clear loses its stamp and takes no later turn', async ($, on) => {
   const feed = new Feed()
   const eng = engine($)
   const h = setup(on, { feeds: [feed], submit: eng.submit })
@@ -317,8 +318,13 @@ test('a deliver in flight across a clear keeps its stamp', async ($, on) => {
   await flush()
   await $.session.end({ reason: 'clear', sessionId: 'sess-1', resume: {} as any })
   await $.session.start({ surface: 'terminal', isInteractive: true, cwd: '/work' })
+  await $.prompt.submit(person('hello'))
+  await complete($, 'p:hello')
   await eng.run('go')
-  expect(rows(h)).toEqual([['d:go', 'c1', 'plugin']])
+  expect(rows(h)).toEqual([
+    ['p:hello', undefined, 'composer'],
+    ['d:go', undefined, undefined],
+  ])
 })
 
 test('a dropped deliver leaves no stamp for a later turn with the same text', async ($, on) => {

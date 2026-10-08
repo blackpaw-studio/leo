@@ -395,11 +395,13 @@ function forgetSubmit(id) {
   pendingSubmits = pendingSubmits.filter((p) => p.id !== id)
 }
 
-// The prompts someone else submitted are the session's: when it ends or a
-// new one starts (a /clear, a resume) none of them has a turn to come. A
-// deliver in flight is not: its submit settles it.
-function forgetObservedSubmits() {
-  pendingSubmits = pendingSubmits.filter((p) => p.stamp !== undefined)
+// Everything pending belongs to the session that ends or starts (a /clear, a
+// resume): none of it has a turn to come in the next. That includes a deliver
+// in flight, cancelled here: its submit settling later forgets an entry that
+// is already gone, and its turn, should it still run, goes unstamped for the
+// daemon's armed-binding fallback to place.
+function forgetAllSubmits() {
+  pendingSubmits = []
 }
 
 // An origin kind the daemon accepts as a report's origin, or undefined.
@@ -1122,7 +1124,7 @@ async function onSessionStart($) {
 
 export function register(on) {
   on('session.start', async ($, e, next) => {
-    forgetObservedSubmits()
+    forgetAllSubmits()
     await onSessionStart($)
     return next(e)
   })
@@ -1255,7 +1257,7 @@ export function register(on) {
   })
 
   on('session.end', async ($, e, next) => {
-    forgetObservedSubmits()
+    forgetAllSubmits()
     // A dormant process leaves the acked entry alone: a successor under the
     // same key may be using it.
     if (isBridging()) {

@@ -529,3 +529,47 @@ func TestBridgedEnvelopeTextWithoutTheWakeOriginIsAPersonsTurn(t *testing.T) {
 		t.Fatalf("record=%+v", rec)
 	}
 }
+
+// A stamp naming no open sent turn (unknown, or its turn already closed) is
+// leo's own submit whose turn is gone: it claims nothing, and it is not a
+// wake, so it neither continues nor steers the turn waiting on its own.
+func TestBridgedStaleStampDoesNotBindToOrSteerAWaitingTurn(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		stamp func(first string) string
+	}{
+		{"unknown command", func(string) string { return "cmd-nobody-holds" }},
+		{"closed turn's command", func(first string) string { return first }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			d, rt, id := startBridgedIdle(t)
+			done, err := d.Send(context.Background(), id, "first")
+			if err != nil {
+				t.Fatal(err)
+			}
+			firstCmd := rt.lastCommandID()
+			reportAll(t, d, id, bridgeStart(t, "e1", "t2", "first", firstCmd), bridgeStop(t, "e2", "t2", "first done"))
+			waiting, err := d.Send(context.Background(), id, "build it")
+			if err != nil {
+				t.Fatal(err)
+			}
+			pending, _ := json.Marshal(map[string]any{"hook_event_name": "Stop", "bridge_turn_id": "t3", "last_assistant_message": "waiting", "background_tasks": shellAndMonitor["background_tasks"], "session_crons": []any{}})
+			reportAll(t, d, id, bridgeStart(t, "e3", "t3", "build it", rt.lastCommandID()), HookReport{EventID: "e4", Payload: pending})
+			if rec := idleRecord(t, d, id); rec.Status != StatusWaiting || turnByID(rec, waiting.TurnID).Outcome != "" {
+				t.Fatalf("waiting record=%+v", rec)
+			}
+
+			reportAll(t, d, id, bridgeStart(t, "e5", "t4", "stale", tc.stamp(firstCmd)), bridgeStop(t, "e6", "t4", "stale done"))
+			rec := idleRecord(t, d, id)
+			if w := turnByID(rec, waiting.TurnID); w.Outcome != "" || w.HarnessTurnID != "t3" || rec.Steered {
+				t.Fatalf("a stale stamp reached the waiting turn: %+v steered=%v", w, rec.Steered)
+			}
+			if f := turnByID(rec, done.TurnID); f.Outcome != TurnFinished || f.Text != "first done" {
+				t.Fatalf("the finished turn changed: %+v", f)
+			}
+			if len(rec.Turns) != 4 || rec.Turns[3].Source != TurnSourceUser || rec.Turns[3].Outcome != TurnFinished || rec.Turns[3].Text != "stale done" {
+				t.Fatalf("the stale start did not run as a turn of its own: %+v", rec.Turns)
+			}
+		})
+	}
+}

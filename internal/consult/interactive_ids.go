@@ -228,12 +228,17 @@ func (d *Dispatcher) startKeyedTurnLocked(s *runState, key, prompt string, injec
 	norm := normalizePrompt(prompt)
 	if isBridgeKey(key) && commandID != "" {
 		// The mod's stamp is the only claim on a sent turn, and it wins
-		// over any reading of the text.
-		if t := d.claimSentTurnLocked(s, key, prompt, commandID); t != nil {
-			t.submitted = norm
-			d.bindKeyLocked(s, t.TurnID, key)
-			return t.TurnID
+		// over any reading of the text. A stamp that claims none (its sent
+		// turn is unknown or already closed) is still leo's own submit, not
+		// a wake or a person: it runs as a turn of its own and reaches no
+		// waiting turn.
+		t := d.claimSentTurnLocked(s, key, prompt, commandID)
+		if t == nil {
+			t = d.openUserTurnLocked(s, key, true)
 		}
+		t.submitted = norm
+		d.bindKeyLocked(s, t.TurnID, key)
+		return t.TurnID
 	}
 	if w := waitingTurnLocked(s); w != nil {
 		// Whatever woke the session (its background work's notification, a
@@ -261,9 +266,7 @@ func (d *Dispatcher) startKeyedTurnLocked(s *runState, key, prompt string, injec
 		t = d.claimSentTurnLocked(s, key, prompt, commandID)
 	}
 	if t == nil {
-		// A turn.start naming a command that has no open sent turn (one
-		// already closed lost or rejected) is leo's own, not a person's.
-		t = d.openUserTurnLocked(s, key, injected || commandID != "")
+		t = d.openUserTurnLocked(s, key, injected)
 	}
 	t.submitted = norm
 	d.bindKeyLocked(s, t.TurnID, key)
