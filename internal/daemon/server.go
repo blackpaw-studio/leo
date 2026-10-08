@@ -86,8 +86,11 @@ type Server struct {
 	processes    ProcessStateProvider
 	webServer    *web.Server
 	agentMgr     AgentManager
-	router       *sessionRouter
-	logPath      string // service log path, set via SetLogPath; threaded into web.Options.LogPath by StartWeb
+	// attachPlacements holds the per-attach dispatch placements registered
+	// over POST /attach/placement; the web server's dispatcher reads it.
+	attachPlacements *consult.AttachPlacements
+	router           *sessionRouter
+	logPath          string // service log path, set via SetLogPath; threaded into web.Options.LogPath by StartWeb
 	// resolveHandle backs web.Options.ResolveHandle: resolves a config-defined
 	// process name to its harness name and SessionHandle. Set via
 	// SetResolveHandle by service boot; nil means every process is claude.
@@ -197,6 +200,7 @@ func New(sockPath, configPath string, processes ProcessStateProvider, opts ...Op
 		configWriter:  config.NewWriter(),
 		pid:           os.Getpid(),
 	}
+	s.attachPlacements = consult.NewAttachPlacements(time.Now, consult.ProcessAlive)
 	for _, opt := range opts {
 		opt(s)
 	}
@@ -265,6 +269,7 @@ func New(sockPath, configPath string, processes ProcessStateProvider, opts ...Op
 	mux.HandleFunc("GET /agents/{name}/logs", s.handleAgentLogs)
 	mux.HandleFunc("GET /agents/{name}/session", s.handleAgentSession)
 	mux.HandleFunc("GET /agents/{name}/attach-spec", s.handleAgentAttachSpec)
+	mux.HandleFunc("POST /attach/placement", s.handleAttachPlacement)
 	for _, verb := range controlVerbs {
 		mux.HandleFunc("POST /agents/{name}/"+verb, s.handleAgentControl)
 	}
@@ -452,9 +457,10 @@ func (s *Server) StartWeb(cfg *config.Config, agentSvc web.AgentService) error {
 		Bridge:         web.BridgeOptions{Router: s.bridgeRouter, Launcher: s.bridgeLauncher},
 		ResolveHandle:  s.resolveHandle,
 		// Consults record to <state>/consults for `leo consult watch`.
-		ConsultRecorder: consult.NewFileRecorder(cfg.StatePath()),
-		ParentContext:   s.parentContext,
-		LeoMCP:          s.leoMCP,
+		ConsultRecorder:  consult.NewFileRecorder(cfg.StatePath()),
+		ParentContext:    s.parentContext,
+		LeoMCP:           s.leoMCP,
+		AttachPlacements: s.attachPlacements,
 	}, observeOpts...)
 	s.setControl(s.webServer.ControlHandler())
 	s.setWebSources(s.webServer.ObserveSources())
@@ -779,3 +785,6 @@ func tmuxPath() string {
 	}
 	return p
 }
+
+// AttachPlacements is the registry of per-attach dispatch placements.
+func (s *Server) AttachPlacements() *consult.AttachPlacements { return s.attachPlacements }

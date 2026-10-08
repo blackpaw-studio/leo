@@ -1,17 +1,24 @@
 package cli
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
 	"os/exec"
 	"os/signal"
+	"path/filepath"
+	"regexp"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/blackpaw-studio/leo/internal/config"
+	"github.com/blackpaw-studio/leo/internal/daemon"
 	"github.com/blackpaw-studio/leo/internal/harness"
+	"github.com/blackpaw-studio/leo/internal/service"
 	"github.com/blackpaw-studio/leo/internal/tmux"
+	"github.com/spf13/cobra"
 )
 
 // hintRemoteTmuxMissing enriches a remote tmux failure with actionable
@@ -65,6 +72,108 @@ type attachOptions struct {
 	// status passed through) instead of replacing leo with tmux, for callers
 	// that must clean up after the client leaves or fails to start.
 	asChild bool
+	// dispatchPlacement (pane, window or background) asks the daemon to open
+	// dispatch viewers that way while this client is attached; see
+	// registerAttachPlacement. Empty leaves placement to the session and
+	// config defaults.
+	dispatchPlacement string
+	// homePath is the leo home whose daemon the placement registers with.
+	homePath string
+}
+
+// attachPlacementRegisterFn is the testability seam for registering a
+// per-attach dispatch placement with the daemon.
+var attachPlacementRegisterFn = daemon.RegisterAttachPlacement
+
+// attachPlacementRegisterTimeout bounds the registration so a wedged daemon
+// cannot hold up an attach.
+const attachPlacementRegisterTimeout = 3 * time.Second
+
+// registerAttachPlacement tells the daemon this process is about to become a
+// tmux client wanting opts.dispatchPlacement. exec keeps the pid, so the
+// registered pid is the client's #{client_pid}. An unreachable daemon costs
+// the placement, not the attach.
+func registerAttachPlacement(opts attachOptions, session string) {
+	if opts.dispatchPlacement == "" {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), attachPlacementRegisterTimeout)
+	defer cancel()
+	err := attachPlacementRegisterFn(ctx, opts.homePath, session, os.Getpid(), opts.dispatchPlacement)
+	if err == nil {
+		return
+	}
+	msg := fmt.Sprintf("warning: --dispatch-placement not registered (%v); attaching anyway\n", err)
+	if opts.cc {
+		// ssh -tt merges stderr into the PTY a control-mode client reads, so
+		// nothing may reach stdout or stderr before the exec.
+		appendToServiceLog(opts.homePath, msg)
+		return
+	}
+	_, _ = fmt.Fprint(agentStderr, msg)
+}
+
+// appendToServiceLog appends a timestamped line to the leo service log. It is
+// best effort: a log that cannot be written costs the note, not the attach.
+func appendToServiceLog(homePath, msg string) {
+	path := service.LogPathFor(homePath)
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return
+	}
+	// O_NONBLOCK: opening a FIFO with no reader would otherwise hang the
+	// attach; any error just drops the line.
+	f, err := os.OpenFile(path, syscall.O_NONBLOCK|os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600) //nolint:gosec // leo's own log path
+	if err != nil {
+		return
+	}
+	defer f.Close()
+	_, _ = fmt.Fprintf(f, "%s attach: %s", time.Now().Format(time.RFC3339), msg)
+}
+
+// validateDispatchPlacement checks a --dispatch-placement value; empty means
+// the flag was not given.
+func validateDispatchPlacement(value string) error {
+	if value == "" || config.IsDispatchViewerPlacement(value) {
+		return nil
+	}
+	return fmt.Errorf("invalid --dispatch-placement %q: want pane, window or background", value)
+}
+
+// addDispatchPlacementFlag registers --dispatch-placement on an attach command.
+func addDispatchPlacementFlag(cmd *cobra.Command, placement *string) {
+	cmd.Flags().StringVar(placement, "dispatch-placement", "", "open dispatch viewers as pane, window or background while this client is attached")
+}
+
+// runRemoteAttachPlaced attaches on a remote host through the remote leo, so
+// the --dispatch-placement registration happens on the daemon's own host.
+// head is the remote subcommand ("attach" or "agent", "attach"). Control mode
+// needs its own ssh flags (see attachRemoteControlMode); otherwise this is
+// runRemoteAttach.
+func runRemoteAttachPlaced(res config.HostResolution, opts attachOptions, head []string, name string) error {
+	remoteArgs := append([]string{}, head...)
+	if opts.cc {
+		remoteArgs = append(remoteArgs, "--cc")
+	}
+	if opts.dispatchPlacement != "" {
+		remoteArgs = append(remoteArgs, "--dispatch-placement", opts.dispatchPlacement)
+	}
+	// "--" keeps a name that starts with "-" from being read as a flag, and
+	// the remote login shell re-parses everything ssh sends, so quote what a
+	// shell would mangle.
+	remoteArgs = append(remoteArgs, "--", remoteShellWord(name))
+	if !opts.cc {
+		return runRemoteAttach(res, remoteArgs...)
+	}
+	sshArgs := []string{"-tt", "-e", "none", res.Host.SSH}
+	sshArgs = append(sshArgs, res.Host.SSHArgs...)
+	sshArgs = append(sshArgs, sshControlOpts(res)...)
+	sshArgs = append(sshArgs, remoteLeoWord(res.Host.RemoteLeoPath()))
+	sshArgs = append(sshArgs, remoteArgs...)
+	c := agentExecCommand("ssh", sshArgs...)
+	c.Stdin = os.Stdin
+	c.Stdout = agentStdout
+	c.Stderr = agentStderr
+	return c.Run()
 }
 
 // attachSignalSource is the testability seam for the signals leo forwards to
@@ -128,6 +237,9 @@ func attachArgs(target string, opts attachOptions) []string {
 // nesting a second full tmux client inside the first.
 func attachTmuxSession(res config.HostResolution, session string, opts attachOptions) error {
 	if !res.Localhost {
+		if opts.dispatchPlacement != "" {
+			return fmt.Errorf("--dispatch-placement needs the remote leo to attach (leo attach or leo agent attach), not a raw tmux session")
+		}
 		if opts.cc {
 			return attachRemoteControlMode(res, session)
 		}
@@ -149,6 +261,15 @@ func attachTmuxSession(res config.HostResolution, session string, opts attachOpt
 		return hintRemoteTmuxMissing(res, c.Run())
 	}
 
+	if opts.dispatchPlacement != "" {
+		if opts.asChild {
+			return fmt.Errorf("--dispatch-placement cannot be used when the attach runs as a child process")
+		}
+		if tmuxEnv() != "" && !opts.cc {
+			return fmt.Errorf("--dispatch-placement cannot be used from inside tmux (the attach opens as a popup, not a client of its own); detach first (prefix+d) and retry")
+		}
+	}
+
 	tmuxPath, err := tmuxLocate()
 	if err != nil {
 		return err
@@ -165,7 +286,8 @@ func attachTmuxSession(res config.HostResolution, session string, opts attachOpt
 			return fmt.Errorf("--cc requires a non-tmux terminal; detach first (prefix+d) and retry")
 		}
 		argv := append([]string{"tmux"}, tmux.Args(append([]string{"-CC"}, attachArgs(tmux.Target(session), opts)...)...)...)
-		return agentSyscallExec(tmuxPath, argv, os.Environ())
+		registerAttachPlacement(opts, session)
+		return agentSyscallExec(tmuxPath, argv, utf8Locale(os.Environ()))
 	}
 	if tmuxEnv() != "" {
 		inner := fmt.Sprintf("%s -L %s %s", shellQuoteArg(tmuxPath), tmux.SocketName, strings.Join(attachArgs(shellQuoteArg(tmux.Target(session)), opts), " "))
@@ -178,6 +300,7 @@ func attachTmuxSession(res config.HostResolution, session string, opts attachOpt
 	}
 	if opts.asChild {
 		c := agentExecCommand(tmuxPath, tmux.Args(attachArgs(tmux.Target(session), opts)...)...)
+		c.Env = utf8Locale(os.Environ())
 		c.Stdin = os.Stdin
 		c.Stdout = agentStdout
 		c.Stderr = agentStderr
@@ -191,7 +314,8 @@ func attachTmuxSession(res config.HostResolution, session string, opts attachOpt
 	// Replace the CLI process so tmux owns the TTY cleanly. Returns an error
 	// only if exec itself fails; on success this call does not return.
 	argv := append([]string{"tmux"}, tmux.Args(attachArgs(tmux.Target(session), opts)...)...)
-	return agentSyscallExec(tmuxPath, argv, os.Environ())
+	registerAttachPlacement(opts, session)
+	return agentSyscallExec(tmuxPath, argv, utf8Locale(os.Environ()))
 }
 
 // attachRemoteControlMode streams a remote agent's terminal over SSH using
@@ -224,6 +348,56 @@ func attachRemoteControlMode(res config.HostResolution, session string) error {
 	c.Stdout = agentStdout
 	c.Stderr = agentStderr
 	return hintRemoteTmuxMissing(res, c.Run())
+}
+
+var plainShellWord = regexp.MustCompile(`^[A-Za-z0-9_.,/:@%+-]+$`)
+
+// remoteShellWord quotes s for transit through a remote login shell, leaving
+// words that need no quoting as they are. A leading "=" is among the quoted
+// cases (see remoteShellTarget).
+func remoteShellWord(s string) string {
+	if plainShellWord.MatchString(s) {
+		return s
+	}
+	return shellQuoteArg(s)
+}
+
+// utf8Locale returns env with an LC_CTYPE that tmux accepts as UTF-8: without
+// one tmux replaces every non-ASCII byte it draws with "_". An env that
+// already names a UTF-8 locale in LC_ALL, LC_CTYPE or LANG is returned as it
+// is. A non-UTF-8 LC_CTYPE is replaced, not duplicated.
+func utf8Locale(env []string) []string {
+	isUTF8 := func(v string) bool {
+		v = strings.ToLower(strings.ReplaceAll(v, "-", ""))
+		return strings.Contains(v, "utf8")
+	}
+	for _, e := range env {
+		for _, k := range []string{"LC_ALL=", "LC_CTYPE=", "LANG="} {
+			if v, ok := strings.CutPrefix(e, k); ok && isUTF8(v) {
+				return env
+			}
+		}
+	}
+	out := make([]string, 0, len(env)+1)
+	for _, e := range env {
+		if !strings.HasPrefix(e, "LC_CTYPE=") {
+			out = append(out, e)
+		}
+	}
+	return append(out, "LC_CTYPE=UTF-8")
+}
+
+// remoteLeoWord quotes the remote leo path for the remote login shell. A
+// leading $HOME/ or ~/ is the one thing left for that shell to expand
+// ("$HOME"/'rest'); everything else is single-quoted whole, so a path with a
+// space, a quote or $() reaches the remote exec as one literal word.
+func remoteLeoWord(path string) string {
+	for _, prefix := range []string{"$HOME/", "~/"} {
+		if rest, ok := strings.CutPrefix(path, prefix); ok {
+			return `"$HOME"/` + shellQuoteArg(rest)
+		}
+	}
+	return shellQuoteArg(path)
 }
 
 // shellQuoteArg wraps a value in single quotes, escaping any embedded single

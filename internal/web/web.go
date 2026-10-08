@@ -417,6 +417,9 @@ type Options struct {
 	// launch, and the leo that manual task runs and `service restart` exec.
 	// The zero value runs the bare "leo" from PATH.
 	LeoMCP leomcp.Server
+	// AttachPlacements is the daemon's registry of per-attach dispatch
+	// placements; nil disables the feature.
+	AttachPlacements *consult.AttachPlacements
 }
 
 // New creates a new web UI server. agentSvc may be nil if agent spawning is

@@ -24,6 +24,7 @@ import (
 	"github.com/blackpaw-studio/leo/internal/harness"
 	claudeharness "github.com/blackpaw-studio/leo/internal/harness/claude"
 	"github.com/blackpaw-studio/leo/internal/leomcp"
+	"github.com/blackpaw-studio/leo/internal/tmux"
 )
 
 // dispatchIDEnv names the variable every dispatched or consulted run
@@ -67,6 +68,8 @@ type Dispatcher struct {
 	waits                map[string]int
 	serial               map[string]*serialLock
 	placement            *ViewerPlacementCoordinator
+	attachPlacements     *AttachPlacements
+	listClients          func(context.Context, string) ([]tmux.Client, error)
 	waitResolvedHook     func()
 	waitDoneHook         func(string)
 	beforeOpeningInject  func()

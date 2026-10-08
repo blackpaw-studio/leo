@@ -78,6 +78,14 @@ func defaultAgentSessionReady(name string) bool {
 // source file that mentions daemon.AgentStart (via agentStartFn above) for
 // the literal substring gateCommand(cmd, "leo_stop_agent").
 func ensureAgentRunning(ctx context.Context, cmd *cobra.Command, homePath, name string, stopped bool) (bool, error) {
+	return ensureAgentRunningPrompt(ctx, cmd, homePath, name, stopped, true)
+}
+
+// ensureAgentRunningPrompt is ensureAgentRunning where allowPrompt false
+// refuses a stopped agent outright, as off a TTY. A control-mode (--cc)
+// attach passes false: the terminal carries its protocol, so a prompt on it
+// would corrupt the stream.
+func ensureAgentRunningPrompt(ctx context.Context, cmd *cobra.Command, homePath, name string, stopped, allowPrompt bool) (bool, error) {
 	if !stopped {
 		return true, nil
 	}
@@ -86,7 +94,7 @@ func ensureAgentRunning(ctx context.Context, cmd *cobra.Command, homePath, name 
 		return false, err
 	}
 
-	if !agentIsTTY() {
+	if !allowPrompt || !agentIsTTY() {
 		return false, fmt.Errorf("agent %q is stopped; run: leo agent start %s", name, name)
 	}
 

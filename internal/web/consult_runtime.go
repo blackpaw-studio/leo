@@ -9,6 +9,7 @@ import (
 	"github.com/blackpaw-studio/leo/internal/bridge"
 	"github.com/blackpaw-studio/leo/internal/consult"
 	"github.com/blackpaw-studio/leo/internal/observe"
+	"github.com/blackpaw-studio/leo/internal/tmux"
 )
 
 // consultLoopIntervals are the consult runtime loop's tick periods. rosterIdle
@@ -58,6 +59,10 @@ func (s *Server) setupConsultRuntime(opts Options, resolveCallerSession func(str
 	if cfg, err := s.loadConfig(); err == nil {
 		s.consults.ApplyConfig(cfg)
 	}
+	s.consults.SetAttachPlacements(opts.AttachPlacements, func(ctx context.Context, session string) ([]tmux.Client, error) {
+		return tmux.ListClients(ctx, findTmuxPath(), session)
+	})
+	viewer.PlacementOverrides = s.consults.ApplyAttachPlacement
 	viewer.Coordinator = s.consults.PlacementCoordinator()
 	viewer.Records = s.consults.Records
 	viewer.PersistRecord = s.consults.PersistViewerRecord

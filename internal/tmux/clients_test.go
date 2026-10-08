@@ -61,3 +61,43 @@ func TestHasAttachedClientFalseOnError(t *testing.T) {
 		t.Fatal("HasAttachedClient = true, want false when the command errors")
 	}
 }
+
+// TestListClientsParsesPidAndCreated proves ListClients issues the exact
+// `list-clients -F` argv against the raw session target (callers pass a
+// session id like $3, which the exact-match "=" form would break) and parses
+// each line into a pid and creation time, skipping malformed lines.
+func TestListClientsParsesPidAndCreated(t *testing.T) {
+	orig := execCommand
+	defer func() { execCommand = orig }()
+
+	var gotArgs []string
+	execCommand = func(ctx context.Context, name string, args ...string) *exec.Cmd {
+		gotArgs = args
+		return exec.Command("printf", "%s", "4242 1760000000\nbogus\n17 notanumber\n99 1760000005\n")
+	}
+
+	got, err := ListClients(context.Background(), "tmux", "$3")
+	if err != nil {
+		t.Fatalf("ListClients: %v", err)
+	}
+	want := []string{"-L", "leo", "list-clients", "-t", "$3", "-F", "#{client_pid} #{client_created}"}
+	if strings.Join(gotArgs, "\x00") != strings.Join(want, "\x00") {
+		t.Fatalf("argv = %q, want %q", gotArgs, want)
+	}
+	if len(got) != 2 || got[0].PID != 4242 || got[0].Created.Unix() != 1760000000 || got[1].PID != 99 {
+		t.Fatalf("clients = %+v", got)
+	}
+}
+
+// TestListClientsErrorsWhenTmuxFails proves a failing list-clients surfaces
+// as an error, so callers can tell "no clients" from "could not look".
+func TestListClientsErrorsWhenTmuxFails(t *testing.T) {
+	orig := execCommand
+	defer func() { execCommand = orig }()
+	execCommand = func(ctx context.Context, name string, args ...string) *exec.Cmd {
+		return exec.Command("false")
+	}
+	if _, err := ListClients(context.Background(), "tmux", "$3"); err == nil {
+		t.Fatal("ListClients error = nil, want failure")
+	}
+}

@@ -57,6 +57,10 @@ type Viewer struct {
 	// Cutoffs hides the finished dispatches a caller's /clear left behind;
 	// nil hides nothing.
 	Cutoffs *RosterCutoffs
+	// PlacementOverrides refines the session overrides with what the
+	// attached clients ask for (see Dispatcher.ApplyAttachPlacement); nil
+	// leaves them as read.
+	PlacementOverrides func(ctx context.Context, rec Record, base ViewerOverrides, cfg *config.Config, read func(context.Context, string) ViewerOverrides) ViewerOverrides
 }
 
 type handledWindow struct {
@@ -89,14 +93,20 @@ func (v *Viewer) OnStart(rec Record) string {
 	v.defaults()
 	background := false
 	if cfg, err := config.Load(v.ConfigPath); err == nil {
-		overrides := ViewerOverrides{}
-		if rec.CallerPaneID != "" && rec.CallerSessionID != "" && rec.CallerSessionID != dispatchViewerSession {
-			overrides = ReadViewerSessionOverrides(context.Background(), v.TmuxPath, rec.CallerSessionID, func(ctx context.Context, name string, args ...string) *exec.Cmd {
+		read := func(ctx context.Context, session string) ViewerOverrides {
+			return ReadViewerSessionOverrides(ctx, v.TmuxPath, session, func(ctx context.Context, name string, args ...string) *exec.Cmd {
 				if v.ExecCommandContext != nil {
 					return v.ExecCommandContext(ctx, name, args...)
 				}
 				return v.ExecCommand(name, args...)
 			})
+		}
+		overrides := ViewerOverrides{}
+		if rec.CallerPaneID != "" && rec.CallerSessionID != "" && rec.CallerSessionID != dispatchViewerSession {
+			overrides = read(context.Background(), rec.CallerSessionID)
+		}
+		if v.PlacementOverrides != nil {
+			overrides = v.PlacementOverrides(context.Background(), rec, overrides, cfg, read)
 		}
 		if v.Coordinator == nil {
 			v.Coordinator = NewViewerPlacementCoordinator()

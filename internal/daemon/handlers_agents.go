@@ -583,3 +583,18 @@ func writeAgentError(w http.ResponseWriter, err error) {
 		writeError(w, http.StatusInternalServerError, err.Error())
 	}
 }
+
+// handleAttachPlacement records which dispatch viewer placement an attaching
+// client wants. The attach registers just before it execs tmux, so the pid
+// becomes the tmux client's pid.
+func (s *Server) handleAttachPlacement(w http.ResponseWriter, r *http.Request) {
+	var req AttachPlacementRequest
+	if !decodeJSON(w, r, &req) {
+		return
+	}
+	if err := s.attachPlacements.Register(req.Session, req.Pid, req.Placement); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, Response{OK: true})
+}

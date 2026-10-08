@@ -28,6 +28,34 @@ merges only placement and max-panes into `defaults.dispatch.viewer`, preserves
 `main_pane_height`, reloads the daemon, and clears the session overrides only
 after both save and reload succeed.
 
+### Per-attach placement
+
+Config and session options are per daemon or per session, so a terminal and an
+app attached to the same agent cannot differ. `leo agent attach
+--dispatch-placement pane|window|background` (also `leo attach`, with or
+without `--cc`, locally or over `--host`) fixes that per client:
+
+```bash
+leo agent attach --dispatch-placement background fetch
+ssh -tt -e none host leo agent attach --cc --dispatch-placement background fetch
+```
+
+The attach registers its pid with the daemon just before it execs tmux, so the
+pid is the tmux client's. When a dispatch starts, Leo lists the tmux clients of
+the root caller's session (for a nested dispatch, the root agent's, not the
+subagent's). Each client contributes its registered placement, or, with no
+registration, the session override or config default. The most visible wins:
+`pane` over `window` over `background`. The winner then goes through the usual
+`max_panes` and caller-pane fallbacks. With no clients attached, placement is
+exactly as before.
+
+A registration counts only while a live client of that session has that pid and
+attached no earlier than the registration (so a reused pid is ignored). Nothing
+unregisters it; it lapses when the client detaches. If the daemon is
+unreachable the attach prints a warning and proceeds without it. The flag is
+refused from inside tmux (the attach is a popup there). Clients can check the
+`attach_dispatch_placement` feature on the SSE `hello` before relying on it.
+
 ## Nested agents
 
 Dispatches and consults cannot launch nested agents: Leo disables the native

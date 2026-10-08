@@ -616,7 +616,7 @@ func attachLocal(ctx context.Context, cmd *cobra.Command, homePath, query string
 	// attach-spec lookup below. Shares ensureAgentRunning with the top-level
 	// `leo attach` door so the prompt behaves identically from either entry
 	// point.
-	ok, err := ensureAgentRunning(ctx, cmd, homePath, session.Name, session.Stopped)
+	ok, err := ensureAgentRunningPrompt(ctx, cmd, homePath, session.Name, session.Stopped, !opts.cc)
 	if err != nil {
 		return err
 	}
@@ -646,7 +646,13 @@ func attachLocal(ctx context.Context, cmd *cobra.Command, homePath, query string
 			return err
 		}
 	} else {
-		fmt.Fprintf(agentStderr, "warning: driver attach lookup failed (%v); falling back to tmux attach\n", err)
+		msg := fmt.Sprintf("warning: driver attach lookup failed (%v); falling back to tmux attach\n", err)
+		if opts.cc {
+			// Nothing may precede the exec on a control-mode terminal.
+			appendToServiceLog(homePath, msg)
+		} else {
+			_, _ = fmt.Fprint(agentStderr, msg)
+		}
 	}
 
 	err = attachTmuxSession(config.HostResolution{Localhost: true}, session.Session, opts)
@@ -661,6 +667,7 @@ func attachLocal(ctx context.Context, cmd *cobra.Command, homePath, query string
 func newAgentAttachCmd() *cobra.Command {
 	var host string
 	var cc bool
+	var dispatchPlacement string
 	cmd := &cobra.Command{
 		Use:   "attach <name>",
 		Short: "Attach to the agent's tmux session",
@@ -674,7 +681,12 @@ Detach with the usual tmux prefix + d (default: C-b d) for claude agents.
 When you're already inside a tmux client, Leo opens a display-popup overlay
 that runs the attach — dismissing the popup returns you to your outer tmux.
 Pass --cc in a tmux-aware terminal (iTerm2, WezTerm) to render the session
-as a native tab via tmux control mode.`,
+as a native tab via tmux control mode.
+
+--dispatch-placement pane|window|background opens dispatch viewers that way
+while this client stays attached (the most visible placement among an agent's
+attached clients wins). It works with and without --cc, locally and remotely,
+but not from inside tmux.`,
 		Example: `  # Attach to an agent by canonical name
   leo agent attach leo-mcp-node-owner-fetch
 
@@ -684,12 +696,21 @@ as a native tab via tmux control mode.`,
 		ValidArgsFunction: completeAgentNames,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			name := args[0]
+			if err := validateDispatchPlacement(dispatchPlacement); err != nil {
+				return err
+			}
 			cfg, res, err := dispatch(host)
 			if err != nil {
 				return err
 			}
+			opts := attachOptions{cc: cc, dispatchPlacement: dispatchPlacement, homePath: cfg.HomePath}
 
 			if !res.Localhost {
+				// With --dispatch-placement the remote leo does the attach (and
+				// the daemon registration), cc or not.
+				if dispatchPlacement != "" {
+					return runRemoteAttachPlaced(res, opts, []string{"agent", "attach"}, name)
+				}
 				// --cc (tmux control mode) must be interpreted by the LOCAL
 				// terminal (iTerm2/WezTerm render it natively) — it cannot be
 				// delegated to the remote side. Keep the old flow here: resolve
@@ -703,7 +724,7 @@ as a native tab via tmux control mode.`,
 					if err != nil {
 						return err
 					}
-					return attachTmuxSession(res, session, attachOptions{cc: cc})
+					return attachTmuxSession(res, session, opts)
 				}
 				// Non-cc: delegate the whole `leo agent attach <name>` invocation
 				// to the remote leo, same as top-level `leo attach` does — the
@@ -713,11 +734,12 @@ as a native tab via tmux control mode.`,
 				return runRemoteAttach(res, "agent", "attach", name)
 			}
 
-			return attachLocal(cmd.Context(), cmd, cfg.HomePath, name, attachOptions{cc: cc})
+			return attachLocal(cmd.Context(), cmd, cfg.HomePath, name, opts)
 		},
 	}
 	addHostFlag(cmd, &host)
 	addControlModeFlag(cmd, &cc)
+	addDispatchPlacementFlag(cmd, &dispatchPlacement)
 	return cmd
 }
 

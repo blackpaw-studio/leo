@@ -209,3 +209,21 @@ func TestWaitForAgentSessionTimesOut(t *testing.T) {
 		t.Errorf("unexpected error: %v", err)
 	}
 }
+
+// A control-mode client reads the tty as protocol: the stopped-agent prompt
+// must not appear, even on a TTY. The attach fails, and stderr may say why.
+func TestEnsureAgentRunningNoPromptRefusesStoppedAgentWithoutPrompting(t *testing.T) {
+	oldTTY := agentIsTTY
+	agentIsTTY = func() bool { return true }
+	t.Cleanup(func() { agentIsTTY = oldTTY })
+	started := stubAgentStart(t, nil)
+	_, stderr := withStubStdio(t)
+
+	ok, err := ensureAgentRunningPrompt(context.Background(), &cobra.Command{}, t.TempDir(), "scratch", true, false)
+	if ok || err == nil || !strings.Contains(err.Error(), "leo agent start scratch") {
+		t.Fatalf("ok=%v err=%v, want a refusal naming the start command", ok, err)
+	}
+	if *started || stderr.Len() != 0 {
+		t.Fatalf("started=%v stderr=%q, want no prompt and no start", *started, stderr.String())
+	}
+}

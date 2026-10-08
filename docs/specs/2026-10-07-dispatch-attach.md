@@ -12,6 +12,7 @@ checks the `features` list on the SSE `hello` before relying on a field.
 | `dispatch_attach` | `dispatches[].attachable` and `tmux_target` exist; `leo dispatch attach` works |
 | `dispatch_removed` | the `dispatch_removed` SSE event exists |
 | `state_seq` | `GET /api/v1/state` carries `meta.seq` |
+| `attach_dispatch_placement` | `leo agent attach --dispatch-placement` steers where dispatch viewers open (see 2026-10-08-attach-dispatch-placement.md) |
 
 ## 1. Viewer placement `background`
 

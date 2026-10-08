@@ -337,3 +337,17 @@ func AgentRename(ctx context.Context, workDir, query, newName string) (agent.Rec
 	}
 	return rec, nil
 }
+
+// RegisterAttachPlacement tells the daemon that process pid, about to become a
+// tmux client of session, wants dispatch viewers placed as placement
+// (pane, window or background) for as long as it stays attached.
+func RegisterAttachPlacement(ctx context.Context, workDir, session string, pid int, placement string) error {
+	resp, err := Send(ctx, workDir, "POST", "/attach/placement", AttachPlacementRequest{Session: session, Pid: pid, Placement: placement})
+	if err != nil {
+		return err
+	}
+	if !resp.OK {
+		return fmt.Errorf("%s", resp.Error)
+	}
+	return nil
+}
