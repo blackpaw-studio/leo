@@ -71,7 +71,7 @@ func NewDispatchObserver(records func() []Record, publisher observe.Publisher, o
 // observe.DispatchLinger of now.
 func (o *DispatchObserver) Dispatches(now time.Time) []observe.Dispatch {
 	out := []observe.Dispatch{}
-	for _, rec := range o.records() {
+	for _, rec := range WithChildWait(o.records()) {
 		if rec.Kind == "dispatch" && withinLinger(rec, now) {
 			out = append(out, observedDispatch(rec, now))
 		}
@@ -122,7 +122,7 @@ func (o *DispatchObserver) Tick() {
 // announced, so a dispatch is removed once, and only if it was ever listed.
 func (o *DispatchObserver) publishChangesLocked(records []Record, now time.Time) {
 	listed := make(map[string]observe.Dispatch, len(records))
-	for _, rec := range records {
+	for _, rec := range WithChildWait(records) {
 		if rec.Kind != "dispatch" || !withinLinger(rec, now) {
 			continue
 		}

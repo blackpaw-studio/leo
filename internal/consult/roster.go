@@ -18,7 +18,7 @@ const (
 // Session/window discovery intentionally stays outside this pure function.
 func RenderRoster(records []Record, now time.Time) string {
 	eligible := make([]Record, 0, len(records))
-	for _, rec := range records {
+	for _, rec := range WithChildWait(records) {
 		if !rosterEligible(rec, now) {
 			continue
 		}

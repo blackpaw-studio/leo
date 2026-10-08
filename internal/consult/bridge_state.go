@@ -24,7 +24,9 @@ func BridgeDispatchStates(records []Record, key string, now time.Time) []bridge.
 		return nil
 	}
 	mine := make([]Record, 0, len(records))
-	for _, rec := range records {
+	// Children may belong to other callers, so wait state is derived from
+	// every record before the caller's own are picked out.
+	for _, rec := range WithChildWait(records) {
 		if isBridgeRosterRecord(rec, key, now) {
 			mine = append(mine, rec)
 		}
