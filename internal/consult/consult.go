@@ -1129,7 +1129,9 @@ func (d *Dispatcher) MarkInterrupted() {
 					rec.Turns[i].EndedAt = markedAt
 					rec.Turns[i].SlotHeld = false
 				}
+				rec.Turns[i].Pending = nil
 			}
+			rec.PendingWork = nil
 			if finished {
 				rec.Status = StatusClosed
 			} else {

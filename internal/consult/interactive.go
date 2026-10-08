@@ -506,9 +506,8 @@ func (d *Dispatcher) buildTurnLocked(s *runState, source TurnSource, text string
 	// run's last observed one.
 	t := Turn{TurnID: fmt.Sprintf("%s#%d", s.record.ID, len(s.record.Turns)+1), Source: source, StartedAt: d.now(), Text: text, SlotHeld: held, ObservedEffort: s.record.ObservedEffort}
 	s.record.Turns = append(s.record.Turns, t)
-	s.record.Status = StatusQueued
+	d.recomputeStatusLocked(s, d.now())
 	if source == TurnSourceUser {
-		s.record.Status = StatusRunning
 		s.record.startActive(d.now())
 		// A user-typed turn keeps the pane where the user typed it, even if
 		// a hide is already queued or under way.
@@ -551,7 +550,7 @@ func (d *Dispatcher) closeTurnLocked(s *runState, id string, outcome TurnOutcome
 			s.armedUntil = time.Time{}
 		}
 		if !s.record.Status.Terminal() && s.record.Status != StatusSettling {
-			s.record.Status = d.interactiveStatusLocked(s, boundary)
+			d.recomputeStatusLocked(s, boundary)
 			if s.record.Status == StatusIdle {
 				// A prompt still pending when its turn ended was answered in
 				// the pane or abandoned; either way nobody needs it now.
@@ -612,21 +611,55 @@ func openPendingWork(s *runState) *PendingWork {
 	return nil
 }
 
-// interactiveStatusLocked derives the run's status from its turns: waiting
-// when an open turn waits on background work, running when one is open,
-// idle when none is. It also refreshes the run's PendingWork from them.
+// interactiveStatusLocked derives the run's status from its open turns:
+// running while one works, else waiting while one waits on background work,
+// else queued while a sent turn has yet to start, else idle. It also
+// refreshes the run's PendingWork from them.
 func (d *Dispatcher) interactiveStatusLocked(s *runState, boundary time.Time) Status {
 	s.record.PendingWork = openPendingWork(s)
+	open, waiting := false, false
 	for _, t := range s.record.Turns {
-		if t.Outcome == "" {
-			if s.record.PendingWork != nil {
-				return StatusWaiting
-			}
+		if t.Outcome != "" {
+			continue
+		}
+		open = true
+		if t.Pending != nil {
+			waiting = true
+		} else if t.Source == TurnSourceUser || t.Delivered {
 			return StatusRunning
 		}
 	}
+	switch {
+	case waiting:
+		return StatusWaiting
+	case open:
+		return StatusQueued
+	}
 	s.idleSince = boundary
 	return StatusIdle
+}
+
+// recomputeStatusLocked is the one place a live run's status changes after a
+// turn does: it re-derives it from the turns. A terminal or settling run
+// keeps its status, and one blocked on a permission stays needs_input until
+// its turns leave nothing to decide for.
+func (d *Dispatcher) recomputeStatusLocked(s *runState, boundary time.Time) {
+	if s.record.Status.Terminal() || s.record.Status == StatusSettling {
+		return
+	}
+	status := d.interactiveStatusLocked(s, boundary)
+	if s.record.Status == StatusNeedsInput && len(s.permissions) > 0 && status != StatusIdle {
+		return
+	}
+	s.record.Status = status
+}
+
+// clearPendingLocked ends every wait: each turn's and the run's.
+func clearPendingLocked(s *runState) {
+	for i := range s.record.Turns {
+		s.record.Turns[i].Pending = nil
+	}
+	s.record.PendingWork = nil
 }
 
 func (d *Dispatcher) Send(ctx context.Context, id, message string) (SendResult, error) {
@@ -904,7 +937,7 @@ func (d *Dispatcher) deliverTurnLocked(s *runState, turnID, harnessTurnID string
 			s.record.Turns[i].HarnessTurnID = harnessTurnID
 			s.armedTurn = ""
 			s.armedUntil = time.Time{}
-			s.record.Status = StatusRunning
+			d.recomputeStatusLocked(s, d.now())
 			s.record.startActive(d.now())
 			return &s.record.Turns[i]
 		}
@@ -1005,10 +1038,9 @@ func (d *Dispatcher) waitOnBackgroundLocked(s *runState, w *PendingWork, turns .
 	for _, t := range turns {
 		t.Pending = w
 	}
-	s.record.PendingWork = openPendingWork(s)
-	s.record.foldActive(d.now())
-	if s.record.Status != StatusNeedsInput {
-		s.record.Status = StatusWaiting
+	d.recomputeStatusLocked(s, d.now())
+	if s.record.Status != StatusRunning {
+		s.record.foldActive(d.now())
 	}
 	if s.record.Status != old {
 		d.persistLocked(s, "status")
@@ -1042,9 +1074,7 @@ func (d *Dispatcher) confirmArmedLocked(s *runState) {
 // as its session starts working again, for payloads that name no turn; the
 // caller persists the change.
 func (d *Dispatcher) resumeWaitingLocked(s *runState) {
-	for i := range s.record.Turns {
-		s.record.Turns[i].Pending = nil
-	}
+	clearPendingLocked(s)
 	d.settleResumedLocked(s)
 }
 
@@ -1056,14 +1086,10 @@ func (d *Dispatcher) resumeTurnLocked(s *runState, t *Turn) {
 }
 
 func (d *Dispatcher) settleResumedLocked(s *runState) {
-	still := openPendingWork(s)
-	if still == nil && s.record.PendingWork == nil && s.record.Status != StatusWaiting {
+	if openPendingWork(s) == nil && s.record.PendingWork == nil && s.record.Status != StatusWaiting {
 		return
 	}
-	s.record.PendingWork = still
-	if still == nil && s.record.Status == StatusWaiting {
-		s.record.Status = StatusRunning
-	}
+	d.recomputeStatusLocked(s, d.now())
 	s.record.startActive(d.now())
 }
 
@@ -1082,7 +1108,7 @@ func (d *Dispatcher) beginSettlementLocked(s *runState, status Status, grace tim
 	}
 	d.dropPermissionsLocked(s)
 	boundary := d.now()
-	s.record.PendingWork = nil
+	clearPendingLocked(s)
 	s.record.Status = StatusSettling
 	s.record.foldActive(boundary)
 	s.settleStatus = status
@@ -1095,7 +1121,7 @@ func (d *Dispatcher) finishInteractiveLocked(s *runState, status Status) {
 	}
 	d.dropPermissionsLocked(s)
 	s.record.foldActive(d.now())
-	s.record.PendingWork = nil
+	clearPendingLocked(s)
 	for _, t := range s.record.Turns {
 		if t.Outcome == "" {
 			o := TurnLost
