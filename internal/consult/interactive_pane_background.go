@@ -24,6 +24,21 @@ func (d *Dispatcher) recordPlacement(s *runState, pane, kind, window string) boo
 	return true
 }
 
+// recordRejoin records that the run's pane is a split below its caller's pane,
+// which is now in the given session and window: the pane cap and the layout
+// read those from the record, which dates from the dispatch request.
+func (d *Dispatcher) recordRejoin(s *runState, pane, callerSession, callerWindow string) bool {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if s.record.PaneID != pane {
+		return false
+	}
+	s.record.ViewerKind, s.record.ViewerWindowID = "split", ""
+	s.record.CallerSessionID, s.record.CallerWindowID = callerSession, callerWindow
+	d.persistLocked(s, "")
+	return true
+}
+
 // locateOwnedPane reads where the run's pane lives. A pane the user parked in
 // a session other than its caller's or the background one, or linked into
 // several, is pinned and reported not owned.
@@ -141,5 +156,7 @@ func (d *Dispatcher) joinBelowCaller(s *runState, rt InteractiveRuntime, rec Rec
 		fmt.Fprintf(os.Stderr, "dispatch %s: rejoining viewer below its caller: %v\n", rec.ID, err)
 		return false
 	}
-	return d.placement.Publish(rec.ID, func() bool { return d.recordPlacement(s, rec.PaneID, "split", "") })
+	return d.placement.Publish(rec.ID, func() bool {
+		return d.recordRejoin(s, rec.PaneID, rec.CallerSessionID, rec.CallerWindowID)
+	})
 }

@@ -120,7 +120,9 @@ func (r *bgRuntime) HidePane(ctx context.Context, pane, name string) (string, er
 func (r *bgRuntime) ShowPane(ctx context.Context, pane, target, window string) error {
 	err := r.movingRuntime.ShowPane(ctx, pane, target, window)
 	if err == nil {
-		r.place(pane, inCallerWindow(2))
+		joined, _ := r.locate(target) // it lands in the target pane's window
+		joined.WindowPanes = 2
+		r.place(pane, joined)
 	}
 	return err
 }
@@ -726,5 +728,31 @@ func TestUserTurnInABackgroundedPaneDoesNotSendItBackAfterItReturns(t *testing.T
 	f.flush(started.ID)
 	if got := f.rt.moves(); !slices.Equal(got, before) || f.kind(started.ID) == "background" {
 		t.Fatalf("moves = %v (kind %q) after the user's turn ended, want %v and still visible", got, f.kind(started.ID), before)
+	}
+}
+
+func TestRejoinedNestedViewersRecordTheCallersLiveWindow(t *testing.T) {
+	f := newLiveFixture(t)
+	parent := f.start(nil)
+	child := f.start(func(r *Request) {
+		r.ParentDispatchID, r.Name = parent.ID, "sub"
+		r.CallerPaneID, r.CallerSessionID, r.CallerWindowID = parent.Pane, "$7", "@1" // the subagent's own coordinates
+	})
+	bg := f.attach("background", 10)
+	f.clients.set(bg)
+	f.poll(2)
+	// While they were away the root agent's pane moved to another window.
+	f.rt.place("%0", PaneLocation{SessionID: callerSessionID, SessionName: callerSessionName, WindowID: "@5", WindowPanes: 1, SessionWindows: 3})
+
+	f.clients.set(bg, f.attach("pane", 11))
+	f.poll(2)
+	for name, id := range map[string]string{"parent": parent.ID, "child": child.ID} {
+		rec, _ := f.d.Get(id)
+		if rec.ViewerKind != "split" || rec.CallerSessionID != callerSessionID || rec.CallerWindowID != "@5" {
+			t.Fatalf("%s record kind=%q caller session=%q window=%q, want a split recorded against %s/@5", name, rec.ViewerKind, rec.CallerSessionID, rec.CallerWindowID, callerSessionID)
+		}
+	}
+	if n := LiveViewerPaneCount(f.d.Records(), callerSessionID, "@5"); n != 2 {
+		t.Fatalf("live splits counted in the caller's window = %d, want both viewers", n)
 	}
 }
