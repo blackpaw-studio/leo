@@ -264,3 +264,44 @@ func TestCancelWhileHeadlessContinuationQueuedLeavesTheLine(t *testing.T) {
 	}
 	expectNoSignal(t, execdCh, "launch of a canceled continuation")
 }
+
+// A cancel that lands after slot admission but before the process starts must
+// not leave the turn reporting delivered: nothing was ever launched.
+func TestCancelBetweenAdmissionAndStartNeverReportsDelivered(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	d := NewDispatcher(newFakeRecorder())
+	execd, execdCh := signalCh()
+	headlessExec(d, execd)
+	id := finishedHeadless(t, d)
+	expectSignal(t, execdCh, "setup launch")
+	freeOne := fillSlots(d)
+	sent, err := d.SendWithConfig(context.Background(), testConfig(), id, "again")
+	if err != nil {
+		t.Fatal(err)
+	}
+	inWindow := make(chan struct{})
+	d.beforeHeadlessStart = func() {
+		defer close(inWindow)
+		if _, err := d.Cancel(id); err != nil {
+			t.Error(err)
+		}
+	}
+
+	before := d.slots.InUse()
+	freeOne()
+	expectSignal(t, inWindow, "admission-to-start window")
+	e := d.Wait(context.Background(), []string{sent.TurnID}, 5*time.Second)[0]
+	if e.Outcome != TurnInterrupted || e.Delivered {
+		t.Fatalf("turn canceled before start = %+v, want interrupted and undelivered", e)
+	}
+	if turn := lastTurn(t, d, id); turn.Queued || turn.Delivered {
+		t.Fatalf("resolved turn = %+v, want neither queued nor delivered", turn)
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for d.slots.InUse() >= before && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	if got := d.slots.InUse(); got != before-1 {
+		t.Fatalf("slots in use = %d, want %d: the canceled turn's slot must be released exactly once", got, before-1)
+	}
+}

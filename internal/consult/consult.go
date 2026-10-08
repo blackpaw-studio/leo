@@ -78,6 +78,10 @@ type Dispatcher struct {
 	// in the grant gap and to know the goroutine is gone.
 	afterQueuedGrant func()
 	queuedSendExited func()
+	// beforeHeadlessStart runs in a headless invocation's goroutine after its
+	// slot is granted, just before the process is started. Tests use it to
+	// land a cancel between admission and launch.
+	beforeHeadlessStart func()
 	// paneOpWait bounds how long a cancellation waits for its queued pane
 	// kill (see defaultPaneOpWait).
 	paneOpWait time.Duration
@@ -438,7 +442,6 @@ func (d *Dispatcher) runInvocation(parent context.Context, state *runState, done
 		d.complete(state, StatusCanceled, "", err)
 		return
 	}
-	d.admitQueuedHeadlessTurn(state)
 	runCtx := parent
 	timeoutCancel := func() {}
 	if timeout > 0 {
@@ -482,9 +485,13 @@ func (d *Dispatcher) runInvocation(parent context.Context, state *runState, done
 	}
 	cmd.Stdout, cmd.Stderr = tee, tee
 
+	if d.beforeHeadlessStart != nil {
+		d.beforeHeadlessStart()
+	}
 	runErr := cmd.Start()
 	if runErr == nil {
 		d.mu.Lock()
+		d.publishHeadlessLaunchLocked(state)
 		if state.record.Isolation == "worktree" {
 			state.headlessStarted = true
 			state.pgid = startedProcessGroup(cmd)
@@ -544,11 +551,10 @@ func (d *Dispatcher) runInvocation(parent context.Context, state *runState, done
 	d.complete(state, StatusDone, parsed.Text, nil)
 }
 
-// admitQueuedHeadlessTurn marks a queued continuation turn delivered once its
-// slot is granted and the process is about to launch.
-func (d *Dispatcher) admitQueuedHeadlessTurn(state *runState) {
-	d.mu.Lock()
-	defer d.mu.Unlock()
+// publishHeadlessLaunchLocked marks a queued continuation turn delivered once
+// its process has actually started. A turn resolved before launch (canceled
+// between slot admission and Start) stays undelivered.
+func (d *Dispatcher) publishHeadlessLaunchLocked(state *runState) {
 	if state.record.Status.Terminal() || len(state.record.Turns) == 0 {
 		return
 	}
@@ -557,7 +563,6 @@ func (d *Dispatcher) admitQueuedHeadlessTurn(state *runState) {
 		return
 	}
 	t.Queued, t.Delivered, t.SlotHeld = false, true, true
-	d.persistRecordLocked(state)
 }
 
 // pruneTerminalRunsLocked bounds completed in-memory runs. Records on disk
