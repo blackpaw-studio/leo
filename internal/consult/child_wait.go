@@ -23,25 +23,20 @@ func WithChildWait(records []Record) []Record {
 	if len(children) == 0 {
 		return records
 	}
-	live := make(map[int]int, len(records))
-	visiting := map[int]bool{}
+	// onPath holds the nodes of the walk in progress, so a cycle ends the walk
+	// without any result being cached: the outcome cannot depend on the
+	// order records arrive in.
+	onPath := map[int]bool{}
 	var liveChildren func(i int) int
 	liveChildren = func(i int) int {
-		if n, ok := live[i]; ok {
-			return n
-		}
-		if visiting[i] {
-			return 0
-		}
-		visiting[i] = true
+		onPath[i] = true
+		defer delete(onPath, i)
 		n := 0
 		for _, c := range children[records[i].ID] {
-			if isLiveChild(records[c], liveChildren(c)) {
+			if !onPath[c] && isLiveChild(records[c], func() int { return liveChildren(c) }) {
 				n++
 			}
 		}
-		visiting[i] = false
-		live[i] = n
 		return n
 	}
 	out := make([]Record, len(records))
@@ -61,11 +56,11 @@ func isIdleStatus(s Status) bool { return s == StatusIdle || s == StatusSettling
 
 // isLiveChild reports whether a child dispatch still holds its parent's
 // attention: unfinished, and either working or itself waiting on children.
-func isLiveChild(rec Record, liveGrandchildren int) bool {
+func isLiveChild(rec Record, liveGrandchildren func() int) bool {
 	if rec.Status.Terminal() || rec.Kind != "dispatch" {
 		return false
 	}
-	return !isIdleStatus(rec.Status) || liveGrandchildren > 0
+	return !isIdleStatus(rec.Status) || liveGrandchildren() > 0
 }
 
 func waitingOnChildren(rec Record, n int) Record {

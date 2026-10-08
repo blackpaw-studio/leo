@@ -1,6 +1,7 @@
 package consult
 
 import (
+	"reflect"
 	"strings"
 	"testing"
 
@@ -147,5 +148,69 @@ func TestDispatchObserverReportsAnIdleParentAsWaitingWithItsRunningChild(t *test
 	}
 	if parent == nil || *parent != "waiting|1 dispatch" {
 		t.Fatalf("parent = %v", parent)
+	}
+}
+
+func TestDispatchObserverTakesCapabilitiesFromTheRecordNotTheProjection(t *testing.T) {
+	interactive := func(id string, status Status) Record {
+		rec := parentRec(id, "alpha", status)
+		rec.Mode, rec.PaneID, rec.ViewerKind = ModeInteractive, "%1", "window"
+		return rec
+	}
+	records := []Record{
+		interactive("settling", StatusSettling), childRec("c1", "settling", "other", StatusRunning),
+		interactive("idle", StatusIdle), childRec("c2", "idle", "other", StatusRunning),
+	}
+	o := NewDispatchObserver(func() []Record { return records }, nil)
+	attachable := map[string]bool{}
+	for _, d := range o.Dispatches(stateNow) {
+		if d.Status != "waiting" && d.ID != "c1" && d.ID != "c2" {
+			t.Fatalf("%s status = %s, want waiting", d.ID, d.Status)
+		}
+		attachable[d.ID] = d.Attachable
+	}
+	if attachable["settling"] {
+		t.Fatal("a settling parent shown as waiting must not be advertised as attachable")
+	}
+	if !attachable["idle"] {
+		t.Fatal("an idle parent keeps the attachability its record has")
+	}
+}
+
+func TestWithChildWaitIsIndependentOfRecordOrderInACycle(t *testing.T) {
+	a, b := parentRec("a", "alpha", StatusIdle), parentRec("b", "alpha", StatusIdle)
+	a.ParentDispatchID, b.ParentDispatchID = "b", "a"
+	c := childRec("c", "a", "other", StatusRunning)
+	summary := func(records []Record) map[string]string {
+		out := map[string]string{}
+		for _, r := range WithChildWait(records) {
+			out[r.ID] = string(r.Status) + "|" + r.PendingWork.Summary()
+		}
+		return out
+	}
+	forward, reverse := summary([]Record{a, b, c}), summary([]Record{c, b, a})
+	if !reflect.DeepEqual(forward, reverse) {
+		t.Fatalf("forward %v != reverse %v", forward, reverse)
+	}
+	if forward["a"] != "waiting|1 dispatch" {
+		t.Fatalf("a = %q, want waiting on its running child", forward["a"])
+	}
+}
+
+func TestTickAnnouncesAParentLeavingWaitingWhenItsChildFinishes(t *testing.T) {
+	parent := agentDispatch("p", "alpha", StatusIdle)
+	child := agentDispatch("c", "other", StatusRunning)
+	child.ParentDispatchID = "p"
+	h := newObserveHarness(parent, child)
+
+	h.obs.Tick()
+	if got := h.pub.take(t); !reflect.DeepEqual(got, []string{"p:waiting", "c:running"}) {
+		t.Fatalf("first tick published %v", got)
+	}
+	h.records.recs[1].Status, h.records.recs[1].EndedAt = StatusDone, h.now
+	h.obs.Tick()
+	got := h.pub.dispatches(t)
+	if len(got) != 2 || got[0].ID != "p" || got[0].Status != "idle" || got[0].Pending != "" || got[1].ID != "c" {
+		t.Fatalf("child finishing published %+v, want p to go idle then c done", got)
 	}
 }

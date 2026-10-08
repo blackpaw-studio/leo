@@ -71,9 +71,11 @@ func NewDispatchObserver(records func() []Record, publisher observe.Publisher, o
 // observe.DispatchLinger of now.
 func (o *DispatchObserver) Dispatches(now time.Time) []observe.Dispatch {
 	out := []observe.Dispatch{}
-	for _, rec := range WithChildWait(o.records()) {
+	records := o.records()
+	shown := WithChildWait(records)
+	for i, rec := range records {
 		if rec.Kind == "dispatch" && withinLinger(rec, now) {
-			out = append(out, observedDispatch(rec, now))
+			out = append(out, observedDispatchShown(rec, shown[i], now))
 		}
 	}
 	return out
@@ -122,11 +124,12 @@ func (o *DispatchObserver) Tick() {
 // announced, so a dispatch is removed once, and only if it was ever listed.
 func (o *DispatchObserver) publishChangesLocked(records []Record, now time.Time) {
 	listed := make(map[string]observe.Dispatch, len(records))
-	for _, rec := range WithChildWait(records) {
+	shown := WithChildWait(records)
+	for i, rec := range records {
 		if rec.Kind != "dispatch" || !withinLinger(rec, now) {
 			continue
 		}
-		d := observedDispatch(rec, now)
+		d := observedDispatchShown(rec, shown[i], now)
 		listed[rec.ID] = d
 		if prev, known := o.last[rec.ID]; known && sameDispatch(prev, d) {
 			continue
@@ -217,10 +220,17 @@ func parentDispatchID(rec Record) string {
 }
 
 func observedDispatch(rec Record, now time.Time) observe.Dispatch {
+	return observedDispatchShown(rec, rec, now)
+}
+
+// observedDispatchShown is rec as /api/v1 shows it. Only the status and
+// pending work come from shown, rec as WithChildWait projects it; everything
+// the record's real state decides (Attachable, stalled) comes from rec.
+func observedDispatchShown(rec, shown Record, now time.Time) observe.Dispatch {
 	d := observe.Dispatch{
 		ID: rec.ID, Name: rec.Name, Role: rec.Role, Template: rec.Template, Model: rec.Model,
 		Effort: rec.Effort, ObservedEffort: rec.ObservedEffort,
-		Status: string(rec.Status), Stalled: isStalled(rec, now), Pending: rec.PendingWork.Summary(),
+		Status: string(shown.Status), Stalled: isStalled(rec, now), Pending: shown.PendingWork.Summary(),
 		CallerAgent: rec.Caller, ParentDispatchID: parentDispatchID(rec), StartedAt: rec.StartedAt,
 		Attachable: Attachable(rec),
 		TokensIn:   valueOr(rec.InputTokens), TokensOut: valueOr(rec.OutputTokens), CostUSD: valueOr(rec.CostUSD),

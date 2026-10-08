@@ -20,13 +20,19 @@ const bridgeRecentAfterEnd = 60 * time.Second
 // asked for, as its mod shows them: every live one, and each that finished
 // within bridgeRecentAfterEnd of now, oldest first.
 func BridgeDispatchStates(records []Record, key string, now time.Time) []bridge.DispatchState {
+	return bridgeDispatchStates(WithChildWait(records), key, now)
+}
+
+// bridgeDispatchStates is BridgeDispatchStates for records already run
+// through WithChildWait, which a caller serving many keys does once. A
+// child may belong to another caller, so wait state is derived from every
+// record before a key's own are picked out.
+func bridgeDispatchStates(records []Record, key string, now time.Time) []bridge.DispatchState {
 	if key == "" {
 		return nil
 	}
 	mine := make([]Record, 0, len(records))
-	// Children may belong to other callers, so wait state is derived from
-	// every record before the caller's own are picked out.
-	for _, rec := range WithChildWait(records) {
+	for _, rec := range records {
 		if isBridgeRosterRecord(rec, key, now) {
 			mine = append(mine, rec)
 		}
@@ -131,7 +137,7 @@ func (p *StatePusher) Tick() {
 		return
 	}
 	now := p.Now()
-	records := p.Cutoffs.Visible(p.Records())
+	records := WithChildWait(p.Cutoffs.Visible(p.Records()))
 	delegation := p.Delegation()
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -154,7 +160,7 @@ func (p *StatePusher) snapshot(key string, records []Record, delegation bridge.D
 	if strings.HasPrefix(key, dispatchBridgeKeyPrefix) {
 		delegation = bridge.DelegationState{}
 	}
-	return bridge.StateSnapshot{Delegation: delegation, Dispatches: BridgeDispatchStates(records, key, now)}
+	return bridge.StateSnapshot{Delegation: delegation, Dispatches: bridgeDispatchStates(records, key, now)}
 }
 
 func (p *StatePusher) pushLocked(key string, snap bridge.StateSnapshot) {
