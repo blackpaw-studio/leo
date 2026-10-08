@@ -261,8 +261,10 @@ finished. A queued follow-up emits no completion notification until it
 resolves. If the run is canceled, times out, or closes first, the turn
 resolves `interrupted` (or `lost`) with a text saying it was never sent; if a
 human types into the pane first (steering), it resolves `lost` for the same
-reason. A run has at most one queued follow-up, so a second send is rejected
-until the first starts. Permission decisions (`decision` / `request_id`) never
+reason; so does daemon shutdown (`interrupted`, with a shutdown reason). A
+continuation of a finished headless run queues the same way (`queued: true`,
+run status `queued`) and `leo_cancel` withdraws it. A run has at most one
+queued follow-up, so a second send is rejected until the first starts. Permission decisions (`decision` / `request_id`) never
 queue and never use a slot. Use `leo_wait` on a run ID to wait for the latest orchestrator turn at
 the moment the wait starts, or on an explicit turn ID such as `d-…#2` to wait
 for that turn. Wait results include `turn_id`, `outcome`, `delivered`, and

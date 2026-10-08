@@ -56,16 +56,37 @@ func (d *Dispatcher) dequeueSendLocked(s *runState, turnID string) {
 	}
 }
 
+// shutdownQueuedText explains a queued follow-up cut off by daemon shutdown.
+func shutdownQueuedText(id string) string {
+	return fmt.Sprintf("dispatch %s: the daemon shut down before a concurrency slot freed, so this queued follow-up was not sent.", id)
+}
+
 // runQueuedSend waits for the turn's place in line, then starts it exactly as
-// an immediate follow-up would. A turn resolved while waiting never sends.
+// an immediate follow-up would. A turn resolved while waiting never sends, and
+// daemon shutdown resolves it interrupted instead of leaving it queued.
 func (d *Dispatcher) runQueuedSend(s *runState, q *queuedSend, message string, waiter *slotWaiter) {
+	if d.queuedSendExited != nil {
+		defer d.queuedSendExited()
+	}
 	select {
 	case <-waiter.Ready():
 	case <-q.cancel:
 		return
+	case <-d.daemonCtx.Done():
+	}
+	if d.afterQueuedGrant != nil {
+		d.afterQueuedGrant()
 	}
 	d.mu.Lock()
-	if s.record.Status.Terminal() || s.record.Status == StatusSettling || turnByID(s.record, q.turnID).Outcome != "" {
+	// The turn was resolved (cancel, close, steer) between the wake-up and
+	// the lock: whoever resolved it already left the line.
+	if s.queuedSend != q || s.record.Status.Terminal() || s.record.Status == StatusSettling || turnByID(s.record, q.turnID).Outcome != "" {
+		d.mu.Unlock()
+		d.slots.Cancel(waiter)
+		return
+	}
+	if d.daemonCtx.Err() != nil {
+		d.closeTurnLocked(s, q.turnID, TurnInterrupted, shutdownQueuedText(s.record.ID))
 		d.mu.Unlock()
 		d.slots.Cancel(waiter)
 		return

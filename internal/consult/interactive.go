@@ -1014,8 +1014,9 @@ func (d *Dispatcher) closeWorkingLocked(s *runState, o TurnOutcome, text string)
 	if len(working) > 0 {
 		return
 	}
+	// A queued follow-up was never sent, so no Stop can be its own.
 	for i := range s.record.Turns {
-		if s.record.Turns[i].Outcome == "" {
+		if s.record.Turns[i].Outcome == "" && !s.record.Turns[i].Queued {
 			d.closeTurnLocked(s, s.record.Turns[i].TurnID, o, text)
 			return
 		}

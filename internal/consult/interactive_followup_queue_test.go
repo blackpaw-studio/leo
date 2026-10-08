@@ -151,6 +151,8 @@ func TestCancelWhileFollowUpQueuedResolvesTheTurn(t *testing.T) {
 	id := idleInteractive(t, d)
 	injected, injectedCh := signalCh()
 	rt.injectHook = injected
+	exited, exitedCh := signalCh()
+	d.queuedSendExited = exited
 	freeOne := fillSlots(d)
 	sent, err := d.Send(context.Background(), id, "more")
 	if err != nil {
@@ -160,6 +162,7 @@ func TestCancelWhileFollowUpQueuedResolvesTheTurn(t *testing.T) {
 	if _, err := d.Cancel(id); err != nil {
 		t.Fatal(err)
 	}
+	expectSignal(t, exitedCh, "queued follow-up goroutine to leave the line")
 	entry := d.Wait(context.Background(), []string{sent.TurnID}, 5*time.Second)[0]
 	if entry.Outcome != TurnInterrupted {
 		t.Fatalf("wait on canceled queued turn = %+v, want outcome interrupted", entry)
@@ -186,6 +189,8 @@ func TestSteeringWhileFollowUpQueuedResolvesTheTurn(t *testing.T) {
 	id := idleInteractive(t, d)
 	injected, injectedCh := signalCh()
 	rt.injectHook = injected
+	exited, exitedCh := signalCh()
+	d.queuedSendExited = exited
 	freeOne := fillSlots(d)
 	sent, err := d.Send(context.Background(), id, "more")
 	if err != nil {
@@ -206,6 +211,7 @@ func TestSteeringWhileFollowUpQueuedResolvesTheTurn(t *testing.T) {
 	if d.slots.Waiting() != 0 {
 		t.Fatalf("%d waiters left in line after steering", d.slots.Waiting())
 	}
+	expectSignal(t, exitedCh, "queued follow-up goroutine to leave the line")
 	freeOne()
 	expectNoSignal(t, injectedCh, "injection for a steered-away turn")
 }

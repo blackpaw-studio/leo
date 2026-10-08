@@ -72,6 +72,12 @@ type Dispatcher struct {
 	beforeOpeningInject  func()
 	afterOpeningInject   func()
 	beforeSendInjectable func()
+	// afterQueuedGrant runs in a queued follow-up's goroutine once its slot
+	// is granted, before it takes the dispatcher lock; queuedSendExited runs
+	// when that goroutine returns. Tests use them to land a cancel or steer
+	// in the grant gap and to know the goroutine is gone.
+	afterQueuedGrant func()
+	queuedSendExited func()
 	// paneOpWait bounds how long a cancellation waits for its queued pane
 	// kill (see defaultPaneOpWait).
 	paneOpWait time.Duration
@@ -402,22 +408,25 @@ func (d *Dispatcher) Start(_ context.Context, cfg *config.Config, req Request) (
 			d.placement.Cancel(rec.ID)
 		}
 	}
-	go d.runInvocation(runCtx, state, state.done, h, model, tmpl.Env, args, harnessEnv, req.Cwd, timeout, false)
+	// Take the place in line before returning, so a later send or start cannot
+	// overtake this run while its goroutine is still being scheduled.
+	waiter, _ := d.slots.AcquireOrEnqueue()
+	go d.runInvocation(runCtx, state, state.done, h, model, tmpl.Env, args, harnessEnv, req.Cwd, timeout, waiter)
 	return Started{ID: rec.ID, Harness: h.Name(), Model: model, Cwd: req.Cwd}, nil
 }
 
 func (d *Dispatcher) run(parent context.Context, state *runState, h harness.Harness, model string, env map[string]string, args []string, harnessEnv map[string]string, cwd string, timeout time.Duration) {
-	d.runInvocation(parent, state, state.done, h, model, env, args, harnessEnv, cwd, timeout, false)
+	waiter, _ := d.slots.AcquireOrEnqueue()
+	d.runInvocation(parent, state, state.done, h, model, env, args, harnessEnv, cwd, timeout, waiter)
 }
 
-func (d *Dispatcher) runInvocation(parent context.Context, state *runState, done chan struct{}, h harness.Harness, model string, env map[string]string, args []string, harnessEnv map[string]string, cwd string, timeout time.Duration, slotHeld bool) {
+func (d *Dispatcher) runInvocation(parent context.Context, state *runState, done chan struct{}, h harness.Harness, model string, env map[string]string, args []string, harnessEnv map[string]string, cwd string, timeout time.Duration, waiter *slotWaiter) {
 	defer close(done)
-	if !slotHeld {
-		w := d.slots.Enqueue()
+	if waiter != nil {
 		select {
-		case <-w.Ready():
+		case <-waiter.Ready():
 		case <-parent.Done():
-			d.slots.Cancel(w)
+			d.slots.Cancel(waiter)
 			d.complete(state, StatusCanceled, "", parent.Err())
 			return
 		}

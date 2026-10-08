@@ -96,18 +96,24 @@ func (d *Dispatcher) continueHeadless(cfg *config.Config, rec Record, message st
 	}
 
 	d.mu.Lock()
-	if !d.slots.TryAcquire() {
-		d.mu.Unlock()
-		return SendResult{}, errors.New("no capacity")
+	// With every slot busy the continuation takes a place in the shared FIFO
+	// line instead of being rejected; a nil waiter means the slot is held.
+	waiter, _ := d.slots.AcquireOrEnqueue()
+	giveUpSlot := func() {
+		if waiter != nil {
+			d.slots.Cancel(waiter)
+			return
+		}
+		d.slots.Release()
 	}
 	if recreate {
 		if err := os.MkdirAll(filepath.Dir(rec.Worktree), dirPerm); err != nil {
-			d.slots.Release()
+			giveUpSlot()
 			d.mu.Unlock()
 			return SendResult{}, err
 		}
 		if _, err := d.git("-C", rec.RepositoryRoot, "worktree", "add", rec.Worktree, rec.Branch); err != nil {
-			d.slots.Release()
+			giveUpSlot()
 			d.mu.Unlock()
 			return SendResult{}, fmt.Errorf("recreating retained worktree: %w", err)
 		}
@@ -120,7 +126,7 @@ func (d *Dispatcher) continueHeadless(cfg *config.Config, rec Record, message st
 		if recreate {
 			rollbackErr = d.rollbackRecreatedWorktreeLocked(rec)
 		}
-		d.slots.Release()
+		giveUpSlot()
 		d.mu.Unlock()
 		return SendResult{}, errors.Join(fmt.Errorf("building %s resume args after workspace preparation: %w", h.Name(), err), rollbackErr)
 	}
@@ -133,7 +139,7 @@ func (d *Dispatcher) continueHeadless(cfg *config.Config, rec Record, message st
 		synthesizeOpeningTurn(&prospective)
 	}
 	now := d.now()
-	turn := Turn{TurnID: fmt.Sprintf("%s#%d", rec.ID, len(prospective.Turns)+1), Source: TurnSourceOrchestrator, StartedAt: now, Delivered: true, SlotHeld: true, Text: message}
+	turn := Turn{TurnID: fmt.Sprintf("%s#%d", rec.ID, len(prospective.Turns)+1), Source: TurnSourceOrchestrator, StartedAt: now, Delivered: true, SlotHeld: waiter == nil, Text: message}
 	prospective.Turns = append(prospective.Turns, turn)
 	prospective.Status, prospective.Text, prospective.Error = StatusQueued, "", ""
 	prospective.EndedAt, prospective.Cwd = time.Time{}, cwd
@@ -150,7 +156,7 @@ func (d *Dispatcher) continueHeadless(cfg *config.Config, rec Record, message st
 		if recreate {
 			rollbackErr = d.rollbackRecreatedWorktreeLocked(rec)
 		}
-		d.slots.Release()
+		giveUpSlot()
 		d.mu.Unlock()
 		return SendResult{}, errors.Join(fmt.Errorf("reopening dispatch recording: %w", openErr), rollbackErr)
 	}
@@ -162,8 +168,8 @@ func (d *Dispatcher) continueHeadless(cfg *config.Config, rec Record, message st
 	state.done, state.cancel = done, cancel
 	d.persistLocked(state, "turn")
 	d.mu.Unlock()
-	go d.runInvocation(runCtx, state, done, h, rec.Model, tmpl.Env, args, harnessEnv, cwd, rec.Timeout, true)
-	return SendResult{TurnID: turn.TurnID, Delivered: true}, nil
+	go d.runInvocation(runCtx, state, done, h, rec.Model, tmpl.Env, args, harnessEnv, cwd, rec.Timeout, waiter)
+	return SendResult{TurnID: turn.TurnID, Delivered: waiter == nil, Queued: waiter != nil}, nil
 }
 
 func (d *Dispatcher) rollbackRecreatedWorktreeLocked(rec Record) error {

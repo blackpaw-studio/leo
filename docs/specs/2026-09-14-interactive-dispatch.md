@@ -164,7 +164,7 @@ happen outside it after revalidating status.
 
 One injector entrypoint, `InjectInto(paneID, classifier, text)`:
 
-1. Acquire a slot for the turn; none free → `rejected: no capacity`.
+1. Acquire a slot for the turn; none free → the turn queues (issue #232; see dispatches.md).
 2. Classify the pane. Anything but `Empty` → `rejected: composer busy` (or
    `composer unknown`). No keystrokes were sent.
 3. `set-buffer --`, `paste-buffer -d -p` (bracketed paste), then confirm the
