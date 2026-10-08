@@ -208,3 +208,66 @@ func TestLocalStateMergesTheWebServersBridgeSources(t *testing.T) {
 		t.Fatalf("unexpected state: %s", w.Body.String())
 	}
 }
+
+// stubDispatchRows is a fixed dispatch projection (the dispatch observer's
+// read seam: outstanding counts plus the live/lingering rows).
+type stubDispatchRows []observe.Dispatch
+
+func (stubDispatchRows) OutstandingDispatches() map[string]int     { return nil }
+func (r stubDispatchRows) Dispatches(time.Time) []observe.Dispatch { return r }
+
+func localStateServer(t *testing.T, rows observe.DispatchCounter) (*Server, *observe.Bus) {
+	t.Helper()
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "leo.yaml")
+	if err := config.Save(cfgPath, &config.Config{}); err != nil {
+		t.Fatal(err)
+	}
+	bus := observe.NewBus()
+	s := New(filepath.Join(dir, "leo.sock"), cfgPath, nil)
+	s.SetObservability(bus, nil, nil, nil, "test")
+	s.SetAgentManager(&fakeAgentManager{records: []agent.Record{{Name: "local", Status: "running"}}})
+	if rows != nil {
+		s.setWebSources(web.AgentSources{Dispatches: rows})
+	}
+	return s, bus
+}
+
+func TestLocalStateCarriesDispatchesAndEventSeq(t *testing.T) {
+	s, bus := localStateServer(t, stubDispatchRows{{ID: "d-1", Status: "running", StartedAt: time.Unix(10, 0)}})
+	bus.Publish(observe.Event{Type: observe.EventAgentStopped, Payload: &observe.AgentStoppedPayload{Agent: "local"}})
+	w := httptest.NewRecorder()
+
+	s.Handler().ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/state", nil))
+
+	var body struct {
+		Data struct {
+			Meta       observe.SnapshotMeta `json:"meta"`
+			Dispatches []observe.Dispatch   `json:"dispatches"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if len(body.Data.Dispatches) != 1 || body.Data.Dispatches[0].ID != "d-1" {
+		t.Fatalf("dispatches missing: %s", w.Body.String())
+	}
+	if body.Data.Meta.Seq == 0 || body.Data.Meta.Seq != bus.Seq() {
+		t.Fatalf("meta.seq = %d, want bus seq %d: %s", body.Data.Meta.Seq, bus.Seq(), w.Body.String())
+	}
+}
+
+func TestLocalStateEmitsEmptyDispatchesArray(t *testing.T) {
+	for name, rows := range map[string]observe.DispatchCounter{"no source": nil, "empty source": stubDispatchRows{}} {
+		t.Run(name, func(t *testing.T) {
+			s, _ := localStateServer(t, rows)
+			w := httptest.NewRecorder()
+
+			s.Handler().ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/state", nil))
+
+			if !strings.Contains(w.Body.String(), `"dispatches":[]`) {
+				t.Fatalf("want \"dispatches\":[] in %s", w.Body.String())
+			}
+		})
+	}
+}

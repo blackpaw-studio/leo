@@ -32,8 +32,13 @@ type healthData struct {
 	PID int `json:"pid"`
 }
 
+// localStateData is the socket /state payload: the agent rows plus the
+// dispatch rows and event-stream seq a client baselines from before applying
+// /events. Meta and Dispatches match /api/v1/state.
 type localStateData struct {
-	Agents []observe.Agent `json:"agents"`
+	Meta       observe.SnapshotMeta `json:"meta"`
+	Agents     []observe.Agent      `json:"agents"`
+	Dispatches []observe.Dispatch   `json:"dispatches"`
 }
 
 type templateListEntry struct {
@@ -61,6 +66,12 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleState(w http.ResponseWriter, r *http.Request) {
 	httpapi.ServeState(w, r, func(context.Context) (any, error) {
+		// Read the event seq before any state: the snapshot then reflects at
+		// least every event up to it (same ordering as /api/v1/state).
+		var seq uint64
+		if s.observeBus != nil {
+			seq = s.observeBus.Seq()
+		}
 		cfg, err := config.Load(s.configPath)
 		if err != nil {
 			return nil, fmt.Errorf("loading config: %w", err)
@@ -77,7 +88,12 @@ func (s *Server) handleState(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 		}
-		return localStateData{Agents: web.ProjectAgents(records, states, s.agentSources(), cfg)}, nil
+		src := s.agentSources()
+		return localStateData{
+			Meta:       observe.SnapshotMeta{Seq: seq},
+			Agents:     web.ProjectAgents(records, states, src, cfg),
+			Dispatches: web.DispatchRows(src.Dispatches, time.Now()),
+		}, nil
 	}, func(w http.ResponseWriter, status int, data any, err error) {
 		if err != nil {
 			writeError(w, status, err.Error())
