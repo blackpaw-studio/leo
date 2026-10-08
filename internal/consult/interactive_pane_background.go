@@ -88,7 +88,10 @@ func (d *Dispatcher) backgroundPane(s *runState) bool {
 
 // foregroundPane brings a backgrounded pane back to its root caller's
 // session as want: below its caller as a split when it can, else in a window
-// of its own (hidden, when the run has nothing in progress).
+// of its own (hidden, when the run has nothing in progress). A pane whose
+// window `leo dispatch attach` has linked comes back by moving that window
+// whole and is not hidden: joining it would empty the window and end the
+// attach, and a later rejoin from hidden would too.
 func (d *Dispatcher) foregroundPane(s *runState, want string) bool {
 	d.mu.Lock()
 	mover, _ := d.interactiveRuntime.(backgroundMoverRuntime)
@@ -109,7 +112,7 @@ func (d *Dispatcher) foregroundPane(s *runState, want string) bool {
 		return d.recordPlacement(s, rec.PaneID, kind, loc.WindowID)
 	}
 	root := d.rootCallerSession(rec)
-	if want == "split" && cfg != nil && d.joinBelowCaller(s, rt, rec, root, cfg) {
+	if want == "split" && cfg != nil && !loc.WatchLinked && d.joinBelowCaller(s, rt, rec, root, cfg) {
 		return true
 	}
 	window, err := mover.ForegroundPane(d.daemonCtx, rec.PaneID, viewerWindowName(rec), root)
@@ -118,7 +121,7 @@ func (d *Dispatcher) foregroundPane(s *runState, want string) bool {
 		return false
 	}
 	kind := "window"
-	if want == viewerHidden {
+	if want == viewerHidden && !loc.WatchLinked {
 		kind = viewerHidden
 	}
 	return d.recordPlacement(s, rec.PaneID, kind, window)

@@ -202,9 +202,18 @@ func (d *Dispatcher) hidePane(s *runState) bool {
 // showPane returns a hidden pane below its caller, where it launched. When
 // that is impossible (the caller is gone) the pane stays in its own window,
 // which then is simply its window and is no longer moved. So is a pane the
-// user moved to another session (it is pinned).
+// user moved to another session (it is pinned) and one whose window an attach
+// has linked, which joining would end.
 func (d *Dispatcher) showPane(s *runState) bool {
-	if _, owned := d.ownedPane(s); !owned {
+	loc, owned := d.ownedPane(s)
+	if !owned {
+		return false
+	}
+	if loc.WatchLinked {
+		d.mu.Lock()
+		pane := s.record.PaneID
+		d.mu.Unlock()
+		d.recordPlacement(s, pane, "window", loc.WindowID)
 		return false
 	}
 	d.mu.Lock()

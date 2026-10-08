@@ -69,6 +69,9 @@ func TestPaneLocationIgnoresWatchSessionLinks(t *testing.T) {
 	if err != nil || loc.SessionName != "orch" {
 		t.Fatalf("location = %+v, %v; want the real session, not the attach link", loc, err)
 	}
+	if !loc.WatchLinked {
+		t.Fatal("WatchLinked = false, want the attach link reported")
+	}
 }
 
 func TestPaneLocationErrors(t *testing.T) {
@@ -308,5 +311,55 @@ func TestTmuxBackgroundPaneRefusesToEndAnAlmostEmptySession(t *testing.T) {
 	}
 	if got := tm("list-sessions", "-F", "#{session_name}"); !strings.Contains(got, "solo") {
 		t.Fatalf("session ended: %q", got)
+	}
+}
+
+// TestTmuxWatchLinkedViewerReturnsByMovingItsWindow shows why a backgrounded
+// viewer under `leo dispatch attach` must come back with move-window: it keeps
+// the attach alive, where join-pane empties the window and ends it.
+func TestTmuxWatchLinkedViewerReturnsByMovingItsWindow(t *testing.T) {
+	r, tm := realTmux(t)
+	ctx := context.Background()
+	watch := DispatchWatchSessionPrefix + "d-1-x"
+	tm("new-session", "-d", "-s", "orch", "-x", "200", "-y", "50", "sleep 300")
+	orch := tm("display-message", "-p", "-t", "=orch:", "#{session_id}")
+	caller := tm("display-message", "-p", "-t", "=orch:", "#{pane_id}")
+	tm("new-window", "-d", "-t", "=orch:", "sleep 300") // so orch survives losing the viewer's window
+	mk := func() (pane, window string) {
+		pane = tm("new-window", "-d", "-P", "-F", "#{pane_id}", "-t", "=orch:", "-n", "viewer·cd34", "sleep 300")
+		window = tm("display-message", "-p", "-t", pane, "#{window_id}")
+		return pane, window
+	}
+	linked := func(window string) bool {
+		out, err := exec.Command("tmux", "-S", tm("display-message", "-p", "#{socket_path}"), "list-windows", "-t", "="+watch+":", "-F", "#{window_id}").CombinedOutput()
+		return err == nil && strings.Contains(string(out), window)
+	}
+
+	pane, window := mk()
+	if _, err := r.BackgroundPane(ctx, pane, "viewer·cd34"); err != nil {
+		t.Fatal(err)
+	}
+	tm("new-session", "-d", "-s", watch, "sleep 300")
+	tm("link-window", "-d", "-s", window, "-t", "="+watch+":")
+	loc, err := r.PaneLocation(ctx, pane)
+	if err != nil || loc.SessionName != "leo-dispatch" || !loc.WatchLinked {
+		t.Fatalf("location = %+v, %v; want leo-dispatch with the watch link reported", loc, err)
+	}
+	if _, err := r.ForegroundPane(ctx, pane, "viewer·cd34", orch); err != nil {
+		t.Fatal(err)
+	}
+	if !linked(window) {
+		t.Fatal("moving the window ended the attach: the watch session lost its link")
+	}
+	if loc, err := r.PaneLocation(ctx, pane); err != nil || loc.SessionName != "orch" || loc.WindowID != window {
+		t.Fatalf("location after the move = %+v, %v; want window %s in orch", loc, err, window)
+	}
+
+	// The control: join-pane on a linked window destroys it, link and all.
+	pane2, window2 := mk()
+	tm("link-window", "-d", "-s", window2, "-t", "="+watch+":")
+	tm("join-pane", "-d", "-v", "-s", pane2, "-t", caller)
+	if linked(window2) {
+		t.Fatal("expected join-pane to end the watch link; if tmux changed, the dispatcher's guard is no longer needed")
 	}
 }

@@ -21,6 +21,9 @@ type bgRuntime struct {
 	seq    int
 	locs   map[string]PaneLocation
 	locErr map[string]error
+	// watchLinked names the panes whose window `leo dispatch attach` has
+	// linked into a watch session.
+	watchLinked map[string]bool
 }
 
 const (
@@ -34,6 +37,7 @@ func newBgRuntime() *bgRuntime {
 		movingRuntime: &movingRuntime{fakeInteractiveRuntime: &fakeInteractiveRuntime{arm: true, empty: true}},
 		locs:          map[string]PaneLocation{},
 		locErr:        map[string]error{},
+		watchLinked:   map[string]bool{},
 	}
 }
 
@@ -78,10 +82,12 @@ func (r *bgRuntime) locate(pane string) (PaneLocation, error) {
 	if err := r.locErr[pane]; err != nil {
 		return PaneLocation{}, err
 	}
-	if loc, ok := r.locs[pane]; ok {
-		return loc, nil
+	loc, ok := r.locs[pane]
+	if !ok {
+		loc = inCallerWindow(2) // an unlaunched pane: the caller's own
 	}
-	return inCallerWindow(2), nil // an unlaunched pane: the caller's own
+	loc.WatchLinked = r.watchLinked[pane]
+	return loc, nil
 }
 
 func (r *bgRuntime) place(pane string, loc PaneLocation) {
@@ -731,6 +737,19 @@ func TestUserTurnInABackgroundedPaneDoesNotSendItBackAfterItReturns(t *testing.T
 	}
 }
 
+func (f *liveFixture) pinned(id string) bool {
+	f.t.Helper()
+	_, state, err := f.d.lookup(id)
+	if err != nil || state == nil {
+		f.t.Fatalf("pinned %s: %v", id, err)
+	}
+	f.d.mu.Lock()
+	defer f.d.mu.Unlock()
+	return state.pinned
+}
+
+var elsewhere = PaneLocation{SessionID: "$7", SessionName: "elsewhere", WindowID: "@70", WindowPanes: 1, SessionWindows: 2}
+
 func TestRejoinedNestedViewersRecordTheCallersLiveWindow(t *testing.T) {
 	f := newLiveFixture(t)
 	parent := f.start(nil)
@@ -756,19 +775,6 @@ func TestRejoinedNestedViewersRecordTheCallersLiveWindow(t *testing.T) {
 		t.Fatalf("live splits counted in the caller's window = %d, want both viewers", n)
 	}
 }
-
-func (f *liveFixture) pinned(id string) bool {
-	f.t.Helper()
-	_, state, err := f.d.lookup(id)
-	if err != nil || state == nil {
-		f.t.Fatalf("pinned %s: %v", id, err)
-	}
-	f.d.mu.Lock()
-	defer f.d.mu.Unlock()
-	return state.pinned
-}
-
-var elsewhere = PaneLocation{SessionID: "$7", SessionName: "elsewhere", WindowID: "@70", WindowPanes: 1, SessionWindows: 2}
 
 func TestShowPaneDoesNotJoinAViewerTheUserMovedToAnotherSession(t *testing.T) {
 	f := newLiveFixture(t)
@@ -801,5 +807,42 @@ func TestOrchestratorStopDoesNotHideAManuallyRelocatedSplit(t *testing.T) {
 	}
 	if !f.pinned(started.ID) {
 		t.Fatal("a split moved to another session must be pinned")
+	}
+}
+
+func TestBackgroundedViewerWithAWatchLinkIsReturnedAsAWindowNotJoined(t *testing.T) {
+	f := newLiveFixture(t)
+	started := f.start(nil)
+	bg := f.attach("background", 10)
+	f.clients.set(bg)
+	f.poll(2)
+	// `leo dispatch attach` links the viewer's window into a watch session;
+	// join-pane would empty that window and end the attach.
+	f.rt.watchLinked[started.Pane] = true
+
+	f.clients.set(bg, f.attach("pane", 11))
+	f.poll(2)
+	if f.rt.count("show") != 0 || f.rt.count("foreground "+started.Pane+" "+callerSessionID) != 1 {
+		t.Fatalf("moves = %v, want the window moved, not joined", f.rt.moves())
+	}
+	if f.kind(started.ID) != "window" {
+		t.Fatalf("kind = %q, want window", f.kind(started.ID))
+	}
+}
+
+func TestShowPaneKeepsAWatchLinkedWindowIntact(t *testing.T) {
+	f := newLiveFixture(t)
+	started := f.start(nil)
+	f.idle(started.ID)
+	f.rt.watchLinked[started.Pane] = true
+
+	if _, err := f.d.Send(context.Background(), started.ID, "next"); err != nil {
+		t.Fatal(err)
+	}
+	if f.rt.count("show") != 0 || f.rt.count("inject "+started.Pane) != 2 {
+		t.Fatalf("events = %v, want the follow-up injected without a join-pane", f.rt.log())
+	}
+	if f.kind(started.ID) != "window" {
+		t.Fatalf("kind = %q, want the pane left in its own window", f.kind(started.ID))
 	}
 }
