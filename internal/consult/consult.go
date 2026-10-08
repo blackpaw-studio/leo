@@ -115,8 +115,6 @@ type runState struct {
 	armedUntil     time.Time
 	pendingCloses  map[string]pendingClose
 	eventIDs       []string
-	closedHarness  map[string]bool
-	closedIDs      []string
 	// idMode latches once a hook payload carries a harness id: from then on
 	// attribution is by id, and an id-less payload never closes more than
 	// the one working turn. Runs whose payloads carry no ids never set it.

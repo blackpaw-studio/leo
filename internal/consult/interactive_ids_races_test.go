@@ -1,6 +1,10 @@
 package consult
 
-import "testing"
+import (
+	"fmt"
+	"testing"
+	"time"
+)
 
 // A wake (a background task's notification) that reaches leo before the
 // delayed Stop of the turn it continues is that turn's, not a new one.
@@ -30,5 +34,29 @@ func TestPromptIDWakeWithNothingWorkingOpensItsOwnTurn(t *testing.T) {
 	rec := idleRecord(t, d, id)
 	if len(rec.Turns) != 2 || rec.Turns[1].Source != TurnSourceUser || rec.Steered {
 		t.Fatalf("record=%+v", rec)
+	}
+}
+
+// A finished turn's ids stay retired for as long as the turn is in the
+// run's record, however many turns came after it: a replayed submit for an
+// old turn opens no new one.
+func TestPromptIDClosedIDsOutliveTheDedupWindow(t *testing.T) {
+	now := time.Date(2026, time.October, 8, 12, 0, 0, 0, time.UTC)
+	d := NewDispatcher(nil)
+	d.now = sharedClock(&now)
+	s := &runState{record: Record{ID: "d-old", Harness: "claude", Mode: ModeInteractive, Status: StatusIdle}, handle: nopHandle{}, done: make(chan struct{}), pendingCloses: map[string]pendingClose{}}
+	d.mu.Lock()
+	d.runs[s.record.ID] = s
+	for i := 0; i <= maxInteractiveDedup; i++ {
+		pid := fmt.Sprintf("h%d", i)
+		turn := d.openTurnLocked(s, TurnSourceUser, "", false)
+		d.bindKeyLocked(s, turn.TurnID, "p:"+pid)
+		d.closeTurnLocked(s, turn.TurnID, TurnFinished, "reply")
+	}
+	d.mu.Unlock()
+	reportAll(t, d, s.record.ID, idSubmit(t, "replay-h0", "h0", "typed"), idStop(t, "replay-s-h0", "h0", "reply"))
+	rec := idleRecord(t, d, s.record.ID)
+	if len(rec.Turns) != maxInteractiveDedup+1 || rec.Status != StatusIdle {
+		t.Fatalf("a replay of the oldest turn's id opened a turn: %d turns, want %d; status %s", len(rec.Turns), maxInteractiveDedup+1, rec.Status)
 	}
 }

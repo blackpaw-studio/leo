@@ -763,9 +763,6 @@ func (d *Dispatcher) Report(id string, r HookReport) error {
 	if s.pendingCloses == nil {
 		s.pendingCloses = map[string]pendingClose{}
 	}
-	if s.closedHarness == nil {
-		s.closedHarness = map[string]bool{}
-	}
 	if r.EventID != "" { // keep a bounded dedup set in pending map namespace
 		key := "@" + r.EventID
 		if _, ok := s.pendingCloses[key]; ok {

@@ -15,10 +15,11 @@ import (
 //	t:<turn id>     the leo-bridge mod (turn.start, turn.complete)
 //	c:<turn_id>     codex hooks
 //
-// A run's open turns hold the keys bound to them; a closed turn's keys move
-// to a bounded closed-key set so a replayed or late report for a finished
-// turn is dropped instead of opening a spurious one. Payloads without any
-// id (older claude, id-less hooks) keep the arrival-order path in Report.
+// A run's turns hold the keys bound to them, and a finished turn keeps its
+// keys, so a replayed or late report for a finished turn is dropped instead
+// of opening a spurious one for as long as the turn is in the run's record.
+// Payloads without any id (older claude, id-less hooks) keep the
+// arrival-order path in Report.
 
 const (
 	keyPrompt = 'p'
@@ -63,18 +64,6 @@ func keyID(key string) string { return key[2:] }
 // command id alone, never by arming or text.
 func isBridgeKey(key string) bool { return key[0] == keyBridge }
 
-// keysOf are the keys t answers to. A turn given only a HarnessTurnID
-// answers to its codex-style key.
-func (t *Turn) keysOf() []string {
-	if len(t.keys) > 0 {
-		return t.keys
-	}
-	if t.HarnessTurnID != "" {
-		return []string{string(keyCodex) + ":" + t.HarnessTurnID}
-	}
-	return nil
-}
-
 func (t *Turn) hasKey(key string) bool {
 	if slices.Contains(t.keys, key) {
 		return true
@@ -111,30 +100,14 @@ func turnForKeyLocked(s *runState, key string) *Turn {
 	return nil
 }
 
-// markKeyClosedLocked records key as belonging to a finished turn, in a set
-// bounded like the event-id dedup set.
-func (d *Dispatcher) markKeyClosedLocked(s *runState, key string) {
-	if s.closedHarness == nil {
-		s.closedHarness = map[string]bool{}
+// isKeyClosedLocked reports a key that belongs to a finished turn.
+func isKeyClosedLocked(s *runState, key string) bool {
+	for i := range s.record.Turns {
+		if t := &s.record.Turns[i]; t.Outcome != "" && t.hasKey(key) {
+			return true
+		}
 	}
-	if s.closedHarness[key] {
-		return
-	}
-	s.closedHarness[key] = true
-	s.closedIDs = append(s.closedIDs, key)
-	if len(s.closedIDs) > maxInteractiveDedup {
-		delete(s.closedHarness, s.closedIDs[0])
-		s.closedIDs = s.closedIDs[1:]
-	}
-}
-
-// closeKeyedLocked closes t and retires every key it answered to.
-func (d *Dispatcher) closeKeyedLocked(s *runState, t *Turn, o TurnOutcome, text string) {
-	keys := slices.Clone(t.keysOf())
-	d.closeTurnLocked(s, t.TurnID, o, text)
-	for _, key := range keys {
-		d.markKeyClosedLocked(s, key)
-	}
+	return false
 }
 
 func turnIndexByID(turns []Turn, id string) int {
@@ -175,7 +148,7 @@ func lastWorkingTurnLocked(s *runState) *Turn {
 
 // submitKeyedLocked attributes a UserPromptSubmit that carries an id.
 func (d *Dispatcher) submitKeyedLocked(s *runState, key string, p map[string]any) {
-	if s.closedHarness[key] {
+	if isKeyClosedLocked(s, key) {
 		fmt.Fprintf(os.Stderr, "dispatch %s: ignoring submit for closed harness turn %s\n", s.record.ID, key)
 		return
 	}
@@ -318,7 +291,7 @@ func (d *Dispatcher) claimSentTurnLocked(s *runState, key, prompt, commandID str
 // briefly, for the submit that names it. It never closes a turn some other
 // id already names.
 func (d *Dispatcher) stopKeyedLocked(s *runState, key, event string, p map[string]any, out TurnOutcome, text string) {
-	if s.closedHarness[key] {
+	if isKeyClosedLocked(s, key) {
 		fmt.Fprintf(os.Stderr, "dispatch %s: ignoring close for closed harness turn %s\n", s.record.ID, key)
 		return
 	}
@@ -347,7 +320,7 @@ func (d *Dispatcher) finishKeyedLocked(s *runState, t *Turn, out TurnOutcome, te
 		return
 	}
 	s.record.PendingWork = nil
-	d.closeKeyedLocked(s, t, out, text)
+	d.closeTurnLocked(s, t.TurnID, out, text)
 }
 
 // adoptStopLocked binds key to the turn a Stop under an unseen id can only
