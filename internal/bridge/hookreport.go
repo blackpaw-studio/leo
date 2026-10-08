@@ -35,9 +35,11 @@ const bridgeEventIDPrefix = "bridge:"
 // turn.complete's pending work (background_tasks, session_crons), so a late-acked
 // orchestrator turn is matched by its text (the prompt as leo sent it, out
 // of the envelope Claude wraps a non-user deliver in) and a dispatch's result is the
-// subagent's final message, exactly as on the hook path. Like the claude
-// shell hooks, the payload carries no turn id: Claude can drain queued
-// prompts inside one running turn, and an id-less Stop closes them all.
+// subagent's final message, exactly as on the hook path. Unlike the claude
+// shell hooks, which identify a turn by prompt_id, the payload names the
+// engine's turn (bridge_turn_id) on both events, and turn.start names the
+// command and origin that submitted it (command_id, origin), so the
+// dispatcher attributes each Stop to its own turn exactly.
 //
 // The mod retries a report the daemon may already have applied (its reply
 // lost); eventID, derived from the event's stable id, lets the dispatcher
@@ -55,6 +57,17 @@ func HookPayload(ev Event) (eventID string, payload json.RawMessage, ok bool) {
 	fields := map[string]any{"hook_event_name": hookName}
 	if ev.SessionID != "" {
 		fields["session_id"] = ev.SessionID
+	}
+	if (ev.Name == EventTurnStart || ev.Name == EventTurnComplete) && ev.TurnID != "" {
+		fields["bridge_turn_id"] = ev.TurnID
+	}
+	if ev.Name == EventTurnStart {
+		if ev.CommandID != "" {
+			fields["command_id"] = ev.CommandID
+		}
+		if ev.Origin != "" {
+			fields["origin"] = ev.Origin
+		}
 	}
 	switch {
 	case ev.Name == EventTurnStart && ev.Prompt != "":

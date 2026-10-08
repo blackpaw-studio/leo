@@ -24,11 +24,18 @@ type Event struct {
 	ClaudeVersion string
 	Usage         json.RawMessage
 	Reason        string
-	Prompt        string       // turn.start
-	Message       string       // turn.complete
-	EventID       string       // stable across retries of one event; may be empty
-	Tokens        *TurnTokens  // turn.complete: the turn's own token counts
-	Pending       *PendingWork // turn.complete: background work left in flight
+	Prompt        string // turn.start
+	Message       string // turn.complete
+	// TurnID is the engine's id of the turn (turn.start, turn.complete).
+	TurnID string
+	// CommandID and Origin say what submitted a turn.start: the command it
+	// is the own turn of (empty when no leo command did) and the
+	// submission's origin kind.
+	CommandID string
+	Origin    string
+	EventID   string       // stable across retries of one event; may be empty
+	Tokens    *TurnTokens  // turn.complete: the turn's own token counts
+	Pending   *PendingWork // turn.complete: background work left in flight
 	// Observe event payloads (see Report): exactly the one matching Name is
 	// set, except that a hello may carry Subagents (the mod's running
 	// count). The observability projection reads these; nothing else does.
@@ -217,6 +224,9 @@ func (h *Hub) recordLocked(agent string, st *agentState, r Report) Event {
 		Reason:        r.Reason,
 		Prompt:        r.Prompt,
 		Message:       r.Message,
+		TurnID:        r.TurnID,
+		CommandID:     r.CommandID,
+		Origin:        r.Origin,
 		EventID:       r.EventID,
 		Tokens:        cloneTokens(r.Tokens),
 		Pending:       clonePending(r.Pending),

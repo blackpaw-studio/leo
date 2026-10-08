@@ -211,6 +211,14 @@ type Report struct {
 	Reason  string
 	Prompt  string // turn.start: the prompt the turn began with
 	Message string // turn.complete: the assistant's final message
+	// TurnID (turn.start, turn.complete) is the engine's id for the turn:
+	// the exact key a Stop is attributed to its turn by.
+	TurnID string
+	// CommandID and Origin (turn.start) say what submitted the turn: the
+	// command leo sent the mod, when this turn is that command's own, and
+	// the submission's origin kind (plugin, composer, ...).
+	CommandID string
+	Origin    string
 	// EventID is stable across the mod's retries of one event, so a replay
 	// can be told from a new event; empty when the mod had none to give.
 	EventID string
@@ -242,6 +250,7 @@ var reportKeys = map[string]map[string]bool{
 	ReportAck:   {"type": true, "id": true, "ok": true, "error": true},
 	ReportEvent: {
 		"type": true, "name": true, "event_id": true, "usage": true, "reason": true, "prompt": true, "message": true, "tokens": true, "pending": true,
+		"turn_id": true, "command_id": true, "origin": true,
 		"tool": true, "summary": true, "state": true, "kind": true, "running": true, "phase": true, "trigger": true, "error": true,
 		"level": true,
 	},
@@ -252,19 +261,22 @@ var reportKeys = map[string]map[string]bool{
 // a turn began with, the final message it ended on, and each observe
 // event's payload.
 var eventOnlyKeys = map[string][]string{
-	"prompt":  {EventTurnStart},
-	"message": {EventTurnComplete},
-	"tokens":  {EventTurnComplete},
-	"pending": {EventTurnComplete},
-	"tool":    {EventActivity, EventAttention},
-	"summary": {EventActivity, EventAttention},
-	"state":   {EventAttention},
-	"kind":    {EventAttention},
-	"running": {EventSubagents},
-	"phase":   {EventCompact},
-	"trigger": {EventCompact},
-	"error":   {EventCompact},
-	"level":   {EventEffort},
+	"prompt":     {EventTurnStart},
+	"command_id": {EventTurnStart},
+	"origin":     {EventTurnStart},
+	"turn_id":    {EventTurnStart, EventTurnComplete},
+	"message":    {EventTurnComplete},
+	"tokens":     {EventTurnComplete},
+	"pending":    {EventTurnComplete},
+	"tool":       {EventActivity, EventAttention},
+	"summary":    {EventActivity, EventAttention},
+	"state":      {EventAttention},
+	"kind":       {EventAttention},
+	"running":    {EventSubagents},
+	"phase":      {EventCompact},
+	"trigger":    {EventCompact},
+	"error":      {EventCompact},
+	"level":      {EventEffort},
 }
 
 var eventNames = map[string]bool{
@@ -438,6 +450,18 @@ func parseEvent(fields map[string]json.RawMessage) (Report, error) {
 		}
 		usage = append(json.RawMessage(nil), raw...)
 	}
+	turnID, err := idField(fields, "turn_id")
+	if err != nil {
+		return Report{}, err
+	}
+	commandID, err := idField(fields, "command_id")
+	if err != nil {
+		return Report{}, err
+	}
+	origin, err := originField(fields)
+	if err != nil {
+		return Report{}, err
+	}
 	tokens, err := parseTokens(fields)
 	if err != nil {
 		return Report{}, err
@@ -446,7 +470,7 @@ func parseEvent(fields map[string]json.RawMessage) (Report, error) {
 	if err != nil {
 		return Report{}, err
 	}
-	report := Report{Type: ReportEvent, Name: name, Usage: usage, Reason: reason, Prompt: prompt, Message: message, EventID: eventID, Tokens: tokens, Pending: pending}
+	report := Report{Type: ReportEvent, Name: name, Usage: usage, Reason: reason, Prompt: prompt, Message: message, EventID: eventID, TurnID: turnID, CommandID: commandID, Origin: origin, Tokens: tokens, Pending: pending}
 	if err := parseObservePayload(fields, &report); err != nil {
 		return Report{}, err
 	}
@@ -456,6 +480,42 @@ func parseEvent(fields map[string]json.RawMessage) (Report, error) {
 		}
 	}
 	return report, nil
+}
+
+// idField reads an optional identifier the daemon stores and matches on: a
+// string of at most MaxEventIDLen bytes with no control characters.
+func idField(fields map[string]json.RawMessage, key string) (string, error) {
+	id, err := stringField(fields, key, false)
+	if err != nil {
+		return "", err
+	}
+	if len(id) > MaxEventIDLen || strings.ContainsFunc(id, unicode.IsControl) {
+		return "", invalidReport("%s must be at most %d bytes with no control characters", key, MaxEventIDLen)
+	}
+	return id, nil
+}
+
+// maxOriginLen bounds a prompt origin kind (composer, plugin, ...).
+const maxOriginLen = 32
+
+// originField reads turn.start's optional origin kind: a short word of
+// [A-Za-z0-9._-]. The engine's set of kinds may grow, so none is listed.
+func originField(fields map[string]json.RawMessage) (string, error) {
+	origin, err := stringField(fields, "origin", false)
+	if err != nil {
+		return "", err
+	}
+	if len(origin) > maxOriginLen {
+		return "", invalidReport("origin must be at most %d bytes", maxOriginLen)
+	}
+	for _, c := range []byte(origin) {
+		switch {
+		case 'a' <= c && c <= 'z', 'A' <= c && c <= 'Z', '0' <= c && c <= '9', c == '.', c == '_', c == '-':
+		default:
+			return "", invalidReport("origin must be of [A-Za-z0-9._-]")
+		}
+	}
+	return origin, nil
 }
 
 // decodeObject decodes exactly one JSON object, rejecting trailing values.
