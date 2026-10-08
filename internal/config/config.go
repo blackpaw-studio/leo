@@ -224,6 +224,21 @@ type DispatchConfig struct {
 	// waits for the orchestrator's decision before falling back to the
 	// prompt in its pane, as a Go duration. Empty means 30m.
 	ApprovalTimeout string `yaml:"approval_timeout,omitempty"`
+	// MaxConcurrent caps the dispatch turns running at once; further new
+	// dispatches and follow-ups queue FIFO until a slot frees. Unset means
+	// DefaultDispatchMaxConcurrent, 0 means unlimited.
+	MaxConcurrent *int `yaml:"max_concurrent,omitempty"`
+}
+
+// DefaultDispatchMaxConcurrent is the slot cap when max_concurrent is unset.
+const DefaultDispatchMaxConcurrent = 6
+
+// DispatchMaxConcurrent is the effective slot cap (0 = unlimited).
+func (c *Config) DispatchMaxConcurrent() int {
+	if v := c.Defaults.Dispatch.MaxConcurrent; v != nil {
+		return *v
+	}
+	return DefaultDispatchMaxConcurrent
 }
 
 const (
@@ -469,6 +484,9 @@ func (c *Config) Validate() error {
 	}
 	if n := c.DispatchViewerMainPaneHeight(); n < 20 || n > 90 {
 		errs = append(errs, "defaults.dispatch.viewer.main_pane_height must be between 20 and 90")
+	}
+	if n := c.DispatchMaxConcurrent(); n < 0 {
+		errs = append(errs, fmt.Sprintf("defaults.dispatch.max_concurrent %d must be 0 (unlimited) or positive", n))
 	}
 	if _, err := parseApprovalTimeout(c.Defaults.Dispatch.ApprovalTimeout); err != nil {
 		errs = append(errs, fmt.Sprintf("defaults.dispatch.approval_timeout %q: %v", c.Defaults.Dispatch.ApprovalTimeout, err))

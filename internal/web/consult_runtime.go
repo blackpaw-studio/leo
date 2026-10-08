@@ -55,6 +55,9 @@ func (s *Server) setupConsultRuntime(opts Options, resolveCallerSession func(str
 	viewer.ExecCommandContext = s.execCommandContext
 	s.consults = consult.NewDispatcherWithOnStart(opts.ConsultRecorder, opts.ParentContext, viewer.OnStart, viewer.Close)
 	s.consults.LeoMCP = opts.LeoMCP
+	if cfg, err := s.loadConfig(); err == nil {
+		s.consults.ApplyConfig(cfg)
+	}
 	viewer.Coordinator = s.consults.PlacementCoordinator()
 	viewer.Records = s.consults.Records
 	viewer.PersistRecord = s.consults.PersistViewerRecord

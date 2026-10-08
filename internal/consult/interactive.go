@@ -106,6 +106,9 @@ type HookReport struct {
 type SendResult struct {
 	TurnID    string `json:"turn_id"`
 	Delivered bool   `json:"delivered"`
+	// Queued reports a follow-up accepted while every slot was busy: it is
+	// sent when its turn in line comes.
+	Queued bool `json:"queued,omitempty"`
 }
 type pendingClose struct {
 	outcome TurnOutcome
@@ -456,18 +459,38 @@ func (d *Dispatcher) failOpening(s *runState, turnID string, err error) {
 }
 
 func (d *Dispatcher) openTurnLocked(s *runState, source TurnSource, text string, held bool) *Turn {
+	d.loseUndeliveredLocked(s)
+	return d.appendTurnLocked(s, source, text, held)
+}
+
+// loseUndeliveredLocked closes every orchestrator turn that never started,
+// including a queued follow-up a newer turn (a human steering) overtakes.
+func (d *Dispatcher) loseUndeliveredLocked(s *runState) {
 	d.expireArmedLocked(s)
 	for i := range s.record.Turns {
-		if s.record.Turns[i].Source == TurnSourceOrchestrator && s.record.Turns[i].Outcome == "" && !s.record.Turns[i].Delivered {
-			d.closeTurnLocked(s, s.record.Turns[i].TurnID, TurnLost, "")
+		t := s.record.Turns[i]
+		if t.Source != TurnSourceOrchestrator || t.Outcome != "" || t.Delivered {
+			continue
 		}
+		text := ""
+		if t.Queued {
+			text = queuedOvertakenText(s.record.ID)
+		}
+		d.closeTurnLocked(s, t.TurnID, TurnLost, text)
 	}
-	return d.appendTurnLocked(s, source, text, held)
 }
 
 // appendTurnLocked opens a turn without expiring undelivered orchestrator
 // turns; openTurnLocked is the default.
 func (d *Dispatcher) appendTurnLocked(s *runState, source TurnSource, text string, held bool) *Turn {
+	t := d.buildTurnLocked(s, source, text, held)
+	d.nudgePaneLocked(s)
+	return t
+}
+
+// buildTurnLocked appends the turn and updates run status without touching
+// the pane.
+func (d *Dispatcher) buildTurnLocked(s *runState, source TurnSource, text string, held bool) *Turn {
 	// The mod reports effort only when it changes: a turn starts at the
 	// run's last observed one.
 	t := Turn{TurnID: fmt.Sprintf("%s#%d", s.record.ID, len(s.record.Turns)+1), Source: source, StartedAt: d.now(), Text: text, SlotHeld: held, ObservedEffort: s.record.ObservedEffort}
@@ -482,7 +505,6 @@ func (d *Dispatcher) appendTurnLocked(s *runState, source TurnSource, text strin
 	} else {
 		s.paneWant = "split"
 	}
-	d.nudgePaneLocked(s)
 	return &s.record.Turns[len(s.record.Turns)-1]
 }
 func (d *Dispatcher) expireArmedLocked(s *runState) {
@@ -507,6 +529,10 @@ func (d *Dispatcher) closeTurnLocked(s *runState, id string, outcome TurnOutcome
 		if t.SlotHeld {
 			t.SlotHeld = false
 			d.slots.Release()
+		}
+		if t.Queued {
+			t.Queued = false
+			d.dequeueSendLocked(s, id)
 		}
 		if s.armedTurn == id {
 			s.armedTurn = ""
@@ -597,6 +623,10 @@ func (d *Dispatcher) Send(ctx context.Context, id, message string) (SendResult, 
 		d.mu.Unlock()
 		return SendResult{}, errors.New("dispatch is queued for a concurrency slot and has not started; leo_wait on it first")
 	}
+	if q := s.queuedSend; q != nil {
+		d.mu.Unlock()
+		return SendResult{}, fmt.Errorf("a follow-up (%s) is already queued for a concurrency slot; leo_wait on it before sending another", q.turnID)
+	}
 	if s.record.Status == StatusNeedsInput && s.record.NeedsInput != nil {
 		need := *s.record.NeedsInput
 		d.mu.Unlock()
@@ -621,23 +651,31 @@ func (d *Dispatcher) Send(ctx context.Context, id, message string) (SendResult, 
 		// which a late ack is matched by.
 		message = f.FrameMessage(s.record.PaneID, message)
 	}
-	if !d.slots.TryAcquire() {
-		t := d.openTurnLocked(s, TurnSourceOrchestrator, message, false)
-		d.closeTurnLocked(s, t.TurnID, TurnRejected, "no capacity")
+	waiter, acquired := d.slots.AcquireOrEnqueue()
+	if !acquired {
+		res := d.queueSendLocked(s, message, waiter)
 		d.mu.Unlock()
-		return SendResult{TurnID: t.TurnID}, errors.New("no capacity")
+		return res, nil
 	}
 	t := d.openTurnLocked(s, TurnSourceOrchestrator, message, true)
+	d.persistLocked(s, "turn")
+	d.mu.Unlock()
+	return d.deliverSend(ctx, s, t.TurnID, message)
+}
+
+// deliverSend injects message into the run's pane as turn turnID, which
+// already holds a slot. The slot is released by whatever closes the turn.
+func (d *Dispatcher) deliverSend(ctx context.Context, s *runState, turnID, message string) (SendResult, error) {
+	d.mu.Lock()
 	pane := s.record.PaneID
 	rt := d.interactiveRuntime
-	d.persistLocked(s, "turn")
 	shown := d.nudgePaneLocked(s)
 	d.mu.Unlock()
 	if rt == nil {
 		d.mu.Lock()
-		d.closeTurnLocked(s, t.TurnID, TurnRejected, "interactive runtime unavailable")
+		d.closeTurnLocked(s, turnID, TurnRejected, "interactive runtime unavailable")
 		d.mu.Unlock()
-		return SendResult{TurnID: t.TurnID}, errors.New("interactive runtime unavailable")
+		return SendResult{TurnID: turnID}, errors.New("interactive runtime unavailable")
 	}
 	select {
 	case <-shown:
@@ -646,34 +684,34 @@ func (d *Dispatcher) Send(ctx context.Context, id, message string) (SendResult, 
 	if d.beforeSendInjectable != nil {
 		d.beforeSendInjectable()
 	}
-	if !d.injectable(s, t.TurnID, pane) {
+	if !d.injectable(s, turnID, pane) {
 		d.mu.Lock()
-		d.closeTurnLocked(s, t.TurnID, TurnRejected, "dispatch settled")
+		d.closeTurnLocked(s, turnID, TurnRejected, "dispatch settled")
 		d.mu.Unlock()
-		return SendResult{TurnID: t.TurnID}, context.Canceled
+		return SendResult{TurnID: turnID}, context.Canceled
 	}
-	err = rt.Inject(ctx, pane, message, func() error {
+	err := rt.Inject(ctx, pane, message, func() error {
 		d.mu.Lock()
 		defer d.mu.Unlock()
-		if s.record.Status == StatusSettling || s.record.Status.Terminal() || turnByID(s.record, t.TurnID).Outcome != "" {
+		if s.record.Status == StatusSettling || s.record.Status.Terminal() || turnByID(s.record, turnID).Outcome != "" {
 			return errors.New("dispatch settled during injection")
 		}
 		if !s.record.Status.Terminal() {
-			d.armTurnLocked(s, t.TurnID)
+			d.armTurnLocked(s, turnID)
 			d.persistLocked(s, "turn")
 		}
 		return nil
 	})
 	if err != nil {
 		d.mu.Lock()
-		d.closeTurnLocked(s, t.TurnID, TurnRejected, err.Error())
+		d.closeTurnLocked(s, turnID, TurnRejected, err.Error())
 		d.mu.Unlock()
-		return SendResult{TurnID: t.TurnID}, err
+		return SendResult{TurnID: turnID}, err
 	}
 	d.mu.Lock()
-	delivered := turnByID(s.record, t.TurnID).Delivered
+	delivered := turnByID(s.record, turnID).Delivered
 	d.mu.Unlock()
-	return SendResult{TurnID: t.TurnID, Delivered: delivered}, nil
+	return SendResult{TurnID: turnID, Delivered: delivered}, nil
 }
 
 // injectable is the final pre-side-effect gate. It deliberately checks both
@@ -1110,6 +1148,9 @@ const undeliveredPreviewRunes = 200
 func endedTurnText(id string, t Turn) string {
 	if t.Source != TurnSourceOrchestrator || t.Delivered {
 		return ""
+	}
+	if t.Queued {
+		return fmt.Sprintf("dispatch %s ended before a concurrency slot freed, so this queued follow-up was never sent.", id)
 	}
 	return fmt.Sprintf("dispatch %s ended, and this follow-up was never seen to start: it may not have run. It began: %q", id, previewRunes(t.Text, undeliveredPreviewRunes))
 }

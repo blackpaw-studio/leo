@@ -17,6 +17,7 @@ import (
 // SendWithConfig sends to interactive sessions or starts a new native
 // invocation for a completed headless dispatch.
 func (d *Dispatcher) SendWithConfig(ctx context.Context, cfg *config.Config, id, message string) (SendResult, error) {
+	d.ApplyConfig(cfg)
 	rec, _, err := d.lookup(id)
 	if err != nil {
 		return SendResult{}, fmt.Errorf("unknown dispatch %s", id)

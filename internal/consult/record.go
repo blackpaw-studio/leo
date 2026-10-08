@@ -60,12 +60,15 @@ const (
 )
 
 type Turn struct {
-	TurnID        string      `json:"turn_id"`
-	Source        TurnSource  `json:"source"`
-	StartedAt     time.Time   `json:"started_at"`
-	EndedAt       time.Time   `json:"ended_at,omitzero"`
-	Delivered     bool        `json:"delivered"`
-	SlotHeld      bool        `json:"slot_held"`
+	TurnID    string     `json:"turn_id"`
+	Source    TurnSource `json:"source"`
+	StartedAt time.Time  `json:"started_at"`
+	EndedAt   time.Time  `json:"ended_at,omitzero"`
+	Delivered bool       `json:"delivered"`
+	SlotHeld  bool       `json:"slot_held"`
+	// Queued marks an orchestrator follow-up accepted while every slot was
+	// busy: it is open but has not been sent to the pane yet.
+	Queued        bool        `json:"queued,omitempty"`
 	Outcome       TurnOutcome `json:"outcome,omitempty"`
 	Status        Status      `json:"status,omitempty"`
 	Error         string      `json:"error,omitempty"`

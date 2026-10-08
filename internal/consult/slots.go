@@ -1,9 +1,13 @@
 package consult
 
-import "sync"
+import (
+	"sync"
 
-// DefaultMaxConcurrent is the slot cap when none is configured.
-const DefaultMaxConcurrent = 6
+	"github.com/blackpaw-studio/leo/internal/config"
+)
+
+// DefaultMaxConcurrent is the slot cap before any config is applied.
+const DefaultMaxConcurrent = config.DefaultDispatchMaxConcurrent
 
 // slotLimiter bounds concurrent orchestrator turns. Waiters are granted slots
 // strictly in the order they enqueued, so queued new dispatches and queued
@@ -19,6 +23,7 @@ type slotLimiter struct {
 type slotWaiter struct {
 	ready   chan struct{}
 	granted bool
+	left    bool
 }
 
 func newSlotLimiter(max int) *slotLimiter { return &slotLimiter{max: max} }
@@ -75,10 +80,15 @@ func (l *slotLimiter) Enqueue() *slotWaiter {
 	return w
 }
 
-// Cancel leaves the line. A slot already granted to w is released.
+// Cancel leaves the line. A slot already granted to w is released. It is
+// idempotent, so any number of paths may cancel the same waiter.
 func (l *slotLimiter) Cancel(w *slotWaiter) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
+	if w.left {
+		return
+	}
+	w.left = true
 	if w.granted {
 		l.releaseLocked()
 		return

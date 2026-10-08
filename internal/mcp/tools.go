@@ -438,7 +438,7 @@ func newRegistry(client *daemonClient, processName string, perms leotools.Permis
 	r.addContext(toolDef{Name: "leo_delegation", Description: "Show active delegation routing.", InputSchema: emptyArgs}, func(ctx context.Context, _ map[string]any) (string, error) { return client.delegationStatus(ctx) })
 
 	r.addContext(toolDef{
-		Name: "leo_send_dispatch", Description: allowNote("Continue a terminal headless dispatch in its captured native session, or send a follow-up to an idle interactive dispatch. Never send while a turn is running. Returns a turn id; with notify on, end your turn and the completion message carries its result; leo_wait on it only to block in-turn. Headless continuation requires a resumable session and available retained workspace; interactive delivery may be acknowledged asynchronously, so never re-send based on delivered alone — wait on the turn id. A rejection means nothing was sent.", "send to dispatched templates", perms.CanConsult),
+		Name: "leo_send_dispatch", Description: allowNote("Continue a terminal headless dispatch in its captured native session, or send a follow-up to an idle interactive dispatch. Never send while a turn is running. Returns a turn id; with notify on, end your turn and the completion message carries its result; leo_wait on it only to block in-turn. Headless continuation requires a resumable session and available retained workspace; interactive delivery may be acknowledged asynchronously, so never re-send based on delivered alone — wait on the turn id. If every dispatch slot is busy the follow-up queues (FIFO with new dispatches) and the turn id is returned at once; leo_wait on it blocks until it has run, and it resolves interrupted or lost if the run is canceled, closed or steered first. Permission decisions never queue. A rejection means nothing was sent.", "send to dispatched templates", perms.CanConsult),
 		InputSchema: objectSchema(map[string]any{
 			"id":         map[string]any{"type": "string"},
 			"message":    map[string]any{"type": "string", "description": "Follow-up text. Omit when answering a needs_input permission request with decision."},
@@ -480,6 +480,9 @@ func newRegistry(client *daemonClient, processName string, perms leotools.Permis
 		result, err := client.sendDispatch(ctx, id, message)
 		if err != nil {
 			return "", err
+		}
+		if result.Queued {
+			return fmt.Sprintf("%s · queued: every slot is busy; it is sent when one frees, in line behind earlier work (do NOT re-send) · leo_wait on %s", result.TurnID, result.TurnID), nil
 		}
 		if result.Delivered {
 			return fmt.Sprintf("%s · delivered; leo_wait on %s", result.TurnID, result.TurnID), nil

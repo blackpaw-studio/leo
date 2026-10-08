@@ -129,6 +129,8 @@ type runState struct {
 	// ends, and wherever the pane was when a user typed a turn into it
 	// (user-typed turns never move a pane). Empty until a turn sets it.
 	paneWant string
+	// queuedSend is the run's follow-up turn waiting for a slot, if any.
+	queuedSend *queuedSend
 	// reconcileQueued is the done channel of a queued, not yet started,
 	// placement reconcile, which further nudges coalesce into.
 	reconcileQueued <-chan struct{}
@@ -216,6 +218,7 @@ func newID() string {
 // Request contexts govern only validation and the immediate caller, never the
 // lifetime of an accepted run.
 func (d *Dispatcher) Start(_ context.Context, cfg *config.Config, req Request) (Started, error) {
+	d.ApplyConfig(cfg)
 	req = withTemplateIsolation(cfg, req)
 	if req.Isolation != "" && req.Isolation != "worktree" {
 		return Started{}, invalidf("isolation must be empty or \"worktree\"")
@@ -994,6 +997,7 @@ func (d *Dispatcher) currentInvocationCancelLocked(state *runState, done chan st
 
 // Consult preserves the synchronous one-off consultant API over dispatch.
 func (d *Dispatcher) Consult(ctx context.Context, cfg *config.Config, req Request) (Result, error) {
+	d.ApplyConfig(cfg)
 	req.Kind, req.Preamble = "consult", true
 	req = withTemplateIsolation(cfg, req)
 	started, err := d.Start(ctx, cfg, req)
