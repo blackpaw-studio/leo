@@ -563,28 +563,14 @@ func (d *Dispatcher) Wait(ctx context.Context, ids []string, timeout time.Durati
 			if skipCleanup[i] {
 				continue
 			}
-			rec, state, err := d.lookup(ids[i])
-			if err != nil {
+			rec, ok := d.collectRun(context.Background(), ids[i], states[i], dones[i])
+			if !ok {
 				continue
 			}
-			if rec.Isolation == "worktree" && states[i] != nil && dones[i] != nil {
-				<-dones[i]
-				rec, state, err = d.lookup(ids[i])
-				if err != nil {
-					continue
-				}
-			}
-			// A wait for an older terminal turn must not clean up or collect
-			// while a newer invocation owns the run.
-			if state != nil && state.done != dones[i] && !rec.Status.Terminal() {
-				continue
-			}
-			rec = d.cleanupWorktree(rec.ID)
 			entries[i].Worktree, entries[i].Branch = "", ""
 			if rec.WorktreeState == WorktreeKept {
 				entries[i].Worktree, entries[i].Branch = rec.Worktree, rec.Branch
 			}
-			d.collect(rec)
 		}
 	}()
 	entries = make([]Entry, len(ids))
@@ -799,6 +785,39 @@ func (d *Dispatcher) Collect(rec Record) Record {
 	}
 	d.collect(rec)
 	return rec
+}
+
+// collectRun runs the side effects of collecting a terminal run: removing a
+// clean isolated worktree (a dirty or unmerged one is kept) and closing a
+// successful headless run's viewer. Both leo_wait and an inline completion
+// notification collect through it, and a second call is a no-op. observed and
+// done are the run state and its done channel as seen when the result was
+// read; ok is false when the run is gone or a newer invocation owns it. The
+// caller holds the run's serial lock.
+func (d *Dispatcher) collectRun(ctx context.Context, id string, observed *runState, done chan struct{}) (rec Record, ok bool) {
+	rec, state, err := d.lookup(id)
+	if err != nil {
+		return rec, false
+	}
+	if rec.Isolation == "worktree" && observed != nil && done != nil {
+		select {
+		case <-done:
+		case <-ctx.Done():
+			return rec, false
+		}
+		rec, state, err = d.lookup(id)
+		if err != nil {
+			return rec, false
+		}
+	}
+	// A result read for an older terminal turn must not clean up or collect
+	// while a newer invocation owns the run.
+	if state != nil && state.done != done && !rec.Status.Terminal() {
+		return rec, false
+	}
+	rec = d.cleanupWorktree(rec.ID)
+	d.collect(rec)
+	return rec, true
 }
 
 func (d *Dispatcher) collect(rec Record) {

@@ -28,6 +28,9 @@ func (d *Dispatcher) SetNotificationDelivery(delivery NotificationDelivery) {
 	d.mu.Lock()
 	d.notificationDelivery = delivery
 	d.mu.Unlock()
+	if acker, ok := delivery.(interface{ OnAcked(func(Record, string)) }); ok {
+		acker.OnAcked(d.collectAcked)
+	}
 }
 
 func sanitizeNotification(value string) string {
@@ -41,6 +44,10 @@ func sanitizeNotification(value string) string {
 }
 
 func completionNotification(rec Record, key string, status Status) string {
+	return completionHeader(rec, key, status) + pointerSuffix
+}
+
+func completionHeader(rec Record, key string, status Status) string {
 	if key == "" {
 		key = rec.ID
 	}
@@ -48,7 +55,7 @@ func completionNotification(rec Record, key string, status Status) string {
 	if name == "" {
 		name = sanitizeNotification(rec.Template)
 	}
-	return fmt.Sprintf("[leo] dispatch %s (%s) %s · active %s — collect with leo_wait", sanitizeNotification(key), name, status, formatActiveSeconds(rec.ActiveSeconds))
+	return fmt.Sprintf("[leo] dispatch %s (%s) %s · active %s", sanitizeNotification(key), name, status, formatActiveSeconds(rec.ActiveSeconds))
 }
 
 func turnNotificationStatus(rec Record, key string) Status {
@@ -285,12 +292,20 @@ func (d *Dispatcher) deliverNotification(ctx context.Context, delivery Notificat
 	}
 	rec := cloneRecord(item.state.record)
 	d.mu.Unlock()
-	err := deliverNotificationLine(ctx, delivery, rec, transport, item.key, notificationMessage(rec, item.key, n))
+	err := deliverNotificationLine(ctx, delivery, rec, transport, item.key, deliveryMessage(rec, item.key, n, transport))
+	collect := false
 	d.mu.Lock()
 	n = item.state.record.Notifications[item.key]
 	switch {
 	case err == nil:
 		n.Disposition, n.DeliveredAt = NotificationDelivered, d.now()
+		// The Claude inbox socket has no ack, so a successful write counts as
+		// delivered. That is safe enough to collect on: collection removes
+		// only a clean, fully merged worktree and closes a viewer, and the
+		// recorded result stays readable by leo_wait and leo_dispatch_output.
+		// A bridge delivery collects when the mod acks it instead (see
+		// collectAcked).
+		collect = carriesResultInline(rec, transport) && transport != NotificationTransportBridge
 	case errors.Is(err, ErrNotificationNotSent):
 		// Nothing was sent or queued, so the next sweep may pick again.
 		n.Disposition, n.ClaimedAt, n.Transport = NotificationPending, time.Time{}, ""
@@ -300,6 +315,9 @@ func (d *Dispatcher) deliverNotification(ctx context.Context, delivery Notificat
 	item.state.record.Notifications[item.key] = n
 	_ = d.persistNotificationRecordLocked(item.state)
 	d.mu.Unlock()
+	if collect {
+		d.collectDelivered(ctx, item)
+	}
 }
 
 // redeliverBridgeClaim queues a bridge claim a restart interrupted again,
@@ -308,7 +326,7 @@ func (d *Dispatcher) deliverNotification(ctx context.Context, delivery Notificat
 // claim expires), never falling back to a transport that could send it
 // twice.
 func (d *Dispatcher) redeliverBridgeClaim(ctx context.Context, delivery NotificationDelivery, item pendingNotification, claim Notification) {
-	err := deliverNotificationLine(ctx, delivery, item.record, NotificationTransportBridge, item.key, notificationMessage(item.record, item.key, claim))
+	err := deliverNotificationLine(ctx, delivery, item.record, NotificationTransportBridge, item.key, deliveryMessage(item.record, item.key, claim, NotificationTransportBridge))
 	if errors.Is(err, ErrNotificationNotSent) {
 		return
 	}

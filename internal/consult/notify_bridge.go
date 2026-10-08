@@ -67,10 +67,18 @@ type BridgeNotificationDelivery struct {
 	// agent whose outbox keeps its messages ("" for a dispatch, which keeps
 	// none); ok is false when the caller has no connected bridge.
 	Route func(ctx context.Context, rec Record) (agent string, target bridge.Target, ok bool)
-	// Queue queues cmd for target, in agent's outbox when agent is set.
-	Queue    func(agent string, target bridge.Target, cmd bridge.Command) error
+	// Queue queues cmd for target, in agent's outbox when agent is set. The
+	// ticket is nil when nothing new was queued.
+	Queue    func(agent string, target bridge.Target, cmd bridge.Command) (*bridge.Ticket, error)
 	Fallback NotificationDelivery
+	// acked is called once the caller's mod acks a notification's deliver
+	// ok; a rejection, or a deliver that never settles, never calls it.
+	acked func(rec Record, key string)
 }
+
+// OnAcked installs the function called, outside any dispatcher lock, when a
+// notification this delivery queued is acked ok by the caller's mod.
+func (b *BridgeNotificationDelivery) OnAcked(fn func(rec Record, key string)) { b.acked = fn }
 
 // NewBridgeNotificationDelivery routes through router. A record carrying
 // the caller's bridge key routes on it: to that key's live generation, and
@@ -89,13 +97,11 @@ func NewBridgeNotificationDelivery(router *bridge.Router, primaryPane func(ctx c
 			}
 			return routeByCallerPane(ctx, router, primaryPane, rec)
 		},
-		Queue: func(agent string, target bridge.Target, cmd bridge.Command) error {
+		Queue: func(agent string, target bridge.Target, cmd bridge.Command) (*bridge.Ticket, error) {
 			if agent == "" {
-				_, err := router.Hub.EnqueueTo(target, cmd)
-				return err
+				return router.Hub.EnqueueTo(target, cmd)
 			}
-			_, err := router.Deliver(agent, target, cmd, "")
-			return err
+			return router.Deliver(agent, target, cmd, "")
 		},
 		Fallback: fallback,
 	}
@@ -174,11 +180,30 @@ func (b *BridgeNotificationDelivery) DeliverVia(ctx context.Context, rec Record,
 	}
 	cmd := bridge.Deliver(line, false)
 	cmd.ID = NotificationCommandID(rec.ID, key)
-	err := b.Queue(agent, target, cmd)
+	ticket, err := b.Queue(agent, target, cmd)
 	switch {
-	case err == nil, errors.Is(err, outbox.ErrDuplicate):
+	case err == nil:
+		b.watchAck(ticket, rec, key)
+		return nil
+	case errors.Is(err, outbox.ErrDuplicate):
 		return nil
 	default:
 		return fmt.Errorf("%w: queueing on the caller's leo bridge: %v", ErrNotificationNotSent, err)
 	}
+}
+
+// watchAck calls acked once ticket settles ok. The goroutine ends when the
+// ticket settles: acked, rejected, forgotten with its generation, or dropped
+// by the hub closing.
+func (b *BridgeNotificationDelivery) watchAck(ticket *bridge.Ticket, rec Record, key string) {
+	if ticket == nil || b.acked == nil {
+		return
+	}
+	acked := b.acked
+	go func() {
+		<-ticket.Done()
+		if ticket.Err() == nil {
+			acked(rec, key)
+		}
+	}()
 }

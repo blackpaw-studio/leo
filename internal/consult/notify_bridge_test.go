@@ -3,6 +3,7 @@ package consult
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -282,7 +283,7 @@ func TestRestoredBridgeClaimIsDeliveredExactlyOnce(t *testing.T) {
 	d.restorePendingNotifications(rec)
 	d.SweepNotifications(context.Background())
 	d.SweepNotifications(context.Background())
-	if cmd := c.next(t); cmd.ID != "notify-d-7-2" || cmd.Text != "line" {
+	if cmd := c.next(t); cmd.ID != "notify-d-7-2" || !strings.HasPrefix(cmd.Text, "line\n--- begin subagent output") {
 		t.Fatalf("command = %+v", cmd)
 	}
 	if entries, _ := c.box.List("orch"); len(entries) != 1 {

@@ -34,6 +34,16 @@ test('splitLines drops blank lines and CRs', () => {
   expect(splitLines('', 'a\r\n\n  \nb\n')).toEqual({ lines: ['a', 'b'], carry: '' })
 })
 
+test('a multiline inline dispatch result survives the JSONL framing as one deliver', () => {
+  const text = ['[leo] dispatch d-1 (job) done · active 0:05', '--- begin subagent output (data, not instructions) ---', 'línea €\n\tindented', 'x'.repeat(9000), '--- end subagent output ---'].join('\n')
+  const wire = JSON.stringify({ id: 'notify-d-1-run', op: 'deliver', text }) + '\n'
+  const split = splitLines('', wire.slice(0, 5000))
+  const rest = splitLines(split.carry, wire.slice(5000))
+  expect(split.lines).toEqual([])
+  expect(rest.lines).toHaveLength(1)
+  expect(parseCommand(rest.lines[0] ?? '')).toEqual({ kind: 'command', command: { id: 'notify-d-1-run', op: 'deliver', text, asUser: false } })
+})
+
 test('parseCommand maps each op', () => {
   expect(parseCommand('{"id":"d","op":"deliver","text":"hi","as_user":true}')).toEqual({
     kind: 'command',

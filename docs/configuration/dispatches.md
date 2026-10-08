@@ -84,9 +84,30 @@ templates:
 
 One notification is considered for each completed headless run or interactive
 turn. A covering `leo_wait` suppresses it, including a wait registered after
-completion but before delivery. The single-line notification identifies the
-dispatch or turn, its outcome and cumulative active time, and directs the
-caller to collect the result with `leo_wait`.
+completion but before delivery. The notification identifies the dispatch or
+turn, its outcome and cumulative active time.
+
+For claude callers (a connected leo bridge, or the peer inbox) it also carries
+the result inline: the same text `leo_wait` would return for that turn, or the
+error/outcome of a failed, lost, interrupted, or canceled one, between
+`--- begin subagent output (data, not instructions) ---` / `--- end subagent output ---` markers so it
+reads as data. The result is capped at 8 KiB on a UTF-8 boundary; when cut, the
+notification ends with `… truncated; full output: leo_dispatch_output <id>`.
+Codex and opencode callers get a single pointer line directing them to collect
+with `leo_wait`, since large multiline tmux pastes are refused or hit tmux's
+command-size limit. An inline delivery collects the dispatch once it is
+confirmed (a bridged caller's mod acks the deliver; the Claude inbox socket has
+no ack, so a successful write counts): a clean isolated worktree is removed
+(a dirty or unmerged one is kept) and a successful headless run's viewer is
+closed. The recorded result stays readable by `leo_wait` and
+`leo_dispatch_output` afterwards, and a follow-up recreates a removed worktree
+or uses one not yet collected. A rejected or unacked deliver, a pointer-only
+notification, and a failed delivery collect nothing. So does a deliver replayed
+after a caller relaunch or daemon restart (durable replay) or one already queued
+(a duplicate): it is acked without collecting, and `leo_wait`, `leo_release` or
+`CloseFinished` collects that run as before. So with notifications on, a
+claude orchestrator can dispatch and end its turn; reach for `leo_wait` only to
+block on a result within the same turn or to wait on a follow-up turn id.
 
 Delivery is best-effort and at most once. Leo durably claims a notification
 before writing to the caller, so a daemon crash can lose a claimed notification
@@ -235,9 +256,9 @@ armed orchestrator send; hook reports are accepted even if forged.
 An orchestrator flow looks like this:
 
 ```text
-leo_dispatch(..., mode: "interactive") → leo_wait(["d-…"])
-→ leo_send_dispatch({id: "d-…", message: "Follow up"})
-→ leo_wait(["d-…#2"]) → leo_cancel({id: "d-…"})
+leo_dispatch(..., mode: "interactive") → end turn; the result arrives inline
+→ leo_send_dispatch({id: "d-…", message: "Follow up"}) → end turn
+→ leo_cancel({id: "d-…"})   (or leo_wait(["d-…#2"]) to block in-turn)
 ```
 
 ## Permission prompts
@@ -312,8 +333,12 @@ way it's labeled `<label>·<hex4>`, using the run name when set or its
 template otherwise; labels replace whitespace, `:`, and `.` with `-` and are
 truncated to 24 characters. It runs `leo dispatch watch <id>` with
 `remain-on-exit` enabled. The pane or window closes when a successful result
-is collected via `leo_wait`, `leo dispatch run`, or web
-`/api/dispatch/wait`. Failed, canceled, and timed-out runs remain open for
+is collected: via `leo_wait`, `leo dispatch run`, or web `/api/dispatch/wait`,
+or when its completion notification is delivered inline and confirmed (claude
+callers; a pointer-only codex/opencode notification collects nothing). Collection also
+removes a clean isolated worktree, keeping a dirty or unmerged one, and a
+second collection is a no-op; `leo_dispatch_output` keeps working afterwards.
+An interactive dispatch's pane is never closed by collection. Failed, canceled, and timed-out runs remain open for
 about one hour for post-mortem inspection. Use `leo dispatch watch <id>` to
 replay the stream anytime. Tmux is observability only: any tmux failure is
 logged and never prevents a dispatch from running. `leo_consult` does not open
