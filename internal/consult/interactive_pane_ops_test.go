@@ -42,8 +42,8 @@ func TestInteractiveCancelKillsPanePublishedBeforeSettle(t *testing.T) {
 		t.Fatal("the pane published during cancellation was never killed")
 	}
 	time.Sleep(20 * time.Millisecond)
-	if len(d.sem) != cap(d.sem)-1 {
-		t.Fatalf("slots in use = %d, want the run's slot released exactly once", len(d.sem))
+	if d.slots.InUse() != d.slots.Max()-1 {
+		t.Fatalf("slots in use = %d, want the run's slot released exactly once", d.slots.InUse())
 	}
 }
 

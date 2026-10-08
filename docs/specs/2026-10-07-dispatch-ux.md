@@ -63,8 +63,8 @@ makes cwd writable. So:
   and launches — same as headless.
 - `leo_cancel` on a queued run finishes it `canceled` with no pane work.
   `leo_send_dispatch` on a queued run is rejected ("queued; wait first").
-- `leo_send_dispatch` follow-up "no capacity" is unchanged (rejection is
-  already a documented wait-and-retry).
+- `leo_send_dispatch` follow-up "no capacity" was superseded (issue #232):
+  follow-ups queue FIFO with new dispatches; see dispatches.md.
 
 ## 5. Panes only while working
 

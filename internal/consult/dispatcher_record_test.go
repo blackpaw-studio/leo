@@ -202,8 +202,8 @@ func TestConsultRecordsEmptyOutputAsFailure(t *testing.T) {
 func TestConsultRecordsQueuedConsultsAndCancellation(t *testing.T) {
 	rec := newFakeRecorder()
 	d := NewDispatcher(rec)
-	for range maxConcurrent {
-		d.sem <- struct{}{}
+	for range DefaultMaxConcurrent {
+		d.slots.TryAcquire()
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

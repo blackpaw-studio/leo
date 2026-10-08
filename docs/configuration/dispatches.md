@@ -244,13 +244,28 @@ concurrency slot until they settle. Slots are per orchestrator turn, so idle
 sessions and user turns are free.
 
 Use `leo_send_dispatch {id, message}` or `leo dispatch send <id> <message>`
-only while the run is `idle`. A send returns `{turn_id, delivered}`; `delivered`
+only while the run is `idle`. A send returns `{turn_id, delivered, queued}`; `delivered`
 is usually `false` at that moment because the harness acknowledges the paste
 asynchronously through its prompt-submit hook, so never re-send on that alone:
 wait on the turn id and trust its outcome. A send is
-rejected if the composer is busy or unknown, no slot is available, pasting
+rejected if the composer is busy or unknown, pasting
 fails, the body contains disallowed control characters, or the run is not
-idle. Use `leo_wait` on a run ID to wait for the latest orchestrator turn at
+idle.
+
+When every slot is busy a follow-up is not rejected: it queues
+(`queued: true`, and the turn carries `queued` until it starts) and the turn
+id comes back at once. Queued follow-ups and queued new dispatches share one
+FIFO line capped by `defaults.dispatch.max_concurrent`; the turn is pasted
+when its place comes up, and `leo_wait` on its turn id blocks until it has
+finished. A queued follow-up emits no completion notification until it
+resolves. If the run is canceled, times out, or closes first, the turn
+resolves `interrupted` (or `lost`) with a text saying it was never sent; if a
+human types into the pane first (steering), it resolves `lost` for the same
+reason; so does daemon shutdown (`interrupted`, with a shutdown reason). A
+continuation of a finished headless run queues the same way (`queued: true`,
+run status `queued`) and `leo_cancel` withdraws it. A run has at most one
+queued follow-up, so a second send is rejected until the first starts. Permission decisions (`decision` / `request_id`) never
+queue and never use a slot. Use `leo_wait` on a run ID to wait for the latest orchestrator turn at
 the moment the wait starts, or on an explicit turn ID such as `d-…#2` to wait
 for that turn. Wait results include `turn_id`, `outcome`, `delivered`, and
 `stalled`; a turn with no hook activity for ten minutes is reported stalled on
@@ -341,7 +356,8 @@ and an available workspace. A kept isolated worktree resumes in place without
 resetting changes. A clean removed worktree is recreated from its retained
 branch only while that branch still points to the recorded base commit. Active
 or still-reaping runs, missing sessions/templates/workspaces, changed
-harnesses, unsupported adapters, and exhausted capacity are rejected before
+harnesses, unsupported adapters, and exhausted capacity (headless continuation
+does not queue) are rejected before
 the record is changed. Timeout and completion notification apply separately
 to each invocation; elapsed active time and measured usage accumulate across
 turns. Recorded output is append-only, so `dispatch output` and `watch` show
@@ -383,13 +399,14 @@ directory:
   record turn and status transitions; malformed output is kept as raw text.
 
 Headless status moves through `queued → running → done | failed | timeout |
-canceled`. At most six runs execute at once; queued work remains
-cancellable. Interactive slots are instead held per orchestrator turn. An
+canceled`. At most `defaults.dispatch.max_concurrent` runs (default 6, `0` =
+unlimited) execute at once; queued work remains cancellable. Interactive slots are instead held per orchestrator turn. An
 interactive dispatch started while every slot is busy is recorded `queued`
 with no pane (`leo_dispatch` says so) and launches, placed as usual, once a
 slot frees. `leo_cancel` on it finishes it `canceled` without opening a pane;
 `leo_send_dispatch` on it is rejected until it has started, so `leo_wait` on
-it first.
+it first. The cap applies to new runs and queued follow-ups alike and is
+re-read from the config on each dispatch or send.
 Consult runs are capped at 30 minutes. Dispatch runs are unlimited unless
 `timeout_seconds` (or CLI `--timeout`) is set. Leo retains the 20 newest
 settled records and never prunes plausible in-flight runs.

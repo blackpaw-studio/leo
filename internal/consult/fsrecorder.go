@@ -53,7 +53,7 @@ type FileRecorder struct {
 	// tests. It must be safe for concurrent use: every recording goroutine
 	// calls it, as does pruning.
 	Now func() time.Time
-	// mu serializes pruning against concurrent Opens — up to maxConcurrent
+	// mu serializes pruning against concurrent Opens — up to the concurrency cap
 	// consults start independently.
 	mu sync.Mutex
 }

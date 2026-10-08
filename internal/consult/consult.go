@@ -33,11 +33,10 @@ const dispatchIDEnv = "LEO_DISPATCH_ID"
 const (
 	// RunTimeout is the authoritative deadline for one consult. A consult is
 	// a full agent run, so this is generous; it stays a hard cap only so a
-	// wedged harness process can't hold one of maxConcurrent slots forever.
+	// wedged harness process can't hold one of concurrency slots forever.
 	// Harness-side MCP tool ceilings are derived from it (leomcp.ToolTimeout)
 	// so leo, not the coding agent, is what times a consult out.
-	RunTimeout    = 30 * time.Minute
-	maxConcurrent = 6
+	RunTimeout = 30 * time.Minute
 )
 
 // ValidationError reports a request/configuration problem that should be
@@ -52,7 +51,7 @@ func invalidf(format string, args ...any) error {
 }
 
 type Dispatcher struct {
-	sem                  chan struct{}
+	slots                *slotLimiter
 	recorder             Recorder
 	ExecCommandContext   func(ctx context.Context, name string, args ...string) *exec.Cmd
 	ProcessCommand       func(ctx context.Context, name string, args ...string) *exec.Cmd
@@ -73,6 +72,16 @@ type Dispatcher struct {
 	beforeOpeningInject  func()
 	afterOpeningInject   func()
 	beforeSendInjectable func()
+	// afterQueuedGrant runs in a queued follow-up's goroutine once its slot
+	// is granted, before it takes the dispatcher lock; queuedSendExited runs
+	// when that goroutine returns. Tests use them to land a cancel or steer
+	// in the grant gap and to know the goroutine is gone.
+	afterQueuedGrant func()
+	queuedSendExited func()
+	// beforeHeadlessStart runs in a headless invocation's goroutine after its
+	// slot is granted, just before the process is started. Tests use it to
+	// land a cancel between admission and launch.
+	beforeHeadlessStart func()
 	// paneOpWait bounds how long a cancellation waits for its queued pane
 	// kill (see defaultPaneOpWait).
 	paneOpWait time.Duration
@@ -130,6 +139,8 @@ type runState struct {
 	// ends, and wherever the pane was when a user typed a turn into it
 	// (user-typed turns never move a pane). Empty until a turn sets it.
 	paneWant string
+	// queuedSend is the run's follow-up turn waiting for a slot, if any.
+	queuedSend *queuedSend
 	// reconcileQueued is the done channel of a queued, not yet started,
 	// placement reconcile, which further nudges coalesce into.
 	reconcileQueued <-chan struct{}
@@ -168,7 +179,7 @@ func NewDispatcherWithOnStart(rec Recorder, parent context.Context, onStart func
 		daemonCtx = parent
 	}
 	d := &Dispatcher{
-		sem:                make(chan struct{}, maxConcurrent),
+		slots:              newSlotLimiter(DefaultMaxConcurrent),
 		recorder:           rec,
 		ExecCommandContext: exec.CommandContext,
 		ProcessCommand:     exec.CommandContext,
@@ -217,6 +228,7 @@ func newID() string {
 // Request contexts govern only validation and the immediate caller, never the
 // lifetime of an accepted run.
 func (d *Dispatcher) Start(_ context.Context, cfg *config.Config, req Request) (Started, error) {
+	d.ApplyConfig(cfg)
 	req = withTemplateIsolation(cfg, req)
 	if req.Isolation != "" && req.Isolation != "worktree" {
 		return Started{}, invalidf("isolation must be empty or \"worktree\"")
@@ -400,27 +412,30 @@ func (d *Dispatcher) Start(_ context.Context, cfg *config.Config, req Request) (
 			d.placement.Cancel(rec.ID)
 		}
 	}
-	go d.runInvocation(runCtx, state, state.done, h, model, tmpl.Env, args, harnessEnv, req.Cwd, timeout, false)
+	// Take the place in line before returning, so a later send or start cannot
+	// overtake this run while its goroutine is still being scheduled.
+	waiter, _ := d.slots.AcquireOrEnqueue()
+	go d.runInvocation(runCtx, state, state.done, h, model, tmpl.Env, args, harnessEnv, req.Cwd, timeout, waiter)
 	return Started{ID: rec.ID, Harness: h.Name(), Model: model, Cwd: req.Cwd}, nil
 }
 
 func (d *Dispatcher) run(parent context.Context, state *runState, h harness.Harness, model string, env map[string]string, args []string, harnessEnv map[string]string, cwd string, timeout time.Duration) {
-	d.runInvocation(parent, state, state.done, h, model, env, args, harnessEnv, cwd, timeout, false)
+	waiter, _ := d.slots.AcquireOrEnqueue()
+	d.runInvocation(parent, state, state.done, h, model, env, args, harnessEnv, cwd, timeout, waiter)
 }
 
-func (d *Dispatcher) runInvocation(parent context.Context, state *runState, done chan struct{}, h harness.Harness, model string, env map[string]string, args []string, harnessEnv map[string]string, cwd string, timeout time.Duration, slotHeld bool) {
+func (d *Dispatcher) runInvocation(parent context.Context, state *runState, done chan struct{}, h harness.Harness, model string, env map[string]string, args []string, harnessEnv map[string]string, cwd string, timeout time.Duration, waiter *slotWaiter) {
 	defer close(done)
-	if slotHeld {
-		defer func() { <-d.sem }()
-	} else {
+	if waiter != nil {
 		select {
-		case d.sem <- struct{}{}:
-			defer func() { <-d.sem }()
+		case <-waiter.Ready():
 		case <-parent.Done():
+			d.slots.Cancel(waiter)
 			d.complete(state, StatusCanceled, "", parent.Err())
 			return
 		}
 	}
+	defer d.slots.Release()
 	// A queued run can be canceled at the same instant a concurrency slot
 	// opens. Do not publish a misleading running transition in that race.
 	if err := parent.Err(); err != nil {
@@ -470,9 +485,13 @@ func (d *Dispatcher) runInvocation(parent context.Context, state *runState, done
 	}
 	cmd.Stdout, cmd.Stderr = tee, tee
 
+	if d.beforeHeadlessStart != nil {
+		d.beforeHeadlessStart()
+	}
 	runErr := cmd.Start()
 	if runErr == nil {
 		d.mu.Lock()
+		d.publishHeadlessLaunchLocked(state)
 		if state.record.Isolation == "worktree" {
 			state.headlessStarted = true
 			state.pgid = startedProcessGroup(cmd)
@@ -530,6 +549,20 @@ func (d *Dispatcher) runInvocation(parent context.Context, state *runState, done
 		return
 	}
 	d.complete(state, StatusDone, parsed.Text, nil)
+}
+
+// publishHeadlessLaunchLocked marks a queued continuation turn delivered once
+// its process has actually started. A turn resolved before launch (canceled
+// between slot admission and Start) stays undelivered.
+func (d *Dispatcher) publishHeadlessLaunchLocked(state *runState) {
+	if state.record.Status.Terminal() || len(state.record.Turns) == 0 {
+		return
+	}
+	t := &state.record.Turns[len(state.record.Turns)-1]
+	if !t.Queued || t.Outcome != "" {
+		return
+	}
+	t.Queued, t.Delivered, t.SlotHeld = false, true, true
 }
 
 // pruneTerminalRunsLocked bounds completed in-memory runs. Records on disk
@@ -708,7 +741,7 @@ func (d *Dispatcher) Wait(ctx context.Context, ids []string, timeout time.Durati
 					} else {
 						entries[i] = headlessEntry(rec, turnIDs[i], d.now())
 					}
-					if rec.Mode != ModeInteractive && !entries[i].Status.Terminal() {
+					if rec.Mode != ModeInteractive && !entries[i].Status.Terminal() && entries[i].Status != StatusQueued {
 						entries[i].Status = StatusRunning
 						entries[i].Err = ""
 					}
@@ -971,7 +1004,7 @@ func (d *Dispatcher) terminateState(state *runState, status Status) Record {
 	if state.record.Mode == ModeHeadless && len(state.record.Turns) > 0 {
 		t := &state.record.Turns[len(state.record.Turns)-1]
 		t.EndedAt, t.Outcome, t.Status = state.record.EndedAt, TurnInterrupted, status
-		t.Error = state.record.Error
+		t.Error, t.Queued = state.record.Error, false
 		turnID = t.TurnID
 	}
 	d.completionCandidateLocked(state, transitionKey(state.record.ID, state.record.Mode, turnID), status)
@@ -995,6 +1028,7 @@ func (d *Dispatcher) currentInvocationCancelLocked(state *runState, done chan st
 
 // Consult preserves the synchronous one-off consultant API over dispatch.
 func (d *Dispatcher) Consult(ctx context.Context, cfg *config.Config, req Request) (Result, error) {
+	d.ApplyConfig(cfg)
 	req.Kind, req.Preamble = "consult", true
 	req = withTemplateIsolation(cfg, req)
 	started, err := d.Start(ctx, cfg, req)
@@ -1111,7 +1145,7 @@ func (d *Dispatcher) MarkInterrupted() {
 				if rec.Turns[i].Outcome == "" {
 					rec.Turns[i].Outcome, rec.Turns[i].Status = TurnInterrupted, StatusFailed
 					rec.Turns[i].Error, rec.Turns[i].EndedAt = "daemon restarted", markedAt
-					rec.Turns[i].SlotHeld = false
+					rec.Turns[i].SlotHeld, rec.Turns[i].Queued = false, false
 				}
 			}
 			if rec.Isolation == "worktree" && rec.WorktreeState != WorktreeRemoved {

@@ -652,8 +652,8 @@ func TestInteractiveLateOpeningFailureDoesNotSettleNewTurn(t *testing.T) {
 			t.Fatal(getErr)
 		}
 		if len(rec.Turns) == 2 && rec.Turns[1].Outcome == "" {
-			if rec.Status == StatusFailed || rec.Turns[1].TurnID != second.TurnID || len(d.sem) != 1 {
-				t.Fatalf("late error changed current turn: record=%+v slots=%d", rec, len(d.sem))
+			if rec.Status == StatusFailed || rec.Turns[1].TurnID != second.TurnID || d.slots.InUse() != 1 {
+				t.Fatalf("late error changed current turn: record=%+v slots=%d", rec, d.slots.InUse())
 			}
 			return
 		}
@@ -999,8 +999,8 @@ func TestInteractiveSlots(t *testing.T) {
 	<-openingStarted
 	_ = d.Report(s.ID, hook(t, "UserPromptSubmit", "a"))
 	_ = d.Report(s.ID, hook(t, "Interrupt", "a"))
-	if len(d.sem) != 0 {
-		t.Fatalf("slot leaked after interrupt: %d", len(d.sem))
+	if d.slots.InUse() != 0 {
+		t.Fatalf("slot leaked after interrupt: %d", d.slots.InUse())
 	}
 	sendReady, releaseSend := make(chan struct{}), make(chan struct{})
 	d.beforeSendInjectable = func() { close(sendReady); <-releaseSend }
@@ -1013,12 +1013,12 @@ func TestInteractiveSlots(t *testing.T) {
 	if _, err := d.Send(context.Background(), s.ID, "again"); err != nil {
 		t.Fatal(err)
 	}
-	if len(d.sem) != 1 {
-		t.Fatalf("send did not hold slot: %d", len(d.sem))
+	if d.slots.InUse() != 1 {
+		t.Fatalf("send did not hold slot: %d", d.slots.InUse())
 	}
 	_, _ = d.Cancel(s.ID)
-	if len(d.sem) != 0 {
-		t.Fatalf("slot leaked after settlement: %d", len(d.sem))
+	if d.slots.InUse() != 0 {
+		t.Fatalf("slot leaked after settlement: %d", d.slots.InUse())
 	}
 }
 

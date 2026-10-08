@@ -574,7 +574,7 @@ func TestFileRecorderRefusesToClobberALiveStream(t *testing.T) {
 }
 
 // TestFileRecorderUnderConcurrentConsults is the spec's race guard: up to
-// maxConcurrent consults record at once.
+// the concurrency cap of consults record at once.
 func TestFileRecorderUnderConcurrentConsults(t *testing.T) {
 	r, dir := newTestRecorder(t)
 	var wg sync.WaitGroup

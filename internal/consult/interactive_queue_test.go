@@ -10,10 +10,10 @@ import (
 // fillSlots occupies every concurrency slot and returns a function that frees
 // one of them.
 func fillSlots(d *Dispatcher) (freeOne func()) {
-	for i := 0; i < cap(d.sem); i++ {
-		d.sem <- struct{}{}
+	for range d.slots.Max() {
+		d.slots.TryAcquire()
 	}
-	return func() { <-d.sem }
+	return d.slots.Release
 }
 
 func (r *fakeInteractiveRuntime) launchCount() int {
@@ -70,8 +70,8 @@ func TestInteractiveStartQueuesWhenLimiterFull(t *testing.T) {
 	if len(rec.Turns) != 1 || !rec.Turns[0].SlotHeld {
 		t.Fatalf("turns = %+v, want one slot-holding opening turn", rec.Turns)
 	}
-	if len(d.sem) != cap(d.sem) {
-		t.Fatalf("slots in use = %d, want the freed slot taken", len(d.sem))
+	if d.slots.InUse() != d.slots.Max() {
+		t.Fatalf("slots in use = %d, want the freed slot taken", d.slots.InUse())
 	}
 }
 
@@ -97,8 +97,8 @@ func TestInteractiveCancelWhileQueuedDoesNoPaneWork(t *testing.T) {
 	if rt.launchCount() != 0 || rt.killCount() != 0 {
 		t.Fatalf("launches=%d kills=%d, want no pane work", rt.launchCount(), rt.killCount())
 	}
-	if len(d.sem) != cap(d.sem)-1 {
-		t.Fatalf("slots in use = %d, a canceled queued run must not take one", len(d.sem))
+	if d.slots.InUse() != d.slots.Max()-1 {
+		t.Fatalf("slots in use = %d, a canceled queued run must not take one", d.slots.InUse())
 	}
 }
 
