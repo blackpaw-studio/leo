@@ -9,7 +9,7 @@ import (
 
 const preamble = "You are a one-off consultant: another agent is asking for your independent opinion. Analyze and answer directly and completely in your final message. Do not modify any files or take actions beyond reading. The question follows."
 
-const dispatchPreamble = "You are a subagent dispatched by an orchestrator. Do not spawn agents or run your own code review; the orchestrator reviews your work. When the orchestrator has finished with you, it releases this pane."
+const dispatchPreamble = "You are a subagent dispatched by an orchestrator. You may dispatch your own subagents when your brief calls for it. Do not self-certify your work; the orchestrator reviews it. When the orchestrator has finished with you, it releases this pane."
 
 type Request struct {
 	Template string

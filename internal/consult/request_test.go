@@ -11,6 +11,18 @@ func TestDispatchPreambleReleaseGuidance(t *testing.T) {
 	}
 }
 
+func TestDispatchPreambleAllowsNestedSubagents(t *testing.T) {
+	got := requestPrompt(Request{Prompt: "work"})
+	for _, banned := range []string{"Do not spawn", "own code review"} {
+		if strings.Contains(got, banned) {
+			t.Fatalf("dispatch preamble forbids nesting via %q: %s", banned, got)
+		}
+	}
+	if !strings.Contains(got, "Do not self-certify your work; the orchestrator reviews it.") {
+		t.Fatalf("self-certify guidance missing: %s", got)
+	}
+}
+
 func TestRequestPrompt(t *testing.T) {
 	tests := []struct {
 		name string

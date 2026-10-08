@@ -93,7 +93,7 @@ func TestInteractiveDispatchLifecycle(t *testing.T) {
 	}
 	first := s.wait(t, started.ID+"#1")
 	openingPrompt := strings.Join([]string{
-		"You are a subagent dispatched by an orchestrator. Do not spawn agents or run your own code review; the orchestrator reviews your work.",
+		"You are a subagent dispatched by an orchestrator. You may dispatch your own subagents when your brief calls for it. Do not self-certify your work; the orchestrator reviews it.",
 		"opening prompt",
 	}, " ")
 	wantOpening := "FAKE-REPLY: " + truncate80(strings.TrimSpace(openingPrompt))
