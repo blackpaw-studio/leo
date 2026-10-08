@@ -33,7 +33,7 @@ func listing(clients ...tmux.Client) func(context.Context, string) ([]tmux.Clien
 func TestAttachPlacementsZeroClientsKeepsBaseOverrides(t *testing.T) {
 	now := attachEpoch
 	reg := newTestAttachPlacements(&now)
-	reg.Register("$1", 10, "background")
+	mustRegister(t, reg, "$1", 10, "background")
 	base := ViewerOverrides{Placement: "window", MaxPanes: 2}
 	got := reg.Resolve(context.Background(), "$1", base, &config.Config{}, listing())
 	if got != base {
@@ -44,7 +44,7 @@ func TestAttachPlacementsZeroClientsKeepsBaseOverrides(t *testing.T) {
 func TestAttachPlacementsListErrorKeepsBaseOverrides(t *testing.T) {
 	now := attachEpoch
 	reg := newTestAttachPlacements(&now)
-	reg.Register("$1", 10, "background")
+	mustRegister(t, reg, "$1", 10, "background")
 	base := ViewerOverrides{Placement: "window"}
 	failing := func(context.Context, string) ([]tmux.Client, error) { return nil, errors.New("tmux down") }
 	if got := reg.Resolve(context.Background(), "$1", base, &config.Config{}, failing); got != base {
@@ -66,7 +66,7 @@ func TestAttachPlacementsMostVisibleWins(t *testing.T) {
 			reg := newTestAttachPlacements(&now)
 			var clients []tmux.Client
 			for i, p := range tc.placements {
-				reg.Register("$1", 100+i, p)
+				mustRegister(t, reg, "$1", 100+i, p)
 				clients = append(clients, clientAt(100+i, attachEpoch.Add(time.Second)))
 			}
 			got := reg.Resolve(context.Background(), "$1", ViewerOverrides{MaxPanes: 2}, &config.Config{}, listing(clients...))
@@ -80,7 +80,7 @@ func TestAttachPlacementsMostVisibleWins(t *testing.T) {
 func TestAttachPlacementsUnflaggedClientContributesSessionOverrideOrDefault(t *testing.T) {
 	now := attachEpoch
 	reg := newTestAttachPlacements(&now)
-	reg.Register("$1", 10, "background")
+	mustRegister(t, reg, "$1", 10, "background")
 	clients := listing(clientAt(10, attachEpoch), clientAt(20, attachEpoch))
 
 	cfg := &config.Config{}
@@ -99,7 +99,7 @@ func TestAttachPlacementsUnflaggedClientContributesSessionOverrideOrDefault(t *t
 func TestAttachPlacementsIgnoresStaleEntries(t *testing.T) {
 	now := attachEpoch
 	reg := newTestAttachPlacements(&now)
-	reg.Register("$1", 10, "background")
+	mustRegister(t, reg, "$1", 10, "background")
 	base := ViewerOverrides{Placement: "pane"}
 
 	// Same pid, but the client was created well before the registration: the
@@ -118,7 +118,7 @@ func TestAttachPlacementsIgnoresStaleEntries(t *testing.T) {
 func TestAttachPlacementsToleratesSecondGranularityClientCreated(t *testing.T) {
 	now := attachEpoch.Add(900 * time.Millisecond)
 	reg := newTestAttachPlacements(&now)
-	reg.Register("$1", 10, "background")
+	mustRegister(t, reg, "$1", 10, "background")
 	// tmux truncated client_created to the whole second, below registered_at.
 	got := reg.Resolve(context.Background(), "$1", ViewerOverrides{Placement: "pane"}, &config.Config{}, listing(clientAt(10, attachEpoch)))
 	if got.Placement != "background" {
@@ -129,8 +129,8 @@ func TestAttachPlacementsToleratesSecondGranularityClientCreated(t *testing.T) {
 func TestAttachPlacementsPrunesEntriesWhoseProcessIsGone(t *testing.T) {
 	now := attachEpoch
 	reg := newTestAttachPlacements(&now)
-	reg.Register("leo-a", 10, "background")
-	reg.Register("leo-a", 11, "window")
+	mustRegister(t, reg, "leo-a", 10, "background")
+	mustRegister(t, reg, "leo-a", 11, "window")
 	live := listing(clientAt(99, attachEpoch))
 
 	// Both processes are alive (11 may be about to exec tmux): both kept.
@@ -148,7 +148,7 @@ func TestAttachPlacementsPrunesEntriesWhoseProcessIsGone(t *testing.T) {
 func TestAttachPlacementsPrunesReusedPidSeenInTheListing(t *testing.T) {
 	now := attachEpoch
 	reg := newTestAttachPlacements(&now)
-	reg.Register("leo-a", 10, "background")
+	mustRegister(t, reg, "leo-a", 10, "background")
 	reg.Resolve(context.Background(), "$1", ViewerOverrides{}, &config.Config{}, listing(clientAt(10, attachEpoch.Add(-time.Hour))))
 	if reg.Len() != 0 {
 		t.Fatalf("reused-pid entry kept: len=%d", reg.Len())
@@ -160,7 +160,7 @@ func TestAttachPlacementsMatchesByPidWhateverSessionNameWasRegistered(t *testing
 	// id. The client list of the id is what scopes the match.
 	now := attachEpoch
 	reg := newTestAttachPlacements(&now)
-	reg.Register("leo-agent-foo", 10, "background")
+	mustRegister(t, reg, "leo-agent-foo", 10, "background")
 	got := reg.Resolve(context.Background(), "$4", ViewerOverrides{Placement: "pane"}, &config.Config{}, listing(clientAt(10, attachEpoch)))
 	if got.Placement != "background" {
 		t.Fatalf("got %+v", got)
@@ -170,8 +170,8 @@ func TestAttachPlacementsMatchesByPidWhateverSessionNameWasRegistered(t *testing
 func TestAttachPlacementsReRegisterReplacesSamePid(t *testing.T) {
 	now := attachEpoch
 	reg := newTestAttachPlacements(&now)
-	reg.Register("$1", 10, "pane")
-	reg.Register("$1", 10, "background")
+	mustRegister(t, reg, "$1", 10, "pane")
+	mustRegister(t, reg, "$1", 10, "background")
 	got := reg.Resolve(context.Background(), "$1", ViewerOverrides{}, &config.Config{}, listing(clientAt(10, attachEpoch)))
 	if got.Placement != "background" || reg.Len() != 1 {
 		t.Fatalf("got %+v len=%d", got, reg.Len())
@@ -200,5 +200,12 @@ func TestNilAttachPlacementsLeavesOverridesAlone(t *testing.T) {
 	base := ViewerOverrides{Placement: "window"}
 	if got := reg.Resolve(context.Background(), "$1", base, &config.Config{}, listing(clientAt(1, attachEpoch))); got != base {
 		t.Fatalf("got %+v", got)
+	}
+}
+
+func mustRegister(t *testing.T, reg *AttachPlacements, session string, pid int, placement string) {
+	t.Helper()
+	if err := reg.Register(session, pid, placement); err != nil {
+		t.Fatalf("Register(%q, %d, %q): %v", session, pid, placement, err)
 	}
 }

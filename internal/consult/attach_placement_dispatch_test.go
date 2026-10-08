@@ -25,7 +25,7 @@ func newAttachDispatcher(t *testing.T, queried *[]string, clients ...tmux.Client
 func TestAttachPlacementUsesTheCallersOwnSessionForARootDispatch(t *testing.T) {
 	var queried []string
 	d, reg := newAttachDispatcher(t, &queried, clientAt(10, attachEpoch))
-	reg.Register("$1", 10, "background")
+	mustRegister(t, reg, "$1", 10, "background")
 	root := startNested(t, d, Request{Caller: "alpha", CallerSessionID: "$1"})
 
 	got := d.ApplyAttachPlacement(context.Background(), root, ViewerOverrides{}, &config.Config{})
@@ -37,7 +37,7 @@ func TestAttachPlacementUsesTheCallersOwnSessionForARootDispatch(t *testing.T) {
 func TestAttachPlacementResolvesNestedDispatchesAgainstTheRootCallersSession(t *testing.T) {
 	var queried []string
 	d, reg := newAttachDispatcher(t, &queried, clientAt(10, attachEpoch.Add(time.Second)))
-	reg.Register("$1", 10, "background")
+	mustRegister(t, reg, "$1", 10, "background")
 	root := startNested(t, d, Request{Caller: "alpha", CallerSessionID: "$1"})
 	// Each nested requester reports a session of its own (its dispatch pane).
 	child := startNested(t, d, Request{ParentDispatchID: root.ID, CallerSessionID: "$7"})
@@ -76,7 +76,7 @@ func TestInteractiveDispatchFollowsTheAttachedClientsPlacement(t *testing.T) {
 	if _, err := d.Start(context.Background(), cfg, req); err != nil {
 		t.Fatalf("Start: %v", err)
 	}
-	reg.Register("$1", 10, "background")
+	mustRegister(t, reg, "$1", 10, "background")
 	if _, err := d.Start(context.Background(), cfg, req); err != nil {
 		t.Fatalf("Start: %v", err)
 	}
