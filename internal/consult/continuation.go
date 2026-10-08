@@ -95,18 +95,18 @@ func (d *Dispatcher) continueHeadless(cfg *config.Config, rec Record, message st
 	}
 
 	d.mu.Lock()
-	if !d.trySlot() {
+	if !d.slots.TryAcquire() {
 		d.mu.Unlock()
 		return SendResult{}, errors.New("no capacity")
 	}
 	if recreate {
 		if err := os.MkdirAll(filepath.Dir(rec.Worktree), dirPerm); err != nil {
-			<-d.sem
+			d.slots.Release()
 			d.mu.Unlock()
 			return SendResult{}, err
 		}
 		if _, err := d.git("-C", rec.RepositoryRoot, "worktree", "add", rec.Worktree, rec.Branch); err != nil {
-			<-d.sem
+			d.slots.Release()
 			d.mu.Unlock()
 			return SendResult{}, fmt.Errorf("recreating retained worktree: %w", err)
 		}
@@ -119,7 +119,7 @@ func (d *Dispatcher) continueHeadless(cfg *config.Config, rec Record, message st
 		if recreate {
 			rollbackErr = d.rollbackRecreatedWorktreeLocked(rec)
 		}
-		<-d.sem
+		d.slots.Release()
 		d.mu.Unlock()
 		return SendResult{}, errors.Join(fmt.Errorf("building %s resume args after workspace preparation: %w", h.Name(), err), rollbackErr)
 	}
@@ -149,7 +149,7 @@ func (d *Dispatcher) continueHeadless(cfg *config.Config, rec Record, message st
 		if recreate {
 			rollbackErr = d.rollbackRecreatedWorktreeLocked(rec)
 		}
-		<-d.sem
+		d.slots.Release()
 		d.mu.Unlock()
 		return SendResult{}, errors.Join(fmt.Errorf("reopening dispatch recording: %w", openErr), rollbackErr)
 	}

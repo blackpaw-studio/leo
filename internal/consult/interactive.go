@@ -173,8 +173,9 @@ func (d *Dispatcher) startInteractive(ctx context.Context, s *runState, req Requ
 	if harnessName == "opencode" {
 		return Started{}, invalidf("interactive dispatch is not supported by harness %q", harnessName)
 	}
-	if !d.trySlot() {
-		return d.queueInteractive(ctx, s, req, harnessName, model, cfg, rt), nil
+	waiter, acquired := d.slots.AcquireOrEnqueue()
+	if !acquired {
+		return d.queueInteractive(ctx, s, req, harnessName, model, cfg, rt, waiter), nil
 	}
 	d.mu.Lock()
 	t := d.openTurnLocked(s, TurnSourceOrchestrator, prompt, true)
@@ -187,26 +188,28 @@ func (d *Dispatcher) startInteractive(ctx context.Context, s *runState, req Requ
 // queueInteractive records an interactive dispatch that found every slot
 // taken: its opening turn waits, without a pane, until launchWhenSlotFree
 // claims a slot and launches it exactly as an immediate start would.
-func (d *Dispatcher) queueInteractive(ctx context.Context, s *runState, req Request, harnessName, model string, cfg *config.Config, rt InteractiveRuntime) Started {
+func (d *Dispatcher) queueInteractive(ctx context.Context, s *runState, req Request, harnessName, model string, cfg *config.Config, rt InteractiveRuntime, waiter *slotWaiter) Started {
 	d.mu.Lock()
 	t := d.openTurnLocked(s, TurnSourceOrchestrator, requestPrompt(req), false)
 	s.awaitingSlot = true
 	d.persistLocked(s, "status")
 	d.persistLocked(s, "turn")
 	d.mu.Unlock()
-	go d.launchWhenSlotFree(ctx, s, req, harnessName, model, cfg, rt, t.TurnID)
+	go d.launchWhenSlotFree(ctx, s, req, harnessName, model, cfg, rt, t.TurnID, waiter)
 	return Started{ID: s.record.ID, Harness: harnessName, Model: model, Cwd: req.Cwd, Queued: true}
 }
 
 // launchWhenSlotFree blocks on a concurrency slot for a queued interactive
 // dispatch, then launches it. A run settled while it waited (canceled, timed
 // out) never takes a slot and never gets a pane.
-func (d *Dispatcher) launchWhenSlotFree(ctx context.Context, s *runState, req Request, harnessName, model string, cfg *config.Config, rt InteractiveRuntime, turnID string) {
+func (d *Dispatcher) launchWhenSlotFree(ctx context.Context, s *runState, req Request, harnessName, model string, cfg *config.Config, rt InteractiveRuntime, turnID string, waiter *slotWaiter) {
 	select {
-	case d.sem <- struct{}{}:
+	case <-waiter.Ready():
 	case <-s.done:
+		d.slots.Cancel(waiter)
 		return
 	case <-ctx.Done():
+		d.slots.Cancel(waiter)
 		d.mu.Lock()
 		s.awaitingSlot = false
 		d.finishInteractiveLocked(s, StatusCanceled)
@@ -216,7 +219,7 @@ func (d *Dispatcher) launchWhenSlotFree(ctx context.Context, s *runState, req Re
 	d.mu.Lock()
 	if s.record.Status.Terminal() || s.record.Status == StatusSettling || turnByID(s.record, turnID).Outcome != "" {
 		d.mu.Unlock()
-		<-d.sem
+		d.slots.Release()
 		return
 	}
 	// Admission: from here the slot belongs to the turn (released once, by
@@ -452,14 +455,6 @@ func (d *Dispatcher) failOpening(s *runState, turnID string, err error) {
 	fmt.Fprintf(os.Stderr, "dispatch %s: ignoring late opening injection error: %v\n", s.record.ID, err)
 }
 
-func (d *Dispatcher) trySlot() bool {
-	select {
-	case d.sem <- struct{}{}:
-		return true
-	default:
-		return false
-	}
-}
 func (d *Dispatcher) openTurnLocked(s *runState, source TurnSource, text string, held bool) *Turn {
 	d.expireArmedLocked(s)
 	for i := range s.record.Turns {
@@ -511,10 +506,7 @@ func (d *Dispatcher) closeTurnLocked(s *runState, id string, outcome TurnOutcome
 		}
 		if t.SlotHeld {
 			t.SlotHeld = false
-			select {
-			case <-d.sem:
-			default:
-			}
+			d.slots.Release()
 		}
 		if s.armedTurn == id {
 			s.armedTurn = ""
@@ -629,7 +621,7 @@ func (d *Dispatcher) Send(ctx context.Context, id, message string) (SendResult, 
 		// which a late ack is matched by.
 		message = f.FrameMessage(s.record.PaneID, message)
 	}
-	if !d.trySlot() {
+	if !d.slots.TryAcquire() {
 		t := d.openTurnLocked(s, TurnSourceOrchestrator, message, false)
 		d.closeTurnLocked(s, t.TurnID, TurnRejected, "no capacity")
 		d.mu.Unlock()

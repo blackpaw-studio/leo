@@ -358,12 +358,12 @@ func TestDetachedWriterOutsideProcessGroupIsDocumentedLimitation(t *testing.T) {
 func TestIsolatedConsultCancellationReapsAndCleans(t *testing.T) {
 	repo, stateDir := gitTestRepo(t), t.TempDir()
 	d := NewDispatcher(NewFileRecorder(stateDir))
-	for range maxConcurrent {
-		d.sem <- struct{}{}
+	for range DefaultMaxConcurrent {
+		d.slots.TryAcquire()
 	}
 	defer func() {
-		for range maxConcurrent {
-			<-d.sem
+		for range DefaultMaxConcurrent {
+			d.slots.Release()
 		}
 	}()
 	d.ExecCommandContext = func(ctx context.Context, _ string, _ ...string) *exec.Cmd {

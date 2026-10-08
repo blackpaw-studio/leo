@@ -146,8 +146,8 @@ func TestConsultReturnsExecutionFailure(t *testing.T) {
 
 func TestConsultHonorsCallerCancellationWhileQueued(t *testing.T) {
 	d := NewDispatcher(nil)
-	for range maxConcurrent {
-		d.sem <- struct{}{}
+	for range DefaultMaxConcurrent {
+		d.slots.TryAcquire()
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()

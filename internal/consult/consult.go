@@ -33,11 +33,10 @@ const dispatchIDEnv = "LEO_DISPATCH_ID"
 const (
 	// RunTimeout is the authoritative deadline for one consult. A consult is
 	// a full agent run, so this is generous; it stays a hard cap only so a
-	// wedged harness process can't hold one of maxConcurrent slots forever.
+	// wedged harness process can't hold one of concurrency slots forever.
 	// Harness-side MCP tool ceilings are derived from it (leomcp.ToolTimeout)
 	// so leo, not the coding agent, is what times a consult out.
-	RunTimeout    = 30 * time.Minute
-	maxConcurrent = 6
+	RunTimeout = 30 * time.Minute
 )
 
 // ValidationError reports a request/configuration problem that should be
@@ -52,7 +51,7 @@ func invalidf(format string, args ...any) error {
 }
 
 type Dispatcher struct {
-	sem                  chan struct{}
+	slots                *slotLimiter
 	recorder             Recorder
 	ExecCommandContext   func(ctx context.Context, name string, args ...string) *exec.Cmd
 	ProcessCommand       func(ctx context.Context, name string, args ...string) *exec.Cmd
@@ -168,7 +167,7 @@ func NewDispatcherWithOnStart(rec Recorder, parent context.Context, onStart func
 		daemonCtx = parent
 	}
 	d := &Dispatcher{
-		sem:                make(chan struct{}, maxConcurrent),
+		slots:              newSlotLimiter(DefaultMaxConcurrent),
 		recorder:           rec,
 		ExecCommandContext: exec.CommandContext,
 		ProcessCommand:     exec.CommandContext,
@@ -410,17 +409,17 @@ func (d *Dispatcher) run(parent context.Context, state *runState, h harness.Harn
 
 func (d *Dispatcher) runInvocation(parent context.Context, state *runState, done chan struct{}, h harness.Harness, model string, env map[string]string, args []string, harnessEnv map[string]string, cwd string, timeout time.Duration, slotHeld bool) {
 	defer close(done)
-	if slotHeld {
-		defer func() { <-d.sem }()
-	} else {
+	if !slotHeld {
+		w := d.slots.Enqueue()
 		select {
-		case d.sem <- struct{}{}:
-			defer func() { <-d.sem }()
+		case <-w.Ready():
 		case <-parent.Done():
+			d.slots.Cancel(w)
 			d.complete(state, StatusCanceled, "", parent.Err())
 			return
 		}
 	}
+	defer d.slots.Release()
 	// A queued run can be canceled at the same instant a concurrency slot
 	// opens. Do not publish a misleading running transition in that race.
 	if err := parent.Err(); err != nil {
