@@ -120,7 +120,9 @@ func appendToServiceLog(homePath, msg string) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return
 	}
-	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600) //nolint:gosec // leo's own log path
+	// O_NONBLOCK: opening a FIFO with no reader would otherwise hang the
+	// attach; any error just drops the line.
+	f, err := os.OpenFile(path, syscall.O_NONBLOCK|os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600) //nolint:gosec // leo's own log path
 	if err != nil {
 		return
 	}
@@ -160,7 +162,7 @@ func runRemoteAttachPlaced(res config.HostResolution, opts attachOptions, head [
 	// shell would mangle.
 	remoteArgs = append(remoteArgs, "--", remoteShellWord(name))
 	if !opts.cc {
-		return runRemoteAttachVia(res, remoteLeoWord(res.Host.RemoteLeoPath()), remoteArgs...)
+		return runRemoteAttach(res, remoteArgs...)
 	}
 	sshArgs := []string{"-tt", "-e", "none", res.Host.SSH}
 	sshArgs = append(sshArgs, res.Host.SSHArgs...)

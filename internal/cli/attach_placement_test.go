@@ -6,8 +6,11 @@ import (
 	"errors"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
+	"time"
 
 	"github.com/blackpaw-studio/leo/internal/config"
 	"github.com/blackpaw-studio/leo/internal/daemon"
@@ -259,11 +262,21 @@ const quotedDefaultRemoteLeo = `"$HOME"/'.local/bin/leo'`
 
 func runLocalCCAttach(t *testing.T, args ...string) (stdout string, err error) {
 	t.Helper()
+	return runLocalCCAttachWithSpec(t, nil, args...)
+}
+
+// runLocalCCAttachWithSpec is runLocalCCAttach where the attach-spec lookup
+// fails with specErr when it is non-nil.
+func runLocalCCAttachWithSpec(t *testing.T, specErr error, args ...string) (stdout string, err error) {
+	t.Helper()
 	stubTmuxLookPath(t, "/usr/bin/tmux", nil)
 	stubOutsideTmux(t)
 	stubAgentSession(t, func(_, name string) (string, error) { return "leo-" + name, nil })
 	oldSpec := agentAttachSpecFn
 	agentAttachSpecFn = func(context.Context, string, string) (daemon.AgentAttachSpecResponse, error) {
+		if specErr != nil {
+			return daemon.AgentAttachSpecResponse{}, specErr
+		}
 		return daemon.AgentAttachSpecResponse{Name: "scratch", Harness: "claude"}, nil
 	}
 	t.Cleanup(func() { agentAttachSpecFn = oldSpec })
@@ -565,5 +578,94 @@ func TestNonCCAttachKeepsTheStderrWarningWhenRegistrationFails(t *testing.T) {
 	}
 	if _, err := os.Stat(service.LogPathFor(home)); err == nil {
 		t.Error("non-cc warning also went to the log file")
+	}
+}
+
+// The attach-spec lookup failing must not put its warning on the terminal a
+// control-mode client is reading; it goes to the service log.
+func TestCCAttachSpecLookupFailureWarnsOnlyInTheServiceLog(t *testing.T) {
+	path := newAgentCLITestConfig(t)
+	_, stderr := withStubStdio(t)
+	stubPlacementRegistration(t, nil)
+	stdout, err := runLocalCCAttachWithSpec(t, errors.New("daemon busy"), "--config", path, "--host", "localhost")
+	if err != nil {
+		t.Fatalf("attach: %v", err)
+	}
+	if stdout != "" || stderr.Len() != 0 {
+		t.Fatalf("stdout=%q stderr=%q, want both empty", stdout, stderr.String())
+	}
+	logged, _ := os.ReadFile(service.LogPathFor(homeFromConfigPath(path)))
+	if !strings.Contains(string(logged), "driver attach lookup failed") {
+		t.Fatalf("service log = %q, want the lookup warning", logged)
+	}
+}
+
+func TestCCAttachToAStoppedAgentFailsInsteadOfPrompting(t *testing.T) {
+	path := newAgentCLITestConfig(t)
+	_, stderr := withStubStdio(t)
+	stubTmuxLookPath(t, "/usr/bin/tmux", nil)
+	stubOutsideTmux(t)
+	stubAgentSessionFull(t, func(_, name string) (daemon.AgentSessionResponse, error) {
+		return daemon.AgentSessionResponse{Session: "leo-" + name, Name: name, Stopped: true}, nil
+	})
+	oldTTY := agentIsTTY
+	agentIsTTY = func() bool { return true }
+	t.Cleanup(func() { agentIsTTY = oldTTY })
+	argv := stubExecRecording(t)
+
+	root := newRootCmd()
+	root.SetArgs([]string{"--config", path, "agent", "attach", "--host", "localhost", "--cc", "--", "scratch"})
+	var err error
+	stdout := captureProcessStdout(t, func() { err = root.Execute() })
+	if err == nil || stdout != "" || strings.Contains(stderr.String(), "Start it?") || len(*argv) != 0 {
+		t.Fatalf("err=%v stdout=%q stderr=%q exec=%v, want a plain failure", err, stdout, stderr.String(), *argv)
+	}
+}
+
+// A FIFO standing in for service.log with no reader must not hang the attach.
+func TestAppendToServiceLogDoesNotBlockOnAReaderlessFIFO(t *testing.T) {
+	home := t.TempDir()
+	logPath := service.LogPathFor(home)
+	if err := os.MkdirAll(filepath.Dir(logPath), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := syscall.Mkfifo(logPath, 0o600); err != nil {
+		t.Skipf("mkfifo: %v", err)
+	}
+	done := make(chan struct{})
+	go func() {
+		appendToServiceLog(home, "warning: x\n")
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("appendToServiceLog blocked on a FIFO with no reader")
+	}
+}
+
+func TestNonPlacedRemoteAttachQuotesTheRemoteLeoPath(t *testing.T) {
+	path := newAgentCLITestConfig(t)
+	cfg, err := config.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	host := cfg.Client.Hosts["prod"]
+	host.LeoPath = "/opt/Leo Tools/leo"
+	cfg.Client.Hosts["prod"] = host
+	if err := config.Save(path, cfg); err != nil {
+		t.Fatal(err)
+	}
+	for _, args := range [][]string{{"agent", "attach", "scratch"}, {"attach", "scratch"}} {
+		stub := withStubExec(t)
+		withStubStdio(t)
+		root := newRootCmd()
+		root.SetArgs(append([]string{"--config", path}, args...))
+		if err := root.Execute(); err != nil {
+			t.Fatalf("%v: %v", args, err)
+		}
+		if len(stub.calls) != 1 || !containsSeq(stub.calls[0], "'/opt/Leo Tools/leo'") {
+			t.Fatalf("%v: ssh calls = %v, want the quoted leo path", args, stub.calls)
+		}
 	}
 }

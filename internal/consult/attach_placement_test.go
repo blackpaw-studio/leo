@@ -273,3 +273,30 @@ func TestAttachPlacementsListingTakenBeforeARegistrationDoesNotDeleteIt(t *testi
 		t.Fatalf("registration lost: %+v", got)
 	}
 }
+
+// client_created has whole-second resolution: a client is accepted iff its
+// second is not before the registration's second.
+func TestAttachPlacementsClientCreatedBoundary(t *testing.T) {
+	for name, tc := range map[string]struct {
+		registeredAt time.Time
+		created      time.Time
+		want         string
+	}{
+		"same second, registration mid-second":      {attachEpoch.Add(900 * time.Millisecond), attachEpoch, "background"},
+		"same second, registration on the boundary": {attachEpoch, attachEpoch, "background"},
+		"created a second before the registration":  {attachEpoch.Add(time.Second), attachEpoch, "pane"},
+		"created long before":                       {attachEpoch.Add(time.Second + time.Millisecond), attachEpoch, "pane"},
+		"created after":                             {attachEpoch, attachEpoch.Add(time.Second), "background"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			now := tc.registeredAt
+			reg := newTestAttachPlacements(&now)
+			mustRegister(t, reg, "leo-a", 10, "background")
+			now = tc.registeredAt.Add(time.Minute)
+			got := reg.Resolve(context.Background(), "$1", ViewerOverrides{Placement: "pane"}, &config.Config{}, listing(clientAt(10, tc.created)))
+			if got.Placement != tc.want {
+				t.Fatalf("got %q, want %q", got.Placement, tc.want)
+			}
+		})
+	}
+}

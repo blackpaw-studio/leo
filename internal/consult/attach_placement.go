@@ -13,10 +13,6 @@ import (
 )
 
 const (
-	// attachClockSlack covers tmux reporting client_created in whole seconds:
-	// a client that attached just after a registration can read as created
-	// up to a second before it.
-	attachClockSlack = time.Second
 	// maxAttachRegistrations bounds the registry: past it the oldest
 	// registration is evicted.
 	maxAttachRegistrations = 256
@@ -139,7 +135,7 @@ func (a *AttachPlacements) ResolveWithFallback(ctx context.Context, session stri
 	best := ""
 	for _, c := range clients {
 		placement := defaultPlacement
-		if e, ok := a.entries[c.PID]; ok && c.Created.Add(attachClockSlack).Before(e.registeredAt) {
+		if e, ok := a.entries[c.PID]; ok && clientPredates(c.Created, e.registeredAt) {
 			// The listed process predates the registration. If the
 			// registration came first, a different process now owns the pid;
 			// if it came after the listing began, this is the previous owner
@@ -156,6 +152,16 @@ func (a *AttachPlacements) ResolveWithFallback(ctx context.Context, session stri
 	}
 	base.Placement = best
 	return base
+}
+
+// clientPredates reports whether a client created at created cannot be the
+// process that registered at registeredAt. tmux reports client_created in
+// whole seconds, so the exact rule is created >= floor(registeredAt to the
+// second); a client created before that second is a previous owner of the
+// pid. Residual window, accepted: an old client created in the same second
+// as the registration whose pid is reused within that second still matches.
+func clientPredates(created, registeredAt time.Time) bool {
+	return created.Before(registeredAt.Truncate(time.Second))
 }
 
 // visibility ranks placements, most visible first; unknown ranks lowest.

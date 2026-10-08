@@ -616,7 +616,7 @@ func attachLocal(ctx context.Context, cmd *cobra.Command, homePath, query string
 	// attach-spec lookup below. Shares ensureAgentRunning with the top-level
 	// `leo attach` door so the prompt behaves identically from either entry
 	// point.
-	ok, err := ensureAgentRunning(ctx, cmd, homePath, session.Name, session.Stopped)
+	ok, err := ensureAgentRunningPrompt(ctx, cmd, homePath, session.Name, session.Stopped, !opts.cc)
 	if err != nil {
 		return err
 	}
@@ -646,7 +646,13 @@ func attachLocal(ctx context.Context, cmd *cobra.Command, homePath, query string
 			return err
 		}
 	} else {
-		fmt.Fprintf(agentStderr, "warning: driver attach lookup failed (%v); falling back to tmux attach\n", err)
+		msg := fmt.Sprintf("warning: driver attach lookup failed (%v); falling back to tmux attach\n", err)
+		if opts.cc {
+			// Nothing may precede the exec on a control-mode terminal.
+			appendToServiceLog(homePath, msg)
+		} else {
+			_, _ = fmt.Fprint(agentStderr, msg)
+		}
 	}
 
 	err = attachTmuxSession(config.HostResolution{Localhost: true}, session.Session, opts)
