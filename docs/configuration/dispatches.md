@@ -287,13 +287,21 @@ waiting run is rejected like a send to a running one; cancel works as usual.
 An interactive dispatch is bound to its caller's tmux session. It closes on
 cancel, TUI exit, one hour of empty-composer idle time, or the session timeout.
 Nothing survives a daemon restart, and interactive panes never close merely
-because their result was collected. Known limitations: Stop/submit attribution for shell-hook (non-bridged)
-claude sessions depends on the order the hooks arrive in, since their
-payloads carry no turn id: a lost or late submit can attribute a Stop to the
-wrong turn or open a spurious steered user turn. The proper fix is exact turn
-identity (such as the bridge's turn ids). Also, opencode is unsupported;
-there is a narrow delivery-attribution race when a human submits during an
-armed orchestrator send; hook reports are accepted even if forged.
+because their result was collected.
+
+Known limitations: turns are attributed by the harness's own ids (claude's
+`prompt_id`, the bridge's turn id, codex's `turn_id`), not by arrival order
+or prompt text. A replayed or late hook for a finished turn is dropped, a Stop
+that beats its submit closes the right turn, and a bridged claude (the
+leo-bridge mod) claims each sent turn by the command id the mod stamps on it.
+What remains is the tmux-paste path (codex, or claude without the bridge): a
+submit that arrives after its send's ack window is matched to the send by
+prompt text, so a human prompt with identical text can be mistaken for it, and
+a human submit inside that window can claim the send. Claude also fires a
+prompt queued into a running turn under that running turn's id and gives the
+queued turn its own id only on its Stop, so without the bridge a human-queued
+prompt that runs as its own turn after the Stop is not tracked as a turn.
+Also, opencode is unsupported; hook reports are accepted even if forged.
 
 An orchestrator flow looks like this:
 
