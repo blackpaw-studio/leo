@@ -60,11 +60,14 @@ const (
 	FeatureDispatchAttach  = "dispatch_attach"
 	FeatureDispatchRemoved = "dispatch_removed"
 	FeatureStateSeq        = "state_seq"
+	// FeatureAttachDispatchPlacement: `leo agent attach --dispatch-placement`
+	// steers where dispatch viewers open for the attached client.
+	FeatureAttachDispatchPlacement = "attach_dispatch_placement"
 )
 
 // Features returns the hello's features list, a fresh copy each call.
 func Features() []string {
-	return []string{FeatureBridgeTurns, FeatureAttentionReason, FeatureDispatchTree, FeatureAgentUsage, FeatureAgentControl, FeatureDispatchAttach, FeatureDispatchRemoved, FeatureStateSeq}
+	return []string{FeatureBridgeTurns, FeatureAttentionReason, FeatureDispatchTree, FeatureAgentUsage, FeatureAgentControl, FeatureDispatchAttach, FeatureDispatchRemoved, FeatureStateSeq, FeatureAttachDispatchPlacement}
 }
 
 // ActivityMinInterval is the most often agent_activity is published per

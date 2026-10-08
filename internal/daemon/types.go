@@ -118,6 +118,15 @@ type AgentSessionResponse struct {
 	Stopped bool   `json:"stopped,omitempty"`
 }
 
+// AttachPlacementRequest is the body of POST /attach/placement: the attaching
+// process (Pid, which becomes the tmux client) of Session asks that dispatch
+// viewers open as Placement (pane, window or background) while it is attached.
+type AttachPlacementRequest struct {
+	Session   string `json:"session"`
+	Pid       int    `json:"pid"`
+	Placement string `json:"placement"`
+}
+
 // AgentResolveResponse is the payload for GET /agents/resolve?q=<query>.
 type AgentResolveResponse struct {
 	Name    string `json:"name"`
