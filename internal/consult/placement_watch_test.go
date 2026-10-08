@@ -756,3 +756,50 @@ func TestRejoinedNestedViewersRecordTheCallersLiveWindow(t *testing.T) {
 		t.Fatalf("live splits counted in the caller's window = %d, want both viewers", n)
 	}
 }
+
+func (f *liveFixture) pinned(id string) bool {
+	f.t.Helper()
+	_, state, err := f.d.lookup(id)
+	if err != nil || state == nil {
+		f.t.Fatalf("pinned %s: %v", id, err)
+	}
+	f.d.mu.Lock()
+	defer f.d.mu.Unlock()
+	return state.pinned
+}
+
+var elsewhere = PaneLocation{SessionID: "$7", SessionName: "elsewhere", WindowID: "@70", WindowPanes: 1, SessionWindows: 2}
+
+func TestShowPaneDoesNotJoinAViewerTheUserMovedToAnotherSession(t *testing.T) {
+	f := newLiveFixture(t)
+	started := f.start(nil)
+	f.idle(started.ID)
+	f.rt.place(started.Pane, elsewhere)
+
+	if _, err := f.d.Send(context.Background(), started.ID, "next"); err != nil {
+		t.Fatal(err)
+	}
+	if f.rt.count("show") != 0 || f.rt.count("inject "+started.Pane) != 2 {
+		t.Fatalf("events = %v, want the follow-up injected without joining the pane", f.rt.log())
+	}
+	if !f.pinned(started.ID) {
+		t.Fatal("a viewer parked in another session must be pinned")
+	}
+}
+
+func TestOrchestratorStopDoesNotHideAManuallyRelocatedSplit(t *testing.T) {
+	f := newLiveFixture(t)
+	started := f.start(nil)
+	waitForInjection(t, f.rt.fakeInteractiveRuntime)
+	_ = f.d.Report(started.ID, hook(t, "UserPromptSubmit", "a"))
+	f.rt.place(started.Pane, elsewhere)
+	_ = f.d.Report(started.ID, hook(t, "Stop", "a"))
+	f.flush(started.ID)
+
+	if f.rt.count("hide") != 0 || f.kind(started.ID) != "split" {
+		t.Fatalf("events = %v, kind = %q, want the relocated split left alone", f.rt.log(), f.kind(started.ID))
+	}
+	if !f.pinned(started.ID) {
+		t.Fatal("a split moved to another session must be pinned")
+	}
+}

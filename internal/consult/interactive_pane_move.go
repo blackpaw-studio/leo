@@ -155,9 +155,28 @@ func (d *Dispatcher) reconcilePane(s *runState) {
 	d.mu.Unlock()
 }
 
+// ownedPane reports whether the run's pane is still where this dispatcher put
+// it, for the moves that act on the pane's current place. A runtime that cannot
+// say owns every pane; one that can pins a pane the user moved to another
+// session (see locateOwnedPane).
+func (d *Dispatcher) ownedPane(s *runState) (PaneLocation, bool) {
+	d.mu.Lock()
+	locator, ok := d.interactiveRuntime.(backgroundMoverRuntime)
+	rec := cloneRecord(s.record)
+	d.mu.Unlock()
+	if !ok {
+		return PaneLocation{}, true
+	}
+	return d.locateOwnedPane(s, locator, rec)
+}
+
 // hidePane breaks the run's pane out of the caller's window into a window of
-// its own, named like the run's viewer, and records where it went.
+// its own, named like the run's viewer, and records where it went. A pane the
+// user moved elsewhere is left where it is.
 func (d *Dispatcher) hidePane(s *runState) bool {
+	if _, owned := d.ownedPane(s); !owned {
+		return false
+	}
 	d.mu.Lock()
 	mover, _ := d.interactiveRuntime.(paneMoverRuntime)
 	id, pane, name, callerWindow := s.record.ID, s.record.PaneID, viewerWindowName(s.record), s.record.CallerWindowID
@@ -182,8 +201,12 @@ func (d *Dispatcher) hidePane(s *runState) bool {
 
 // showPane returns a hidden pane below its caller, where it launched. When
 // that is impossible (the caller is gone) the pane stays in its own window,
-// which then is simply its window and is no longer moved.
+// which then is simply its window and is no longer moved. So is a pane the
+// user moved to another session (it is pinned).
 func (d *Dispatcher) showPane(s *runState) bool {
+	if _, owned := d.ownedPane(s); !owned {
+		return false
+	}
 	d.mu.Lock()
 	mover, _ := d.interactiveRuntime.(paneMoverRuntime)
 	id, pane, target, window := s.record.ID, s.record.PaneID, s.record.CallerPaneID, s.record.CallerWindowID
