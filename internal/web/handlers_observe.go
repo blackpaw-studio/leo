@@ -205,9 +205,18 @@ func buildSnapshot(in snapshotInput) observe.Snapshot {
 // dispatchSnapshot reads the dispatch list once, nil-safe.
 func dispatchSnapshot(p dispatchProvider, now time.Time) []observe.Dispatch {
 	if p == nil {
-		return nil
+		return []observe.Dispatch{}
 	}
-	return p.Dispatches(now)
+	// Empty, never null: consumers range over this without a nil check.
+	return append([]observe.Dispatch{}, p.Dispatches(now)...)
+}
+
+// DispatchRows is the snapshot's dispatches (live plus lingering) for an
+// agent-source dispatch seam; the same set GET /api/v1/state reports. A
+// source that only counts dispatches yields an empty list.
+func DispatchRows(src observe.DispatchCounter, now time.Time) []observe.Dispatch {
+	p, _ := src.(dispatchProvider)
+	return dispatchSnapshot(p, now)
 }
 
 // agentViews is every per-agent source read once for one projection.

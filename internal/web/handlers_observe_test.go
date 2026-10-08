@@ -954,13 +954,13 @@ func (f *fakeDispatchProvider) Dispatches(now time.Time) []observe.Dispatch {
 
 func (f *fakeDispatchProvider) OutstandingDispatches() map[string]int { return nil }
 
-func TestBuildSnapshotWithoutBridgeOrDispatchSourcesIsUnchanged(t *testing.T) {
+func TestBuildSnapshotWithoutBridgeSourcesOmitsBridgeFields(t *testing.T) {
 	snap := buildSnapshot(snapshotInput{Records: []agent.Record{{Name: "agent-a"}}, Now: time.Now()})
 	raw, err := json.Marshal(snap)
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, key := range []string{`"dispatches"`, `"usage"`, `"outstanding"`, `"bridge"`, `"reason"`} {
+	for _, key := range []string{`"usage"`, `"outstanding"`, `"bridge"`, `"reason"`} {
 		if bytes.Contains(raw, []byte(key)) {
 			t.Fatalf("snapshot %s carries %s with no source wired", raw, key)
 		}
@@ -977,5 +977,22 @@ func TestBuildSnapshotDispatchesFromProvider(t *testing.T) {
 	}
 	if !p.gotNow.Equal(now) {
 		t.Fatalf("provider asked for now=%v, want %v", p.gotNow, now)
+	}
+}
+
+func TestBuildSnapshotEmitsEmptyDispatchesArray(t *testing.T) {
+	for name, in := range map[string]snapshotInput{
+		"no source":    {Now: time.Now()},
+		"empty source": {Dispatches: countingDispatches{}, Now: time.Now()},
+	} {
+		t.Run(name, func(t *testing.T) {
+			raw, err := json.Marshal(buildSnapshot(in))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !strings.Contains(string(raw), `"dispatches":[]`) {
+				t.Fatalf("want \"dispatches\":[] in %s", raw)
+			}
+		})
 	}
 }

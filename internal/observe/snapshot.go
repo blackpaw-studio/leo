@@ -36,8 +36,8 @@ type Snapshot struct {
 	RecentMessages []AgentMessage `json:"recent_messages"`
 	// Dispatches are live leo dispatches plus those ended within
 	// DispatchLinger, flat: clients build the tree from ParentDispatchID.
-	// Absent when the daemon has no dispatch source.
-	Dispatches []Dispatch `json:"dispatches,omitempty"`
+	// Always present: empty when there are none or no dispatch source.
+	Dispatches []Dispatch `json:"dispatches"`
 }
 
 // SnapshotMeta is the snapshot's place in the event stream.
