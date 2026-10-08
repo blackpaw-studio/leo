@@ -232,8 +232,8 @@ func (r *TmuxInteractiveRuntime) Launch(ctx context.Context, req LaunchRequest) 
 	}
 	if session == "" {
 		session = dispatchViewerSession
-		if r.run(ctx, "has-session", "-t", tmux.Target(session)) != nil && r.run(ctx, "new-session", "-d", "-s", session) != nil && r.run(ctx, "has-session", "-t", tmux.Target(session)) != nil {
-			return "", "", fmt.Errorf("create fallback tmux session %q", session)
+		if err := r.ensureDispatchSession(ctx); err != nil {
+			return "", "", err
 		}
 	}
 	label := viewerWindowName(Record{ID: req.ID, Name: req.Name, Template: req.Template})

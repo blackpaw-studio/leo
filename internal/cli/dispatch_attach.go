@@ -23,7 +23,7 @@ import (
 // watchSessionPrefix names the throwaway tmux sessions `dispatch attach`
 // creates. It must never start with "leo-": that prefix marks supervised
 // agents, and the daemon would try to manage it.
-const watchSessionPrefix = "_watch-"
+const watchSessionPrefix = consult.DispatchWatchSessionPrefix
 
 // dispatchIDPattern is what a dispatch id may contain. It keeps an id usable
 // as a tmux session name and as a single shell token on a remote host.
