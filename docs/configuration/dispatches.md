@@ -324,8 +324,12 @@ way it's labeled `<label>·<hex4>`, using the run name when set or its
 template otherwise; labels replace whitespace, `:`, and `.` with `-` and are
 truncated to 24 characters. It runs `leo dispatch watch <id>` with
 `remain-on-exit` enabled. The pane or window closes when a successful result
-is collected via `leo_wait`, `leo dispatch run`, or web
-`/api/dispatch/wait`. Failed, canceled, and timed-out runs remain open for
+is collected: via `leo_wait`, `leo dispatch run`, or web `/api/dispatch/wait`,
+or when its completion notification is delivered inline (claude callers; a
+pointer-only codex/opencode notification collects nothing). Collection also
+removes a clean isolated worktree, keeping a dirty or unmerged one, and a
+second collection is a no-op; `leo_dispatch_output` keeps working afterwards.
+An interactive dispatch's pane is never closed by collection. Failed, canceled, and timed-out runs remain open for
 about one hour for post-mortem inspection. Use `leo dispatch watch <id>` to
 replay the stream anytime. Tmux is observability only: any tmux failure is
 logged and never prevents a dispatch from running. `leo_consult` does not open

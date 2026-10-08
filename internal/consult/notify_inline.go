@@ -1,6 +1,7 @@
 package consult
 
 import (
+	"context"
 	"fmt"
 	"strings"
 	"time"
@@ -107,4 +108,26 @@ func tokenCount(p *int64) int64 {
 		return 0
 	}
 	return *p
+}
+
+// collectDelivered collects the run after its result was delivered inline,
+// as leo_wait would have on the same result: the entry leo_wait returns for
+// this notification's turn must be terminal, and a result for an older turn
+// of a headless run that has moved on collects nothing.
+func (d *Dispatcher) collectDelivered(ctx context.Context, item pendingNotification) {
+	d.mu.Lock()
+	rec, done := cloneRecord(item.state.record), item.state.done
+	d.mu.Unlock()
+	if !waitEntryFor(rec, item.key).Status.Terminal() || isSupersededHeadlessTurn(rec, item.key) {
+		return
+	}
+	unlock := d.serialLocks([]string{rec.ID})
+	defer unlock()
+	d.collectRun(ctx, rec.ID, item.state, done)
+}
+
+// isSupersededHeadlessTurn mirrors leo_wait's skip of cleanup for a
+// headless turn that is not the run's latest.
+func isSupersededHeadlessTurn(rec Record, key string) bool {
+	return rec.Mode != ModeInteractive && strings.Contains(key, "#") && len(rec.Turns) > 0 && key != rec.Turns[len(rec.Turns)-1].TurnID
 }

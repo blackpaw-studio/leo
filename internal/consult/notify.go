@@ -290,11 +290,13 @@ func (d *Dispatcher) deliverNotification(ctx context.Context, delivery Notificat
 	rec := cloneRecord(item.state.record)
 	d.mu.Unlock()
 	err := deliverNotificationLine(ctx, delivery, rec, transport, item.key, deliveryMessage(rec, item.key, n, transport))
+	collect := false
 	d.mu.Lock()
 	n = item.state.record.Notifications[item.key]
 	switch {
 	case err == nil:
 		n.Disposition, n.DeliveredAt = NotificationDelivered, d.now()
+		collect = carriesResultInline(rec, transport)
 	case errors.Is(err, ErrNotificationNotSent):
 		// Nothing was sent or queued, so the next sweep may pick again.
 		n.Disposition, n.ClaimedAt, n.Transport = NotificationPending, time.Time{}, ""
@@ -304,6 +306,9 @@ func (d *Dispatcher) deliverNotification(ctx context.Context, delivery Notificat
 	item.state.record.Notifications[item.key] = n
 	_ = d.persistNotificationRecordLocked(item.state)
 	d.mu.Unlock()
+	if collect {
+		d.collectDelivered(ctx, item)
+	}
 }
 
 // redeliverBridgeClaim queues a bridge claim a restart interrupted again,
@@ -316,11 +321,20 @@ func (d *Dispatcher) redeliverBridgeClaim(ctx context.Context, delivery Notifica
 	if errors.Is(err, ErrNotificationNotSent) {
 		return
 	}
+	if d.settleBridgeClaim(item, err) && err == nil {
+		// Outside d.mu: collecting takes it again.
+		d.collectDelivered(ctx, item)
+	}
+}
+
+// settleBridgeClaim records the outcome of redelivering a bridge claim; it
+// reports whether item's claim was still the bridge's to settle.
+func (d *Dispatcher) settleBridgeClaim(item pendingNotification, err error) bool {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	n := item.state.record.Notifications[item.key]
 	if n.Disposition != NotificationClaimed || n.Transport != NotificationTransportBridge {
-		return
+		return false
 	}
 	if err == nil {
 		n.Disposition, n.DeliveredAt = NotificationDelivered, d.now()
@@ -329,6 +343,7 @@ func (d *Dispatcher) redeliverBridgeClaim(ctx context.Context, delivery Notifica
 	}
 	item.state.record.Notifications[item.key] = n
 	_ = d.persistNotificationRecordLocked(item.state)
+	return true
 }
 
 func notificationMessage(rec Record, key string, n Notification) string {
