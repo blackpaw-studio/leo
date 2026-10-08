@@ -43,3 +43,34 @@ or `settling`. A `split` pane (shares the caller's window) and a `hidden` pane
 exists, attachable or not. Both fields are derived from the recorded placement,
 which the pane reconciler keeps current, so a move republishes
 `dispatch_changed`. Go callers use `consult.Attachable(Record)`.
+
+## 3. `leo [--host H] dispatch attach <id>`
+
+1. Fetch the record (`GET /api/dispatch/<id>`) and check `consult.Attachable`.
+   An unknown id, a headless run, an ended one (terminal, `closed`,
+   `settling` aside), and a split or hidden pane each print one line to stderr
+   and exit 1 (`SilenceUsage`/`SilenceErrors`; no tmux is touched).
+2. Probe live that the pane's window has exactly one pane
+   (`display-message -p -t %N '#{window_id} #{window_panes}'`); the record can
+   be stale.
+3. `new-session -d -s _watch-<id>-<rand>` (never a `leo-` prefix, which marks
+   supervised agents), `link-window` the dispatch's window into it, `kill-window`
+   the placeholder window `new-session` made, `set-option status off`.
+4. `tmux -L leo attach -r -t =_watch-…` (`-r`: keystrokes never reach the
+   dispatch; popup variant inside tmux). Panes are never moved or broken out.
+5. Any failure before the attach kills the watch session.
+
+`destroy-unattached` is armed by a `client-attached` hook, not set up front.
+Verified against tmux 3.6a on an isolated `TMUX_TMPDIR` socket: setting
+`destroy-unattached on` on a session that has no client destroys it at once,
+before the attach could start. With the hook, detaching destroys the session
+(the dispatch window survives in its own session), and the dispatch's window
+closing destroys it and the client exits 0.
+
+Remote: `ssh -tt <host> <leo> dispatch attach '<id>'`, the id a single
+shell-quoted token. The remote leo prints its own one-line reason; only its
+exit status is propagated.
+
+Known behavior: startup-dialog auto-dismiss skips sessions with an attached
+client (`session_attached`). The watch session is a different session, so the
+dispatch's own session still reads 0 attached.

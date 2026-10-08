@@ -155,6 +155,8 @@ leo dispatch run --role implement --effort high "Add the parser tests"
 leo dispatch run codex-implementer "Inspect only" --notify=false
 leo dispatch list
 leo dispatch watch d-12ab34
+leo dispatch attach d-12ab34
+leo dispatch attach d-12ab34 --host prod
 leo dispatch show d-12ab34
 leo dispatch output d-12ab34 --tail 120
 leo dispatch send d-12ab34 "Please also cover malformed input"
@@ -167,6 +169,20 @@ opening turn. `list` and `watch` also work for consults, preserving the older
 Ctrl-C only detaches. `show` prints a record as JSON. `list` and `watch`
 support `--host`; `run`, `show`, `output`, `send`, and `cancel` currently require the
 local daemon.
+
+`attach` shows an interactive dispatch's live TUI, read-only. It links the
+dispatch's own tmux window into a throwaway `_watch-<id>-<rand>` session and
+attaches a read-only (`tmux attach -r`) client to that, so nothing typed
+reaches the dispatch and no pane is moved. The throwaway session removes
+itself when you detach or when the dispatch's window closes (exit status 0
+either way); the dispatch keeps running. Inside tmux, `attach` opens the same
+view in a popup. It prints a one-line reason and exits 1 for an unknown,
+headless, or ended dispatch, and for one whose pane is split into its caller's
+window or is hidden (use `background` placement, or `leo dispatch watch`).
+`--host` runs the remote leo over `ssh -tt`. `leo agent attach` is unchanged.
+Because the dispatch's own session has no client attached, the auto-dismiss of
+Claude startup dialogs (which skips attached sessions) can still act on a
+dispatch someone is watching this way.
 
 `list` includes measured `INPUT`, `OUTPUT`, `COST_USD`, `USAGE_TURNS`, and
 `TOOLS`. An em dash is unknown; zero is measured. Claude reports native token
