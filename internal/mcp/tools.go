@@ -345,7 +345,7 @@ func newRegistry(client *daemonClient, processName string, perms leotools.Permis
 	})
 
 	r.addContext(toolDef{
-		Name: "leo_dispatch", Description: allowNote("Run a subagent on the template's harness/model in your project directory. mode interactive runs a real TUI, usually split as a pane in your current tmux window (falling back to a separate window, or a background session if your caller can't be resolved), that the user may watch; the result comes from the harness's own turn hooks. Send every follow-up through leo_send_dispatch; never ask the user to type into the pane. Returns immediately; collect with leo_wait.", "dispatch to these templates", perms.CanConsult),
+		Name: "leo_dispatch", Description: allowNote("Run a subagent on the template's harness/model in your project directory. mode interactive runs a real TUI, usually split as a pane in your current tmux window (falling back to a separate window, or a background session if your caller can't be resolved), that the user may watch; the result comes from the harness's own turn hooks. Send every follow-up through leo_send_dispatch; never ask the user to type into the pane. Returns immediately. With notify on (default), end your turn: the completion message carries the result. leo_wait only to block within this turn or if it says truncated (or leo_dispatch_output); codex/opencode callers collect with leo_wait.", "dispatch to these templates", perms.CanConsult),
 		InputSchema: objectSchema(map[string]any{"template": map[string]any{"type": "string"}, "role": map[string]any{"type": "string"}, "prompt": map[string]any{"type": "string"}, "model": map[string]any{"type": "string"}, "effort": map[string]any{"type": "string"}, "cwd": map[string]any{"type": "string"}, "name": map[string]any{"type": "string"}, "mode": map[string]any{"type": "string", "enum": []string{"headless", "interactive"}}, "notify": map[string]any{"type": "boolean", "description": "notify the caller when complete; defaults to true"}, "isolation": map[string]any{"type": "string", "enum": []string{"worktree"}, "description": "run from a managed Git worktree created at the current committed HEAD"}, "timeout_seconds": map[string]any{"type": "number", "description": "optional run cap in seconds; unlimited when omitted"}}, "prompt"),
 	}, func(ctx context.Context, args map[string]any) (string, error) {
 		template, _ := args["template"].(string)
@@ -438,7 +438,7 @@ func newRegistry(client *daemonClient, processName string, perms leotools.Permis
 	r.addContext(toolDef{Name: "leo_delegation", Description: "Show active delegation routing.", InputSchema: emptyArgs}, func(ctx context.Context, _ map[string]any) (string, error) { return client.delegationStatus(ctx) })
 
 	r.addContext(toolDef{
-		Name: "leo_send_dispatch", Description: allowNote("Continue a terminal headless dispatch in its captured native session, or send a follow-up to an idle interactive dispatch. Never send while a turn is running. Returns a turn id to pass to leo_wait. Headless continuation requires a resumable session and available retained workspace; interactive delivery may be acknowledged asynchronously, so never re-send based on delivered alone — wait on the turn id. A rejection means nothing was sent.", "send to dispatched templates", perms.CanConsult),
+		Name: "leo_send_dispatch", Description: allowNote("Continue a terminal headless dispatch in its captured native session, or send a follow-up to an idle interactive dispatch. Never send while a turn is running. Returns a turn id; with notify on, end your turn and the completion message carries its result; leo_wait on it only to block in-turn. Headless continuation requires a resumable session and available retained workspace; interactive delivery may be acknowledged asynchronously, so never re-send based on delivered alone — wait on the turn id. A rejection means nothing was sent.", "send to dispatched templates", perms.CanConsult),
 		InputSchema: objectSchema(map[string]any{
 			"id":         map[string]any{"type": "string"},
 			"message":    map[string]any{"type": "string", "description": "Follow-up text. Omit when answering a needs_input permission request with decision."},
@@ -488,7 +488,7 @@ func newRegistry(client *daemonClient, processName string, perms leotools.Permis
 	})
 
 	r.addContext(toolDef{
-		Name: "leo_wait", Description: allowNote("Wait for dispatched subagents for at most 1799 seconds per call. On timeout, running ids come back as running; call leo_wait again.", "wait on dispatched templates", perms.CanConsult),
+		Name: "leo_wait", Description: allowNote("Block until dispatched subagents finish, at most 1799 seconds per call; only needed when you need the result within this turn, are blocked on a follow-up turn id, or a notification said truncated. On timeout, running ids come back as running; call leo_wait again.", "wait on dispatched templates", perms.CanConsult),
 		InputSchema: objectSchema(map[string]any{"ids": map[string]any{"type": "array", "items": map[string]any{"type": "string"}}, "timeout_seconds": map[string]any{"type": "number"}}, "ids"),
 	}, func(ctx context.Context, args map[string]any) (string, error) {
 		raw, ok := args["ids"].([]any)
@@ -622,7 +622,7 @@ const consultDescription = "Run a one-off consultant subagent for a second opini
 	"Those names are templates (see leo_list_templates), not running agents, so leo_send_message is the wrong tool for them. " +
 	"The template determines the harness and model; `model` optionally overrides the template's model. " +
 	"The prompt must be self-contained: the consultant sees none of your conversation, only files in your workspace. " +
-	"Waits for and returns the consultant's answer directly. For delegated implementation, review, or exploration that should continue asynchronously, use leo_dispatch and then leo_wait instead."
+	"Waits for and returns the consultant's answer directly. For delegated implementation, review, or exploration that should continue asynchronously, use leo_dispatch instead and end your turn; its completion message delivers the result."
 
 // forkConsultDescription is leo_consult's fork argument description.
 const forkConsultDescription = "true asks a fork of yourself instead of a template: same model, sees this whole conversation, no tools, cheapest; " +

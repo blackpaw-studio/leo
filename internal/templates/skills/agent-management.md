@@ -3,8 +3,12 @@
 Leo can spawn and manage ephemeral coding agents two ways: the HTTP API (used by channel plugins and the web UI) and the `leo agent` CLI (Bash tool, SSH). Both share one in-memory manager so state is always consistent. Agents run in tmux with `--remote-control` and appear in claude.ai/code.
 
 For bounded work that does not need a persistent agent or a branch, use
-`leo_dispatch`: it starts a template asynchronously, returns an ID, and
-`leo_wait` collects the result. It is headless by default; pass
+`leo_dispatch`: it starts a template asynchronously and returns an ID. With
+notifications on (the default), end your turn: a claude caller's completion
+message carries the result inline (capped at 8 KiB; if it says truncated, read
+`leo_dispatch_output`). Use `leo_wait` only to block within the same turn, to
+wait on a follow-up turn id you are blocked on, or when you are a codex or
+opencode caller (whose notification is a pointer only). It is headless by default; pass
 `mode: "interactive"` to run a Codex/Claude TUI in the caller's tmux session
 that the user may watch. Send follow-ups through `leo_send_dispatch` (only
 when the run is idle); never ask the user to type into a dispatch pane. Once review
