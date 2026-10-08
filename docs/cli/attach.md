@@ -5,7 +5,7 @@ Top-level shortcut for [`leo agent attach`](agent.md).
 ## Usage
 
 ```bash
-leo attach [name] [--host <host>] [--cc]
+leo attach [name] [--host <host>] [--cc] [--dispatch-placement pane|window|background]
 ```
 
 ## Description
@@ -22,6 +22,7 @@ When `--host` targets a remote, Leo delegates the whole resolution to the server
 |------|-------------|
 | `--host <name>` | Target a remote host defined under `client.hosts` in the config. |
 | `--cc` | Render the session as a native tab via tmux control mode. Requires a tmux-aware terminal (iTerm2, WezTerm). |
+| `--dispatch-placement <pane\|window\|background>` | Open dispatch viewers that way while this client is attached. See [Viewer placement](../configuration/dispatches.md#per-attach-placement). |
 
 ## Examples
 
@@ -37,6 +38,9 @@ leo attach fetch --host prod
 
 # Render as a native tab in a tmux control-mode-aware terminal
 leo attach coding-assistant --cc
+
+# Keep this client's dispatch viewers out of the agent's session
+leo attach coding-assistant --dispatch-placement background
 ```
 
 ## See Also

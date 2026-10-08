@@ -41,6 +41,7 @@ var lookupAgentSession = daemon.AgentSession
 func newAttachCmd() *cobra.Command {
 	var host string
 	var cc bool
+	var dispatchPlacement string
 	cmd := &cobra.Command{
 		Use:   "attach [name]",
 		Short: "Attach to a running agent",
@@ -51,7 +52,10 @@ client does not need to know the remote's agent list.
 
 Passing no name opens an interactive arrow-key picker over the available
 agents. Pass --cc in a tmux-aware terminal (iTerm2, WezTerm) to render the
-session as a native tab via tmux control mode.`,
+session as a native tab via tmux control mode.
+
+--dispatch-placement pane|window|background opens dispatch viewers that way
+while this client stays attached; see 'leo agent attach --help'.`,
 		Example: `  # Attach to a running agent by name
   leo attach coding-assistant
 
@@ -63,11 +67,14 @@ session as a native tab via tmux control mode.`,
 		Args:              cobra.MaximumNArgs(1),
 		ValidArgsFunction: completeAgentNames,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if err := validateDispatchPlacement(dispatchPlacement); err != nil {
+				return err
+			}
 			cfg, res, err := dispatch(host)
 			if err != nil {
 				return err
 			}
-			opts := attachOptions{cc: cc}
+			opts := attachOptions{cc: cc, dispatchPlacement: dispatchPlacement, homePath: cfg.HomePath}
 
 			if len(args) == 0 {
 				return runAttachPicker(cmd.Context(), cfg, res, opts)
@@ -77,7 +84,12 @@ session as a native tab via tmux control mode.`,
 			// Remote: hand the whole `leo attach <name>` invocation to the server so
 			// it can resolve ambiguity with its own view of agents.
 			if !res.Localhost {
-				err := runRemoteAttach(res, "attach", name)
+				var err error
+				if dispatchPlacement != "" {
+					err = runRemoteAttachPlaced(res, opts, []string{"attach"}, name)
+				} else {
+					err = runRemoteAttach(res, "attach", name)
+				}
 				if err == nil {
 					stampLastAttached(cfg.HomePath, res.Name, name, time.Now())
 				}
@@ -132,6 +144,7 @@ session as a native tab via tmux control mode.`,
 	}
 	addHostFlag(cmd, &host)
 	addControlModeFlag(cmd, &cc)
+	addDispatchPlacementFlag(cmd, &dispatchPlacement)
 	return cmd
 }
 

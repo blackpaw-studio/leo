@@ -170,6 +170,9 @@ func attachPickedAgent(ctx context.Context, cfg *config.Config, a picker.Agent, 
 		}
 		return attachChosenSession(ctx, cfg, res, choice, opts)
 	}
+	if opts.dispatchPlacement != "" {
+		return runRemoteAttachPlaced(res, opts, []string{"agent", "attach"}, a.Name)
+	}
 	return runRemoteAttach(res, "agent", "attach", a.Name)
 }
 

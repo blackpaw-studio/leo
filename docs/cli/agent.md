@@ -11,7 +11,7 @@ leo agent spawn <template> --repo <owner/repo>                     # spawn from 
 leo agent spawn <template> --repo <name> --name <n>                # spawn with a custom name
 leo agent spawn <template> --repo <owner/repo> --worktree <branch> # spawn into a dedicated git worktree
 leo agent worktree <agent> <branch>                                # spawn a worktree agent branched off an existing agent
-leo agent attach <name>                                            # attach to the agent's tmux session
+leo agent attach <name> [--cc] [--dispatch-placement P]           # attach to the agent's tmux session
 leo agent session-name <query>                                     # print the tmux session name
 leo agent stop <name>                                              # stop a running agent — always dormant, never deletes anything
 leo agent start <name>                                             # start a dormant agent, rejoining its prior conversation
@@ -191,6 +191,13 @@ single-candidate auto-attach shortcut.
 Pass `--cc` to open the session in tmux control mode (`-CC`), which iTerm2
 and WezTerm pick up as a native tab. Control mode is refused cleanly from
 inside tmux or over SSH.
+
+Pass `--dispatch-placement pane|window|background` to choose where dispatch
+viewers open while this client stays attached; see
+[Per-attach placement](../configuration/dispatches.md#per-attach-placement).
+It works with and without `--cc`, locally and over `--host` (the remote leo
+does the attach, so `--cc` then runs `ssh -tt -e none <host> leo agent attach
+--cc …`), and is refused from inside tmux, where the attach is a popup.
 
 `<name>` accepts shorthand — see [Shorthand Resolution](#shorthand-resolution).
 Detach with the normal tmux prefix + `d` (default: `C-b d`). The agent keeps

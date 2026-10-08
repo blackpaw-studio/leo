@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -8,10 +9,13 @@ import (
 	"os/signal"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/blackpaw-studio/leo/internal/config"
+	"github.com/blackpaw-studio/leo/internal/daemon"
 	"github.com/blackpaw-studio/leo/internal/harness"
 	"github.com/blackpaw-studio/leo/internal/tmux"
+	"github.com/spf13/cobra"
 )
 
 // hintRemoteTmuxMissing enriches a remote tmux failure with actionable
@@ -65,6 +69,79 @@ type attachOptions struct {
 	// status passed through) instead of replacing leo with tmux, for callers
 	// that must clean up after the client leaves or fails to start.
 	asChild bool
+	// dispatchPlacement (pane, window or background) asks the daemon to open
+	// dispatch viewers that way while this client is attached; see
+	// registerAttachPlacement. Empty leaves placement to the session and
+	// config defaults.
+	dispatchPlacement string
+	// homePath is the leo home whose daemon the placement registers with.
+	homePath string
+}
+
+// attachPlacementRegisterFn is the testability seam for registering a
+// per-attach dispatch placement with the daemon.
+var attachPlacementRegisterFn = daemon.RegisterAttachPlacement
+
+// attachPlacementRegisterTimeout bounds the registration so a wedged daemon
+// cannot hold up an attach.
+const attachPlacementRegisterTimeout = 3 * time.Second
+
+// registerAttachPlacement tells the daemon this process is about to become a
+// tmux client wanting opts.dispatchPlacement. exec keeps the pid, so the
+// registered pid is the client's #{client_pid}. An unreachable daemon costs
+// the placement, not the attach.
+func registerAttachPlacement(opts attachOptions, session string) {
+	if opts.dispatchPlacement == "" {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), attachPlacementRegisterTimeout)
+	defer cancel()
+	if err := attachPlacementRegisterFn(ctx, opts.homePath, session, os.Getpid(), opts.dispatchPlacement); err != nil {
+		fmt.Fprintf(agentStderr, "warning: --dispatch-placement not registered (%v); attaching anyway\n", err)
+	}
+}
+
+// validateDispatchPlacement checks a --dispatch-placement value; empty means
+// the flag was not given.
+func validateDispatchPlacement(value string) error {
+	if value == "" || config.IsDispatchViewerPlacement(value) {
+		return nil
+	}
+	return fmt.Errorf("invalid --dispatch-placement %q: want pane, window or background", value)
+}
+
+// addDispatchPlacementFlag registers --dispatch-placement on an attach command.
+func addDispatchPlacementFlag(cmd *cobra.Command, placement *string) {
+	cmd.Flags().StringVar(placement, "dispatch-placement", "", "open dispatch viewers as pane, window or background while this client is attached")
+}
+
+// runRemoteAttachPlaced attaches on a remote host through the remote leo, so
+// the --dispatch-placement registration happens on the daemon's own host.
+// head is the remote subcommand ("attach" or "agent", "attach"). Control mode
+// needs its own ssh flags (see attachRemoteControlMode); otherwise this is
+// runRemoteAttach.
+func runRemoteAttachPlaced(res config.HostResolution, opts attachOptions, head []string, name string) error {
+	remoteArgs := append([]string{}, head...)
+	if opts.cc {
+		remoteArgs = append(remoteArgs, "--cc")
+	}
+	if opts.dispatchPlacement != "" {
+		remoteArgs = append(remoteArgs, "--dispatch-placement", opts.dispatchPlacement)
+	}
+	remoteArgs = append(remoteArgs, name)
+	if !opts.cc {
+		return runRemoteAttach(res, remoteArgs...)
+	}
+	sshArgs := []string{"-tt", "-e", "none", res.Host.SSH}
+	sshArgs = append(sshArgs, res.Host.SSHArgs...)
+	sshArgs = append(sshArgs, sshControlOpts(res)...)
+	sshArgs = append(sshArgs, res.Host.RemoteLeoPath())
+	sshArgs = append(sshArgs, remoteArgs...)
+	c := agentExecCommand("ssh", sshArgs...)
+	c.Stdin = os.Stdin
+	c.Stdout = agentStdout
+	c.Stderr = agentStderr
+	return c.Run()
 }
 
 // attachSignalSource is the testability seam for the signals leo forwards to
@@ -128,6 +205,9 @@ func attachArgs(target string, opts attachOptions) []string {
 // nesting a second full tmux client inside the first.
 func attachTmuxSession(res config.HostResolution, session string, opts attachOptions) error {
 	if !res.Localhost {
+		if opts.dispatchPlacement != "" {
+			return fmt.Errorf("--dispatch-placement needs the remote leo to attach (leo attach or leo agent attach), not a raw tmux session")
+		}
 		if opts.cc {
 			return attachRemoteControlMode(res, session)
 		}
@@ -149,6 +229,15 @@ func attachTmuxSession(res config.HostResolution, session string, opts attachOpt
 		return hintRemoteTmuxMissing(res, c.Run())
 	}
 
+	if opts.dispatchPlacement != "" {
+		if opts.asChild {
+			return fmt.Errorf("--dispatch-placement cannot be used when the attach runs as a child process")
+		}
+		if tmuxEnv() != "" && !opts.cc {
+			return fmt.Errorf("--dispatch-placement cannot be used from inside tmux (the attach opens as a popup, not a client of its own); detach first (prefix+d) and retry")
+		}
+	}
+
 	tmuxPath, err := tmuxLocate()
 	if err != nil {
 		return err
@@ -165,6 +254,7 @@ func attachTmuxSession(res config.HostResolution, session string, opts attachOpt
 			return fmt.Errorf("--cc requires a non-tmux terminal; detach first (prefix+d) and retry")
 		}
 		argv := append([]string{"tmux"}, tmux.Args(append([]string{"-CC"}, attachArgs(tmux.Target(session), opts)...)...)...)
+		registerAttachPlacement(opts, session)
 		return agentSyscallExec(tmuxPath, argv, os.Environ())
 	}
 	if tmuxEnv() != "" {
@@ -191,6 +281,7 @@ func attachTmuxSession(res config.HostResolution, session string, opts attachOpt
 	// Replace the CLI process so tmux owns the TTY cleanly. Returns an error
 	// only if exec itself fails; on success this call does not return.
 	argv := append([]string{"tmux"}, tmux.Args(attachArgs(tmux.Target(session), opts)...)...)
+	registerAttachPlacement(opts, session)
 	return agentSyscallExec(tmuxPath, argv, os.Environ())
 }
 
