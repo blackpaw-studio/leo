@@ -56,6 +56,46 @@ unreachable the attach prints a warning and proceeds without it. The flag is
 refused from inside tmux (the attach is a popup there). Clients can check the
 `attach_dispatch_placement` feature on the SSE `hello` before relying on it.
 
+#### Live placement
+
+Placement is not fixed at dispatch start. While an interactive dispatch viewer
+is live, Leo lists every tmux client once a second (one `list-clients` across
+all sessions) and works out the placement each root caller session's clients
+ask for between them. When that flips between `background` and visible
+(`pane` or `window`), and the new state holds for two polls in a row, the
+session's live viewers move to match. A client attaching, detaching, exiting or
+registering can each cause a flip. Nothing is polled while no viewer is live.
+
+- **Only background <-> visible moves anything.** A `pane` <-> `window` flip
+  leaves viewers where they are. A session with no clients is not a flip either:
+  when the last client detaches, viewers stay put.
+- **Going background:** a split pane is broken out of the caller's window
+  (`break-pane`) into its own window in the `leo-dispatch` session; a pane alone
+  in its window is moved there whole (`move-window`, so a `leo dispatch attach`
+  link survives). The record's `viewer_kind` becomes `background` (distinct from
+  a `window` in the caller's session; `leo dispatch attach` still works on it).
+  Idle panes parked as `hidden` go there too.
+- **Staying there:** while the session is background, a `leo_send_dispatch`
+  follow-up does not rejoin the pane and an idle run is not hidden again.
+- **Coming back:** with `pane` placement, a viewer rejoins below its caller
+  (`join-pane`) when the caller's pane is still in the root caller's session and
+  the pane cap allows it; otherwise, and with `window` placement, it returns as a
+  window of the caller's session. An idle run returns `hidden`, as the pane
+  reconciler leaves idle panes.
+- **Pane ids (`%N`) never change**, so follow-ups, `leo dispatch attach` and
+  restart recovery keep addressing the same pane.
+- **Nested dispatches** follow the root caller's session and move parent first.
+- **Your own moves win.** A viewer you moved to a session other than its
+  caller's or `leo-dispatch` is left alone from then on. A viewer you moved
+  between those two is not fought until the next flip.
+- **Headless viewer windows are unchanged in this release**: they are still
+  placed once, when the dispatch starts. Moving them (they are tracked by window
+  id, not pane id) is planned as a follow-up.
+
+Each move resizes the TUI, which redraws it, even mid-turn; the two-poll
+debounce keeps attaching a laptop and a phone in turn from thrashing it. Clients
+can check the `dispatch_placement_live` feature on the SSE `hello`.
+
 ## Nested agents
 
 Leo disables each harness's native subagent tool inside dispatches and
@@ -258,8 +298,8 @@ flag in `~/.claude.json`.
 
 A pane split into the caller's window stays there only while the
 orchestrator has work in it. When an orchestrator turn ends and the run goes
-`idle`, Leo moves the pane out with `break-pane -d` into a background window
-named `<label>·<hex4>` in the same tmux session (the record's `viewer_kind`
+`idle`, Leo moves the pane out with `break-pane -d` into a window of its own,
+named `<label>·<hex4>`, in the same tmux session (the record's `viewer_kind`
 becomes `hidden`). A `leo_send_dispatch` follow-up moves it back with
 `join-pane -d`, split below the caller as at launch; if the caller's pane is
 gone, the pane stays in its own window instead. Turns the user types never
