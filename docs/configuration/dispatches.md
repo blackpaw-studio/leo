@@ -34,6 +34,11 @@ Dispatches and consults cannot launch nested agents: Leo disables the native
 subagent tool for each supported harness, and tells the subagent that the
 orchestrator performs review. There is no opt-out yet.
 
+A subagent that calls `leo_dispatch` anyway starts a nested dispatch. Leo
+records the calling dispatch as its `parent_dispatch_id` and files the child
+under the same `caller` as the parent, so a whole tree reports the root agent
+as its caller.
+
 Every dispatch and consult run carries `LEO_DISPATCH_ID` (headless, interactive,
 and headless continuations alike), which Leo's MCP server uses to refuse
 caller-only tools such as `leo_surface_file`: a subagent inherits its

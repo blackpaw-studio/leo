@@ -96,3 +96,23 @@ forever.
   daemon has no event source.
 
 Advertised as the `dispatch_removed` and `state_seq` hello features.
+
+## 5. Nested dispatches: `parent_dispatch_id` and the root caller
+
+A subagent's own MCP server knows its `LEO_DISPATCH_ID`, and `leo_dispatch`
+sends it as `parent_dispatch_id` on `POST /api/dispatch`. `consult.Start`
+verifies it names a known dispatch (an unknown or malformed id is dropped, the
+dispatch just has no recorded parent) and then:
+
+- stores it on the record as `ParentDispatchID`. It works for headless parents
+  too, which have no bridge key to derive it from;
+- sets the child's `Caller` to the parent's, so every dispatch in a tree has the
+  root agent as its `caller_agent`, at every depth (a parent with no caller
+  leaves the child's own). Nested interactive dispatches are therefore placed
+  against the root agent's session like any other, unless the viewer placement
+  is `background`.
+
+`dispatches[].parent_dispatch_id` is the *immediate* parent, as before. Records
+written before this change still derive it from `caller_bridge_key`
+(`dispatch.<id>`), which stays as the fallback. Attention holds are unchanged:
+only a root agent's direct dispatches count toward its `outstanding.dispatches`.

@@ -34,6 +34,10 @@ type Request struct {
 	CallerHarness   string
 	CallerSessionID string
 	CallerWindowID  string
+	// ParentDispatchID is the dispatch whose subagent asked (the calling
+	// process's LEO_DISPATCH_ID), when a dispatch starts another. Start
+	// records it only when it names a known dispatch.
+	ParentDispatchID string
 	// CallerBridgeKey is the bridge key of the claude that asked
 	// ($LEO_BRIDGE_AGENT), so its mod can be shown the dispatch. Optional.
 	CallerBridgeKey string

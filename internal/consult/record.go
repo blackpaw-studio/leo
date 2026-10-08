@@ -141,6 +141,10 @@ type Record struct {
 	CallerSessionID string `json:"caller_session_id,omitempty"`
 	CallerWindowID  string `json:"caller_window_id,omitempty"`
 	CallerBridgeKey string `json:"caller_bridge_key,omitempty"`
+	// ParentDispatchID is the dispatch that started this one, set for any
+	// nested dispatch (headless parents included). Records written before it
+	// existed name their parent only through CallerBridgeKey.
+	ParentDispatchID string `json:"parent_dispatch_id,omitempty"`
 	// CallerBridgeLaunch is the caller's launch id (see
 	// Request.CallerBridgeLaunch): a digest, never the launch token.
 	CallerBridgeLaunch string                  `json:"caller_bridge_launch,omitempty"`

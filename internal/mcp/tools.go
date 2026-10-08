@@ -392,7 +392,7 @@ func newRegistry(client *daemonClient, processName string, perms leotools.Permis
 		}
 		isolation, _ := args["isolation"].(string)
 		callerPane, _ := tmux.CallerPaneFromEnv(os.Environ())
-		request := consult.Request{Caller: processName, CallerPaneID: callerPane, CallerBridgeKey: os.Getenv(bridgemod.EnvAgent), Template: template, Role: role, Model: model, Effort: effort, Prompt: prompt, Cwd: cwd, Name: name, Timeout: timeout, Mode: mode, Notify: notify, Isolation: isolation}
+		request := consult.Request{Caller: processName, ParentDispatchID: r.dispatchID, CallerPaneID: callerPane, CallerBridgeKey: os.Getenv(bridgemod.EnvAgent), Template: template, Role: role, Model: model, Effort: effort, Prompt: prompt, Cwd: cwd, Name: name, Timeout: timeout, Mode: mode, Notify: notify, Isolation: isolation}
 		if role != "" {
 			request.Template = resolvedTemplate
 		}

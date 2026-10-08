@@ -203,7 +203,13 @@ func withinLinger(rec Record, now time.Time) bool {
 	return !rec.EndedAt.IsZero() && now.Sub(rec.EndedAt) < observe.DispatchLinger
 }
 
+// parentDispatchID is the dispatch that started rec: the recorded parent,
+// else (for records written before it was recorded) the one named by its
+// caller's bridge key.
 func parentDispatchID(rec Record) string {
+	if rec.ParentDispatchID != "" {
+		return rec.ParentDispatchID
+	}
 	if id, ok := DispatchIDFromBridgeKey(rec.CallerBridgeKey); ok {
 		return id
 	}
