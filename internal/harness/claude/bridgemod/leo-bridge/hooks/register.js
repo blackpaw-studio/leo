@@ -121,13 +121,18 @@ let reportedEffort = null
 let isSubmitting = false
 let turnStartWaiters = []
 
-// The delivers submitted whose own turn has not started yet, oldest first:
-// { text, commandId, origin }. A turn.start claims the oldest whose text it
-// carries, so the turn a deliver starts is reported under that deliver's
-// command id (see takeSubmitStamp). $.prompt.submit waits for the session
-// to be idle, so a deliver never queues behind a running turn: its turn is
-// the next one that starts with its text.
-let inFlightSubmits = []
+// The submits whose turn has not started yet, oldest first: { text, stamp? }.
+// A deliver of this mod carries the stamp (its command id and origin) its
+// turn is reported under; $.prompt.submit waits for the session to be idle,
+// so a deliver never queues behind a running turn. The rest are the submits
+// the prompt.submit hook saw from anyone else (a person, a wake, another
+// plugin), noted so the turn each starts is not taken for a deliver's. See
+// takeSubmitStamp.
+let pendingSubmits = []
+const MAX_OBSERVED_SUBMITS = 16
+
+// The plugin name the engine gives this mod's own submits as their origin.
+const PLUGIN_NAME = 'leo-bridge'
 
 // Serial chains: reports keep per-process order; commands run one at a time;
 // store entry rewrites never interleave (an interrupt settles off the
@@ -377,23 +382,43 @@ function settleTurnStartWaiters(turnId) {
   waiters.forEach((resolve) => resolve(turnId))
 }
 
-// Notes a submit until its turn starts; the returned function forgets it
+// Notes a deliver until its turn starts; the returned function forgets it
 // (its turn started, or it was dropped or failed).
-function trackSubmit(stamp) {
-  inFlightSubmits = [...inFlightSubmits, stamp]
+function trackSubmit(text, stamp) {
+  const entry = { text, stamp }
+  pendingSubmits = [...pendingSubmits, entry]
   return () => {
-    inFlightSubmits = inFlightSubmits.filter((s) => s !== stamp)
+    pendingSubmits = pendingSubmits.filter((p) => p !== entry)
   }
 }
 
-// Claims the oldest in-flight submit whose text turn.start's text carries
-// (Claude may wrap a plugin's message in an envelope, never alter it), or
-// undefined for a turn nothing submitted here: a queued prompt that ran
-// later, a wake, a continuation. Text guards against a turn another
-// submitter started first taking this deliver's stamp.
+// Whether the engine says this prompt.submit is the mod's own deliver.
+function isOwnSubmit(e) {
+  return e.origin?.kind === 'plugin' && e.origin.name === PLUGIN_NAME
+}
+
+// Notes a submit someone else made. The engine raises prompt.submit before
+// that submit's turn.start, so the hook sees it first.
+function noteObservedSubmit(text) {
+  const observed = pendingSubmits.filter((p) => p.stamp === undefined)
+  const dropped = observed.length >= MAX_OBSERVED_SUBMITS ? observed[0] : undefined
+  pendingSubmits = [...pendingSubmits.filter((p) => p !== dropped), { text: typeof text === 'string' ? text : '' }]
+}
+
+// The stamp of the deliver this turn.start is the turn of, or undefined for
+// a turn someone else started (a person, a wake, a queued prompt that ran
+// first) or the engine did (a continuation). The engine runs submits in the
+// order they were made, so the turn is the oldest pending submit's whose
+// text it carries (Claude may wrap a message in an envelope, never alter
+// it): the text rules a turn out, the order says whose it is among turns
+// that carry the same words, so a person's identical text never takes a
+// deliver's stamp. The seen submits ahead of it folded into a running turn
+// and never started one: they are retired.
 function takeSubmitStamp(text) {
-  const stamp = inFlightSubmits.find((s) => text.includes(s.text))
-  if (stamp) inFlightSubmits = inFlightSubmits.filter((s) => s !== stamp)
+  const i = pendingSubmits.findIndex((p) => text.includes(p.text))
+  if (i < 0) return undefined
+  const { stamp } = pendingSubmits[i]
+  pendingSubmits = pendingSubmits.filter((p, j) => j > i || (j < i && p.stamp !== undefined))
   return stamp
 }
 
@@ -520,7 +545,7 @@ async function runDeliver($, command) {
   const args = command.asUser ? { text: command.text, asUser: true } : { text: command.text }
   await markHandedOff($, command.id)
   isSubmitting = true
-  const untrack = trackSubmit({ text: command.text, commandId: command.id, origin: 'plugin' })
+  const untrack = trackSubmit(command.text, { commandId: command.id, origin: 'plugin' })
   try {
     const result = await $.prompt.submit(args)
     if (result && typeof result.drop === 'string') {
@@ -1076,6 +1101,11 @@ async function onSessionStart($) {
 export function register(on) {
   on('session.start', async ($, e, next) => {
     await onSessionStart($)
+    return next(e)
+  })
+
+  on('prompt.submit', async ($, e, next) => {
+    if (!isOwnSubmit(e)) noteObservedSubmit(e.text)
     return next(e)
   })
 
