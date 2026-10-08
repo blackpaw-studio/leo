@@ -102,7 +102,10 @@ no ack, so a successful write counts): a clean isolated worktree is removed
 closed. The recorded result stays readable by `leo_wait` and
 `leo_dispatch_output` afterwards, and a follow-up recreates a removed worktree
 or uses one not yet collected. A rejected or unacked deliver, a pointer-only
-notification, and a failed delivery collect nothing. So with notifications on, a
+notification, and a failed delivery collect nothing. So does a deliver replayed
+after a caller relaunch or daemon restart (durable replay) or one already queued
+(a duplicate): it is acked without collecting, and `leo_wait`, `leo_release` or
+`CloseFinished` collects that run as before. So with notifications on, a
 claude orchestrator can dispatch and end its turn; reach for `leo_wait` only to
 block on a result within the same turn or to wait on a follow-up turn id.
 
