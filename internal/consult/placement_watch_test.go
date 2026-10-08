@@ -24,6 +24,9 @@ type bgRuntime struct {
 	// watchLinked names the panes whose window `leo dispatch attach` has
 	// linked into a watch session.
 	watchLinked map[string]bool
+	// race runs once, just before the next move's guard is checked: the user
+	// acting between the dispatcher's probe and the move.
+	race func()
 }
 
 const (
@@ -100,14 +103,54 @@ func (r *bgRuntime) PaneLocation(_ context.Context, pane string) (PaneLocation, 
 	return r.locate(pane)
 }
 
-func (r *bgRuntime) BackgroundPane(_ context.Context, pane, name string) (string, error) {
+func (r *bgRuntime) raceOnce(f func()) {
+	r.locMu.Lock()
+	r.race = f
+	r.locMu.Unlock()
+}
+
+// link has an attach link the pane's window into a watch session.
+func (r *bgRuntime) link(pane string) {
+	r.locMu.Lock()
+	r.watchLinked[pane] = true
+	r.locMu.Unlock()
+}
+
+// guard stands in for the check tmux makes in the same command as the move:
+// the pane must still be where the dispatcher probed it, and unlinked when the
+// move would empty its window.
+func (r *bgRuntime) guard(pane string, from PaneLocation, unlinked bool) error {
+	r.locMu.Lock()
+	race := r.race
+	r.race = nil
+	r.locMu.Unlock()
+	if race != nil {
+		race()
+	}
+	cur, err := r.locate(pane)
+	if err != nil {
+		return err
+	}
+	if cur.SessionID != from.SessionID || cur.WindowID != from.WindowID || unlinked && cur.WatchLinked {
+		return fmt.Errorf("guard on %s: %w", pane, ErrPaneMoved)
+	}
+	return nil
+}
+
+func (r *bgRuntime) BackgroundPane(_ context.Context, pane, name string, from PaneLocation) (string, error) {
+	if err := r.guard(pane, from, false); err != nil {
+		return "", err
+	}
 	r.record("background " + pane + " " + name)
 	window := "@2" + strings.TrimPrefix(pane, "%")
 	r.place(pane, inBackground(window))
 	return window, nil
 }
 
-func (r *bgRuntime) ForegroundPane(_ context.Context, pane, name, session string) (string, error) {
+func (r *bgRuntime) ForegroundPane(_ context.Context, pane, name, session string, from PaneLocation) (string, error) {
+	if err := r.guard(pane, from, false); err != nil {
+		return "", err
+	}
 	r.record("foreground " + pane + " " + session)
 	loc := inCallerWindow(1)
 	loc.WindowID = "@3" + strings.TrimPrefix(pane, "%")
@@ -115,16 +158,22 @@ func (r *bgRuntime) ForegroundPane(_ context.Context, pane, name, session string
 	return loc.WindowID, nil
 }
 
-func (r *bgRuntime) HidePane(ctx context.Context, pane, name string) (string, error) {
-	window, err := r.movingRuntime.HidePane(ctx, pane, name)
+func (r *bgRuntime) HidePane(ctx context.Context, pane, name string, from PaneLocation) (string, error) {
+	if err := r.guard(pane, from, false); err != nil {
+		return "", err
+	}
+	window, err := r.movingRuntime.HidePane(ctx, pane, name, from)
 	loc := inCallerWindow(1)
 	loc.WindowID = window
 	r.place(pane, loc)
 	return window, err
 }
 
-func (r *bgRuntime) ShowPane(ctx context.Context, pane, target, window string) error {
-	err := r.movingRuntime.ShowPane(ctx, pane, target, window)
+func (r *bgRuntime) ShowPane(ctx context.Context, pane, target, window string, from PaneLocation) error {
+	if err := r.guard(pane, from, true); err != nil {
+		return err
+	}
+	err := r.movingRuntime.ShowPane(ctx, pane, target, window, from)
 	if err == nil {
 		joined, _ := r.locate(target) // it lands in the target pane's window
 		joined.WindowPanes = 2
@@ -844,5 +893,95 @@ func TestShowPaneKeepsAWatchLinkedWindowIntact(t *testing.T) {
 	}
 	if f.kind(started.ID) != "window" {
 		t.Fatalf("kind = %q, want the pane left in its own window", f.kind(started.ID))
+	}
+}
+
+// The ownership probe and the move are separate steps; the guard on the move is
+// what keeps a user's change in between from being overridden. Each test has
+// the user (or an attach) act in that gap.
+
+func TestHideRacingAUserMoveIsRefusedAndPinsThePane(t *testing.T) {
+	f := newLiveFixture(t)
+	started := f.start(nil)
+	waitForInjection(t, f.rt.fakeInteractiveRuntime)
+	_ = f.d.Report(started.ID, hook(t, "UserPromptSubmit", "a"))
+	f.rt.raceOnce(func() { f.rt.place(started.Pane, elsewhere) })
+	_ = f.d.Report(started.ID, hook(t, "Stop", "a"))
+	f.flush(started.ID)
+
+	if f.rt.count("hide") != 0 || f.kind(started.ID) != "split" || !f.pinned(started.ID) {
+		t.Fatalf("events = %v, kind = %q, pinned = %v; want the split left where the user put it", f.rt.log(), f.kind(started.ID), f.pinned(started.ID))
+	}
+}
+
+func TestShowRacingAUserMoveIsRefusedAndPinsThePane(t *testing.T) {
+	f := newLiveFixture(t)
+	started := f.start(nil)
+	f.idle(started.ID)
+	f.rt.raceOnce(func() { f.rt.place(started.Pane, elsewhere) })
+
+	if _, err := f.d.Send(context.Background(), started.ID, "next"); err != nil {
+		t.Fatal(err)
+	}
+	if f.rt.count("show") != 0 || f.rt.count("inject "+started.Pane) != 2 || !f.pinned(started.ID) {
+		t.Fatalf("events = %v, pinned = %v; want the follow-up injected without joining the pane", f.rt.log(), f.pinned(started.ID))
+	}
+}
+
+func TestShowRacingAnAttachLeavesTheLinkedWindowIntact(t *testing.T) {
+	f := newLiveFixture(t)
+	started := f.start(nil)
+	f.idle(started.ID)
+	f.rt.raceOnce(func() { f.rt.link(started.Pane) })
+
+	if _, err := f.d.Send(context.Background(), started.ID, "next"); err != nil {
+		t.Fatal(err)
+	}
+	if f.rt.count("show") != 0 || f.rt.count("inject "+started.Pane) != 2 || f.kind(started.ID) != "window" {
+		t.Fatalf("events = %v, kind = %q; want no join-pane and the pane left in its own window", f.rt.log(), f.kind(started.ID))
+	}
+}
+
+func TestReturnFromBackgroundRacingAnAttachMovesTheWindowInsteadOfJoining(t *testing.T) {
+	f := newLiveFixture(t)
+	started := f.start(nil)
+	bg := f.attach("background", 10)
+	f.clients.set(bg)
+	f.poll(2)
+	f.rt.raceOnce(func() { f.rt.link(started.Pane) }) // the attach lands after the probe, before the join
+
+	f.clients.set(bg, f.attach("pane", 11))
+	f.poll(2)
+	if f.rt.count("show") != 0 || f.rt.count("foreground "+started.Pane) != 1 || f.kind(started.ID) != "window" {
+		t.Fatalf("moves = %v, kind = %q; want the linked window moved whole", f.rt.moves(), f.kind(started.ID))
+	}
+}
+
+func TestBackgroundRacingAUserMoveIsRefusedAndPinsThePane(t *testing.T) {
+	f := newLiveFixture(t)
+	started := f.start(nil)
+	f.rt.raceOnce(func() { f.rt.place(started.Pane, elsewhere) })
+
+	f.clients.set(f.attach("background", 10))
+	f.poll(2)
+	if f.rt.count("background") != 0 || f.kind(started.ID) != "split" || !f.pinned(started.ID) {
+		t.Fatalf("moves = %v, kind = %q, pinned = %v; want the pane left alone", f.rt.moves(), f.kind(started.ID), f.pinned(started.ID))
+	}
+}
+
+func TestMoveRetriesFromAFreshProbeWhenThePaneOnlyChangedWindows(t *testing.T) {
+	f := newLiveFixture(t)
+	started := f.start(nil)
+	// Still in the caller's session, so still the dispatcher's to move.
+	f.rt.raceOnce(func() {
+		reshuffled := inCallerWindow(2)
+		reshuffled.WindowID = "@77"
+		f.rt.place(started.Pane, reshuffled)
+	})
+
+	f.clients.set(f.attach("background", 10))
+	f.poll(2)
+	if f.rt.count("background") != 1 || f.kind(started.ID) != "background" || f.pinned(started.ID) {
+		t.Fatalf("moves = %v, kind = %q, pinned = %v; want the retry to have backgrounded it", f.rt.moves(), f.kind(started.ID), f.pinned(started.ID))
 	}
 }

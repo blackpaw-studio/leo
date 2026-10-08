@@ -41,11 +41,14 @@ var (
 type backgroundMoverRuntime interface {
 	PaneLocation(ctx context.Context, pane string) (PaneLocation, error)
 	// BackgroundPane puts pane in its own window of the background session
-	// and returns that window's id.
-	BackgroundPane(ctx context.Context, pane, name string) (windowID string, err error)
+	// and returns that window's id. from is where the caller probed the pane;
+	// the move happens only while it is still there (see guardedMove), and
+	// ErrPaneMoved says it was not.
+	BackgroundPane(ctx context.Context, pane, name string, from PaneLocation) (windowID string, err error)
 	// ForegroundPane puts pane in its own window of session (a tmux session
-	// target such as "$3") and returns that window's id.
-	ForegroundPane(ctx context.Context, pane, name, session string) (windowID string, err error)
+	// target such as "$3") and returns that window's id. from is as for
+	// BackgroundPane.
+	ForegroundPane(ctx context.Context, pane, name, session string, from PaneLocation) (windowID string, err error)
 }
 
 const paneLocationFormat = "#{pane_id}\t#{session_id}\t#{session_name}\t#{window_id}\t#{window_panes}\t#{session_windows}"
@@ -88,55 +91,48 @@ func (r *TmuxInteractiveRuntime) PaneLocation(ctx context.Context, pane string) 
 
 // BackgroundPane moves pane into the background session, creating it when
 // needed. A pane already there stays.
-func (r *TmuxInteractiveRuntime) BackgroundPane(ctx context.Context, pane, name string) (string, error) {
+func (r *TmuxInteractiveRuntime) BackgroundPane(ctx context.Context, pane, name string, from PaneLocation) (string, error) {
+	if from.SessionName == dispatchViewerSession {
+		return from.WindowID, nil
+	}
 	if err := r.ensureDispatchSession(ctx); err != nil {
 		return "", err
 	}
-	loc, err := r.PaneLocation(ctx, pane)
-	if err != nil {
-		return "", err
-	}
-	if loc.SessionName == dispatchViewerSession {
-		return loc.WindowID, nil
-	}
-	return r.relocatePane(ctx, pane, loc, tmux.Target(dispatchViewerSession)+":", name)
+	return r.relocatePane(ctx, pane, from, tmux.Target(dispatchViewerSession)+":", name)
 }
 
 // ForegroundPane moves pane into session. A pane already there stays.
-func (r *TmuxInteractiveRuntime) ForegroundPane(ctx context.Context, pane, name, session string) (string, error) {
-	loc, err := r.PaneLocation(ctx, pane)
-	if err != nil {
-		return "", err
+func (r *TmuxInteractiveRuntime) ForegroundPane(ctx context.Context, pane, name, session string, from PaneLocation) (string, error) {
+	if from.SessionID == session {
+		return from.WindowID, nil
 	}
-	if loc.SessionID == session {
-		return loc.WindowID, nil
-	}
-	return r.relocatePane(ctx, pane, loc, session+":", name)
+	return r.relocatePane(ctx, pane, from, session+":", name)
 }
 
-// relocatePane moves pane to the session dest names. A pane alone in its
-// window takes the window along (the window id, and any link of it into a
-// watch session, survive); one sharing a window is broken out into a new
-// window called name. The source is qualified by session, so a link in a
-// watch session stays intact.
-func (r *TmuxInteractiveRuntime) relocatePane(ctx context.Context, pane string, loc PaneLocation, dest, name string) (string, error) {
-	if loc.WindowPanes == 1 {
-		if loc.SessionWindows == 1 {
-			return "", fmt.Errorf("move pane %s: its window is the only one of session %s, and moving it would end the session", pane, loc.SessionName)
+// relocatePane moves pane, as probed at from, to the session dest names. A pane
+// alone in its window takes the window along (the window id, and any link of it
+// into a watch session, survive); one sharing a window is broken out into a new
+// window called name. The source is qualified by session, so a link in a watch
+// session stays intact. Besides the pane's place, the guard holds the pane
+// count the choice of move rested on, and the session's window count, since
+// moving its last window would end the session.
+func (r *TmuxInteractiveRuntime) relocatePane(ctx context.Context, pane string, from PaneLocation, dest, name string) (string, error) {
+	if from.WindowPanes == 1 {
+		if from.SessionWindows == 1 {
+			return "", fmt.Errorf("move pane %s: its window is the only one of session %s, and moving it would end the session", pane, from.SessionName)
 		}
-		if err := r.run(ctx, "move-window", "-d", "-s", loc.SessionID+":"+loc.WindowID, "-t", dest); err != nil {
-			return "", fmt.Errorf("move window %s of pane %s: %w", loc.WindowID, pane, err)
+		if _, err := r.guardedMove(ctx, pane, from, []string{windowPanesAre(1), sessionWindowsAre(from.SessionWindows)},
+			"move-window", "-d", "-s", from.SessionID+":"+from.WindowID, "-t", dest); err != nil {
+			return "", fmt.Errorf("move window %s of pane %s: %w", from.WindowID, pane, err)
 		}
-		return loc.WindowID, nil
+		return from.WindowID, nil
 	}
-	if err := r.run(ctx, "break-pane", "-d", "-s", pane, "-t", dest, "-n", name); err != nil {
+	window, err := r.guardedMove(ctx, pane, from, []string{windowPanesAre(from.WindowPanes)},
+		"break-pane", "-d", "-P", "-F", "#{window_id}", "-s", paneRef(pane, from), "-t", dest, "-n", name)
+	if err != nil {
 		return "", fmt.Errorf("break pane %s out: %w", pane, err)
 	}
-	moved, err := r.PaneLocation(ctx, pane)
-	if err != nil {
-		return "", err
-	}
-	return moved.WindowID, nil
+	return window, nil
 }
 
 // ensureDispatchSession makes sure the background session exists. Another

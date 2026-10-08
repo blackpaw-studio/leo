@@ -26,7 +26,7 @@ type movingRuntime struct {
 	showHook func()
 }
 
-func (r *movingRuntime) HidePane(_ context.Context, pane, name string) (string, error) {
+func (r *movingRuntime) HidePane(_ context.Context, pane, name string, _ PaneLocation) (string, error) {
 	if r.hideHook != nil {
 		r.hideHook()
 	}
@@ -36,7 +36,7 @@ func (r *movingRuntime) HidePane(_ context.Context, pane, name string) (string, 
 	return "@9", nil
 }
 
-func (r *movingRuntime) ShowPane(_ context.Context, pane, targetPane, window string) error {
+func (r *movingRuntime) ShowPane(_ context.Context, pane, targetPane, window string, _ PaneLocation) error {
 	if r.showHook != nil {
 		r.showHook()
 	}
@@ -216,45 +216,121 @@ func waitForHidden(t *testing.T, d *Dispatcher, id string) {
 	}
 }
 
+// guardOf is the guard condition for pane in window of session: the
+// session, the window, and the pane's membership of it, then any extra clauses.
+func guardOf(session, window, pane string, extra ...string) string {
+	clauses := append([]string{
+		"#{==:#{session_id}," + session + "}",
+		"#{==:#{window_id}," + window + "}",
+		"#{m:*|" + pane + "|*,#{P:|#{pane_id}|}}",
+	}, extra...)
+	cond := clauses[len(clauses)-1]
+	for i := len(clauses) - 2; i >= 0; i-- {
+		cond = "#{&&:" + clauses[i] + "," + cond + "}"
+	}
+	return cond
+}
+
+// splitPaneAt is where the argv tests find %5: a split in window @2 of
+// session $3.
+var splitPaneAt = PaneLocation{SessionID: "$3", SessionName: "orch", WindowID: "@2", WindowPanes: 2, SessionWindows: 3}
+
 func TestTmuxHidePaneArgv(t *testing.T) {
 	r := NewInteractiveRuntime("x", nil, nil, "tmux", "/opt/leo")
-	var calls [][]string
-	r.ExecCommandContext = func(_ context.Context, _ string, args ...string) *exec.Cmd {
-		calls = append(calls, append([]string(nil), args...))
-		if len(calls) == 1 {
-			return exec.Command("printf", "$3\n")
-		}
-		return exec.Command("printf", "@12\n")
-	}
-	window, err := r.HidePane(context.Background(), "%5", "impl·ab12")
+	calls := scriptTmux(r, tmuxStep{out: "@12\n"})
+	window, err := r.HidePane(context.Background(), "%5", "impl·ab12", splitPaneAt)
 	if err != nil || window != "@12" {
 		t.Fatalf("HidePane = %q, %v", window, err)
 	}
-	want := [][]string{
-		tmux.Args("display-message", "-p", "-t", "%5", "#{session_id}"),
-		tmux.Args("break-pane", "-d", "-P", "-F", "#{window_id}", "-s", "%5", "-t", "$3:", "-n", "impl·ab12"),
-	}
-	if !reflect.DeepEqual(calls, want) {
-		t.Fatalf("argv = %#v\nwant %#v", calls, want)
+	// One command: tmux re-checks the guard and breaks the pane out together.
+	want := [][]string{tmux.Args("if-shell", "-F", "-t", "$3:@2", guardOf("$3", "@2", "%5"),
+		"break-pane -d -P -F '#{window_id}' -s '$3:@2.%5' -t '$3:' -n 'impl·ab12'",
+		"display-message -p leo-guard-failed")}
+	if !reflect.DeepEqual(*calls, want) {
+		t.Fatalf("argv = %#v\nwant %#v", *calls, want)
 	}
 }
 
 func TestTmuxShowPaneArgv(t *testing.T) {
 	r := NewInteractiveRuntime("x", nil, nil, "tmux", "/opt/leo")
-	var calls [][]string
-	r.ExecCommandContext = func(_ context.Context, _ string, args ...string) *exec.Cmd {
-		calls = append(calls, append([]string(nil), args...))
-		return exec.Command("true")
-	}
-	if err := r.ShowPane(context.Background(), "%5", "%0", "@1"); err != nil {
+	calls := scriptTmux(r)
+	hidden := PaneLocation{SessionID: "$3", SessionName: "orch", WindowID: "@9", WindowPanes: 1, SessionWindows: 3}
+	if err := r.ShowPane(context.Background(), "%5", "%0", "@1", hidden); err != nil {
 		t.Fatal(err)
 	}
+	// join-pane only while the window is linked nowhere else: an attach's watch
+	// link would die with the emptied window.
 	want := [][]string{
-		tmux.Args("join-pane", "-d", "-v", "-s", "%5", "-t", "%0"),
+		tmux.Args("if-shell", "-F", "-t", "$3:@9", guardOf("$3", "@9", "%5", "#{==:#{window_linked},0}"),
+			"join-pane -d -v -s '$3:@9.%5' -t %0",
+			"display-message -p leo-guard-failed"),
 		tmux.Args("select-layout", "-t", "@1", "main-horizontal"),
 	}
-	if !reflect.DeepEqual(calls, want) {
-		t.Fatalf("argv = %#v\nwant %#v", calls, want)
+	if !reflect.DeepEqual(*calls, want) {
+		t.Fatalf("argv = %#v\nwant %#v", *calls, want)
+	}
+}
+
+func TestTmuxMovesReportAFailedGuardAndNothingElse(t *testing.T) {
+	for name, move := range map[string]func(*TmuxInteractiveRuntime) error{
+		"hide": func(r *TmuxInteractiveRuntime) error {
+			_, err := r.HidePane(context.Background(), "%5", "x", splitPaneAt)
+			return err
+		},
+		"show": func(r *TmuxInteractiveRuntime) error {
+			return r.ShowPane(context.Background(), "%5", "%0", "@1", splitPaneAt)
+		},
+		"background": func(r *TmuxInteractiveRuntime) error {
+			_, err := r.BackgroundPane(context.Background(), "%5", "x", splitPaneAt)
+			return err
+		},
+		"foreground": func(r *TmuxInteractiveRuntime) error {
+			bg := PaneLocation{SessionID: "$9", SessionName: dispatchViewerSession, WindowID: "@7", WindowPanes: 1, SessionWindows: 2}
+			_, err := r.ForegroundPane(context.Background(), "%5", "x", "$1", bg)
+			return err
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			r := NewInteractiveRuntime("x", nil, nil, "tmux", "/opt/leo")
+			// has-session answers first for the background move; every other call
+			// prints the sentinel, as tmux does when the guard is false.
+			r.ExecCommandContext = func(_ context.Context, _ string, args ...string) *exec.Cmd {
+				if len(args) > 2 && args[2] == "has-session" {
+					return exec.Command("true")
+				}
+				return exec.Command("printf", "%s\n", "leo-guard-failed")
+			}
+			if err := move(r); !errors.Is(err, ErrPaneMoved) {
+				t.Fatalf("err = %v, want ErrPaneMoved", err)
+			}
+		})
+	}
+}
+
+func TestTmuxMovesRejectAnUnprobedPane(t *testing.T) {
+	r := NewInteractiveRuntime("x", nil, nil, "tmux", "/opt/leo")
+	calls := scriptTmux(r)
+	if _, err := r.HidePane(context.Background(), "%5", "x", PaneLocation{}); err == nil {
+		t.Fatal("hid a pane without a probed location")
+	}
+	if _, err := r.HidePane(context.Background(), "%5; kill-server", "x", splitPaneAt); err == nil {
+		t.Fatal("accepted a pane id that is not a tmux id")
+	}
+	if len(*calls) != 0 {
+		t.Fatalf("ran tmux anyway: %#v", *calls)
+	}
+}
+
+func TestTmuxMoveQuotesNamesThatWouldOtherwiseBeCommands(t *testing.T) {
+	r := NewInteractiveRuntime("x", nil, nil, "tmux", "/opt/leo")
+	calls := scriptTmux(r, tmuxStep{out: "@12\n"})
+	name := "it's; kill-server $HOME #{x}"
+	if _, err := r.HidePane(context.Background(), "%5", name, splitPaneAt); err != nil {
+		t.Fatal(err)
+	}
+	got := (*calls)[0][7] // the move command, after -L leo if-shell -F -t target cond
+	if want := `break-pane -d -P -F '#{window_id}' -s '$3:@2.%5' -t '$3:' -n 'it'"'"'s; kill-server $HOME #{x}'`; got != want {
+		t.Fatalf("command = %s\nwant     %s", got, want)
 	}
 }
 
@@ -297,7 +373,14 @@ func TestTmuxPaneMoveRoundTripsThroughRealTmux(t *testing.T) {
 		}
 		return exec.CommandContext(ctx, name, args...)
 	}
-	window, err := r.HidePane(context.Background(), pane, "impl·ab12")
+	probe := func() PaneLocation {
+		loc, err := r.PaneLocation(context.Background(), pane)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return loc
+	}
+	window, err := r.HidePane(context.Background(), pane, "impl·ab12", probe())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -307,17 +390,17 @@ func TestTmuxPaneMoveRoundTripsThroughRealTmux(t *testing.T) {
 	if got := tm("display-message", "-p", "-t", callerWindow, "#{window_panes}"); got != "1" {
 		t.Fatalf("caller window panes = %s after hide", got)
 	}
-	if err := r.ShowPane(context.Background(), pane, caller, callerWindow); err != nil {
+	if err := r.ShowPane(context.Background(), pane, caller, callerWindow, probe()); err != nil {
 		t.Fatal(err)
 	}
 	if got := tm("display-message", "-p", "-t", pane, "#{window_id}"); got != callerWindow {
 		t.Fatalf("rejoined pane in %s, want %s", got, callerWindow)
 	}
-	if _, err := r.HidePane(context.Background(), pane, "impl·ab12"); err != nil {
+	if _, err := r.HidePane(context.Background(), pane, "impl·ab12", probe()); err != nil {
 		t.Fatal(err)
 	}
 	tm("kill-pane", "-t", caller)
-	if err := r.ShowPane(context.Background(), pane, caller, callerWindow); err == nil {
+	if err := r.ShowPane(context.Background(), pane, caller, callerWindow, probe()); err == nil {
 		t.Fatal("rejoin to a gone caller pane succeeded")
 	}
 }

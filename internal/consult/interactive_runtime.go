@@ -629,29 +629,27 @@ func sortedKeys(m map[string]string) []string {
 }
 
 // HidePane breaks pane out of its window into a detached window named name
-// in the pane's own session and returns the new window's id. The session is
-// named explicitly: an untargeted break-pane lands in tmux's most recently
-// used session, not the pane's.
-func (r *TmuxInteractiveRuntime) HidePane(ctx context.Context, pane, name string) (string, error) {
-	session, err := r.output(ctx, "display-message", "-p", "-t", pane, "#{session_id}")
-	if err != nil {
-		return "", fmt.Errorf("resolve session of pane %s: %w", pane, err)
-	}
-	sessionID := strings.TrimSpace(string(session))
-	if sessionID == "" {
-		return "", fmt.Errorf("resolve session of pane %s: empty", pane)
-	}
-	out, err := r.output(ctx, "break-pane", "-d", "-P", "-F", "#{window_id}", "-s", pane, "-t", sessionID+":", "-n", name)
+// in the pane's own session and returns the new window's id. from is where the
+// caller probed the pane: tmux breaks it out only while it is still there, and
+// ErrPaneMoved says it was not. The session is named explicitly: an untargeted
+// break-pane lands in tmux's most recently used session, not the pane's.
+func (r *TmuxInteractiveRuntime) HidePane(ctx context.Context, pane, name string, from PaneLocation) (string, error) {
+	window, err := r.guardedMove(ctx, pane, from, nil,
+		"break-pane", "-d", "-P", "-F", "#{window_id}", "-s", paneRef(pane, from), "-t", from.SessionID+":", "-n", name)
 	if err != nil {
 		return "", fmt.Errorf("break pane %s out: %w", pane, err)
 	}
-	return strings.TrimSpace(string(out)), nil
+	return window, nil
 }
 
 // ShowPane joins pane back below targetPane, the same split a launch makes,
-// and re-tiles window.
-func (r *TmuxInteractiveRuntime) ShowPane(ctx context.Context, pane, targetPane, window string) error {
-	if err := r.run(ctx, "join-pane", "-d", "-v", "-s", pane, "-t", targetPane); err != nil {
+// and re-tiles window. from is where the caller probed the pane: tmux joins it
+// only while it is still there and its window is linked nowhere else (join-pane
+// empties the window, which would end the attach of an `leo dispatch attach`
+// that linked it); ErrPaneMoved says one of those no longer held.
+func (r *TmuxInteractiveRuntime) ShowPane(ctx context.Context, pane, targetPane, window string, from PaneLocation) error {
+	if _, err := r.guardedMove(ctx, pane, from, []string{windowUnlinked()},
+		"join-pane", "-d", "-v", "-s", paneRef(pane, from), "-t", targetPane); err != nil {
 		return fmt.Errorf("join pane %s below %s: %w", pane, targetPane, err)
 	}
 	_ = r.run(ctx, "select-layout", "-t", window, "main-horizontal")

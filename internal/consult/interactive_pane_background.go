@@ -69,10 +69,14 @@ func (d *Dispatcher) backgroundPane(s *runState) bool {
 	rec := cloneRecord(s.record)
 	layout := runtimeLayout(d.interactiveRuntime)
 	d.mu.Unlock()
-	if _, owned := d.locateOwnedPane(s, mover, rec); !owned {
+	loc, owned := d.locateOwnedPane(s, mover, rec)
+	if !owned {
 		return false
 	}
-	window, err := mover.BackgroundPane(d.daemonCtx, rec.PaneID, viewerWindowName(rec))
+	window, err := mover.BackgroundPane(d.daemonCtx, rec.PaneID, viewerWindowName(rec), loc)
+	if errors.Is(err, ErrPaneMoved) {
+		return true // probed again on the next step (see reconcilePane)
+	}
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "dispatch %s: moving viewer to the background: %v\n", rec.ID, err)
 		return false
@@ -112,10 +116,16 @@ func (d *Dispatcher) foregroundPane(s *runState, want string) bool {
 		return d.recordPlacement(s, rec.PaneID, kind, loc.WindowID)
 	}
 	root := d.rootCallerSession(rec)
-	if want == "split" && cfg != nil && !loc.WatchLinked && d.joinBelowCaller(s, rt, rec, root, cfg) {
-		return true
+	if want == "split" && cfg != nil && !loc.WatchLinked {
+		switch d.joinBelowCaller(s, rt, rec, loc, root, cfg) {
+		case joinDone, joinPaneMoved:
+			return true
+		}
 	}
-	window, err := mover.ForegroundPane(d.daemonCtx, rec.PaneID, viewerWindowName(rec), root)
+	window, err := mover.ForegroundPane(d.daemonCtx, rec.PaneID, viewerWindowName(rec), root, loc)
+	if errors.Is(err, ErrPaneMoved) {
+		return true // probed again on the next step (see reconcilePane)
+	}
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "dispatch %s: returning viewer from the background: %v\n", rec.ID, err)
 		return false
@@ -127,22 +137,35 @@ func (d *Dispatcher) foregroundPane(s *runState, want string) bool {
 	return d.recordPlacement(s, rec.PaneID, kind, window)
 }
 
-// joinBelowCaller returns the pane below its caller's pane, as a launch in pane
-// placement would, and reports whether it did. It does not when the caller's
+// joinOutcome is how joinBelowCaller ended.
+type joinOutcome int
+
+const (
+	// joinSkipped: the pane was not joined, and comes back as a window instead.
+	joinSkipped joinOutcome = iota
+	// joinDone: the pane is a split below its caller again.
+	joinDone
+	// joinPaneMoved: the pane was no longer where it was probed (or its window
+	// had been linked), so tmux did not join it. Probe it again.
+	joinPaneMoved
+)
+
+// joinBelowCaller returns the pane, probed at from, below its caller's pane, as
+// a launch in pane placement would. It does not (joinSkipped) when the caller's
 // pane is gone or no longer in the root caller's session (a nested viewer
 // whose parent has not come back), or when the placement coordinator says the
 // caller's window is full: the pane then comes back as a window instead. The
 // caller's coordinates are read live, since the recorded ones date from when
 // the dispatch was requested.
-func (d *Dispatcher) joinBelowCaller(s *runState, rt InteractiveRuntime, rec Record, root string, cfg *config.Config) bool {
+func (d *Dispatcher) joinBelowCaller(s *runState, rt InteractiveRuntime, rec Record, from PaneLocation, root string, cfg *config.Config) joinOutcome {
 	mover, _ := rt.(backgroundMoverRuntime)
 	shower, _ := rt.(paneMoverRuntime)
 	if mover == nil || shower == nil || rec.CallerPaneID == "" {
-		return false
+		return joinSkipped
 	}
 	callerLoc, err := mover.PaneLocation(d.daemonCtx, rec.CallerPaneID)
 	if err != nil || callerLoc.SessionID != root {
-		return false
+		return joinSkipped
 	}
 	rec.CallerSessionID, rec.CallerWindowID = callerLoc.SessionID, callerLoc.WindowID
 	overrides := ViewerOverrides{}
@@ -152,14 +175,20 @@ func (d *Dispatcher) joinBelowCaller(s *runState, rt InteractiveRuntime, rec Rec
 	overrides.Placement = "pane"
 	placement := d.placement.Decide(rec, overrides, cfg, d.Records)
 	if placement.Kind != "split" {
-		return false
+		return joinSkipped
 	}
-	if err := shower.ShowPane(d.daemonCtx, rec.PaneID, placement.Target, rec.CallerWindowID); err != nil {
+	if err := shower.ShowPane(d.daemonCtx, rec.PaneID, placement.Target, rec.CallerWindowID, from); err != nil {
 		d.placement.Cancel(rec.ID)
+		if errors.Is(err, ErrPaneMoved) {
+			return joinPaneMoved
+		}
 		fmt.Fprintf(os.Stderr, "dispatch %s: rejoining viewer below its caller: %v\n", rec.ID, err)
-		return false
+		return joinSkipped
 	}
-	return d.placement.Publish(rec.ID, func() bool {
+	if !d.placement.Publish(rec.ID, func() bool {
 		return d.recordRejoin(s, rec.PaneID, rec.CallerSessionID, rec.CallerWindowID)
-	})
+	}) {
+		return joinSkipped
+	}
+	return joinDone
 }

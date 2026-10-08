@@ -21,8 +21,11 @@ const viewerBackground = "background"
 // and a background window. tmux pane ids (%N) are stable across both moves,
 // so every other runtime call keeps addressing the pane by Record.PaneID.
 type paneMoverRuntime interface {
-	HidePane(ctx context.Context, pane, name string) (windowID string, err error)
-	ShowPane(ctx context.Context, pane, targetPane, window string) error
+	// from is where the dispatcher probed the pane. Each move happens only while
+	// the pane is still there (see guardedMove) and reports ErrPaneMoved when it
+	// was not, so a user's change between the probe and the move wins.
+	HidePane(ctx context.Context, pane, name string, from PaneLocation) (windowID string, err error)
+	ShowPane(ctx context.Context, pane, targetPane, window string, from PaneLocation) error
 }
 
 // maxReconcileSteps bounds one reconcile's moves, so state that keeps
@@ -123,7 +126,10 @@ func (d *Dispatcher) returnTargetLocked(s *runState) string {
 
 // reconcilePane moves s's pane, one tmux step at a time, until its recorded
 // placement matches the desired one, re-reading the run's state before each
-// step. A failed step stops it; the next nudge tries again.
+// step. A failed step stops it; the next nudge tries again. A step that finds
+// the pane gone from where it probed it (ErrPaneMoved) reports true without
+// recording anything, so the next step probes again and either pins the pane,
+// when it is no longer ours, or moves it from where it is now.
 func (d *Dispatcher) reconcilePane(s *runState) {
 	d.mu.Lock()
 	s.reconcileQueued = nil
@@ -174,7 +180,8 @@ func (d *Dispatcher) ownedPane(s *runState) (PaneLocation, bool) {
 // its own, named like the run's viewer, and records where it went. A pane the
 // user moved elsewhere is left where it is.
 func (d *Dispatcher) hidePane(s *runState) bool {
-	if _, owned := d.ownedPane(s); !owned {
+	loc, owned := d.ownedPane(s)
+	if !owned {
 		return false
 	}
 	d.mu.Lock()
@@ -182,7 +189,10 @@ func (d *Dispatcher) hidePane(s *runState) bool {
 	id, pane, name, callerWindow := s.record.ID, s.record.PaneID, viewerWindowName(s.record), s.record.CallerWindowID
 	layout := runtimeLayout(d.interactiveRuntime)
 	d.mu.Unlock()
-	window, err := mover.HidePane(d.daemonCtx, pane, name)
+	window, err := mover.HidePane(d.daemonCtx, pane, name, loc)
+	if errors.Is(err, ErrPaneMoved) {
+		return true
+	}
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "dispatch %s: hiding idle pane: %v\n", id, err)
 		return false
@@ -203,7 +213,8 @@ func (d *Dispatcher) hidePane(s *runState) bool {
 // that is impossible (the caller is gone) the pane stays in its own window,
 // which then is simply its window and is no longer moved. So is a pane the
 // user moved to another session (it is pinned) and one whose window an attach
-// has linked, which joining would end.
+// has linked, which joining would end. The linked check is repeated by the
+// join itself, so an attach that lands after the probe is caught too.
 func (d *Dispatcher) showPane(s *runState) bool {
 	loc, owned := d.ownedPane(s)
 	if !owned {
@@ -222,7 +233,10 @@ func (d *Dispatcher) showPane(s *runState) bool {
 	d.mu.Unlock()
 	err := errors.New("no caller pane recorded")
 	if target != "" {
-		err = mover.ShowPane(d.daemonCtx, pane, target, window)
+		err = mover.ShowPane(d.daemonCtx, pane, target, window, loc)
+	}
+	if errors.Is(err, ErrPaneMoved) {
+		return true
 	}
 	d.mu.Lock()
 	defer d.mu.Unlock()

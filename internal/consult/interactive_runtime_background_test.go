@@ -99,35 +99,46 @@ func TestPaneLocationErrors(t *testing.T) {
 
 var hasBackground = tmux.Args("has-session", "-t", "=leo-dispatch")
 
+var (
+	loneInCaller   = PaneLocation{SessionID: "$1", SessionName: "orch", WindowID: "@7", WindowPanes: 1, SessionWindows: 3}
+	splitInCaller  = PaneLocation{SessionID: "$1", SessionName: "orch", WindowID: "@2", WindowPanes: 2, SessionWindows: 3}
+	loneInBackdrop = PaneLocation{SessionID: "$9", SessionName: "leo-dispatch", WindowID: "@7", WindowPanes: 1, SessionWindows: 2}
+)
+
+func ifShell(target, cond, move string) []string {
+	return tmux.Args("if-shell", "-F", "-t", target, cond, move, "display-message -p leo-guard-failed")
+}
+
 func TestBackgroundPaneMovesALoneWindowWithItsWindowId(t *testing.T) {
 	r := NewInteractiveRuntime("x", nil, nil, "tmux", "/opt/leo")
-	calls := scriptTmux(r, tmuxStep{}, tmuxStep{out: panesRow("%5", "$1", "orch", "@7", 1, 3)})
-	window, err := r.BackgroundPane(context.Background(), "%5", "impl·ab12")
+	calls := scriptTmux(r)
+	window, err := r.BackgroundPane(context.Background(), "%5", "impl·ab12", loneInCaller)
 	if err != nil || window != "@7" {
 		t.Fatalf("BackgroundPane = %q, %v", window, err)
 	}
+	// move-window takes the whole window, so the guard also pins the window to
+	// the pane alone and the session to the windows it had.
 	want := [][]string{
 		hasBackground,
-		listPanesAll,
-		tmux.Args("move-window", "-d", "-s", "$1:@7", "-t", "=leo-dispatch:"),
+		ifShell("$1:@7", guardOf("$1", "@7", "%5", "#{==:#{window_panes},1}", "#{==:#{session_windows},3}"),
+			"move-window -d -s '$1:@7' -t =leo-dispatch:"),
 	}
 	if !reflect.DeepEqual(*calls, want) {
 		t.Fatalf("argv = %#v\nwant %#v", *calls, want)
 	}
 }
 
-func TestBackgroundPaneBreaksASplitOutAndReprobesItsWindow(t *testing.T) {
+func TestBackgroundPaneBreaksASplitOutAndReadsItsWindowFromBreakPane(t *testing.T) {
 	r := NewInteractiveRuntime("x", nil, nil, "tmux", "/opt/leo")
-	calls := scriptTmux(r, tmuxStep{}, tmuxStep{out: panesRow("%4", "$1", "orch", "@2", 2, 3) + panesRow("%5", "$1", "orch", "@2", 2, 3)}, tmuxStep{}, tmuxStep{out: panesRow("%5", "$9", "leo-dispatch", "@12", 1, 2)})
-	window, err := r.BackgroundPane(context.Background(), "%5", "impl·ab12")
+	calls := scriptTmux(r, tmuxStep{}, tmuxStep{out: "@12\n"})
+	window, err := r.BackgroundPane(context.Background(), "%5", "impl·ab12", splitInCaller)
 	if err != nil || window != "@12" {
-		t.Fatalf("BackgroundPane = %q, %v; want the re-probed window id", window, err)
+		t.Fatalf("BackgroundPane = %q, %v; want the window break-pane printed", window, err)
 	}
 	want := [][]string{
 		hasBackground,
-		listPanesAll,
-		tmux.Args("break-pane", "-d", "-s", "%5", "-t", "=leo-dispatch:", "-n", "impl·ab12"),
-		listPanesAll,
+		ifShell("$1:@2", guardOf("$1", "@2", "%5", "#{==:#{window_panes},2}"),
+			"break-pane -d -P -F '#{window_id}' -s '$1:@2.%5' -t =leo-dispatch: -n 'impl·ab12'"),
 	}
 	if !reflect.DeepEqual(*calls, want) {
 		t.Fatalf("argv = %#v\nwant %#v", *calls, want)
@@ -136,8 +147,8 @@ func TestBackgroundPaneBreaksASplitOutAndReprobesItsWindow(t *testing.T) {
 
 func TestBackgroundPaneCreatesTheSessionOnDemand(t *testing.T) {
 	r := NewInteractiveRuntime("x", nil, nil, "tmux", "/opt/leo")
-	calls := scriptTmux(r, tmuxStep{fail: true}, tmuxStep{}, tmuxStep{out: panesRow("%5", "$1", "orch", "@7", 1, 3)})
-	if _, err := r.BackgroundPane(context.Background(), "%5", "impl·ab12"); err != nil {
+	calls := scriptTmux(r, tmuxStep{fail: true})
+	if _, err := r.BackgroundPane(context.Background(), "%5", "impl·ab12", loneInCaller); err != nil {
 		t.Fatal(err)
 	}
 	if got := (*calls)[1]; !reflect.DeepEqual(got, tmux.Args("new-session", "-d", "-s", "leo-dispatch")) {
@@ -147,21 +158,23 @@ func TestBackgroundPaneCreatesTheSessionOnDemand(t *testing.T) {
 
 func TestBackgroundPaneIsIdempotentInTheBackgroundSession(t *testing.T) {
 	r := NewInteractiveRuntime("x", nil, nil, "tmux", "/opt/leo")
-	calls := scriptTmux(r, tmuxStep{}, tmuxStep{out: panesRow("%5", "$9", "leo-dispatch", "@7", 1, 2)})
-	window, err := r.BackgroundPane(context.Background(), "%5", "impl·ab12")
-	if err != nil || window != "@7" || len(*calls) != 2 {
-		t.Fatalf("BackgroundPane = %q, %v after %d calls; want no move", window, err, len(*calls))
+	calls := scriptTmux(r)
+	window, err := r.BackgroundPane(context.Background(), "%5", "impl·ab12", loneInBackdrop)
+	if err != nil || window != "@7" || len(*calls) != 0 {
+		t.Fatalf("BackgroundPane = %q, %v after %d calls; want no tmux at all", window, err, len(*calls))
 	}
 }
 
 func TestBackgroundPaneNeverEmptiesASession(t *testing.T) {
 	r := NewInteractiveRuntime("x", nil, nil, "tmux", "/opt/leo")
-	calls := scriptTmux(r, tmuxStep{}, tmuxStep{out: panesRow("%5", "$1", "orch", "@7", 1, 1)})
-	if _, err := r.BackgroundPane(context.Background(), "%5", "impl·ab12"); err == nil {
+	calls := scriptTmux(r)
+	only := loneInCaller
+	only.SessionWindows = 1
+	if _, err := r.BackgroundPane(context.Background(), "%5", "impl·ab12", only); err == nil {
 		t.Fatal("moving the only window of a session destroys the session")
 	}
 	for _, call := range *calls {
-		if len(call) > 2 && call[2] == "move-window" {
+		if call[2] == "if-shell" {
 			t.Fatalf("moved anyway: %#v", *calls)
 		}
 	}
@@ -169,12 +182,13 @@ func TestBackgroundPaneNeverEmptiesASession(t *testing.T) {
 
 func TestForegroundPaneMovesALoneWindowBackToTheCallerSession(t *testing.T) {
 	r := NewInteractiveRuntime("x", nil, nil, "tmux", "/opt/leo")
-	calls := scriptTmux(r, tmuxStep{out: panesRow("%5", "$9", "leo-dispatch", "@7", 1, 2)})
-	window, err := r.ForegroundPane(context.Background(), "%5", "impl·ab12", "$1")
+	calls := scriptTmux(r)
+	window, err := r.ForegroundPane(context.Background(), "%5", "impl·ab12", "$1", loneInBackdrop)
 	if err != nil || window != "@7" {
 		t.Fatalf("ForegroundPane = %q, %v", window, err)
 	}
-	want := [][]string{listPanesAll, tmux.Args("move-window", "-d", "-s", "$9:@7", "-t", "$1:")}
+	want := [][]string{ifShell("$9:@7", guardOf("$9", "@7", "%5", "#{==:#{window_panes},1}", "#{==:#{session_windows},2}"),
+		"move-window -d -s '$9:@7' -t '$1:'")}
 	if !reflect.DeepEqual(*calls, want) {
 		t.Fatalf("argv = %#v\nwant %#v", *calls, want)
 	}
@@ -182,9 +196,9 @@ func TestForegroundPaneMovesALoneWindowBackToTheCallerSession(t *testing.T) {
 
 func TestForegroundPaneLeavesAPaneAlreadyInTheCallerSession(t *testing.T) {
 	r := NewInteractiveRuntime("x", nil, nil, "tmux", "/opt/leo")
-	calls := scriptTmux(r, tmuxStep{out: panesRow("%5", "$1", "orch", "@7", 1, 3)})
-	window, err := r.ForegroundPane(context.Background(), "%5", "impl·ab12", "$1")
-	if err != nil || window != "@7" || len(*calls) != 1 {
+	calls := scriptTmux(r)
+	window, err := r.ForegroundPane(context.Background(), "%5", "impl·ab12", "$1", loneInCaller)
+	if err != nil || window != "@7" || len(*calls) != 0 {
 		t.Fatalf("ForegroundPane = %q, %v after %d calls; want no move", window, err, len(*calls))
 	}
 }
@@ -245,16 +259,17 @@ func TestTmuxBackgroundRoundTripKeepsPaneIdsThroughRealTmux(t *testing.T) {
 	where := func(pane string) string {
 		return tm("display-message", "-p", "-t", pane, "#{pane_id} #{window_panes}")
 	}
-	sessionOf := func(pane string) string {
+	probe := func(pane string) PaneLocation {
 		loc, err := r.PaneLocation(ctx, pane)
 		if err != nil {
 			t.Fatalf("PaneLocation(%s): %v", pane, err)
 		}
-		return loc.SessionName
+		return loc
 	}
+	sessionOf := func(pane string) string { return probe(pane).SessionName }
 
 	// A split pane goes to the background session as a window of its own.
-	window, err := r.BackgroundPane(ctx, split, "impl·ab12")
+	window, err := r.BackgroundPane(ctx, split, "impl·ab12", probe(split))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -269,14 +284,14 @@ func TestTmuxBackgroundRoundTripKeepsPaneIdsThroughRealTmux(t *testing.T) {
 	}
 
 	// It comes back as a window of the caller session, then as a split.
-	back, err := r.ForegroundPane(ctx, split, "impl·ab12", orch)
+	back, err := r.ForegroundPane(ctx, split, "impl·ab12", orch, probe(split))
 	if err != nil || back != window {
 		t.Fatalf("ForegroundPane = %q, %v; want the same window %s", back, err, window)
 	}
 	if sessionOf(split) != "orch" {
 		t.Fatalf("split pane in %s, want orch", sessionOf(split))
 	}
-	if err := r.ShowPane(ctx, split, caller, callerWindow); err != nil {
+	if err := r.ShowPane(ctx, split, caller, callerWindow, probe(split)); err != nil {
 		t.Fatal(err)
 	}
 	if got := tm("display-message", "-p", "-t", split, "#{window_id}"); got != callerWindow {
@@ -284,7 +299,7 @@ func TestTmuxBackgroundRoundTripKeepsPaneIdsThroughRealTmux(t *testing.T) {
 	}
 
 	// A lone window moves whole: same window id, and the watch link survives.
-	moved, err := r.BackgroundPane(ctx, lone, "lone·cd34")
+	moved, err := r.BackgroundPane(ctx, lone, "lone·cd34", probe(lone))
 	if err != nil || moved != loneWindow {
 		t.Fatalf("BackgroundPane(lone) = %q, %v; want %s", moved, err, loneWindow)
 	}
@@ -294,7 +309,7 @@ func TestTmuxBackgroundRoundTripKeepsPaneIdsThroughRealTmux(t *testing.T) {
 	if links := tm("list-windows", "-t", "="+DispatchWatchSessionPrefix+"d-1-x:", "-F", "#{window_id}"); !strings.Contains(links, loneWindow) {
 		t.Fatalf("watch session lost its link: %q", links)
 	}
-	if _, err := r.ForegroundPane(ctx, lone, "lone·cd34", orch); err != nil || sessionOf(lone) != "orch" {
+	if _, err := r.ForegroundPane(ctx, lone, "lone·cd34", orch, probe(lone)); err != nil || sessionOf(lone) != "orch" {
 		t.Fatalf("ForegroundPane(lone): %v, in %s", err, sessionOf(lone))
 	}
 	if where(lone) != lone+" 1" || where(split) != split+" 2" {
@@ -306,7 +321,11 @@ func TestTmuxBackgroundPaneRefusesToEndAnAlmostEmptySession(t *testing.T) {
 	r, tm := realTmux(t)
 	tm("new-session", "-d", "-s", "solo", "sleep 300")
 	pane := tm("display-message", "-p", "-t", "=solo:", "#{pane_id}")
-	if _, err := r.BackgroundPane(context.Background(), pane, "x"); err == nil {
+	from, err := r.PaneLocation(context.Background(), pane)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.BackgroundPane(context.Background(), pane, "x", from); err == nil {
 		t.Fatal("moved the only window of its session")
 	}
 	if got := tm("list-sessions", "-F", "#{session_name}"); !strings.Contains(got, "solo") {
@@ -335,8 +354,15 @@ func TestTmuxWatchLinkedViewerReturnsByMovingItsWindow(t *testing.T) {
 		return err == nil && strings.Contains(string(out), window)
 	}
 
+	probe := func(pane string) PaneLocation {
+		loc, err := r.PaneLocation(ctx, pane)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return loc
+	}
 	pane, window := mk()
-	if _, err := r.BackgroundPane(ctx, pane, "viewer·cd34"); err != nil {
+	if _, err := r.BackgroundPane(ctx, pane, "viewer·cd34", probe(pane)); err != nil {
 		t.Fatal(err)
 	}
 	tm("new-session", "-d", "-s", watch, "sleep 300")
@@ -345,7 +371,7 @@ func TestTmuxWatchLinkedViewerReturnsByMovingItsWindow(t *testing.T) {
 	if err != nil || loc.SessionName != "leo-dispatch" || !loc.WatchLinked {
 		t.Fatalf("location = %+v, %v; want leo-dispatch with the watch link reported", loc, err)
 	}
-	if _, err := r.ForegroundPane(ctx, pane, "viewer·cd34", orch); err != nil {
+	if _, err := r.ForegroundPane(ctx, pane, "viewer·cd34", orch, probe(pane)); err != nil {
 		t.Fatal(err)
 	}
 	if !linked(window) {
@@ -361,5 +387,151 @@ func TestTmuxWatchLinkedViewerReturnsByMovingItsWindow(t *testing.T) {
 	tm("join-pane", "-d", "-v", "-s", pane2, "-t", caller)
 	if linked(window2) {
 		t.Fatal("expected join-pane to end the watch link; if tmux changed, the dispatcher's guard is no longer needed")
+	}
+}
+
+// TestTmuxGuardedMovesLeaveAPaneThatChangedPlaceSinceTheProbe is the
+// check-then-act race: the dispatcher probed the pane, decided the move was
+// its to make, and the user (or an attach) changed things before the move ran.
+// The guard is evaluated by the tmux server in the same command as the move,
+// so each stale move must refuse with ErrPaneMoved and leave the pane alone.
+func TestTmuxGuardedMovesLeaveAPaneThatChangedPlaceSinceTheProbe(t *testing.T) {
+	const watch = DispatchWatchSessionPrefix + "d-1-x"
+	type world struct {
+		r         *TmuxInteractiveRuntime
+		tm        func(args ...string) string
+		caller    string
+		callerWin string
+		orch      string
+	}
+	newWorld := func(t *testing.T) *world {
+		r, tm := realTmux(t)
+		tm("new-session", "-d", "-s", "orch", "-x", "200", "-y", "50", "sleep 300")
+		tm("new-session", "-d", "-s", "elsewhere", "sleep 300")
+		tm("new-window", "-d", "-t", "=orch:", "sleep 300") // orch survives losing the viewer's window
+		return &world{r: r, tm: tm,
+			caller:    tm("display-message", "-p", "-t", "=orch:", "#{pane_id}"),
+			callerWin: tm("display-message", "-p", "-t", "=orch:", "#{window_id}"),
+			orch:      tm("display-message", "-p", "-t", "=orch:", "#{session_id}")}
+	}
+	lone := func(w *world) (pane, window string) {
+		pane = w.tm("new-window", "-d", "-P", "-F", "#{pane_id}", "-t", "=orch:", "-n", "viewer", "sleep 300")
+		return pane, w.tm("display-message", "-p", "-t", pane, "#{window_id}")
+	}
+	// relocated moves the pane's window to another session behind the dispatcher's back.
+	relocated := func(w *world, window string) { w.tm("move-window", "-d", "-s", window, "-t", "=elsewhere:") }
+
+	for name, tc := range map[string]struct {
+		// stale probes the pane, makes it change place, and returns the move
+		// the dispatcher would still make from the probe.
+		stale func(t *testing.T, w *world) (pane string, move func() error)
+		// wantSession and wantPanes are where the pane must still be.
+		wantSession string
+		wantPanes   string
+	}{
+		"hide: the user moved the split to another session": {
+			stale: func(t *testing.T, w *world) (string, func() error) {
+				pane := w.tm("split-window", "-d", "-P", "-F", "#{pane_id}", "-t", w.caller, "sleep 300")
+				from, err := w.r.PaneLocation(context.Background(), pane)
+				if err != nil {
+					t.Fatal(err)
+				}
+				w.tm("break-pane", "-d", "-s", pane, "-t", "=elsewhere:")
+				return pane, func() error { _, err := w.r.HidePane(context.Background(), pane, "x", from); return err }
+			},
+			wantSession: "elsewhere", wantPanes: "1",
+		},
+		"show: the user moved the hidden pane to another session": {
+			stale: func(t *testing.T, w *world) (string, func() error) {
+				pane, window := lone(w)
+				from, err := w.r.PaneLocation(context.Background(), pane)
+				if err != nil {
+					t.Fatal(err)
+				}
+				relocated(w, window)
+				return pane, func() error { return w.r.ShowPane(context.Background(), pane, w.caller, w.callerWin, from) }
+			},
+			wantSession: "elsewhere", wantPanes: "1",
+		},
+		"show: an attach linked the window after the probe": {
+			stale: func(t *testing.T, w *world) (string, func() error) {
+				pane, window := lone(w)
+				from, err := w.r.PaneLocation(context.Background(), pane)
+				if err != nil {
+					t.Fatal(err)
+				}
+				w.tm("new-session", "-d", "-s", watch, "sleep 300")
+				w.tm("link-window", "-d", "-s", window, "-t", "="+watch+":")
+				return pane, func() error { return w.r.ShowPane(context.Background(), pane, w.caller, w.callerWin, from) }
+			},
+			wantSession: "orch", wantPanes: "1",
+		},
+		"background: the user moved the window to another session": {
+			stale: func(t *testing.T, w *world) (string, func() error) {
+				pane, window := lone(w)
+				from, err := w.r.PaneLocation(context.Background(), pane)
+				if err != nil {
+					t.Fatal(err)
+				}
+				relocated(w, window)
+				return pane, func() error { _, err := w.r.BackgroundPane(context.Background(), pane, "x", from); return err }
+			},
+			wantSession: "elsewhere", wantPanes: "1",
+		},
+		"background: another pane joined the window, which move-window would drag along": {
+			stale: func(t *testing.T, w *world) (string, func() error) {
+				pane, _ := lone(w)
+				from, err := w.r.PaneLocation(context.Background(), pane)
+				if err != nil {
+					t.Fatal(err)
+				}
+				w.tm("split-window", "-d", "-t", pane, "sleep 300")
+				return pane, func() error { _, err := w.r.BackgroundPane(context.Background(), pane, "x", from); return err }
+			},
+			wantSession: "orch", wantPanes: "2",
+		},
+		"foreground: the user moved the backgrounded window to another session": {
+			stale: func(t *testing.T, w *world) (string, func() error) {
+				pane, _ := lone(w)
+				from, err := w.r.PaneLocation(context.Background(), pane)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if _, err := w.r.BackgroundPane(context.Background(), pane, "x", from); err != nil {
+					t.Fatal(err)
+				}
+				inBackground, err := w.r.PaneLocation(context.Background(), pane)
+				if err != nil {
+					t.Fatal(err)
+				}
+				w.tm("move-window", "-d", "-s", inBackground.WindowID, "-t", "=elsewhere:")
+				return pane, func() error {
+					_, err := w.r.ForegroundPane(context.Background(), pane, "x", w.orch, inBackground)
+					return err
+				}
+			},
+			wantSession: "elsewhere", wantPanes: "1",
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			w := newWorld(t)
+			pane, move := tc.stale(t, w)
+			// Windows of the user's sessions: a background move may still have
+			// created the (empty) background session, which is harmless.
+			windows := func() string {
+				return w.tm("list-windows", "-a", "-F", "#{session_name} #{window_id} #{window_panes}", "-f", "#{!=:#{session_name},leo-dispatch}")
+			}
+			before := windows()
+			if err := move(); !errors.Is(err, ErrPaneMoved) {
+				t.Fatalf("stale move: err = %v, want ErrPaneMoved", err)
+			}
+			if after := windows(); after != before {
+				t.Fatalf("a refused move still changed tmux:\nbefore %s\nafter  %s", before, after)
+			}
+			loc, err := w.r.PaneLocation(context.Background(), pane)
+			if err != nil || loc.SessionName != tc.wantSession || itoa(loc.WindowPanes) != tc.wantPanes {
+				t.Fatalf("pane at %+v, %v; want session %s with %s pane(s)", loc, err, tc.wantSession, tc.wantPanes)
+			}
+		})
 	}
 }
