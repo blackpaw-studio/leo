@@ -18,6 +18,9 @@ func TestDispatchPreambleAllowsNestedSubagents(t *testing.T) {
 			t.Fatalf("dispatch preamble forbids nesting via %q: %s", banned, got)
 		}
 	}
+	if !strings.Contains(got, "You may dispatch your own subagents") {
+		t.Fatalf("nesting permission missing: %s", got)
+	}
 	if !strings.Contains(got, "Do not self-certify your work; the orchestrator reviews it.") {
 		t.Fatalf("self-certify guidance missing: %s", got)
 	}
