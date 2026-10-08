@@ -80,7 +80,7 @@ func (v *Viewer) UpdateRoster(records []Record, now time.Time) {
 	resolved := make(map[string][]Record)
 	unresolved := make([]string, 0)
 	eligible := 0
-	for _, rec := range v.Cutoffs.Visible(records) {
+	for _, rec := range WithChildWait(v.Cutoffs.Visible(records)) {
 		if rec.Kind != "dispatch" {
 			unresolved = append(unresolved, rec.ID+":not-dispatch")
 			continue
