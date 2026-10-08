@@ -41,6 +41,10 @@ func sanitizeNotification(value string) string {
 }
 
 func completionNotification(rec Record, key string, status Status) string {
+	return completionHeader(rec, key, status) + pointerSuffix
+}
+
+func completionHeader(rec Record, key string, status Status) string {
 	if key == "" {
 		key = rec.ID
 	}
@@ -48,7 +52,7 @@ func completionNotification(rec Record, key string, status Status) string {
 	if name == "" {
 		name = sanitizeNotification(rec.Template)
 	}
-	return fmt.Sprintf("[leo] dispatch %s (%s) %s · active %s — collect with leo_wait", sanitizeNotification(key), name, status, formatActiveSeconds(rec.ActiveSeconds))
+	return fmt.Sprintf("[leo] dispatch %s (%s) %s · active %s", sanitizeNotification(key), name, status, formatActiveSeconds(rec.ActiveSeconds))
 }
 
 func turnNotificationStatus(rec Record, key string) Status {
@@ -285,7 +289,7 @@ func (d *Dispatcher) deliverNotification(ctx context.Context, delivery Notificat
 	}
 	rec := cloneRecord(item.state.record)
 	d.mu.Unlock()
-	err := deliverNotificationLine(ctx, delivery, rec, transport, item.key, notificationMessage(rec, item.key, n))
+	err := deliverNotificationLine(ctx, delivery, rec, transport, item.key, deliveryMessage(rec, item.key, n, transport))
 	d.mu.Lock()
 	n = item.state.record.Notifications[item.key]
 	switch {
@@ -308,7 +312,7 @@ func (d *Dispatcher) deliverNotification(ctx context.Context, delivery Notificat
 // claim expires), never falling back to a transport that could send it
 // twice.
 func (d *Dispatcher) redeliverBridgeClaim(ctx context.Context, delivery NotificationDelivery, item pendingNotification, claim Notification) {
-	err := deliverNotificationLine(ctx, delivery, item.record, NotificationTransportBridge, item.key, notificationMessage(item.record, item.key, claim))
+	err := deliverNotificationLine(ctx, delivery, item.record, NotificationTransportBridge, item.key, deliveryMessage(item.record, item.key, claim, NotificationTransportBridge))
 	if errors.Is(err, ErrNotificationNotSent) {
 		return
 	}
