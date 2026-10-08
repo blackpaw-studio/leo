@@ -70,6 +70,47 @@ func TestRosterCutoffsLaterClearMovesTheCutoffForward(t *testing.T) {
 	}
 }
 
+func TestRosterCutoffsRetriedClearEventDoesNotAdvanceTheCutoff(t *testing.T) {
+	now := stateNow
+	c := NewRosterCutoffs(func() time.Time { return now })
+	ev := clearEvent("alpha", "clear")
+	ev.EventID = "session.end:s1"
+	c.OnBridgeEvent(ev)
+
+	// A dispatch that was still running at the clear finishes, then the hub
+	// redelivers the same event.
+	now = stateNow.Add(10 * time.Second)
+	rec := finishedRecord("d", "alpha", 0)
+	rec.EndedAt = now
+	now = stateNow.Add(20 * time.Second)
+	c.OnBridgeEvent(ev)
+	if len(c.Visible([]Record{rec})) != 1 {
+		t.Fatal("a retried session.end(clear) hid a dispatch that finished after the real clear")
+	}
+
+	ev.EventID = "session.end:s2"
+	c.OnBridgeEvent(ev)
+	if len(c.Visible([]Record{rec})) != 0 {
+		t.Fatal("a new clear event did not advance the cutoff")
+	}
+}
+
+func TestRosterCutoffsPruneEntriesPastTheRetentionWindow(t *testing.T) {
+	now := stateNow
+	c := NewRosterCutoffs(func() time.Time { return now })
+	c.OnBridgeEvent(clearEvent("old", "clear"))
+	stale := finishedRecord("stale", "old", 0)
+
+	now = stateNow.Add(viewerGraceAfterEnd + time.Second)
+	c.OnBridgeEvent(clearEvent("fresh", "clear"))
+	if len(c.Visible([]Record{stale})) != 1 {
+		t.Fatal("cutoff older than every retention window was kept")
+	}
+	if len(c.Visible([]Record{finishedRecord("recent", "fresh", 0)})) != 0 {
+		t.Fatal("pruning dropped the fresh cutoff")
+	}
+}
+
 func TestNilRosterCutoffsHideNothing(t *testing.T) {
 	var c *RosterCutoffs
 	records := []Record{finishedRecord("d", "alpha", time.Second)}

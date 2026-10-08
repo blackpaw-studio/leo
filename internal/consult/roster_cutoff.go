@@ -1,7 +1,6 @@
 package consult
 
 import (
-	"maps"
 	"sync"
 	"time"
 
@@ -11,6 +10,18 @@ import (
 // sessionEndClear is the session.end reason a /clear reports.
 const sessionEndClear = "clear"
 
+// cutoffRetention is how long a cutoff can still matter: past the longest
+// window a finished dispatch is shown, every record ended before the cutoff
+// has aged out on its own.
+const cutoffRetention = max(bridgeRecentAfterEnd, viewerGraceAfterEnd)
+
+// rosterCutoff is one caller's last recorded /clear and the hub event that
+// reported it.
+type rosterCutoff struct {
+	at      time.Time
+	eventID string
+}
+
 // RosterCutoffs remembers, per caller bridge key, when its claude last ran
 // /clear. A cleared session starts over, so the dispatches that had already
 // finished by then leave its roster at once instead of lingering through
@@ -18,14 +29,15 @@ const sessionEndClear = "clear"
 // hidden; they finish after the cutoff and age out as normal.
 //
 // Cutoffs live in memory only: they matter for as long as a finished
-// dispatch would otherwise be shown (bridgeRecentAfterEnd and
-// viewerGraceAfterEnd), so one lost to a daemon restart has already expired
-// on its own. A nil *RosterCutoffs hides nothing.
+// dispatch would otherwise be shown (cutoffRetention), so one lost to a
+// daemon restart has already expired on its own, and one older than that is
+// pruned the next time any clear is recorded. A nil *RosterCutoffs hides
+// nothing.
 type RosterCutoffs struct {
 	now func() time.Time
 
 	mu        sync.Mutex
-	clearedAt map[string]time.Time
+	clearedAt map[string]rosterCutoff
 }
 
 // NewRosterCutoffs returns cutoffs stamped by now.
@@ -34,7 +46,9 @@ func NewRosterCutoffs(now func() time.Time) *RosterCutoffs {
 }
 
 // OnBridgeEvent records a /clear (a session.end with reason "clear") as the
-// cutoff for the event's bridge key.
+// cutoff for the event's bridge key. The hub may redeliver an event, so a
+// repeat of the key's last applied EventID is ignored rather than moving the
+// cutoff past dispatches that finished since the real clear.
 func (c *RosterCutoffs) OnBridgeEvent(ev bridge.Event) {
 	if c == nil || ev.Name != bridge.EventSessionEnd || ev.Reason != sessionEndClear || ev.Agent == "" {
 		return
@@ -42,11 +56,16 @@ func (c *RosterCutoffs) OnBridgeEvent(ev bridge.Event) {
 	at := c.now()
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	next := maps.Clone(c.clearedAt)
-	if next == nil {
-		next = map[string]time.Time{}
+	if last, ok := c.clearedAt[ev.Agent]; ok && ev.EventID != "" && last.eventID == ev.EventID {
+		return
 	}
-	next[ev.Agent] = at
+	next := make(map[string]rosterCutoff, len(c.clearedAt)+1)
+	for key, cutoff := range c.clearedAt {
+		if key != ev.Agent && at.Sub(cutoff.at) < cutoffRetention {
+			next[key] = cutoff
+		}
+	}
+	next[ev.Agent] = rosterCutoff{at: at, eventID: ev.EventID}
 	c.clearedAt = next
 }
 
@@ -64,7 +83,7 @@ func (c *RosterCutoffs) Visible(records []Record) []Record {
 	}
 	visible := make([]Record, 0, len(records))
 	for _, rec := range records {
-		if at, ok := cleared[rec.CallerBridgeKey]; ok && rec.Status.Terminal() && !rec.EndedAt.IsZero() && !rec.EndedAt.After(at) {
+		if cutoff, ok := cleared[rec.CallerBridgeKey]; ok && rec.Status.Terminal() && !rec.EndedAt.IsZero() && !rec.EndedAt.After(cutoff.at) {
 			continue
 		}
 		visible = append(visible, rec)
