@@ -36,7 +36,7 @@ test('a deliver stamps the turn it starts with its command id and origin', async
   expect(acks(h)).toEqual([{ type: 'ack', id: 'c1', ok: true }])
 })
 
-test('a plugin-framed deliver is still matched to its turn', async ($, on) => {
+test('a deliver\'s turn is stamped whatever text the engine frames it with', async ($, on) => {
   const feed = new Feed()
   const h = setup(on, {
     feeds: [feed],
@@ -85,125 +85,168 @@ test('a deliver queued behind a running turn stamps its own turn, not the runnin
   expect(order).toEqual(['turn.start:t1:-', 'turn.complete:t1:-', 'turn.start:t2:c1'])
 })
 
-// A person (or a wake) submits through the same prompt.submit chain the mod's
-// hook sees, then the engine starts their turn. The engine runs submits in
-// the order they were made, once the session is idle: the tests below gate
-// each submit's turn so the order is the test's to choose.
+// What the engine does (live, claude 2.1.294): a person's or a wake's prompt
+// raises prompt.submit with its origin, and at idle its turn.start follows at
+// once. Typed over a running turn it carries that turn's id (turnId): either
+// it enters the session at the turn's next step (folded: no turn.start of its
+// own) or, with no step left, it runs as a turn of its own the moment the
+// running one completes. The mod's own $.prompt.submit raises no
+// prompt.submit hook for the mod.
 const isDeliver = (e: { origin?: unknown }) => (e.origin as { name?: string } | undefined)?.name === 'leo-bridge'
 
-// What a turn.start looks like to leo: [turn id, command id].
-const stamps = (h: ReturnType<typeof setup>) => starts(h).map((r) => [r.turn_id, r.command_id])
+const person = (text: string, turnId?: string, kind = 'composer') => ({ text, asUser: true, origin: { kind }, ...(turnId ? { turnId } : {}) }) as any
 
-// An engine whose person-typed submits and the mod's delivers each wait for a
-// gate, then start the turn they carry.
-function gatedEngine() {
+// [turn id, command id, origin] of every turn.start leo was told of.
+const rows = (h: ReturnType<typeof setup>) => starts(h).map((r) => [r.turn_id, r.command_id, r.origin])
+
+const complete = ($: any, turnId: string) => $.turn.complete({ turnId, answer: 'x', durationMs: 5, isAborted: false, reason: 'answer' })
+
+// The engine's own step: an empty answer.
+function answerSteps(on: any) {
+  on('turn.step', async function* (_$: any, e: any) {
+    return { turnId: e.turnId, index: e.index, answer: '', toolUses: [], stopReason: 'end_turn', usage: null }
+  })
+}
+
+async function step($: any, turnId: string, index: number) {
+  for await (const _ of $.turn.step({ turnId, index, model: 'claude-opus-5-5', messageCount: 1 })) {
+    // drain
+  }
+}
+
+// An engine whose delivers wait for a gate before their turn starts (the
+// session is busy) and whose idle prompts start their turn at once.
+function engine($: any) {
   const gates = new Map<string, () => void>()
-  const pending: string[] = []
   return {
-    submit: ($: any) => async (e: any) => {
-      const who = isDeliver(e) ? 'deliver' : 'person'
-      const turnId = `t${pending.push(who) + 1}`
-      await new Promise<void>((r) => gates.set(`${who}:${e.text}`, r))
-      await $.turn.start({ text: String(e.text), turnId })
-      await $.turn.complete({ turnId, answer: 'x', durationMs: 5, isAborted: false, reason: 'answer' })
+    submit: async (e: any) => {
+      if (isDeliver(e)) {
+        await new Promise<void>((r) => gates.set(String(e.text), r))
+        await $.turn.start({ text: String(e.text), turnId: `d:${e.text}` })
+      } else if (e.text === 'refused') {
+        return { drop: 'refused' }
+      } else if (!e.turnId) {
+        await $.turn.start({ text: String(e.text), turnId: `p:${e.text}` })
+      }
       return { text: e.text }
     },
-    run: async (who: string, text: string) => {
-      gates.get(`${who}:${text}`)!()
+    run: async (text: string) => {
+      gates.get(text)!()
       await flush()
     },
   }
 }
 
-// The deliver is the mod's own: a turn someone else's submit starts is not
-// the deliver's, whichever words it carries.
-test('a prompt a person queued before a deliver runs first and is not stamped', async ($, on) => {
-  const feed = new Feed()
-  const engine = gatedEngine()
-  const h = setup(on, { feeds: [feed], submit: engine.submit($) })
-  await start($, h)
-  void $.prompt.submit({ text: 'typed while it ran', asUser: true })
-  await flush()
-  feed.line(deliver('c1', 'follow up'))
-  await flush()
-  await engine.run('person', 'typed while it ran')
-  await engine.run('deliver', 'follow up')
-  expect(stamps(h)).toEqual([
-    ['t2', undefined],
-    ['t3', 'c1'],
-  ])
-})
-
 // The deliver's text is no evidence of its turn: a person's identical words
-// are theirs. Which turn is whose is the order the submits were made in.
-test('a person submitting a waiting deliver\'s exact text does not take its stamp', async ($, on) => {
+// are theirs. The engine runs the prompts it holds in the order they were
+// made, and the mod follows that order.
+test('a prompt a person typed over a running turn before a deliver runs first and is not stamped', async ($, on) => {
   const feed = new Feed()
-  const engine = gatedEngine()
-  const h = setup(on, { feeds: [feed], submit: engine.submit($) })
+  const eng = engine($)
+  const h = setup(on, { feeds: [feed], submit: eng.submit })
   await start($, h)
-  void $.prompt.submit({ text: 'go', asUser: true })
-  await flush()
+  await $.turn.start({ text: 'long task', turnId: 't1' })
+  await $.prompt.submit(person('go', 't1'))
   feed.line(deliver('c1', 'go'))
   await flush()
-  await engine.run('person', 'go')
-  await engine.run('deliver', 'go')
-  expect(stamps(h)).toEqual([
-    ['t2', undefined],
-    ['t3', 'c1'],
+  await complete($, 't1')
+  await $.turn.start({ text: 'go', turnId: 't2' })
+  await complete($, 't2')
+  await eng.run('go')
+  expect(rows(h)).toEqual([
+    ['t1', undefined, undefined],
+    ['t2', undefined, 'composer'],
+    ['d:go', 'c1', 'plugin'],
   ])
 })
 
 test('a deliver submitted before a person\'s identical text keeps its stamp', async ($, on) => {
   const feed = new Feed()
-  const engine = gatedEngine()
-  const h = setup(on, { feeds: [feed], submit: engine.submit($) })
+  const eng = engine($)
+  const h = setup(on, { feeds: [feed], submit: eng.submit })
+  await start($, h)
+  await $.turn.start({ text: 'long task', turnId: 't1' })
+  feed.line(deliver('c1', 'go'))
+  await flush()
+  await $.prompt.submit(person('go', 't1'))
+  await complete($, 't1')
+  await eng.run('go')
+  await complete($, 'd:go')
+  await $.turn.start({ text: 'go', turnId: 't3' })
+  await h.settle()
+  expect(rows(h)).toEqual([
+    ['t1', undefined, undefined],
+    ['d:go', 'c1', 'plugin'],
+    ['t3', undefined, 'composer'],
+  ])
+})
+
+// Typed over a turn that still steps, a prompt enters the session at the
+// next step and never starts a turn of its own; it must not take the start
+// of the next turn.
+test('a prompt that folded into the running turn does not take a later deliver\'s start', async ($, on) => {
+  const feed = new Feed()
+  const eng = engine($)
+  const h = setup(on, { feeds: [feed], submit: eng.submit })
+  answerSteps(on)
+  await start($, h)
+  await $.turn.start({ text: 'long task', turnId: 't1' })
+  await step($, 't1', 0)
+  await $.prompt.submit(person('same words', 't1'))
+  await step($, 't1', 1)
+  await complete($, 't1')
+  feed.line(deliver('c1', 'same words'))
+  await flush()
+  await eng.run('same words')
+  expect(rows(h)).toEqual([
+    ['t1', undefined, undefined],
+    ['d:same words', 'c1', 'plugin'],
+  ])
+})
+
+// A prompt a hook refused starts no turn.
+test('a prompt that was refused does not take a later deliver\'s start', async ($, on) => {
+  const feed = new Feed()
+  const eng = engine($)
+  const h = setup(on, { feeds: [feed], submit: eng.submit })
+  await start($, h)
+  await $.prompt.submit(person('refused'))
+  feed.line(deliver('c1', 'refused'))
+  await flush()
+  await eng.run('refused')
+  expect(rows(h)).toEqual([['d:refused', 'c1', 'plugin']])
+})
+
+// The prompt's origin says who started a turn nobody at leo sent.
+test('a turn a person or a wake started reports who submitted it', async ($, on) => {
+  const h = setup(on, { submit: engine($).submit })
+  await start($, h)
+  await $.prompt.submit(person('hello'))
+  await complete($, 'p:hello')
+  await $.prompt.submit(person('<task-notification/>', undefined, 'task-notification'))
+  expect(rows(h)).toEqual([
+    ['p:hello', undefined, 'composer'],
+    ['p:<task-notification/>', undefined, 'task-notification'],
+  ])
+})
+
+// The mod's own submit raises no hook for the mod: nothing of it may linger
+// to claim the next turn nobody submitted.
+test('a turn nobody submitted after a deliver\'s turn carries no stamp', async ($, on) => {
+  const feed = new Feed()
+  const eng = engine($)
+  const h = setup(on, { feeds: [feed], submit: eng.submit })
   await start($, h)
   feed.line(deliver('c1', 'go'))
   await flush()
-  void $.prompt.submit({ text: 'go', asUser: true })
-  await flush()
-  await engine.run('deliver', 'go')
-  await engine.run('person', 'go')
-  expect(stamps(h)).toEqual([
-    ['t2', 'c1'],
-    ['t3', undefined],
-  ])
-})
-
-// A turn nothing here submitted (a continuation) is not the deliver's even
-// though no submit was seen for it.
-test('a turn started by the engine itself while a deliver waits is not stamped', async ($, on) => {
-  const feed = new Feed()
-  const engine = gatedEngine()
-  const h = setup(on, { feeds: [feed], submit: engine.submit($) })
-  await start($, h)
-  feed.line(deliver('c1', 'follow up'))
-  await flush()
-  await $.turn.start({ text: '', turnId: 'tc' })
-  await $.turn.complete({ turnId: 'tc', answer: 'x', durationMs: 5, isAborted: false, reason: 'answer' })
-  await engine.run('deliver', 'follow up')
-  expect(stamps(h)).toEqual([
-    ['tc', undefined],
-    ['t2', 'c1'],
-  ])
-})
-
-// A prompt typed over a running turn can fold into it and never start a
-// turn of its own: it must not hide the next deliver's turn.
-test('a submit that never started a turn does not hide a later deliver\'s stamp', async ($, on) => {
-  const feed = new Feed()
-  const h = setup(on, {
-    feeds: [feed],
-    submit: async (e) => {
-      if (isDeliver(e)) await $.turn.start({ text: String(e.text), turnId: 't2' })
-      return { text: e.text }
-    },
-  })
-  await start($, h)
-  await $.prompt.submit({ text: 'folded into the running turn', asUser: true })
-  feed.line(deliver('c1', 'next'))
+  await eng.run('go')
+  await complete($, 'd:go')
+  await $.turn.start({ text: 'a continuation', turnId: 't2' })
   await h.settle()
-  expect(stamps(h)).toEqual([['t2', 'c1']])
+  expect(rows(h)).toEqual([
+    ['d:go', 'c1', 'plugin'],
+    ['t2', undefined, undefined],
+  ])
 })
 
 test('a dropped deliver leaves no stamp for a later turn with the same text', async ($, on) => {

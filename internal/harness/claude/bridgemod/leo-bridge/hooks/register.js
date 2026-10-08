@@ -121,18 +121,17 @@ let reportedEffort = null
 let isSubmitting = false
 let turnStartWaiters = []
 
-// The submits whose turn has not started yet, oldest first: { text, stamp? }.
-// A deliver of this mod carries the stamp (its command id and origin) its
-// turn is reported under; $.prompt.submit waits for the session to be idle,
-// so a deliver never queues behind a running turn. The rest are the submits
-// the prompt.submit hook saw from anyone else (a person, a wake, another
-// plugin), noted so the turn each starts is not taken for a deliver's. See
-// takeSubmitStamp.
+// The submits whose turn has not started yet, in the order they were made
+// (the order the engine runs them in). A deliver of this mod is { stamp }: the
+// command id and origin its turn is reported under. The engine raises no
+// prompt.submit hook for the plugin's own $.prompt.submit (verified on
+// 2.1.294), so every submit the hook does see is somebody else's: { origin,
+// queuedOver }, the kind of origin it came from and, for a prompt typed over
+// a running turn, that turn's id until the prompt enters the session at the
+// turn's next step (folded: no turn of its own) or the turn completes (it
+// runs as a turn of its own, next). See takeTurnOwner.
 let pendingSubmits = []
-const MAX_OBSERVED_SUBMITS = 16
-
-// The plugin name the engine gives this mod's own submits as their origin.
-const PLUGIN_NAME = 'leo-bridge'
+const MAX_OBSERVED_SUBMITS = 32
 
 // Serial chains: reports keep per-process order; commands run one at a time;
 // store entry rewrites never interleave (an interrupt settles off the
@@ -384,42 +383,56 @@ function settleTurnStartWaiters(turnId) {
 
 // Notes a deliver until its turn starts; the returned function forgets it
 // (its turn started, or it was dropped or failed).
-function trackSubmit(text, stamp) {
-  const entry = { text, stamp }
+function trackSubmit(stamp) {
+  const entry = { stamp }
   pendingSubmits = [...pendingSubmits, entry]
-  return () => {
-    pendingSubmits = pendingSubmits.filter((p) => p !== entry)
-  }
+  return () => forgetSubmit(entry)
 }
 
-// Whether the engine says this prompt.submit is the mod's own deliver.
-function isOwnSubmit(e) {
-  return e.origin?.kind === 'plugin' && e.origin.name === PLUGIN_NAME
+function forgetSubmit(entry) {
+  pendingSubmits = pendingSubmits.filter((p) => p !== entry)
 }
 
-// Notes a submit someone else made. The engine raises prompt.submit before
-// that submit's turn.start, so the hook sees it first.
-function noteObservedSubmit(text) {
+// An origin kind the daemon accepts as a report's origin, or undefined.
+function originKind(origin) {
+  const kind = origin?.kind
+  return typeof kind === 'string' && /^[A-Za-z0-9._-]{1,32}$/.test(kind) ? kind : undefined
+}
+
+// Notes a submit someone else made; the engine raises prompt.submit before
+// that submit's turn.start. The oldest are dropped past the cap: nothing
+// starts a turn for every submit (a refusal below the hook, say).
+function noteObservedSubmit(e) {
+  const entry = { origin: originKind(e.origin), queuedOver: turnIdField(e.turnId) }
   const observed = pendingSubmits.filter((p) => p.stamp === undefined)
   const dropped = observed.length >= MAX_OBSERVED_SUBMITS ? observed[0] : undefined
-  pendingSubmits = [...pendingSubmits.filter((p) => p !== dropped), { text: typeof text === 'string' ? text : '' }]
+  pendingSubmits = [...pendingSubmits.filter((p) => p !== dropped), entry]
+  return entry
 }
 
-// The stamp of the deliver this turn.start is the turn of, or undefined for
-// a turn someone else started (a person, a wake, a queued prompt that ran
-// first) or the engine did (a continuation). The engine runs submits in the
-// order they were made, so the turn is the oldest pending submit's whose
-// text it carries (Claude may wrap a message in an envelope, never alter
-// it): the text rules a turn out, the order says whose it is among turns
-// that carry the same words, so a person's identical text never takes a
-// deliver's stamp. The seen submits ahead of it folded into a running turn
-// and never started one: they are retired.
-function takeSubmitStamp(text) {
-  const i = pendingSubmits.findIndex((p) => text.includes(p.text))
-  if (i < 0) return undefined
-  const { stamp } = pendingSubmits[i]
-  pendingSubmits = pendingSubmits.filter((p, j) => j > i || (j < i && p.stamp !== undefined))
-  return stamp
+// The turn a step begins is the one prompts typed over it enter: they have
+// folded into it and start no turn of their own.
+function foldQueuedInto(turnId) {
+  pendingSubmits = pendingSubmits.filter((p) => p.queuedOver === undefined || p.queuedOver !== turnId)
+}
+
+// Prompts typed over a turn that completed without folding them run next, as
+// turns of their own.
+function releaseQueuedAfter(turnId) {
+  pendingSubmits = pendingSubmits.map((p) => (p.queuedOver !== undefined && p.queuedOver === turnId ? { ...p, queuedOver: undefined } : p))
+}
+
+// The submit this turn.start is the turn of: the oldest one that is ready to
+// run (not typed over a turn still running), or undefined for a turn nothing
+// submitted (a continuation). The engine runs submits in the order they were
+// made, so the order alone says whose a turn is, whatever words it carries:
+// a deliver's stamp is its own, and a person's or a wake's origin is theirs.
+// An unobserved turn while a deliver waits is the deliver's, since the
+// deliver is the only submit the hook never sees.
+function takeTurnOwner() {
+  const owner = pendingSubmits.find((p) => p.queuedOver === undefined)
+  if (owner) forgetSubmit(owner)
+  return owner
 }
 
 // ---- commands ------------------------------------------------------------
@@ -545,7 +558,7 @@ async function runDeliver($, command) {
   const args = command.asUser ? { text: command.text, asUser: true } : { text: command.text }
   await markHandedOff($, command.id)
   isSubmitting = true
-  const untrack = trackSubmit(command.text, { commandId: command.id, origin: 'plugin' })
+  const untrack = trackSubmit({ commandId: command.id, origin: 'plugin' })
   try {
     const result = await $.prompt.submit(args)
     if (result && typeof result.drop === 'string') {
@@ -1104,10 +1117,19 @@ export function register(on) {
     return next(e)
   })
 
+  // Watches the prompts others submit (the plugin's own raise no hook here),
+  // to tell whose turn each turn.start is.
   on('prompt.submit', async ($, e, next) => {
-    if (!isOwnSubmit(e)) noteObservedSubmit(e.text)
-    return next(e)
-  })
+    const entry = noteObservedSubmit(e)
+    try {
+      const result = await next(e)
+      if (result && typeof result.drop === 'string') forgetSubmit(entry)
+      return result
+    } catch (err) {
+      forgetSubmit(entry)
+      throw err
+    }
+  }).catch(observeFailed)
 
   on('turn.start', async ($, e, next) => {
     // Defensive: per the v2.1.289 typings only the main loop raises
@@ -1115,15 +1137,15 @@ export function register(on) {
     if (e.agentId) return next(e)
     markRunning(e.turnId)
     stopPending = undefined
+    const owner = takeTurnOwner()
     if (isBridging()) {
       enqueueReport($, () => helloIfSessionChanged($))
-      const stamp = takeSubmitStamp(e.text)
       const fields = {
         event_id: eventId('turn.start', e.turnId),
         turn_id: turnIdField(e.turnId),
         prompt: reportText(e.text),
-        command_id: stamp?.commandId,
-        origin: stamp?.origin,
+        command_id: owner?.stamp?.commandId,
+        origin: owner?.stamp?.origin ?? owner?.origin,
       }
       enqueueReport($, () => eventReport('turn.start', defined(fields)))
     }
@@ -1133,6 +1155,7 @@ export function register(on) {
   on('turn.complete', async ($, e, next) => {
     if (e.agentId) return next(e)
     markIdle()
+    releaseQueuedAfter(e.turnId)
     if (!isBridging()) return next(e)
     clearAttention($)
     // The report is queued now, so it keeps its place among this process's
@@ -1165,6 +1188,7 @@ export function register(on) {
 
   // The effort each main-loop step asks for, reported when it changes.
   on('turn.step', async function* ($, e, next) {
+    if (!e.agentId) foldQueuedInto(e.turnId)
     if (!e.agentId && isBridging() && typeof e.effort === 'string' && e.effort !== reportedEffort) {
       reportedEffort = e.effort
       const level = e.effort
