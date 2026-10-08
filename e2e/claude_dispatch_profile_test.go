@@ -77,7 +77,7 @@ func TestClaudeDispatchProfile(t *testing.T) {
 	} else if err := json.Unmarshal(raw, &dispatchArgs); err != nil {
 		t.Fatal(err)
 	}
-	wantPrompt := "You are a subagent dispatched by an orchestrator. Do not spawn agents or run your own code review; the orchestrator reviews your work. When the orchestrator has finished with you, it releases this pane. work"
+	wantPrompt := "You are a subagent dispatched by an orchestrator. You may dispatch your own subagents when your brief calls for it. Do not self-certify your work; the orchestrator reviews it. When the orchestrator has finished with you, it releases this pane. work"
 	wantDispatch := []string{"-p", wantPrompt, "--model", "sonnet", "--max-turns", "15", "--output-format", "stream-json", "--verbose", "--strict-mcp-config", "--mcp-config", `{"mcpServers":{"leo":{"command":"leo","args":["mcp-server"]}}}`, "--add-dir", ws, "--disallowed-tools", "Agent", "--settings", `{"enabledPlugins":{"a@local":false,"b@market":false}}`}
 	if !reflect.DeepEqual(structuralArgv(t, dispatchArgs), structuralArgv(t, wantDispatch)) {
 		t.Fatalf("dispatch argv\n got: %#v\nwant: %#v", dispatchArgs, wantDispatch)

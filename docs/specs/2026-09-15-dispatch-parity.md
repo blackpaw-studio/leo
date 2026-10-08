@@ -201,7 +201,7 @@ Build order. Features 1, 3, and 5 overlap in `consult.go`, Record/Entry/lifecycl
 
 ## Addendum: no nested agents (2026-09-15)
 
-Every `leo_dispatch`, `leo_consult`, and `leo dispatch run` launch is marked as dispatched in its `LaunchSpec`. Dispatched Codex invocations set `features.multi_agent=false`, dispatched Claude invocations merge `Agent` into `--disallowed-tools`, and dispatched OpenCode invocations set `permission.task` to `deny` in the per-invocation config overlay. Dispatch prompts also state that the subagent must not spawn agents or conduct its own review; the orchestrator retains review responsibility.
+Every `leo_dispatch`, `leo_consult`, and `leo dispatch run` launch is marked as dispatched in its `LaunchSpec`. Dispatched Codex invocations set `features.multi_agent=false`, dispatched Claude invocations merge `Agent` into `--disallowed-tools`, and dispatched OpenCode invocations set `permission.task` to `deny` in the per-invocation config overlay. Dispatch prompts state that the subagent may dispatch its own subagents when its brief calls for it, but must not self-certify its work; the orchestrator retains review responsibility.
 
 1. Serial foundation: shared Record/Request/Entry contracts, caller identity, transition keys, collection serialization, and transport schemas.
 2. Parallel implementation with partitioned ownership: notification helpers, worktree helpers, and shared output renderer/reader. Integrate shared call sites serially.

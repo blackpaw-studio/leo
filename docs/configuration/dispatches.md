@@ -58,14 +58,17 @@ refused from inside tmux (the attach is a popup there). Clients can check the
 
 ## Nested agents
 
-Dispatches and consults cannot launch nested agents: Leo disables the native
-subagent tool for each supported harness, and tells the subagent that the
-orchestrator performs review. There is no opt-out yet.
+Leo disables each harness's native subagent tool inside dispatches and
+consults (Claude's `Agent` tool, Codex `multi_agent`, OpenCode `task`), but
+nested Leo dispatches are permitted: the dispatch preamble tells the subagent
+it may dispatch its own subagents when its brief calls for it, and not to
+self-certify its work. There is no per-dispatch opt-out. Leo's MCP server is
+injected into dispatches only for the `claude` harness today, so only Claude
+dispatches can call `leo_dispatch` this way.
 
-A subagent that calls `leo_dispatch` anyway starts a nested dispatch. Leo
-records the calling dispatch as its `parent_dispatch_id` and files the child
-under the same `caller` as the parent, so a whole tree reports the root agent
-as its caller.
+A subagent that calls `leo_dispatch` starts a nested dispatch. Leo records the
+calling dispatch as its `parent_dispatch_id` and files the child under the same
+`caller` as the parent, so a whole tree reports the root agent as its caller.
 
 Every dispatch and consult run carries `LEO_DISPATCH_ID` (headless, interactive,
 and headless continuations alike), which Leo's MCP server uses to refuse
