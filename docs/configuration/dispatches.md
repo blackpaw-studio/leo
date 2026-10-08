@@ -8,14 +8,20 @@ conversation after they finish. Dispatches can also run interactively.
 
 Dispatch viewers open in panes below the caller by default, using tmux's
 `main-horizontal` layout. Configure `defaults.dispatch.viewer` with
-`placement: pane|window` (default `pane`), `max_panes: 1..6` (default `3`),
-and `main_pane_height: 20..90` (default `60`). Leo falls back to a separate
-window when the cap is reached or a split fails. Session options
+`placement: pane|window|background` (default `pane`), `max_panes: 1..6`
+(default `3`), and `main_pane_height: 20..90` (default `60`). Leo falls back to
+a separate window when the cap is reached or a split fails. Session options
 `@leo_viewer_placement` and `@leo_viewer_max_panes` override the config.
 Release an idle or finished interactive pane with `leo dispatch release <id>`.
 
+`background` never touches the caller's tmux session: every dispatch (headless
+viewer or interactive TUI, nested dispatches included) opens as a detached
+window in the `leo-dispatch` session, even when the caller is a live
+supervised agent. Nothing appears in the caller's window; look at a dispatch
+with `leo dispatch watch <id>` or `leo dispatch attach <id>`.
+
 Inside Leo's tmux server, press `prefix + L` to open the dispatch viewer
-settings menu. It has four actions: toggle viewer placement, cycle the pane
+settings menu. It has four actions: cycle viewer placement (pane → window → background), cycle the pane
 cap from 1 through 6, close finished viewers belonging to the current caller
 session, and save the current session overrides as the config default. Saving
 merges only placement and max-panes into `defaults.dispatch.viewer`, preserves

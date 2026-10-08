@@ -72,6 +72,10 @@ func (c *ViewerPlacementCoordinator) Publish(id string, publish func() bool) boo
 type ViewerPlacement struct {
 	Kind, Target             string
 	MaxPanes, MainPaneHeight int
+	// Background marks a window placement that must stay out of every
+	// caller's tmux session: the viewer window lives in the detached
+	// leo-dispatch session instead.
+	Background bool
 }
 type ViewerOverrides struct {
 	Placement string
@@ -80,12 +84,16 @@ type ViewerOverrides struct {
 
 func ResolveViewerPlacement(rec Record, overrides ViewerOverrides, cfg *config.Config, live int) ViewerPlacement {
 	p := ViewerPlacement{Kind: "window", MaxPanes: cfg.DispatchViewerMaxPanes(), MainPaneHeight: cfg.DispatchViewerMainPaneHeight()}
-	if rec.CallerPaneID == "" || rec.CallerSessionID == "" || rec.CallerSessionID == dispatchViewerSession {
+	placement := cfg.DispatchViewerPlacement()
+	if config.IsDispatchViewerPlacement(overrides.Placement) {
+		placement = overrides.Placement
+	}
+	if placement == "background" {
+		p.Background = true
 		return p
 	}
-	placement := cfg.DispatchViewerPlacement()
-	if overrides.Placement == "pane" || overrides.Placement == "window" {
-		placement = overrides.Placement
+	if rec.CallerPaneID == "" || rec.CallerSessionID == "" || rec.CallerSessionID == dispatchViewerSession {
+		return p
 	}
 	if overrides.MaxPanes >= 1 && overrides.MaxPanes <= 6 {
 		p.MaxPanes = overrides.MaxPanes

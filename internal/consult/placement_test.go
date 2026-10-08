@@ -36,3 +36,32 @@ func TestLiveViewerPaneCount(t *testing.T) {
 		t.Fatalf("count=%d", got)
 	}
 }
+
+func TestResolveViewerPlacementBackground(t *testing.T) {
+	cfg := &config.Config{}
+	cfg.Defaults.Dispatch.Viewer.Placement = "background"
+	inPane := Record{CallerPaneID: "%1", CallerSessionID: "$1", CallerWindowID: "@1"}
+	for name, rec := range map[string]Record{
+		"caller in a pane":              inPane,
+		"no caller pane":                {},
+		"nested in the dispatch window": {CallerPaneID: "%7", CallerSessionID: dispatchViewerSession, CallerWindowID: "@3"},
+	} {
+		got := ResolveViewerPlacement(rec, ViewerOverrides{}, cfg, 0)
+		if got.Kind != "window" || !got.Background || got.Target != "" {
+			t.Fatalf("%s: placement=%+v, want a background window", name, got)
+		}
+	}
+	if got := ResolveViewerPlacement(inPane, ViewerOverrides{Placement: "pane"}, cfg, 0); got.Kind != "split" || got.Background {
+		t.Fatalf("pane override=%+v", got)
+	}
+	if got := ResolveViewerPlacement(inPane, ViewerOverrides{Placement: "window"}, cfg, 0); got.Kind != "window" || got.Background {
+		t.Fatalf("window override=%+v", got)
+	}
+	cfg.Defaults.Dispatch.Viewer.Placement = "pane"
+	if got := ResolveViewerPlacement(inPane, ViewerOverrides{Placement: "background"}, cfg, 0); got.Kind != "window" || !got.Background {
+		t.Fatalf("background override=%+v", got)
+	}
+	if got := ResolveViewerPlacement(Record{}, ViewerOverrides{Placement: "background"}, cfg, 0); !got.Background {
+		t.Fatalf("background override without a caller pane=%+v", got)
+	}
+}

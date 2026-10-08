@@ -801,3 +801,48 @@ func TestInteractiveSplitCloseLayout(t *testing.T) {
 		t.Fatalf("calls=%#v want=%#v", calls, want)
 	}
 }
+
+func TestInteractiveBackgroundLaunchNeverTouchesCallerSession(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("HOME", dir)
+	cfg := &config.Config{HomePath: dir, Templates: map[string]config.TemplateConfig{"claude": {Harness: "claude"}}}
+	resolved := 0
+	r := NewInteractiveRuntime("/tmp/leo.yaml", func() (*config.Config, error) { return cfg, nil }, func(string) (string, bool) {
+		resolved++
+		return "leo-caller", true
+	}, "tmux", "/opt/leo")
+	var calls [][]string
+	r.ExecCommandContext = func(_ context.Context, _ string, args ...string) *exec.Cmd {
+		calls = append(calls, append([]string(nil), args...))
+		if slices.Contains(args, "new-window") {
+			return exec.Command("echo", "%5")
+		}
+		return exec.Command("true")
+	}
+	pane, _, err := r.Launch(context.Background(), LaunchRequest{ID: "d-bg1", Template: "claude", Caller: "caller", Cwd: dir, Name: "work",
+		CallerPaneID: "%1", CallerSessionID: "$1", CallerWindowID: "@1", Placement: ViewerPlacement{Kind: "window", Background: true}})
+	if err != nil || pane != "%5" {
+		t.Fatalf("Launch = %q, %v", pane, err)
+	}
+	if resolved != 0 {
+		t.Fatalf("resolved the caller session %d times; background must not look it up", resolved)
+	}
+	var launch []string
+	for _, c := range calls {
+		if slices.Contains(c, "-t") && slices.Contains(c, "=leo-caller") {
+			t.Fatalf("touched the caller session: %#v", c)
+		}
+		if slices.Contains(c, "new-window") {
+			launch = c
+		}
+	}
+	if !reflect.DeepEqual(calls[0], []string{"-L", "leo", "has-session", "-t", "=leo-dispatch"}) {
+		t.Fatalf("probe=%#v", calls[0])
+	}
+	if !reflect.DeepEqual(launch[:11], []string{"-L", "leo", "new-window", "-d", "-P", "-F", "#{pane_id}", "-t", "=leo-dispatch", "-n", "work·bg1"}) {
+		t.Fatalf("launch=%#v", launch)
+	}
+	if got := r.ViewerKind(pane); got != "window" {
+		t.Fatalf("ViewerKind=%q", got)
+	}
+}

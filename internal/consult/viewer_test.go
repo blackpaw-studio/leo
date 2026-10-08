@@ -521,3 +521,58 @@ func TestViewerSweepDoesNotRetrackHandledWindow(t *testing.T) {
 		t.Fatalf("handled viewer was re-tracked: %#v", v.windowIDs)
 	}
 }
+
+func TestViewerBackgroundOpensDetachedWindowInDispatchSession(t *testing.T) {
+	var calls [][]string
+	resolved := 0
+	v := &Viewer{ConfigPath: viewerConfig(t, "background"), TmuxPath: "tmux", Executable: func() (string, error) { return "/opt/leo", nil }, ResolveCaller: func(string) (string, bool) {
+		resolved++
+		return "leo-caller", true
+	}, ExecCommand: func(name string, args ...string) *exec.Cmd {
+		calls = append(calls, append([]string{name}, args...))
+		if len(args) > 2 && args[2] == "new-window" {
+			return exec.Command("printf", "@7\\n")
+		}
+		return exec.Command("true")
+	}}
+	rec := Record{ID: "d-123abc", Kind: "dispatch", Caller: "caller", Template: "claude", CallerPaneID: "%1", CallerSessionID: "$1", CallerWindowID: "@1"}
+	if got := v.OnStart(rec); got != "@7" {
+		t.Fatalf("OnStart=%q", got)
+	}
+	if resolved != 0 {
+		t.Fatalf("resolved the caller session %d times", resolved)
+	}
+	want := [][]string{
+		{"tmux", "-L", "leo", "show-options", "-t", "$1"},
+		{"tmux", "-L", "leo", "has-session", "-t", "=leo-dispatch"},
+		{"tmux", "-L", "leo", "new-window", "-d", "-P", "-F", "#{window_id}", "-t", "=leo-dispatch", "-n", "claude·3abc", "sleep 86400"},
+		{"tmux", "-L", "leo", "set-window-option", "-t", "@7", "remain-on-exit", "on"},
+		{"tmux", "-L", "leo", "respawn-pane", "-k", "-t", "@7", "'/opt/leo' --config '" + v.ConfigPath + "' dispatch watch d-123abc"},
+	}
+	if !reflect.DeepEqual(calls, want) {
+		t.Fatalf("calls=%#v\nwant=%#v", calls, want)
+	}
+}
+
+func TestViewerBackgroundHonorsSessionOverrideWithoutCallerPane(t *testing.T) {
+	var calls [][]string
+	v := &Viewer{ConfigPath: viewerConfig(t, "pane"), TmuxPath: "tmux", Executable: func() (string, error) { return "/opt/leo", nil }, ResolveCaller: func(string) (string, bool) { return "leo-caller", true }, ExecCommand: func(name string, args ...string) *exec.Cmd {
+		calls = append(calls, append([]string{name}, args...))
+		switch {
+		case len(args) > 2 && args[2] == "show-options":
+			return exec.Command("printf", "@leo_viewer_placement background\\n")
+		case len(args) > 2 && args[2] == "new-window":
+			return exec.Command("printf", "@7\\n")
+		}
+		return exec.Command("true")
+	}}
+	v.OnStart(Record{ID: "d-123abc", Kind: "dispatch", Caller: "caller", Template: "claude", CallerPaneID: "%1", CallerSessionID: "$1", CallerWindowID: "@1"})
+	for _, c := range calls {
+		if containsArg(c, "=leo-caller") {
+			t.Fatalf("touched the caller session: %#v", c)
+		}
+	}
+	if len(calls) < 3 || !reflect.DeepEqual(calls[2][3:], []string{"new-window", "-d", "-P", "-F", "#{window_id}", "-t", "=leo-dispatch", "-n", "claude·3abc", "sleep 86400"}) {
+		t.Fatalf("calls=%#v", calls)
+	}
+}
