@@ -129,8 +129,10 @@ let turnStartWaiters = []
 // queuedOver }, the kind of origin it came from and, for a prompt typed over
 // a running turn, that turn's id until the prompt enters the session at the
 // turn's next step (folded: no turn of its own) or the turn completes (it
-// runs as a turn of its own, next). See takeTurnOwner.
+// runs as a turn of its own, next). Each entry has an id that survives the
+// entry being replaced, so what made it can forget it. See takeTurnOwner.
 let pendingSubmits = []
+let lastSubmitId = 0
 const MAX_OBSERVED_SUBMITS = 32
 
 // Serial chains: reports keep per-process order; commands run one at a time;
@@ -384,13 +386,20 @@ function settleTurnStartWaiters(turnId) {
 // Notes a deliver until its turn starts; the returned function forgets it
 // (its turn started, or it was dropped or failed).
 function trackSubmit(stamp) {
-  const entry = { stamp }
-  pendingSubmits = [...pendingSubmits, entry]
-  return () => forgetSubmit(entry)
+  const id = ++lastSubmitId
+  pendingSubmits = [...pendingSubmits, { id, stamp }]
+  return () => forgetSubmit(id)
 }
 
-function forgetSubmit(entry) {
-  pendingSubmits = pendingSubmits.filter((p) => p !== entry)
+function forgetSubmit(id) {
+  pendingSubmits = pendingSubmits.filter((p) => p.id !== id)
+}
+
+// The prompts someone else submitted are the session's: when it ends or a
+// new one starts (a /clear, a resume) none of them has a turn to come. A
+// deliver in flight is not: its submit settles it.
+function forgetObservedSubmits() {
+  pendingSubmits = pendingSubmits.filter((p) => p.stamp !== undefined)
 }
 
 // An origin kind the daemon accepts as a report's origin, or undefined.
@@ -403,11 +412,11 @@ function originKind(origin) {
 // that submit's turn.start. The oldest are dropped past the cap: nothing
 // starts a turn for every submit (a refusal below the hook, say).
 function noteObservedSubmit(e) {
-  const entry = { origin: originKind(e.origin), queuedOver: turnIdField(e.turnId) }
+  const entry = { id: ++lastSubmitId, origin: originKind(e.origin), queuedOver: turnIdField(e.turnId) }
   const observed = pendingSubmits.filter((p) => p.stamp === undefined)
   const dropped = observed.length >= MAX_OBSERVED_SUBMITS ? observed[0] : undefined
   pendingSubmits = [...pendingSubmits.filter((p) => p !== dropped), entry]
-  return entry
+  return entry.id
 }
 
 // The turn a step begins is the one prompts typed over it enter: they have
@@ -431,7 +440,7 @@ function releaseQueuedAfter(turnId) {
 // deliver is the only submit the hook never sees.
 function takeTurnOwner() {
   const owner = pendingSubmits.find((p) => p.queuedOver === undefined)
-  if (owner) forgetSubmit(owner)
+  if (owner) forgetSubmit(owner.id)
   return owner
 }
 
@@ -1113,6 +1122,7 @@ async function onSessionStart($) {
 
 export function register(on) {
   on('session.start', async ($, e, next) => {
+    forgetObservedSubmits()
     await onSessionStart($)
     return next(e)
   })
@@ -1120,13 +1130,13 @@ export function register(on) {
   // Watches the prompts others submit (the plugin's own raise no hook here),
   // to tell whose turn each turn.start is.
   on('prompt.submit', async ($, e, next) => {
-    const entry = noteObservedSubmit(e)
+    const id = noteObservedSubmit(e)
     try {
       const result = await next(e)
-      if (result && typeof result.drop === 'string') forgetSubmit(entry)
+      if (result && typeof result.drop === 'string') forgetSubmit(id)
       return result
     } catch (err) {
-      forgetSubmit(entry)
+      forgetSubmit(id)
       throw err
     }
   }).catch(observeFailed)
@@ -1245,6 +1255,7 @@ export function register(on) {
   })
 
   on('session.end', async ($, e, next) => {
+    forgetObservedSubmits()
     // A dormant process leaves the acked entry alone: a successor under the
     // same key may be using it.
     if (isBridging()) {

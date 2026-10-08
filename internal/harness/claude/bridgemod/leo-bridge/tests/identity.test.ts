@@ -249,6 +249,78 @@ test('a turn nobody submitted after a deliver\'s turn carries no stamp', async (
   ])
 })
 
+// The queue entry of a prompt typed over a running turn is released when that
+// turn completes; the prompt's hook may still resolve as refused after that.
+test('a queued prompt refused after its running turn completed leaves nothing behind', async ($, on) => {
+  let refuse: (() => void) | null = null
+  const h = setup(on, {
+    submit: async (e) => {
+      await new Promise<void>((r) => (refuse = r))
+      return { drop: 'refused', text: e.text }
+    },
+  })
+  await start($, h)
+  await $.turn.start({ text: 'long task', turnId: 't1' })
+  const refused = $.prompt.submit(person('typed over it', 't1'))
+  await flush()
+  await complete($, 't1')
+  refuse!()
+  await refused
+  await $.turn.start({ text: 'a continuation', turnId: 't2' })
+  await h.settle()
+  expect(rows(h)).toEqual([
+    ['t1', undefined, undefined],
+    ['t2', undefined, undefined],
+  ])
+})
+
+// A /clear or a resume ends the session the prompts were typed in.
+test('prompts pending when a session ends are forgotten', async ($, on) => {
+  const h = setup(on, { submit: engine($).submit })
+  await start($, h)
+  await $.turn.start({ text: 'long task', turnId: 't1' })
+  await $.prompt.submit(person('typed over it', 't1'))
+  await $.session.end({ reason: 'clear', sessionId: 'sess-1', resume: {} as any })
+  await $.session.start({ surface: 'terminal', isInteractive: true, cwd: '/work' })
+  await complete($, 't1')
+  await $.turn.start({ text: 'a continuation', turnId: 't2' })
+  await h.settle()
+  expect(rows(h)).toEqual([
+    ['t1', undefined, undefined],
+    ['t2', undefined, undefined],
+  ])
+})
+
+test('prompts pending when a session starts are forgotten', async ($, on) => {
+  const h = setup(on, { submit: engine($).submit })
+  await start($, h)
+  await $.turn.start({ text: 'long task', turnId: 't1' })
+  await $.prompt.submit(person('typed over it', 't1'))
+  await $.session.start({ surface: 'terminal', isInteractive: true, cwd: '/work' })
+  await complete($, 't1')
+  await $.turn.start({ text: 'a continuation', turnId: 't2' })
+  await h.settle()
+  expect(rows(h)).toEqual([
+    ['t1', undefined, undefined],
+    ['t2', undefined, undefined],
+  ])
+})
+
+// The deliver's own submit is not a prompt typed in the old session: its
+// stamp stays until its turn starts or the submit settles.
+test('a deliver in flight across a clear keeps its stamp', async ($, on) => {
+  const feed = new Feed()
+  const eng = engine($)
+  const h = setup(on, { feeds: [feed], submit: eng.submit })
+  await start($, h)
+  feed.line(deliver('c1', 'go'))
+  await flush()
+  await $.session.end({ reason: 'clear', sessionId: 'sess-1', resume: {} as any })
+  await $.session.start({ surface: 'terminal', isInteractive: true, cwd: '/work' })
+  await eng.run('go')
+  expect(rows(h)).toEqual([['d:go', 'c1', 'plugin']])
+})
+
 test('a dropped deliver leaves no stamp for a later turn with the same text', async ($, on) => {
   const feed = new Feed()
   const h = setup(on, { feeds: [feed], submit: () => ({ drop: 'refused' }) })
