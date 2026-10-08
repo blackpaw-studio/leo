@@ -161,6 +161,18 @@ func waitingTurnLocked(s *runState) *Turn {
 	return nil
 }
 
+// lastWorkingTurnLocked is the most recent open turn that is running: a
+// user's, or a sent one whose submit has arrived.
+func lastWorkingTurnLocked(s *runState) *Turn {
+	for i := len(s.record.Turns) - 1; i >= 0; i-- {
+		t := &s.record.Turns[i]
+		if t.Outcome == "" && !t.Queued && (t.Source == TurnSourceUser || t.Delivered) {
+			return t
+		}
+	}
+	return nil
+}
+
 // submitKeyedLocked attributes a UserPromptSubmit that carries an id.
 func (d *Dispatcher) submitKeyedLocked(s *runState, key string, p map[string]any) {
 	if s.closedHarness[key] {
@@ -238,6 +250,15 @@ func (d *Dispatcher) startKeyedTurnLocked(s *runState, key, prompt string, injec
 		return id
 	}
 	d.resumeWaitingLocked(s)
+	if injected {
+		// A wake that reaches leo before the Stop that leaves its turn
+		// waiting (that Stop is delayed) continues the turn all the same:
+		// the Stop then keeps it waiting, and the wake's own Stop ends it.
+		if w := lastWorkingTurnLocked(s); w != nil {
+			d.bindKeyLocked(s, w.TurnID, key)
+			return w.TurnID
+		}
+	}
 	var t *Turn
 	if !injected {
 		t = d.claimSentTurnLocked(s, key, prompt, commandID)
