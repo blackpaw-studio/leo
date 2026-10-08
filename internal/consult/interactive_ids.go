@@ -150,6 +150,17 @@ func lastWorkingTurnLocked(s *runState) *Turn {
 	return nil
 }
 
+// isInjectedSubmit reports a submit the harness made on its own (a background
+// task's notification) rather than a person or a leo send. The bridge mod
+// says so by the origin it reports, never by the text; the shell hooks carry
+// no origin, so for them the text is the notification's envelope.
+func isInjectedSubmit(key, prompt string, p map[string]any) bool {
+	if isBridgeKey(key) {
+		return str(p, "origin") == originTaskNotification
+	}
+	return isHarnessInjection(prompt)
+}
+
 // submitKeyedLocked attributes a UserPromptSubmit that carries an id.
 func (d *Dispatcher) submitKeyedLocked(s *runState, key string, p map[string]any) {
 	if isKeyClosedLocked(s, key) {
@@ -158,7 +169,7 @@ func (d *Dispatcher) submitKeyedLocked(s *runState, key string, p map[string]any
 	}
 	oldStatus := s.record.Status
 	prompt := str(p, "prompt")
-	injected := s.record.Harness == "claude" && (isHarnessInjection(prompt) || str(p, "origin") == originTaskNotification)
+	injected := s.record.Harness == "claude" && isInjectedSubmit(key, prompt, p)
 	persistPlaced := func() { d.persistLocked(s, "") }
 	if known := turnForKeyLocked(s, key); known != nil {
 		d.noteKnownSubmitLocked(s, known, prompt, injected)
@@ -215,6 +226,15 @@ func (d *Dispatcher) noteKnownSubmitLocked(s *runState, t *Turn, prompt string, 
 // continues, the sent turn it delivers, else a new turn of the user's.
 func (d *Dispatcher) startKeyedTurnLocked(s *runState, key, prompt string, injected bool, commandID string) string {
 	norm := normalizePrompt(prompt)
+	if isBridgeKey(key) && commandID != "" {
+		// The mod's stamp is the only claim on a sent turn, and it wins
+		// over any reading of the text.
+		if t := d.claimSentTurnLocked(s, key, prompt, commandID); t != nil {
+			t.submitted = norm
+			d.bindKeyLocked(s, t.TurnID, key)
+			return t.TurnID
+		}
+	}
 	if w := waitingTurnLocked(s); w != nil {
 		// Whatever woke the session (its background work's notification, a
 		// wakeup, a human) carries the waiting turn on under a new id.

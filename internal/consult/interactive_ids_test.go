@@ -342,6 +342,14 @@ func bridgeStart(t *testing.T, eventID, turnID, prompt, commandID string) HookRe
 	return HookReport{EventID: eventID, Payload: b}
 }
 
+// bridgeWake is a turn.start the mod reports for a background task's
+// notification: the origin says so, whatever the text.
+func bridgeWake(t *testing.T, eventID, turnID, prompt string) HookReport {
+	t.Helper()
+	b, _ := json.Marshal(map[string]any{"hook_event_name": "UserPromptSubmit", "bridge_turn_id": turnID, "prompt": prompt, "origin": originTaskNotification})
+	return HookReport{EventID: eventID, Payload: b}
+}
+
 func bridgeStop(t *testing.T, eventID, turnID, message string) HookReport {
 	t.Helper()
 	b, _ := json.Marshal(map[string]any{"hook_event_name": "Stop", "bridge_turn_id": turnID, "last_assistant_message": message})
@@ -422,7 +430,7 @@ func TestBridgedStopBeforeItsStartIsHeldUntilTheStartArrives(t *testing.T) {
 // injection is a person's: it steers, and an injection does not.
 func TestBridgedUnstampedTurnsAreAttributedByKind(t *testing.T) {
 	d, _, id := startBridgedIdle(t)
-	reportAll(t, d, id, bridgeStart(t, "e1", "t2", taskNotification, ""))
+	reportAll(t, d, id, bridgeWake(t, "e1", "t2", taskNotification))
 	rec := idleRecord(t, d, id)
 	if len(rec.Turns) != 2 || rec.Steered || rec.Turns[1].Source != TurnSourceUser {
 		t.Fatalf("injected turn record=%+v", rec)
@@ -444,7 +452,7 @@ func TestBridgedWaitingTurnIsContinuedByTheWakeTurn(t *testing.T) {
 	if rec := idleRecord(t, d, id); rec.Status != StatusWaiting || turnByID(rec, sent.TurnID).Outcome != "" {
 		t.Fatalf("waiting record=%+v", rec)
 	}
-	reportAll(t, d, id, bridgeStart(t, "e3", "t3", taskNotification, ""), bridgeStop(t, "e4", "t3", "Build passed."))
+	reportAll(t, d, id, bridgeWake(t, "e3", "t3", taskNotification), bridgeStop(t, "e4", "t3", "Build passed."))
 	rec := idleRecord(t, d, id)
 	if st := turnByID(rec, sent.TurnID); st.Outcome != TurnFinished || st.Text != "Build passed." || len(rec.Turns) != 2 || rec.Steered || rec.Status != StatusIdle {
 		t.Fatalf("record=%+v", rec)
@@ -491,6 +499,33 @@ func TestBridgedWakeOriginContinuesTheWorkingTurnWithoutItsEnvelope(t *testing.T
 	reportAll(t, d, id, HookReport{EventID: "e2", Payload: wake}, bridgeStop(t, "e3", "t3", "Build passed."))
 	rec := idleRecord(t, d, id)
 	if st := turnByID(rec, sent.TurnID); st.Outcome != TurnFinished || st.Text != "Build passed." || len(rec.Turns) != 2 || rec.Steered || rec.Status != StatusIdle {
+		t.Fatalf("record=%+v", rec)
+	}
+}
+
+// The mod's command stamp is the only claim on a sent turn: a deliver whose
+// text happens to be a notification envelope is still the sent turn's.
+func TestBridgedStampedStartWinsOverEnvelopeText(t *testing.T) {
+	d, rt, id := startBridgedIdle(t)
+	sent, err := d.Send(context.Background(), id, taskNotification)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reportAll(t, d, id, bridgeStart(t, "e1", "t2", taskNotification, rt.lastCommandID()), bridgeStop(t, "e2", "t2", "done"))
+	rec := idleRecord(t, d, id)
+	if st := turnByID(rec, sent.TurnID); !st.Delivered || st.Outcome != TurnFinished || st.Text != "done" || len(rec.Turns) != 2 || rec.Steered || rec.Status != StatusIdle {
+		t.Fatalf("record=%+v", rec)
+	}
+}
+
+// A bridged start's text is never read for a notification envelope: only the
+// origin the mod reports makes it a wake. An unstamped turn quoting the
+// envelope is a person's.
+func TestBridgedEnvelopeTextWithoutTheWakeOriginIsAPersonsTurn(t *testing.T) {
+	d, _, id := startBridgedIdle(t)
+	reportAll(t, d, id, bridgeStart(t, "e1", "t2", taskNotification, ""))
+	rec := idleRecord(t, d, id)
+	if len(rec.Turns) != 2 || rec.Turns[1].Source != TurnSourceUser || !rec.Steered {
 		t.Fatalf("record=%+v", rec)
 	}
 }
