@@ -74,3 +74,25 @@ exit status is propagated.
 Known behavior: startup-dialog auto-dismiss skips sessions with an attached
 client (`session_attached`). The watch session is a different session, so the
 dispatch's own session still reads 0 attached.
+
+## 4. `dispatch_removed` and `meta.seq`
+
+`dispatch_changed` announces every change to an entry of `dispatches[]`; until
+now nothing announced the entry leaving `/state` when its `DispatchLinger`
+(60 s) expired, so a client that never refetched kept finished dispatches
+forever.
+
+- SSE `dispatch_removed`, payload `{id, seq, at}`: published once, by the 1 s
+  dispatch tick, when a dispatch that was listed in `/state` no longer is: its
+  linger expired, or its record left the store. A dispatch that was never
+  listed (finished long before the daemon started) never produces one. Clients
+  drop the entry; removing an unknown id is a no-op.
+- `GET /api/v1/state` gains `meta: {seq}`: the event bus's last `seq` read
+  *before* the snapshot is built, the same counter every SSE payload and the
+  `hello` frame carry. The snapshot reflects every event with `seq <= meta.seq`
+  and may already reflect later ones, so a client fetches `/state`, opens the
+  stream, and applies only events with `seq > meta.seq`; event payloads carry
+  whole entities, so re-applying one is harmless. `meta.seq` is `0` when the
+  daemon has no event source.
+
+Advertised as the `dispatch_removed` and `state_seq` hello features.

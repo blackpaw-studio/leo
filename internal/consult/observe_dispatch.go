@@ -1,6 +1,8 @@
 package consult
 
 import (
+	"maps"
+	"slices"
 	"sync"
 	"time"
 
@@ -115,23 +117,34 @@ func (o *DispatchObserver) Tick() {
 	o.notifyCountsLocked(o.outstandingCounts(records))
 }
 
+// publishChangesLocked announces each dispatch in /state whose record changed
+// and each one that has left it. o.last is exactly the set the previous Tick
+// announced, so a dispatch is removed once, and only if it was ever listed.
 func (o *DispatchObserver) publishChangesLocked(records []Record, now time.Time) {
-	seen := make(map[string]observe.Dispatch, len(records))
+	listed := make(map[string]observe.Dispatch, len(records))
 	for _, rec := range records {
-		if rec.Kind != "dispatch" {
+		if rec.Kind != "dispatch" || !withinLinger(rec, now) {
 			continue
 		}
 		d := observedDispatch(rec, now)
-		seen[rec.ID] = d
-		prev, known := o.last[rec.ID]
-		if known && sameDispatch(prev, d) || !known && !withinLinger(rec, now) {
+		listed[rec.ID] = d
+		if prev, known := o.last[rec.ID]; known && sameDispatch(prev, d) {
 			continue
 		}
-		if o.publisher != nil {
-			o.publisher.Publish(observe.Event{Type: observe.EventDispatchChanged, Payload: &observe.DispatchChangedPayload{Dispatch: d}})
+		o.publish(observe.Event{Type: observe.EventDispatchChanged, Payload: &observe.DispatchChangedPayload{Dispatch: d}})
+	}
+	for _, id := range slices.Sorted(maps.Keys(o.last)) {
+		if _, still := listed[id]; !still {
+			o.publish(observe.Event{Type: observe.EventDispatchRemoved, Payload: &observe.DispatchRemovedPayload{ID: id}})
 		}
 	}
-	o.last = seen
+	o.last = listed
+}
+
+func (o *DispatchObserver) publish(ev observe.Event) {
+	if o.publisher != nil {
+		o.publisher.Publish(ev)
+	}
 }
 
 func (o *DispatchObserver) notifyCountsLocked(counts map[string]int) {

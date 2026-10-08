@@ -115,6 +115,15 @@ func (b *Bus) Publish(ev Event) {
 // method closes; production code never sets it.
 var publishTestHook func(seq uint64)
 
+// Seq returns the sequence number of the last published event (0 if none).
+// It is the same value Subscribe reports as a stream's starting point, so a
+// snapshot that records it can be ordered against the events that follow.
+func (b *Bus) Seq() uint64 {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.seq
+}
+
 // Subscribe registers a new subscriber with the given channel buffer size and
 // returns the receive-only channel, an unsubscribe function, and the
 // sequence number of the last event published before this subscriber was

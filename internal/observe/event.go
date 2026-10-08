@@ -43,6 +43,9 @@ const (
 	// EventDispatchChanged carries a dispatch's full record whenever it
 	// changes; a terminal Status marks the end.
 	EventDispatchChanged EventType = "dispatch_changed"
+	// EventDispatchRemoved announces that a finished dispatch has left
+	// Snapshot.Dispatches: its DispatchLinger expired (or its record is gone).
+	EventDispatchRemoved EventType = "dispatch_removed"
 )
 
 // Features are the optional capabilities this daemon's API offers,
@@ -55,11 +58,13 @@ const (
 	FeatureAgentUsage      = "agent_usage"
 	FeatureAgentControl    = "agent_control"
 	FeatureDispatchAttach  = "dispatch_attach"
+	FeatureDispatchRemoved = "dispatch_removed"
+	FeatureStateSeq        = "state_seq"
 )
 
 // Features returns the hello's features list, a fresh copy each call.
 func Features() []string {
-	return []string{FeatureBridgeTurns, FeatureAttentionReason, FeatureDispatchTree, FeatureAgentUsage, FeatureAgentControl, FeatureDispatchAttach}
+	return []string{FeatureBridgeTurns, FeatureAttentionReason, FeatureDispatchTree, FeatureAgentUsage, FeatureAgentControl, FeatureDispatchAttach, FeatureDispatchRemoved, FeatureStateSeq}
 }
 
 // ActivityMinInterval is the most often agent_activity is published per
@@ -262,6 +267,13 @@ type AgentUsagePayload struct {
 type DispatchChangedPayload struct {
 	Meta
 	Dispatch Dispatch `json:"dispatch"`
+}
+
+// DispatchRemovedPayload names a dispatch that has left Snapshot.Dispatches.
+// Consumers drop it; a later dispatch_changed would have to re-add it.
+type DispatchRemovedPayload struct {
+	Meta
+	ID string `json:"id"`
 }
 
 // Publisher is the seam producers publish through — the supervisor for agent events, the

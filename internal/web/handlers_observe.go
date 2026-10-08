@@ -36,6 +36,9 @@ const sseSubscriberBuffer = 32
 // GET /api/v1/state
 func (s *Server) handleAPIState(w http.ResponseWriter, r *http.Request) {
 	httpapi.ServeState(w, r, func(context.Context) (any, error) {
+		// Read the event seq before any state: the snapshot then reflects at
+		// least every event up to it, and a client applies only later ones.
+		seq := s.eventSeq()
 		cfg, err := s.loadConfig()
 		if err != nil {
 			return nil, err
@@ -70,6 +73,7 @@ func (s *Server) handleAPIState(w http.ResponseWriter, r *http.Request) {
 			BridgeFeed:    s.bridgeFeed,
 			Dispatches:    s.dispatches,
 			LeoVersion:    s.version,
+			Seq:           seq,
 			Now:           time.Now(),
 		}), nil
 	}, func(w http.ResponseWriter, status int, data any, err error) {
@@ -79,6 +83,19 @@ func (s *Server) handleAPIState(w http.ResponseWriter, r *http.Request) {
 		}
 		writeJSON(w, status, apiResponse{OK: true, Data: data})
 	})
+}
+
+// seqSource is an eventSource that also reports its last published seq
+// (observe.Bus does).
+type seqSource interface{ Seq() uint64 }
+
+// eventSeq is the event stream's last seq, or 0 without a source that
+// reports one.
+func (s *Server) eventSeq() uint64 {
+	if src, ok := s.events.(seqSource); ok {
+		return src.Seq()
+	}
+	return 0
 }
 
 // snapshotInput is buildSnapshot's input: every raw source of world state,
@@ -115,7 +132,10 @@ type snapshotInput struct {
 	// dispatches and outstanding dispatch counts absent.
 	Dispatches dispatchProvider
 	LeoVersion string
-	Now        time.Time
+	// Seq is the event stream's last seq when the snapshot began (see
+	// observe.Snapshot.Meta).
+	Seq uint64
+	Now time.Time
 }
 
 // bridgeFeedProvider is the narrow read seam onto observe.BridgeFeed.
@@ -170,6 +190,7 @@ func buildSnapshot(in snapshotInput) observe.Snapshot {
 	}
 
 	return observe.Snapshot{
+		Meta:           observe.SnapshotMeta{Seq: in.Seq},
 		Version:        observe.SnapshotVersion,
 		ServerTime:     in.Now,
 		LeoVersion:     in.LeoVersion,

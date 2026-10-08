@@ -182,8 +182,8 @@ func TestTickPublishesOnlyChangedDispatches(t *testing.T) {
 
 	h.now = h.now.Add(observe.DispatchLinger + time.Second)
 	h.obs.Tick()
-	if got := h.pub.take(t); len(got) != 0 {
-		t.Fatalf("leaving the linger window published %v", got)
+	if got := h.pub.removed(); !reflect.DeepEqual(got, []string{"d1"}) || len(h.pub.events) != 1 {
+		t.Fatalf("leaving the linger window published %v (%d events), want one dispatch_removed for d1", got, len(h.pub.events))
 	}
 }
 
@@ -364,5 +364,62 @@ func TestDispatchChangedPublishesWhenAttachabilityChanges(t *testing.T) {
 	got := h.pub.dispatches(t)
 	if len(got) != 1 || got[0].Attachable || got[0].TmuxTarget != "%7" {
 		t.Fatalf("events=%+v; a pane moving out of its window must republish", got)
+	}
+}
+
+func (p *recordingPublisher) removed() []string {
+	out := []string{}
+	for _, ev := range p.events {
+		if payload, ok := ev.Payload.(*observe.DispatchRemovedPayload); ok && ev.Type == observe.EventDispatchRemoved {
+			out = append(out, payload.ID)
+		}
+	}
+	return out
+}
+
+func TestTickPublishesDispatchRemovedWhenLingerExpires(t *testing.T) {
+	ended := Record{ID: "d-a", Kind: "dispatch", Status: StatusDone, StartedAt: stateNow.Add(-time.Hour), EndedAt: stateNow}
+	h := newObserveHarness(ended)
+	h.obs.Tick()
+	if got := h.pub.removed(); len(got) != 0 {
+		t.Fatalf("removed %v while the finished dispatch is still listed", got)
+	}
+	h.pub.events = nil
+	h.now = stateNow.Add(observe.DispatchLinger - time.Second)
+	h.obs.Tick()
+	if len(h.pub.events) != 0 {
+		t.Fatalf("events=%v one second before the linger ends", h.pub.events)
+	}
+	h.now = stateNow.Add(observe.DispatchLinger)
+	h.obs.Tick()
+	if got := h.pub.removed(); !reflect.DeepEqual(got, []string{"d-a"}) || len(h.pub.events) != 1 {
+		t.Fatalf("removed=%v events=%d; want exactly one dispatch_removed for d-a", got, len(h.pub.events))
+	}
+	h.now = h.now.Add(time.Hour)
+	h.pub.events = nil
+	h.obs.Tick()
+	if len(h.pub.events) != 0 {
+		t.Fatalf("removal repeated: %v", h.pub.events)
+	}
+}
+
+func TestTickPublishesDispatchRemovedWhenRecordLeavesStore(t *testing.T) {
+	h := newObserveHarness(Record{ID: "d-a", Kind: "dispatch", Status: StatusRunning, StartedAt: stateNow})
+	h.obs.Tick()
+	h.pub.events = nil
+	h.records.recs = nil
+	h.obs.Tick()
+	if got := h.pub.removed(); !reflect.DeepEqual(got, []string{"d-a"}) {
+		t.Fatalf("removed=%v", got)
+	}
+}
+
+func TestTickNeverAnnouncesRemovalOfADispatchItNeverListed(t *testing.T) {
+	old := Record{ID: "d-old", Kind: "dispatch", Status: StatusDone, StartedAt: stateNow.Add(-time.Hour), EndedAt: stateNow.Add(-time.Hour)}
+	h := newObserveHarness(old)
+	h.obs.Tick()
+	h.obs.Tick()
+	if len(h.pub.events) != 0 {
+		t.Fatalf("events=%v for a dispatch that was never in /state", h.pub.events)
 	}
 }

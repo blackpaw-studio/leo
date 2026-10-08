@@ -16,12 +16,17 @@ const SnapshotVersion = 1
 
 // Snapshot is the whole observable world at one instant, served by GET /api/v1/state.
 type Snapshot struct {
-	Version    int       `json:"version"`
-	ServerTime time.Time `json:"server_time"`
-	LeoVersion string    `json:"leo_version"`
-	Agents     []Agent   `json:"agents"`
-	Tasks      []Task    `json:"tasks"`
-	RecentRuns []TaskRun `json:"recent_runs"`
+	// Meta orders the snapshot against the event stream: it reflects every
+	// event with seq <= Meta.Seq (and may already reflect later ones), so a
+	// client applies only events whose seq is greater. Advertised by the
+	// state_seq feature.
+	Meta       SnapshotMeta `json:"meta"`
+	Version    int          `json:"version"`
+	ServerTime time.Time    `json:"server_time"`
+	LeoVersion string       `json:"leo_version"`
+	Agents     []Agent      `json:"agents"`
+	Tasks      []Task       `json:"tasks"`
+	RecentRuns []TaskRun    `json:"recent_runs"`
 	// RecentMessages are recent agent-to-agent message pairs (names and
 	// timestamps only, never content), so a consumer connecting mid-
 	// conversation can seed what it missed rather than waiting for the next
@@ -31,6 +36,11 @@ type Snapshot struct {
 	// DispatchLinger, flat: clients build the tree from ParentDispatchID.
 	// Absent when the daemon has no dispatch source.
 	Dispatches []Dispatch `json:"dispatches,omitempty"`
+}
+
+// SnapshotMeta is the snapshot's place in the event stream.
+type SnapshotMeta struct {
+	Seq uint64 `json:"seq"`
 }
 
 // Status is an agent's lifecycle state, mirroring the supervisor's own vocabulary.
