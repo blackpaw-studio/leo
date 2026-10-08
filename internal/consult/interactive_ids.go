@@ -21,6 +21,10 @@ import (
 // Payloads without any id (older claude, id-less hooks) keep the
 // arrival-order path in Report.
 
+// originTaskNotification is the origin the leo-bridge mod reports for a turn
+// the harness started on a background task's notification.
+const originTaskNotification = "task-notification"
+
 const (
 	keyPrompt = 'p'
 	keyBridge = 't'
@@ -154,7 +158,7 @@ func (d *Dispatcher) submitKeyedLocked(s *runState, key string, p map[string]any
 	}
 	oldStatus := s.record.Status
 	prompt := str(p, "prompt")
-	injected := s.record.Harness == "claude" && isHarnessInjection(prompt)
+	injected := s.record.Harness == "claude" && (isHarnessInjection(prompt) || str(p, "origin") == originTaskNotification)
 	persistPlaced := func() { d.persistLocked(s, "") }
 	if known := turnForKeyLocked(s, key); known != nil {
 		d.noteKnownSubmitLocked(s, known, prompt, injected)

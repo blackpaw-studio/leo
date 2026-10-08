@@ -477,3 +477,20 @@ func TestBridgedStopWithPendingWorkBeforeItsStartStillWaits(t *testing.T) {
 		t.Fatalf("record=%+v", rec)
 	}
 }
+
+// The mod reports the origin of the prompt that started a turn: a background
+// task's notification continues the working turn whatever text it carries.
+func TestBridgedWakeOriginContinuesTheWorkingTurnWithoutItsEnvelope(t *testing.T) {
+	d, rt, id := startBridgedIdle(t)
+	sent, err := d.Send(context.Background(), id, "build it")
+	if err != nil {
+		t.Fatal(err)
+	}
+	reportAll(t, d, id, bridgeStart(t, "e1", "t2", "build it", rt.lastCommandID()))
+	wake, _ := json.Marshal(map[string]any{"hook_event_name": "UserPromptSubmit", "bridge_turn_id": "t3", "prompt": "background job finished", "origin": "task-notification"})
+	reportAll(t, d, id, HookReport{EventID: "e2", Payload: wake}, bridgeStop(t, "e3", "t3", "Build passed."))
+	rec := idleRecord(t, d, id)
+	if st := turnByID(rec, sent.TurnID); st.Outcome != TurnFinished || st.Text != "Build passed." || len(rec.Turns) != 2 || rec.Steered || rec.Status != StatusIdle {
+		t.Fatalf("record=%+v", rec)
+	}
+}
