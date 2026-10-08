@@ -121,6 +121,14 @@ let reportedEffort = null
 let isSubmitting = false
 let turnStartWaiters = []
 
+// The delivers submitted whose own turn has not started yet, oldest first:
+// { text, commandId, origin }. A turn.start claims the oldest whose text it
+// carries, so the turn a deliver starts is reported under that deliver's
+// command id (see takeSubmitStamp). $.prompt.submit waits for the session
+// to be idle, so a deliver never queues behind a running turn: its turn is
+// the next one that starts with its text.
+let inFlightSubmits = []
+
 // Serial chains: reports keep per-process order; commands run one at a time;
 // store entry rewrites never interleave (an interrupt settles off the
 // command chain).
@@ -278,6 +286,11 @@ async function buildAndSend($, build) {
   }
 }
 
+// The turn id a report names its turn by; undefined when the engine gave none.
+function turnIdField(turnId) {
+  return typeof turnId === 'string' && turnId !== '' ? turnId : undefined
+}
+
 // Only keys with a value: a report never carries an explicit undefined.
 function defined(fields) {
   return Object.fromEntries(Object.entries(fields).filter(([, v]) => v !== undefined))
@@ -291,6 +304,7 @@ function defined(fields) {
 async function turnCompleteReport($, e, tokens, pending) {
   const fields = {
     event_id: eventId('turn.complete', e.turnId),
+    turn_id: turnIdField(e.turnId),
     message: reportText(e.answer),
     reason: e.isAborted === true ? 'aborted' : undefined,
     tokens: turnTokens(tokens),
@@ -361,6 +375,26 @@ function settleTurnStartWaiters(turnId) {
   const waiters = turnStartWaiters
   turnStartWaiters = []
   waiters.forEach((resolve) => resolve(turnId))
+}
+
+// Notes a submit until its turn starts; the returned function forgets it
+// (its turn started, or it was dropped or failed).
+function trackSubmit(stamp) {
+  inFlightSubmits = [...inFlightSubmits, stamp]
+  return () => {
+    inFlightSubmits = inFlightSubmits.filter((s) => s !== stamp)
+  }
+}
+
+// Claims the oldest in-flight submit whose text turn.start's text carries
+// (Claude may wrap a plugin's message in an envelope, never alter it), or
+// undefined for a turn nothing submitted here: a queued prompt that ran
+// later, a wake, a continuation. Text guards against a turn another
+// submitter started first taking this deliver's stamp.
+function takeSubmitStamp(text) {
+  const stamp = inFlightSubmits.find((s) => text.includes(s.text))
+  if (stamp) inFlightSubmits = inFlightSubmits.filter((s) => s !== stamp)
+  return stamp
 }
 
 // ---- commands ------------------------------------------------------------
@@ -486,6 +520,7 @@ async function runDeliver($, command) {
   const args = command.asUser ? { text: command.text, asUser: true } : { text: command.text }
   await markHandedOff($, command.id)
   isSubmitting = true
+  const untrack = trackSubmit({ text: command.text, commandId: command.id, origin: 'plugin' })
   try {
     const result = await $.prompt.submit(args)
     if (result && typeof result.drop === 'string') {
@@ -497,6 +532,7 @@ async function runDeliver($, command) {
     settleTurnStartWaiters(null)
     throw err
   } finally {
+    untrack()
     isSubmitting = false
   }
 }
@@ -1051,7 +1087,14 @@ export function register(on) {
     stopPending = undefined
     if (isBridging()) {
       enqueueReport($, () => helloIfSessionChanged($))
-      const fields = { event_id: eventId('turn.start', e.turnId), prompt: reportText(e.text) }
+      const stamp = takeSubmitStamp(e.text)
+      const fields = {
+        event_id: eventId('turn.start', e.turnId),
+        turn_id: turnIdField(e.turnId),
+        prompt: reportText(e.text),
+        command_id: stamp?.commandId,
+        origin: stamp?.origin,
+      }
       enqueueReport($, () => eventReport('turn.start', defined(fields)))
     }
     return next(e)

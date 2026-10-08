@@ -329,11 +329,12 @@ test('turn events are reported; turn.complete carries usage', async ($, on) => {
   await $.turn.complete({ turnId: 't1', answer: 'done', durationMs: 5, isAborted: false, reason: 'answer' })
   await h.settle()
   expect(events(h)).toEqual([
-    { type: 'event', name: 'turn.start', event_id: 'turn.start:t1', prompt: 'go' },
+    { type: 'event', name: 'turn.start', event_id: 'turn.start:t1', turn_id: 't1', prompt: 'go' },
     {
       type: 'event',
       name: 'turn.complete',
       event_id: 'turn.complete:t1',
+      turn_id: 't1',
       message: 'done',
       tokens: { input: 0, output: 0, cache_read: 0, cache_creation: 0 },
       usage: { startedAt: 1, context: { tokens: 10, window: 200000, percent: 0 }, rateLimits: [], cost: { usd: 0.01 } },

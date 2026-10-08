@@ -48,7 +48,7 @@ test('turn.start carries the prompt; turn.complete carries the final message', a
   await $.turn.complete({ turnId: 't1', answer: 'the answer', durationMs: 5, isAborted: false, reason: 'answer' })
   await h.settle()
   const [startEv, completeEv] = events(h)
-  expect(startEv).toEqual({ type: 'event', name: 'turn.start', event_id: 'turn.start:t1', prompt: 'line one\nline two' })
+  expect(startEv).toEqual({ type: 'event', name: 'turn.start', event_id: 'turn.start:t1', turn_id: 't1', prompt: 'line one\nline two' })
   expect(completeEv).toMatchObject({ type: 'event', name: 'turn.complete', message: 'the answer' })
 })
 
@@ -74,7 +74,7 @@ test('missing prompt or answer text is left out, not sent as junk', async ($, on
   await $.turn.complete({ turnId: 't1', durationMs: 5, isAborted: true, reason: 'aborted' } as any)
   await h.settle()
   const [startEv, completeEv] = events(h)
-  expect(startEv).toEqual({ type: 'event', name: 'turn.start', event_id: 'turn.start:t1' })
+  expect(startEv).toEqual({ type: 'event', name: 'turn.start', event_id: 'turn.start:t1', turn_id: 't1' })
   expect(completeEv!.message).toBeUndefined()
 })
 
