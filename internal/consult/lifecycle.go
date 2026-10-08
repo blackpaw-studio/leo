@@ -78,6 +78,7 @@ func (d *Dispatcher) complete(state *runState, status Status, text string, cause
 				t.Outcome = TurnInterrupted
 			}
 			t.Error = state.record.Error
+			t.Queued = false
 			turnID = t.TurnID
 		}
 		persist = d.completionCandidateLocked(state, transitionKey(state.record.ID, state.record.Mode, turnID), status)
@@ -134,6 +135,9 @@ func headlessEntry(rec Record, turnID string, now time.Time) Entry {
 	switch t.Outcome {
 	case "":
 		e.Status, e.Err = StatusRunning, ""
+		if t.Queued {
+			e.Status = StatusQueued
+		}
 	case TurnFinished:
 		e.Status, e.Err = StatusDone, ""
 	}

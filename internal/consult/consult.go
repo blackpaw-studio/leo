@@ -438,6 +438,7 @@ func (d *Dispatcher) runInvocation(parent context.Context, state *runState, done
 		d.complete(state, StatusCanceled, "", err)
 		return
 	}
+	d.admitQueuedHeadlessTurn(state)
 	runCtx := parent
 	timeoutCancel := func() {}
 	if timeout > 0 {
@@ -541,6 +542,22 @@ func (d *Dispatcher) runInvocation(parent context.Context, state *runState, done
 		return
 	}
 	d.complete(state, StatusDone, parsed.Text, nil)
+}
+
+// admitQueuedHeadlessTurn marks a queued continuation turn delivered once its
+// slot is granted and the process is about to launch.
+func (d *Dispatcher) admitQueuedHeadlessTurn(state *runState) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if state.record.Status.Terminal() || len(state.record.Turns) == 0 {
+		return
+	}
+	t := &state.record.Turns[len(state.record.Turns)-1]
+	if !t.Queued || t.Outcome != "" {
+		return
+	}
+	t.Queued, t.Delivered, t.SlotHeld = false, true, true
+	d.persistRecordLocked(state)
 }
 
 // pruneTerminalRunsLocked bounds completed in-memory runs. Records on disk
@@ -719,7 +736,7 @@ func (d *Dispatcher) Wait(ctx context.Context, ids []string, timeout time.Durati
 					} else {
 						entries[i] = headlessEntry(rec, turnIDs[i], d.now())
 					}
-					if rec.Mode != ModeInteractive && !entries[i].Status.Terminal() {
+					if rec.Mode != ModeInteractive && !entries[i].Status.Terminal() && entries[i].Status != StatusQueued {
 						entries[i].Status = StatusRunning
 						entries[i].Err = ""
 					}
@@ -982,7 +999,7 @@ func (d *Dispatcher) terminateState(state *runState, status Status) Record {
 	if state.record.Mode == ModeHeadless && len(state.record.Turns) > 0 {
 		t := &state.record.Turns[len(state.record.Turns)-1]
 		t.EndedAt, t.Outcome, t.Status = state.record.EndedAt, TurnInterrupted, status
-		t.Error = state.record.Error
+		t.Error, t.Queued = state.record.Error, false
 		turnID = t.TurnID
 	}
 	d.completionCandidateLocked(state, transitionKey(state.record.ID, state.record.Mode, turnID), status)
@@ -1123,7 +1140,7 @@ func (d *Dispatcher) MarkInterrupted() {
 				if rec.Turns[i].Outcome == "" {
 					rec.Turns[i].Outcome, rec.Turns[i].Status = TurnInterrupted, StatusFailed
 					rec.Turns[i].Error, rec.Turns[i].EndedAt = "daemon restarted", markedAt
-					rec.Turns[i].SlotHeld = false
+					rec.Turns[i].SlotHeld, rec.Turns[i].Queued = false, false
 				}
 			}
 			if rec.Isolation == "worktree" && rec.WorktreeState != WorktreeRemoved {

@@ -137,9 +137,16 @@ func TestGrantRacingResolutionYieldsOneOutcome(t *testing.T) {
 
 // headlessExec stubs the harness process: each launch signals started and
 // prints a finished result for session sid-1.
-func headlessExec(d *Dispatcher, started func()) {
+func headlessExec(d *Dispatcher, started func()) { headlessExecHeld(d, started, nil) }
+
+// headlessExecHeld is headlessExec, except a non-nil release holds every
+// launch (and so its slot) until it closes.
+func headlessExecHeld(d *Dispatcher, started func(), release <-chan struct{}) {
 	d.ExecCommandContext = func(ctx context.Context, _ string, _ ...string) *exec.Cmd {
 		started()
+		if release != nil {
+			<-release
+		}
 		return exec.CommandContext(ctx, "printf", "%s", `{"type":"result","session_id":"sid-1","result":"ok","is_error":false,"usage":{"input_tokens":1,"output_tokens":1},"num_turns":1}`)
 	}
 }
@@ -154,7 +161,9 @@ func TestHeadlessStartTakesItsPlaceInLineBeforeReturning(t *testing.T) {
 	injected, injectedCh := signalCh()
 	rt.injectHook = injected
 	execd, execdCh := signalCh()
-	headlessExec(d, execd)
+	release := make(chan struct{})
+	defer close(release)
+	headlessExecHeld(d, execd, release)
 	freeOne := fillSlots(d)
 
 	if _, err := d.Start(context.Background(), testConfig(), Request{Template: "claude", Prompt: "h", Cwd: t.TempDir(), Kind: "dispatch"}); err != nil {
@@ -202,17 +211,24 @@ func TestHeadlessContinuationQueuesWhenEverySlotIsBusy(t *testing.T) {
 	if !sent.Queued || sent.TurnID != id+"#2" {
 		t.Fatalf("send result = %+v, want queued turn %s#2", sent, id)
 	}
+	if sent.Delivered {
+		t.Fatalf("send result = %+v, want not delivered while queued", sent)
+	}
 	if rec, _ := d.Get(id); rec.Status != StatusQueued {
 		t.Fatalf("run status = %s, want queued", rec.Status)
 	}
 	if d.slots.Waiting() != 1 {
 		t.Fatalf("waiters = %d, want the continuation in line", d.slots.Waiting())
 	}
+	if e := d.Wait(context.Background(), []string{sent.TurnID}, time.Millisecond)[0]; e.Status != StatusQueued || e.Delivered || e.Outcome != "" {
+		t.Fatalf("wait while queued = %+v, want status queued, undelivered, no outcome", e)
+	}
 
 	freeOne()
 	expectSignal(t, execdCh, "queued continuation launch")
-	if e := d.Wait(context.Background(), []string{sent.TurnID}, 5*time.Second)[0]; e.Outcome != TurnFinished {
-		t.Fatalf("queued continuation = %+v, want finished", e)
+	e := d.Wait(context.Background(), []string{sent.TurnID}, 5*time.Second)[0]
+	if e.Outcome != TurnFinished || !e.Delivered {
+		t.Fatalf("queued continuation = %+v, want finished and delivered", e)
 	}
 }
 
@@ -232,8 +248,11 @@ func TestCancelWhileHeadlessContinuationQueuedLeavesTheLine(t *testing.T) {
 	if _, err := d.Cancel(id); err != nil {
 		t.Fatal(err)
 	}
-	if e := d.Wait(context.Background(), []string{sent.TurnID}, 5*time.Second)[0]; e.Outcome != TurnInterrupted {
-		t.Fatalf("canceled queued continuation = %+v, want interrupted", e)
+	if e := d.Wait(context.Background(), []string{sent.TurnID}, 5*time.Second)[0]; e.Outcome != TurnInterrupted || e.Delivered {
+		t.Fatalf("canceled queued continuation = %+v, want interrupted and never delivered", e)
+	}
+	if turn := lastTurn(t, d, id); turn.Queued || turn.SlotHeld {
+		t.Fatalf("resolved turn = %+v, want no queued/slot flags", turn)
 	}
 	if d.slots.Waiting() != 0 {
 		t.Fatalf("%d waiters left in line after cancel", d.slots.Waiting())

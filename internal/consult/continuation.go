@@ -139,7 +139,7 @@ func (d *Dispatcher) continueHeadless(cfg *config.Config, rec Record, message st
 		synthesizeOpeningTurn(&prospective)
 	}
 	now := d.now()
-	turn := Turn{TurnID: fmt.Sprintf("%s#%d", rec.ID, len(prospective.Turns)+1), Source: TurnSourceOrchestrator, StartedAt: now, Delivered: true, SlotHeld: waiter == nil, Text: message}
+	turn := Turn{TurnID: fmt.Sprintf("%s#%d", rec.ID, len(prospective.Turns)+1), Source: TurnSourceOrchestrator, StartedAt: now, Delivered: waiter == nil, SlotHeld: waiter == nil, Queued: waiter != nil, Text: message}
 	prospective.Turns = append(prospective.Turns, turn)
 	prospective.Status, prospective.Text, prospective.Error = StatusQueued, "", ""
 	prospective.EndedAt, prospective.Cwd = time.Time{}, cwd
