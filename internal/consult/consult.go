@@ -13,6 +13,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"regexp"
 	"sort"
 	"strings"
 	"sync"
@@ -297,8 +298,16 @@ func (d *Dispatcher) Start(_ context.Context, cfg *config.Config, req Request) (
 	if notify && req.Notify != nil {
 		notify = *req.Notify
 	}
+	// A nested dispatch is filed under the root agent: whatever name the
+	// calling subagent inherited, its parent's caller is the root's. Only the
+	// record takes it; req.Caller stays the requester's own so viewer
+	// placement never resolves the root agent's tmux session for a subagent.
+	parentID, caller := d.resolveParent(req.ParentDispatchID)
+	if caller == "" {
+		caller = req.Caller
+	}
 	rec := Record{
-		ID: newID(), Caller: req.Caller, Template: req.Template, Role: req.Role, Profile: req.Profile,
+		ID: newID(), Caller: caller, ParentDispatchID: parentID, Template: req.Template, Role: req.Role, Profile: req.Profile,
 		Kind: kind, Harness: h.Name(), Model: model, Cwd: req.Cwd, Name: req.Name, Timeout: timeout,
 		Effort: req.Effort,
 		Prompt: req.Prompt, Status: StatusQueued, StartedAt: d.now(), Mode: mode,
@@ -751,6 +760,27 @@ func waitNeedsInput(entries []Entry) bool {
 	}
 	return false
 }
+
+// resolveParent verifies that id names a known dispatch and returns it with
+// that dispatch's caller. It returns "" for an id that is empty, malformed, or
+// not a dispatch this store knows: a parent is only recorded when it can be
+// checked.
+func (d *Dispatcher) resolveParent(id string) (parentID, caller string) {
+	if !ValidDispatchID(id) {
+		return "", ""
+	}
+	rec, _, err := d.lookup(id)
+	if err != nil || rec.Kind != "dispatch" {
+		return "", ""
+	}
+	return rec.ID, rec.Caller
+}
+
+// ValidDispatchID reports whether id is shaped like a dispatch id: letters,
+// digits, '-' and '_' only, so it is safe as a file name and a shell token.
+func ValidDispatchID(id string) bool { return dispatchIDShape.MatchString(id) }
+
+var dispatchIDShape = regexp.MustCompile(`^[A-Za-z0-9_-]+$`)
 
 func (d *Dispatcher) lookup(id string) (Record, *runState, error) {
 	runID := id

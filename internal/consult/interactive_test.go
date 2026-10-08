@@ -22,6 +22,7 @@ type fakeInteractiveRuntime struct {
 	injectErr    error
 	injectHook   func()
 	placements   []string
+	callers      []string
 	sessionAlive *bool
 	killHook     func()
 	launchHook   func()
@@ -63,6 +64,7 @@ func (r *fakeInteractiveRuntime) Launch(_ context.Context, req LaunchRequest) (s
 	}
 	r.alive = true
 	r.placements = append(r.placements, req.Placement.Kind)
+	r.callers = append(r.callers, req.Caller)
 	return r.pane, "w", nil
 }
 func (r *fakeInteractiveRuntime) SessionAlive(string) (bool, error) {

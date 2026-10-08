@@ -260,6 +260,13 @@ type DispatchViewerConfig struct {
 	MainPaneHeight *int   `yaml:"main_pane_height,omitempty"`
 }
 
+// IsDispatchViewerPlacement reports whether p names a viewer placement: pane
+// (a split in the caller's window), window (a window in the caller's
+// session) or background (a detached window in the leo-dispatch session).
+func IsDispatchViewerPlacement(p string) bool {
+	return p == "pane" || p == "window" || p == "background"
+}
+
 func (c *Config) DispatchViewerPlacement() string {
 	if c.Defaults.Dispatch.Viewer.Placement != "" {
 		return c.Defaults.Dispatch.Viewer.Placement
@@ -454,8 +461,8 @@ func (c *Config) TaskTimeout(t TaskConfig) time.Duration {
 // Validate checks the config for required fields and valid values.
 func (c *Config) Validate() error {
 	var errs []string
-	if p := c.DispatchViewerPlacement(); p != "pane" && p != "window" {
-		errs = append(errs, fmt.Sprintf("defaults.dispatch.viewer.placement %q must be pane or window", p))
+	if p := c.DispatchViewerPlacement(); !IsDispatchViewerPlacement(p) {
+		errs = append(errs, fmt.Sprintf("defaults.dispatch.viewer.placement %q must be pane, window or background", p))
 	}
 	if n := c.DispatchViewerMaxPanes(); n < 1 || n > 6 {
 		errs = append(errs, "defaults.dispatch.viewer.max_panes must be between 1 and 6")

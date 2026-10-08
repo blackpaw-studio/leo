@@ -331,3 +331,22 @@ func TestHelloSeqUnderConcurrentPublishers(t *testing.T) {
 		unsub()
 	}
 }
+
+func TestBusSeqIsTheStartingPointSubscribeReports(t *testing.T) {
+	b := NewBus()
+	if got := b.Seq(); got != 0 {
+		t.Fatalf("empty bus Seq()=%d", got)
+	}
+	for range 3 {
+		b.Publish(Event{Type: EventAgentStopped, Payload: &AgentStoppedPayload{Agent: "den"}})
+	}
+	ch, unsub, start := b.Subscribe(4)
+	defer unsub()
+	if got := b.Seq(); got != 3 || start != 3 {
+		t.Fatalf("Seq()=%d Subscribe start=%d; both are the last published seq", got, start)
+	}
+	b.Publish(Event{Type: EventAgentStopped, Payload: &AgentStoppedPayload{Agent: "den"}})
+	if first := (<-ch).Payload.(*AgentStoppedPayload); first.Seq != 4 || b.Seq() != 4 {
+		t.Fatalf("first event after the snapshot seq=%d, Seq()=%d", first.Seq, b.Seq())
+	}
+}

@@ -225,7 +225,7 @@ func (r *TmuxInteractiveRuntime) Launch(ctx context.Context, req LaunchRequest) 
 		env[k] = ""
 	}
 	session := ""
-	if r.resolveCallerSession != nil && req.Caller != "" {
+	if r.resolveCallerSession != nil && req.Caller != "" && !req.Placement.Background {
 		if candidate, live := r.resolveCallerSession(req.Caller); live && r.run(ctx, "has-session", "-t", tmux.Target(candidate)) == nil {
 			session = candidate
 		}

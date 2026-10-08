@@ -5,7 +5,9 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"os/signal"
 	"strings"
+	"syscall"
 
 	"github.com/blackpaw-studio/leo/internal/config"
 	"github.com/blackpaw-studio/leo/internal/harness"
@@ -56,6 +58,62 @@ type attachOptions struct {
 	// `tmux -CC`; remote attaches stream it over SSH (see
 	// attachRemoteControlMode).
 	cc bool
+	// readOnly attaches with `-r`: the client can look but its keystrokes
+	// never reach the session's panes.
+	readOnly bool
+	// asChild runs the local attach as a child process (stdio inherited, exit
+	// status passed through) instead of replacing leo with tmux, for callers
+	// that must clean up after the client leaves or fails to start.
+	asChild bool
+}
+
+// attachSignalSource is the testability seam for the signals leo forwards to
+// an attach child: it returns the delivery channel and a func that stops
+// delivery.
+var attachSignalSource = func() (<-chan os.Signal, func()) {
+	ch := make(chan os.Signal, 1)
+	signal.Notify(ch, syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP)
+	return ch, func() { signal.Stop(ch) }
+}
+
+// runForwardingSignals runs c to completion, forwarding SIGINT, SIGTERM and
+// SIGHUP to it meanwhile. leo keeps waiting for the child to exit, so the
+// caller's cleanup runs and no tmux client is orphaned.
+func runForwardingSignals(c *exec.Cmd) error {
+	sigs, stop := attachSignalSource()
+	defer stop()
+	if err := c.Start(); err != nil {
+		return err
+	}
+	done := make(chan error, 1)
+	go func() { done <- c.Wait() }()
+	for {
+		select {
+		case sig := <-sigs:
+			// Fails harmlessly once the child has exited.
+			_ = c.Process.Signal(sig)
+		case err := <-done:
+			return err
+		}
+	}
+}
+
+// childExitCode is the status leo exits with for a finished child: its own
+// exit code, or 128+N when signal N killed it (ExitCode reports -1 then).
+func childExitCode(e *exec.ExitError) int {
+	if ws, ok := e.Sys().(syscall.WaitStatus); ok && ws.Signaled() {
+		return 128 + int(ws.Signal())
+	}
+	return e.ExitCode()
+}
+
+// attachArgs is the `attach` subcommand argv for target under opts.
+func attachArgs(target string, opts attachOptions) []string {
+	args := []string{"attach"}
+	if opts.readOnly {
+		args = append(args, "-r")
+	}
+	return append(args, "-t", target)
 }
 
 // attachTmuxSession replaces the current process with a tmux attach (local) or
@@ -82,7 +140,7 @@ func attachTmuxSession(res config.HostResolution, session string, opts attachOpt
 		sshArgs = append(sshArgs, sshControlOpts(res)...)
 		prefixLen := len(sshArgs)
 		sshArgs = append(sshArgs, res.Host.RemoteTmuxPath())
-		sshArgs = append(sshArgs, tmux.Args("attach", "-t", remoteShellTarget(tmux.Target(session)))...)
+		sshArgs = append(sshArgs, tmux.Args(attachArgs(remoteShellTarget(tmux.Target(session)), opts)...)...)
 		sshArgs = applyRemoteTermFallback(sshArgs, prefixLen, termOverride)
 		c := agentExecCommand("ssh", sshArgs...)
 		c.Stdin = os.Stdin
@@ -106,11 +164,11 @@ func attachTmuxSession(res config.HostResolution, session string, opts attachOpt
 		if tmuxEnv() != "" {
 			return fmt.Errorf("--cc requires a non-tmux terminal; detach first (prefix+d) and retry")
 		}
-		argv := append([]string{"tmux"}, tmux.Args("-CC", "attach", "-t", tmux.Target(session))...)
+		argv := append([]string{"tmux"}, tmux.Args(append([]string{"-CC"}, attachArgs(tmux.Target(session), opts)...)...)...)
 		return agentSyscallExec(tmuxPath, argv, os.Environ())
 	}
 	if tmuxEnv() != "" {
-		inner := fmt.Sprintf("%s -L %s attach -t %s", shellQuoteArg(tmuxPath), tmux.SocketName, shellQuoteArg(tmux.Target(session)))
+		inner := fmt.Sprintf("%s -L %s %s", shellQuoteArg(tmuxPath), tmux.SocketName, strings.Join(attachArgs(shellQuoteArg(tmux.Target(session)), opts), " "))
 		popupArgs := []string{"display-popup", "-E", "-w", "95%", "-h", "95%", inner}
 		c := agentExecCommand(tmuxPath, popupArgs...)
 		c.Stdin = os.Stdin
@@ -118,9 +176,21 @@ func attachTmuxSession(res config.HostResolution, session string, opts attachOpt
 		c.Stderr = agentStderr
 		return c.Run()
 	}
+	if opts.asChild {
+		c := agentExecCommand(tmuxPath, tmux.Args(attachArgs(tmux.Target(session), opts)...)...)
+		c.Stdin = os.Stdin
+		c.Stdout = agentStdout
+		c.Stderr = agentStderr
+		err := runForwardingSignals(c)
+		var exitErr *exec.ExitError
+		if errors.As(err, &exitErr) {
+			return exitCodeError{code: childExitCode(exitErr), err: errors.New("")}
+		}
+		return err
+	}
 	// Replace the CLI process so tmux owns the TTY cleanly. Returns an error
 	// only if exec itself fails; on success this call does not return.
-	argv := append([]string{"tmux"}, tmux.Args("attach", "-t", tmux.Target(session))...)
+	argv := append([]string{"tmux"}, tmux.Args(attachArgs(tmux.Target(session), opts)...)...)
 	return agentSyscallExec(tmuxPath, argv, os.Environ())
 }
 

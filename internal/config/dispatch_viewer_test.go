@@ -1,6 +1,9 @@
 package config
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestDispatchViewerConfig(t *testing.T) {
 	cfg := &Config{}
@@ -16,5 +19,21 @@ func TestDispatchViewerConfig(t *testing.T) {
 	cfg.Defaults.Dispatch.Viewer.MaxPanes, cfg.Defaults.Dispatch.Viewer.MainPaneHeight = &six, &ninety
 	if err := cfg.Validate(); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestDispatchViewerPlacementAcceptsBackground(t *testing.T) {
+	cfg := &Config{}
+	cfg.Defaults.Dispatch.Viewer.Placement = "background"
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("background rejected: %v", err)
+	}
+	if cfg.DispatchViewerPlacement() != "background" {
+		t.Fatalf("placement=%q", cfg.DispatchViewerPlacement())
+	}
+	cfg.Defaults.Dispatch.Viewer.Placement = "floating"
+	err := cfg.Validate()
+	if err == nil || !strings.Contains(err.Error(), "must be pane, window or background") {
+		t.Fatalf("err=%v", err)
 	}
 }

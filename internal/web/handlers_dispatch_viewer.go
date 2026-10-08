@@ -57,7 +57,7 @@ func (s *Server) handleDispatchViewerSaveDefault(w http.ResponseWriter, r *http.
 	viewer := cfg.Defaults.Dispatch.Viewer
 	if req.Placement != nil {
 		if strings.TrimSpace(*req.Placement) == "" {
-			writeJSON(w, http.StatusBadRequest, apiResponse{Error: "placement must be pane or window"})
+			writeJSON(w, http.StatusBadRequest, apiResponse{Error: "placement must be pane, window or background"})
 			return
 		}
 		viewer.Placement = *req.Placement

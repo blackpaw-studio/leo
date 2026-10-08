@@ -30,6 +30,7 @@ func (s *Server) handleAPIDispatch(w http.ResponseWriter, r *http.Request) {
 		Isolation                                              string       `json:"isolation"`
 		CallerPaneID                                           string       `json:"caller_pane_id"`
 		CallerBridgeKey                                        string       `json:"caller_bridge_key"`
+		ParentDispatchID                                       string       `json:"parent_dispatch_id"`
 	}
 	if err := decodeDispatchJSON(r, &req); err != nil {
 		writeJSON(w, http.StatusBadRequest, apiResponse{Error: fmt.Sprintf("invalid request: %v", err)})
@@ -49,6 +50,10 @@ func (s *Server) handleAPIDispatch(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.CallerBridgeKey != "" && !config.ValidName(req.CallerBridgeKey) {
 		writeJSON(w, http.StatusBadRequest, apiResponse{Error: "invalid caller_bridge_key"})
+		return
+	}
+	if req.ParentDispatchID != "" && !consult.ValidDispatchID(req.ParentDispatchID) {
+		writeJSON(w, http.StatusBadRequest, apiResponse{Error: "invalid parent_dispatch_id"})
 		return
 	}
 	cfg, err := s.loadConfig()
@@ -88,7 +93,7 @@ func (s *Server) handleAPIDispatch(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, apiResponse{Error: err.Error()})
 		return
 	}
-	started, err := s.consults.Start(r.Context(), cfg, consult.Request{Caller: req.From, Template: req.Template, Model: req.Model, Effort: req.Effort, Role: req.Role, Profile: profile, Prompt: req.Prompt, Cwd: req.Cwd, Name: req.Name, Timeout: timeout, Mode: mode, Notify: req.Notify, Isolation: req.Isolation, CallerPaneID: caller.PaneID, CallerSessionID: caller.SessionID, CallerWindowID: caller.WindowID, CallerHarness: caller.Harness, CallerBridgeKey: req.CallerBridgeKey, CallerBridgeLaunch: s.bridgeLaunchID(req.CallerBridgeKey)})
+	started, err := s.consults.Start(r.Context(), cfg, consult.Request{Caller: req.From, Template: req.Template, Model: req.Model, Effort: req.Effort, Role: req.Role, Profile: profile, Prompt: req.Prompt, Cwd: req.Cwd, Name: req.Name, Timeout: timeout, Mode: mode, Notify: req.Notify, Isolation: req.Isolation, CallerPaneID: caller.PaneID, CallerSessionID: caller.SessionID, CallerWindowID: caller.WindowID, CallerHarness: caller.Harness, CallerBridgeKey: req.CallerBridgeKey, CallerBridgeLaunch: s.bridgeLaunchID(req.CallerBridgeKey), ParentDispatchID: req.ParentDispatchID})
 	if err != nil {
 		var validationErr *consult.ValidationError
 		status := http.StatusInternalServerError

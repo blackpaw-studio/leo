@@ -8,14 +8,20 @@ conversation after they finish. Dispatches can also run interactively.
 
 Dispatch viewers open in panes below the caller by default, using tmux's
 `main-horizontal` layout. Configure `defaults.dispatch.viewer` with
-`placement: pane|window` (default `pane`), `max_panes: 1..6` (default `3`),
-and `main_pane_height: 20..90` (default `60`). Leo falls back to a separate
-window when the cap is reached or a split fails. Session options
+`placement: pane|window|background` (default `pane`), `max_panes: 1..6`
+(default `3`), and `main_pane_height: 20..90` (default `60`). Leo falls back to
+a separate window when the cap is reached or a split fails. Session options
 `@leo_viewer_placement` and `@leo_viewer_max_panes` override the config.
 Release an idle or finished interactive pane with `leo dispatch release <id>`.
 
+`background` never touches the caller's tmux session: every dispatch (headless
+viewer or interactive TUI, nested dispatches included) opens as a detached
+window in the `leo-dispatch` session, even when the caller is a live
+supervised agent. Nothing appears in the caller's window; look at a dispatch
+with `leo dispatch watch <id>` or `leo dispatch attach <id>`.
+
 Inside Leo's tmux server, press `prefix + L` to open the dispatch viewer
-settings menu. It has four actions: toggle viewer placement, cycle the pane
+settings menu. It has four actions: cycle viewer placement (pane → window → background), cycle the pane
 cap from 1 through 6, close finished viewers belonging to the current caller
 session, and save the current session overrides as the config default. Saving
 merges only placement and max-panes into `defaults.dispatch.viewer`, preserves
@@ -27,6 +33,11 @@ after both save and reload succeed.
 Dispatches and consults cannot launch nested agents: Leo disables the native
 subagent tool for each supported harness, and tells the subagent that the
 orchestrator performs review. There is no opt-out yet.
+
+A subagent that calls `leo_dispatch` anyway starts a nested dispatch. Leo
+records the calling dispatch as its `parent_dispatch_id` and files the child
+under the same `caller` as the parent, so a whole tree reports the root agent
+as its caller.
 
 Every dispatch and consult run carries `LEO_DISPATCH_ID` (headless, interactive,
 and headless continuations alike), which Leo's MCP server uses to refuse
@@ -149,6 +160,8 @@ leo dispatch run --role implement --effort high "Add the parser tests"
 leo dispatch run codex-implementer "Inspect only" --notify=false
 leo dispatch list
 leo dispatch watch d-12ab34
+leo dispatch attach d-12ab34
+leo dispatch attach d-12ab34 --host prod
 leo dispatch show d-12ab34
 leo dispatch output d-12ab34 --tail 120
 leo dispatch send d-12ab34 "Please also cover malformed input"
@@ -161,6 +174,20 @@ opening turn. `list` and `watch` also work for consults, preserving the older
 Ctrl-C only detaches. `show` prints a record as JSON. `list` and `watch`
 support `--host`; `run`, `show`, `output`, `send`, and `cancel` currently require the
 local daemon.
+
+`attach` shows an interactive dispatch's live TUI, read-only. It links the
+dispatch's own tmux window into a throwaway `_watch-<id>-<rand>` session and
+attaches a read-only (`tmux attach -r`) client to that, so nothing typed
+reaches the dispatch and no pane is moved. The throwaway session removes
+itself when you detach or when the dispatch's window closes (exit status 0
+either way); the dispatch keeps running. Inside tmux, `attach` opens the same
+view in a popup. It prints a one-line reason and exits 1 for an unknown,
+headless, or ended dispatch, and for one whose pane is split into its caller's
+window or is hidden (use `background` placement, or `leo dispatch watch`).
+`--host` runs the remote leo over `ssh -tt`. `leo agent attach` is unchanged.
+Because the dispatch's own session has no client attached, the auto-dismiss of
+Claude startup dialogs (which skips attached sessions) can still act on a
+dispatch someone is watching this way.
 
 `list` includes measured `INPUT`, `OUTPUT`, `COST_USD`, `USAGE_TURNS`, and
 `TOOLS`. An em dash is unknown; zero is measured. Claude reports native token

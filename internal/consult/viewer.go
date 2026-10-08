@@ -87,34 +87,36 @@ func (v *Viewer) OnStart(rec Record) string {
 		return ""
 	}
 	v.defaults()
-	if rec.CallerPaneID != "" && rec.CallerSessionID != "" && rec.CallerSessionID != dispatchViewerSession {
-		cfg, err := config.Load(v.ConfigPath)
-		if err == nil {
-			overrides := ReadViewerSessionOverrides(context.Background(), v.TmuxPath, rec.CallerSessionID, func(ctx context.Context, name string, args ...string) *exec.Cmd {
+	background := false
+	if cfg, err := config.Load(v.ConfigPath); err == nil {
+		overrides := ViewerOverrides{}
+		if rec.CallerPaneID != "" && rec.CallerSessionID != "" && rec.CallerSessionID != dispatchViewerSession {
+			overrides = ReadViewerSessionOverrides(context.Background(), v.TmuxPath, rec.CallerSessionID, func(ctx context.Context, name string, args ...string) *exec.Cmd {
 				if v.ExecCommandContext != nil {
 					return v.ExecCommandContext(ctx, name, args...)
 				}
 				return v.ExecCommand(name, args...)
 			})
-			if v.Coordinator == nil {
-				v.Coordinator = NewViewerPlacementCoordinator()
+		}
+		if v.Coordinator == nil {
+			v.Coordinator = NewViewerPlacementCoordinator()
+		}
+		placement := v.Coordinator.Decide(rec, overrides, cfg, v.Records)
+		background = placement.Background
+		if placement.Kind == "split" {
+			rec.ViewerKind = "split"
+			rec.ViewerTitle = viewerWindowName(rec)
+			if v.PersistIntent != nil {
+				v.PersistIntent(rec)
 			}
-			placement := v.Coordinator.Decide(rec, overrides, cfg, v.Records)
-			if placement.Kind == "split" {
-				rec.ViewerKind = "split"
-				rec.ViewerTitle = viewerWindowName(rec)
-				if v.PersistIntent != nil {
-					v.PersistIntent(rec)
-				}
-				if pane := v.openSplit(rec, placement); pane != "" {
-					return pane
-				}
-				v.Coordinator.Cancel(rec.ID)
+			if pane := v.openSplit(rec, placement); pane != "" {
+				return pane
 			}
+			v.Coordinator.Cancel(rec.ID)
 		}
 	}
 	session := ""
-	if v.ResolveCaller != nil && rec.Caller != "" {
+	if !background && v.ResolveCaller != nil && rec.Caller != "" {
 		if candidate, ok := v.ResolveCaller(rec.Caller); ok && v.run("has-session", "-t", tmux.Target(candidate)) == nil {
 			session = candidate
 		}

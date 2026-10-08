@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
@@ -21,6 +22,21 @@ var viewerExecutable = os.Executable
 type viewerOverrides struct {
 	Placement *string `json:"placement,omitempty"`
 	MaxPanes  *int    `json:"max_panes,omitempty"`
+}
+
+const errViewerPlacement = "placement must be pane, window or background"
+
+// viewerPlacementCycle is the menu's next step through pane → window →
+// background → pane, with the labels for the current and next placement.
+func viewerPlacementCycle(current string) (next, from, to string) {
+	switch current {
+	case "pane":
+		return "window", "panes", "windows"
+	case "window":
+		return "background", "windows", "background"
+	default:
+		return "pane", "background", "panes"
+	}
 }
 
 func tmuxFormatLiteral(s string) string { return strings.ReplaceAll(s, "#", "##") }
@@ -67,8 +83,8 @@ func readViewerOverrides(ctx context.Context, tmuxPath, session string) (viewerO
 		}
 		switch key {
 		case "@leo_viewer_placement":
-			if value != "pane" && value != "window" {
-				return result, fmt.Errorf("placement must be pane or window")
+			if !config.IsDispatchViewerPlacement(value) {
+				return result, errors.New(errViewerPlacement)
 			}
 			v := value
 			result.Placement = &v
@@ -110,11 +126,7 @@ func newViewerMenuCmd() *cobra.Command {
 		if overrides.MaxPanes != nil {
 			cap = *overrides.MaxPanes
 		}
-		nextPlacement := "pane"
-		from, to := "windows", "panes"
-		if placement == "pane" {
-			nextPlacement, from, to = "window", "panes", "windows"
-		}
+		nextPlacement, from, to := viewerPlacementCycle(placement)
 		nextCap := cap%6 + 1
 		leo, err := viewerExecutable()
 		if err != nil {
@@ -147,8 +159,8 @@ func newViewerSetCmd() *cobra.Command {
 		}
 		switch key {
 		case "placement":
-			if value != "pane" && value != "window" {
-				err = fmt.Errorf("placement must be pane or window")
+			if !config.IsDispatchViewerPlacement(value) {
+				err = errors.New(errViewerPlacement)
 			}
 		case "max_panes":
 			n, e := strconv.Atoi(value)

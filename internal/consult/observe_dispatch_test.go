@@ -182,8 +182,8 @@ func TestTickPublishesOnlyChangedDispatches(t *testing.T) {
 
 	h.now = h.now.Add(observe.DispatchLinger + time.Second)
 	h.obs.Tick()
-	if got := h.pub.take(t); len(got) != 0 {
-		t.Fatalf("leaving the linger window published %v", got)
+	if got := h.pub.removed(); !reflect.DeepEqual(got, []string{"d1"}) || len(h.pub.events) != 1 {
+		t.Fatalf("leaving the linger window published %v (%d events), want one dispatch_removed for d1", got, len(h.pub.events))
 	}
 }
 
@@ -307,5 +307,119 @@ func TestKeylessDispatchesAreListedButNeverOutstanding(t *testing.T) {
 	ds := h.obs.Dispatches(h.now)
 	if len(ds) != 1 || ds[0].CallerAgent != "gamma" {
 		t.Fatalf("Dispatches = %+v; want d1 with caller gamma", ds)
+	}
+}
+
+func TestAttachable(t *testing.T) {
+	live := Record{ID: "d-a", Kind: "dispatch", Mode: ModeInteractive, PaneID: "%7", ViewerKind: "window", Status: StatusRunning}
+	cases := map[string]func(*Record){
+		"running window pane": func(*Record) {},
+		"idle":                func(r *Record) { r.Status = StatusIdle },
+		"headless":            func(r *Record) { r.Mode = ModeHeadless },
+		"no pane yet":         func(r *Record) { r.PaneID = "" },
+		"done":                func(r *Record) { r.Status = StatusDone },
+		"failed":              func(r *Record) { r.Status = StatusFailed },
+		"closed":              func(r *Record) { r.Status = StatusClosed },
+		"released":            func(r *Record) { r.Status = StatusReleased },
+		"settling":            func(r *Record) { r.Status = StatusSettling },
+		"split pane":          func(r *Record) { r.ViewerKind = "split" },
+		"hidden pane":         func(r *Record) { r.ViewerKind = viewerHidden },
+		"no viewer kind":      func(r *Record) { r.ViewerKind = "" },
+	}
+	want := map[string]bool{"running window pane": true, "idle": true}
+	for name, mutate := range cases {
+		rec := live
+		mutate(&rec)
+		if got := Attachable(rec); got != want[name] {
+			t.Errorf("%s: Attachable=%v, want %v", name, got, want[name])
+		}
+	}
+}
+
+func TestObservedDispatchExposesAttachTarget(t *testing.T) {
+	rec := Record{ID: "d-a", Kind: "dispatch", Mode: ModeInteractive, PaneID: "%7", ViewerKind: "window", Status: StatusRunning, StartedAt: stateNow}
+	d := observedDispatch(rec, stateNow)
+	if !d.Attachable || d.TmuxTarget != "%7" {
+		t.Fatalf("window pane: attachable=%v target=%q", d.Attachable, d.TmuxTarget)
+	}
+	rec.ViewerKind = "split"
+	if d = observedDispatch(rec, stateNow); d.Attachable || d.TmuxTarget != "%7" {
+		t.Fatalf("split pane: attachable=%v target=%q; the target is still reported", d.Attachable, d.TmuxTarget)
+	}
+	rec.Mode, rec.PaneID = ModeHeadless, ""
+	if d = observedDispatch(rec, stateNow); d.Attachable || d.TmuxTarget != "" {
+		t.Fatalf("headless: attachable=%v target=%q", d.Attachable, d.TmuxTarget)
+	}
+}
+
+func TestDispatchChangedPublishesWhenAttachabilityChanges(t *testing.T) {
+	running := Record{ID: "d-a", Kind: "dispatch", Mode: ModeInteractive, PaneID: "%7", ViewerKind: "window", Status: StatusRunning, StartedAt: stateNow}
+	h := newObserveHarness(running)
+	h.obs.Tick()
+	h.pub.events = nil
+	moved := running
+	moved.ViewerKind = "split"
+	h.records.recs = []Record{moved}
+	h.obs.Tick()
+	got := h.pub.dispatches(t)
+	if len(got) != 1 || got[0].Attachable || got[0].TmuxTarget != "%7" {
+		t.Fatalf("events=%+v; a pane moving out of its window must republish", got)
+	}
+}
+
+func (p *recordingPublisher) removed() []string {
+	out := []string{}
+	for _, ev := range p.events {
+		if payload, ok := ev.Payload.(*observe.DispatchRemovedPayload); ok && ev.Type == observe.EventDispatchRemoved {
+			out = append(out, payload.ID)
+		}
+	}
+	return out
+}
+
+func TestTickPublishesDispatchRemovedWhenLingerExpires(t *testing.T) {
+	ended := Record{ID: "d-a", Kind: "dispatch", Status: StatusDone, StartedAt: stateNow.Add(-time.Hour), EndedAt: stateNow}
+	h := newObserveHarness(ended)
+	h.obs.Tick()
+	if got := h.pub.removed(); len(got) != 0 {
+		t.Fatalf("removed %v while the finished dispatch is still listed", got)
+	}
+	h.pub.events = nil
+	h.now = stateNow.Add(observe.DispatchLinger - time.Second)
+	h.obs.Tick()
+	if len(h.pub.events) != 0 {
+		t.Fatalf("events=%v one second before the linger ends", h.pub.events)
+	}
+	h.now = stateNow.Add(observe.DispatchLinger)
+	h.obs.Tick()
+	if got := h.pub.removed(); !reflect.DeepEqual(got, []string{"d-a"}) || len(h.pub.events) != 1 {
+		t.Fatalf("removed=%v events=%d; want exactly one dispatch_removed for d-a", got, len(h.pub.events))
+	}
+	h.now = h.now.Add(time.Hour)
+	h.pub.events = nil
+	h.obs.Tick()
+	if len(h.pub.events) != 0 {
+		t.Fatalf("removal repeated: %v", h.pub.events)
+	}
+}
+
+func TestTickPublishesDispatchRemovedWhenRecordLeavesStore(t *testing.T) {
+	h := newObserveHarness(Record{ID: "d-a", Kind: "dispatch", Status: StatusRunning, StartedAt: stateNow})
+	h.obs.Tick()
+	h.pub.events = nil
+	h.records.recs = nil
+	h.obs.Tick()
+	if got := h.pub.removed(); !reflect.DeepEqual(got, []string{"d-a"}) {
+		t.Fatalf("removed=%v", got)
+	}
+}
+
+func TestTickNeverAnnouncesRemovalOfADispatchItNeverListed(t *testing.T) {
+	old := Record{ID: "d-old", Kind: "dispatch", Status: StatusDone, StartedAt: stateNow.Add(-time.Hour), EndedAt: stateNow.Add(-time.Hour)}
+	h := newObserveHarness(old)
+	h.obs.Tick()
+	h.obs.Tick()
+	if len(h.pub.events) != 0 {
+		t.Fatalf("events=%v for a dispatch that was never in /state", h.pub.events)
 	}
 }

@@ -223,6 +223,9 @@ func (c *daemonClient) dispatch(ctx context.Context, request consult.Request) (c
 	if request.CallerBridgeKey != "" {
 		body["caller_bridge_key"] = request.CallerBridgeKey
 	}
+	if request.ParentDispatchID != "" {
+		body["parent_dispatch_id"] = request.ParentDispatchID
+	}
 	if request.Isolation != "" {
 		body["isolation"] = request.Isolation
 	}

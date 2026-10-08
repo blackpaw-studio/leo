@@ -1,0 +1,34 @@
+package mcp
+
+import (
+	"encoding/json"
+	"testing"
+
+	"github.com/blackpaw-studio/leo/internal/leotools"
+)
+
+// A leo_dispatch subagent's MCP server knows the dispatch it serves
+// (LEO_DISPATCH_ID); the new dispatch names it as its parent, headless
+// parents included.
+func TestLeoDispatchNamesTheCallingDispatchAsParent(t *testing.T) {
+	for _, tc := range []struct{ dispatchID, want string }{{"d-self", "d-self"}, {"", ""}} {
+		var gotBody map[string]any
+		d := newFakeDaemon(func(method, path string, body []byte) (int, string) {
+			_ = json.Unmarshal(body, &gotBody)
+			return 200, `{"ok":true,"data":{"id":"d-test","harness":"codex","model":"gpt","cwd":"/tmp"}}`
+		})
+		reg := newRegistry(newDaemonClient(d.port(), "tok"), "assistant", leotools.Permissions{}, withDispatchID(tc.dispatchID))
+		runRequest(t, reg, map[string]any{"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": map[string]any{"name": "leo_dispatch", "arguments": map[string]any{"template": "codex", "prompt": "do it", "cwd": "/tmp"}}})
+		d.close()
+		got, present := gotBody["parent_dispatch_id"]
+		if tc.want == "" {
+			if present {
+				t.Fatalf("not inside a dispatch, but sent parent_dispatch_id %v", got)
+			}
+			continue
+		}
+		if got != tc.want {
+			t.Fatalf("parent_dispatch_id = %v, want %q (body %v)", got, tc.want, gotBody)
+		}
+	}
+}

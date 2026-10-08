@@ -1,6 +1,8 @@
 package consult
 
 import (
+	"maps"
+	"slices"
 	"sync"
 	"time"
 
@@ -115,23 +117,34 @@ func (o *DispatchObserver) Tick() {
 	o.notifyCountsLocked(o.outstandingCounts(records))
 }
 
+// publishChangesLocked announces each dispatch in /state whose record changed
+// and each one that has left it. o.last is exactly the set the previous Tick
+// announced, so a dispatch is removed once, and only if it was ever listed.
 func (o *DispatchObserver) publishChangesLocked(records []Record, now time.Time) {
-	seen := make(map[string]observe.Dispatch, len(records))
+	listed := make(map[string]observe.Dispatch, len(records))
 	for _, rec := range records {
-		if rec.Kind != "dispatch" {
+		if rec.Kind != "dispatch" || !withinLinger(rec, now) {
 			continue
 		}
 		d := observedDispatch(rec, now)
-		seen[rec.ID] = d
-		prev, known := o.last[rec.ID]
-		if known && sameDispatch(prev, d) || !known && !withinLinger(rec, now) {
+		listed[rec.ID] = d
+		if prev, known := o.last[rec.ID]; known && sameDispatch(prev, d) {
 			continue
 		}
-		if o.publisher != nil {
-			o.publisher.Publish(observe.Event{Type: observe.EventDispatchChanged, Payload: &observe.DispatchChangedPayload{Dispatch: d}})
+		o.publish(observe.Event{Type: observe.EventDispatchChanged, Payload: &observe.DispatchChangedPayload{Dispatch: d}})
+	}
+	for _, id := range slices.Sorted(maps.Keys(o.last)) {
+		if _, still := listed[id]; !still {
+			o.publish(observe.Event{Type: observe.EventDispatchRemoved, Payload: &observe.DispatchRemovedPayload{ID: id}})
 		}
 	}
-	o.last = seen
+	o.last = listed
+}
+
+func (o *DispatchObserver) publish(ev observe.Event) {
+	if o.publisher != nil {
+		o.publisher.Publish(ev)
+	}
 }
 
 func (o *DispatchObserver) notifyCountsLocked(counts map[string]int) {
@@ -190,7 +203,13 @@ func withinLinger(rec Record, now time.Time) bool {
 	return !rec.EndedAt.IsZero() && now.Sub(rec.EndedAt) < observe.DispatchLinger
 }
 
+// parentDispatchID is the dispatch that started rec: the recorded parent,
+// else (for records written before it was recorded) the one named by its
+// caller's bridge key.
 func parentDispatchID(rec Record) string {
+	if rec.ParentDispatchID != "" {
+		return rec.ParentDispatchID
+	}
 	if id, ok := DispatchIDFromBridgeKey(rec.CallerBridgeKey); ok {
 		return id
 	}
@@ -203,13 +222,27 @@ func observedDispatch(rec Record, now time.Time) observe.Dispatch {
 		Effort: rec.Effort, ObservedEffort: rec.ObservedEffort,
 		Status: string(rec.Status), Stalled: isStalled(rec, now), Pending: rec.PendingWork.Summary(),
 		CallerAgent: rec.Caller, ParentDispatchID: parentDispatchID(rec), StartedAt: rec.StartedAt,
-		TokensIn: valueOr(rec.InputTokens), TokensOut: valueOr(rec.OutputTokens), CostUSD: valueOr(rec.CostUSD),
+		Attachable: Attachable(rec),
+		TokensIn:   valueOr(rec.InputTokens), TokensOut: valueOr(rec.OutputTokens), CostUSD: valueOr(rec.CostUSD),
+	}
+	if rec.Mode == ModeInteractive {
+		d.TmuxTarget = rec.PaneID
 	}
 	if !rec.EndedAt.IsZero() {
 		ended := rec.EndedAt
 		d.EndedAt = &ended
 	}
 	return d
+}
+
+// Attachable reports whether `leo dispatch attach` can show rec: a live
+// interactive dispatch whose pane is recorded as sitting alone in its own
+// tmux window. A split pane shares its window with the caller and a hidden
+// one is parked, so attaching either would mean moving or exposing a
+// pane that is not the dispatch's own.
+func Attachable(rec Record) bool {
+	return rec.Mode == ModeInteractive && rec.PaneID != "" && rec.ViewerKind == "window" &&
+		!rec.Status.Terminal() && rec.Status != StatusSettling
 }
 
 func sameDispatch(a, b observe.Dispatch) bool {

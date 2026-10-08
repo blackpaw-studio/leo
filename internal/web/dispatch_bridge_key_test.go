@@ -100,3 +100,44 @@ func TestAPIDispatchRecordsTheCallersLaunchAndOwnsByIt(t *testing.T) {
 		t.Fatalf("owner = %q after the key was reopened for another launch; want none", owner)
 	}
 }
+
+func TestAPIDispatchRecordsTheParentDispatchAndInheritsItsCaller(t *testing.T) {
+	s, _, _ := newTestServerWithAgents(t)
+	s.consults.ExecCommandContext = func(ctx context.Context, name string, args ...string) *exec.Cmd {
+		return exec.CommandContext(ctx, "sleep", "5")
+	}
+	idOf := func(w *httptest.ResponseRecorder) string {
+		t.Helper()
+		if w.Code != http.StatusOK {
+			t.Fatalf("start: %d %s", w.Code, w.Body.String())
+		}
+		var started struct {
+			Data struct {
+				ID string `json:"id"`
+			} `json:"data"`
+		}
+		if err := json.Unmarshal(w.Body.Bytes(), &started); err != nil {
+			t.Fatal(err)
+		}
+		return started.Data.ID
+	}
+	parent := idOf(startDispatch(t, s, `{"from":"root-agent","template":"coding","prompt":"work","cwd":"/tmp"}`))
+	child := idOf(startDispatch(t, s, `{"from":"inherited","template":"coding","prompt":"work","cwd":"/tmp","parent_dispatch_id":"`+parent+`"}`))
+	rec, err := s.consults.Get(child)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rec.ParentDispatchID != parent || rec.Caller != "root-agent" {
+		t.Fatalf("parent=%q caller=%q, want %q/root-agent", rec.ParentDispatchID, rec.Caller, parent)
+	}
+}
+
+func TestAPIDispatchRejectsAnInvalidParentDispatchID(t *testing.T) {
+	s, _, _ := newTestServerWithAgents(t)
+	for _, id := range []string{"../x", "a b", "d-1;rm"} {
+		w := startDispatch(t, s, `{"from":"caller","template":"coding","prompt":"work","cwd":"/tmp","parent_dispatch_id":"`+id+`"}`)
+		if w.Code != http.StatusBadRequest {
+			t.Fatalf("id %q: status %d, want 400: %s", id, w.Code, w.Body.String())
+		}
+	}
+}

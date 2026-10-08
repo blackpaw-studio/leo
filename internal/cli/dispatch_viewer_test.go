@@ -42,7 +42,7 @@ func viewerTestSetup(t *testing.T, show string) (*[][]string, string) {
 }
 
 func TestViewerMenuArgv(t *testing.T) {
-	for _, placement := range []string{"pane", "window"} {
+	for _, placement := range []string{"pane", "window", "background"} {
 		for cap := 1; cap <= 6; cap++ {
 			t.Run(fmt.Sprintf("%s-%d", placement, cap), func(t *testing.T) {
 				calls, cfgPath := viewerTestSetup(t, fmt.Sprintf("@leo_viewer_placement %s\n@leo_viewer_max_panes %d\n", placement, cap))
@@ -51,10 +51,12 @@ func TestViewerMenuArgv(t *testing.T) {
 				if err := cmd.Execute(); err != nil {
 					t.Fatal(err)
 				}
-				nextPlacement, from, to := "pane", "windows", "panes"
-				if placement == "pane" {
-					nextPlacement, from, to = "window", "panes", "windows"
-				}
+				next := map[string][3]string{
+					"pane":       {"window", "panes", "windows"},
+					"window":     {"background", "windows", "background"},
+					"background": {"pane", "background", "panes"},
+				}[placement]
+				nextPlacement, from, to := next[0], next[1], next[2]
 				nextCap := cap%6 + 1
 				prefix := `run-shell "'/leo' --config '` + cfgPath + `' dispatch viewer `
 				suffix := ` --session 'demo'"`
@@ -74,6 +76,28 @@ func TestViewerSetValidationAndArgv(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := [][]string{{"/tmux", "-L", "leo", "set-option", "-t", "=demo", "@leo_viewer_placement", "window"}}
+	if !reflect.DeepEqual(*calls, want) {
+		t.Fatalf("%q", *calls)
+	}
+}
+func TestViewerSetAcceptsBackgroundAndRejectsUnknownPlacement(t *testing.T) {
+	calls, _ := viewerTestSetup(t, "")
+	cmd := newViewerSetCmd()
+	cmd.SetArgs([]string{"--session", "demo", "placement=background"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	want := [][]string{{"/tmux", "-L", "leo", "set-option", "-t", "=demo", "@leo_viewer_placement", "background"}}
+	if !reflect.DeepEqual(*calls, want) {
+		t.Fatalf("%q", *calls)
+	}
+	*calls = nil
+	cmd = newViewerSetCmd()
+	cmd.SetArgs([]string{"--session", "demo", "placement=floating"})
+	if err := cmd.Execute(); err == nil {
+		t.Fatal("want error")
+	}
+	want = [][]string{{"/tmux", "-L", "leo", "display-message", "-t", "=demo:", "placement must be pane, window or background"}}
 	if !reflect.DeepEqual(*calls, want) {
 		t.Fatalf("%q", *calls)
 	}

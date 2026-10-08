@@ -9,7 +9,11 @@ import (
 
 func main() {
 	if err := cli.Execute(); err != nil {
-		prompt.Err.Fprintf(os.Stderr, "Error: %s\n", err)
+		// An empty message means the failure was already reported (a remote
+		// leo's own stderr), so only the exit status is left to pass on.
+		if msg := err.Error(); msg != "" {
+			prompt.Err.Fprintf(os.Stderr, "Error: %s\n", msg)
+		}
 		os.Exit(cli.ExitCode(err))
 	}
 }

@@ -56,7 +56,52 @@ func (f *fakeEventSource) Subscribe(buffer int) (<-chan observe.Event, func(), u
 	}, f.seq
 }
 
+// Seq reports the canned sequence number, as observe.Bus.Seq does.
+func (f *fakeEventSource) Seq() uint64 { return f.seq }
+
 // --- GET /api/v1/state ---
+
+func stateMetaSeq(t *testing.T, s *Server) float64 {
+	t.Helper()
+	w := httptest.NewRecorder()
+	s.httpServer.Handler.ServeHTTP(w, httptest.NewRequest("GET", "/api/v1/state", nil))
+	var resp struct {
+		Data struct {
+			Meta map[string]any `json:"meta"`
+		} `json:"data"`
+	}
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decoding state: %v", err)
+	}
+	seq, ok := resp.Data.Meta["seq"].(float64)
+	if !ok {
+		t.Fatalf("state has no meta.seq: %v", resp.Data.Meta)
+	}
+	return seq
+}
+
+func TestStateMetaSeqIsTheEventBusSeq(t *testing.T) {
+	bus := observe.NewBus()
+	s, _ := newTestServerWithObserveDeps(t, nil, bus)
+	if got := stateMetaSeq(t, s); got != 0 {
+		t.Fatalf("meta.seq=%v before any event", got)
+	}
+	for range 3 {
+		bus.Publish(observe.Event{Type: observe.EventAgentStopped, Payload: &observe.AgentStoppedPayload{Agent: "den"}})
+	}
+	_, unsub, helloSeq := bus.Subscribe(1)
+	defer unsub()
+	if got := stateMetaSeq(t, s); got != 3 || uint64(got) != helloSeq {
+		t.Fatalf("meta.seq=%v, SSE hello seq=%d; a client orders the baseline against events with these", got, helloSeq)
+	}
+}
+
+func TestStateMetaSeqWithoutAnEventSourceIsZero(t *testing.T) {
+	s, _ := newTestServerWithObserveDeps(t, nil, nil)
+	if got := stateMetaSeq(t, s); got != 0 {
+		t.Fatalf("meta.seq=%v", got)
+	}
+}
 
 func TestHandleAPIStateEnvelopeAndAuth(t *testing.T) {
 	s, _ := newTestServer(t)

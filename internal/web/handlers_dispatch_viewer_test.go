@@ -72,6 +72,21 @@ func TestSaveViewerDefaultsRoundTrip(t *testing.T) {
 		t.Fatalf("viewer=%+v", cfg.Defaults.Dispatch.Viewer)
 	}
 }
+func TestSaveViewerDefaultsAcceptsBackground(t *testing.T) {
+	s := viewerHandlerServer(t, nil)
+	w := httptest.NewRecorder()
+	s.handleDispatchViewerSaveDefault(w, viewerRequest("/api/dispatch/viewer/save-default", `{"placement":"background"}`, "operator"))
+	if w.Code != 200 {
+		t.Fatalf("%d %s", w.Code, w.Body.String())
+	}
+	cfg, err := config.Load(s.configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.DispatchViewerPlacement() != "background" {
+		t.Fatalf("viewer=%+v", cfg.Defaults.Dispatch.Viewer)
+	}
+}
 func TestSaveViewerDefaultsRejectsInvalidOverrides(t *testing.T) {
 	s := viewerHandlerServer(t, nil)
 	before, _ := os.ReadFile(s.configPath)
