@@ -2,6 +2,7 @@ package consult
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -137,9 +138,10 @@ func TestReleaseOnFinishPointerOnlyDeliveryWaitsForCollection(t *testing.T) {
 	if rec := status(d, "d-rof"); rec.Status != StatusIdle || rt.killCount() != 0 {
 		t.Fatalf("a pointer-only notification does not carry the result, yet released: %s", rec.Status)
 	}
-	entry := d.Wait(context.Background(), []string{"d-rof"}, 0)[0]
-	if entry.Text != "the answer" || entry.Outcome != TurnFinished {
-		t.Fatalf("wait entry = %+v", entry)
+	var entry Entry
+	err := d.WaitAndRelease(context.Background(), []string{"d-rof"}, 0, func(entries []Entry) error { entry = entries[0]; return nil })
+	if err != nil || entry.Text != "the answer" || entry.Outcome != TurnFinished {
+		t.Fatalf("wait entry = %+v, %v", entry, err)
 	}
 	if rec := status(d, "d-rof"); rec.Status != StatusReleased || !rec.ReleasedOnFinish || rt.killCount() != 1 {
 		t.Fatalf("after leo_wait returned the result: %s kills=%d", rec.Status, rt.killCount())
@@ -149,7 +151,10 @@ func TestReleaseOnFinishPointerOnlyDeliveryWaitsForCollection(t *testing.T) {
 func TestReleaseOnFinishWaitReleasesWhenNotifyIsOff(t *testing.T) {
 	d, rt, s := finishedRun(t, "claude", TurnFinished, true)
 	s.record.Notify = false
-	entry := d.Wait(context.Background(), []string{"d-rof"}, 0)[0]
+	var entry Entry
+	if err := d.WaitAndRelease(context.Background(), []string{"d-rof"}, 0, func(entries []Entry) error { entry = entries[0]; return nil }); err != nil {
+		t.Fatal(err)
+	}
 	if entry.Text != "the answer" {
 		t.Fatalf("the wait must still return the result, got %+v", entry)
 	}
@@ -173,15 +178,77 @@ func TestReleaseOnFinishNotifyOffWithNoCollectorFallsBackToIdleClose(t *testing.
 	}
 }
 
-func TestReleaseOnFinishOutputSnapshotReleases(t *testing.T) {
+func TestReleaseOnFinishPlainWaitDoesNotRelease(t *testing.T) {
 	d, rt, s := finishedRun(t, "claude", TurnFinished, true)
 	s.record.Notify = false
-	if err := d.ReleaseDelivered("d-rof"); err != nil {
-		t.Fatal(err)
+	if entry := d.Wait(context.Background(), []string{"d-rof"}, 0)[0]; entry.Text != "the answer" {
+		t.Fatalf("entry = %+v", entry)
 	}
-	if rec := status(d, "d-rof"); rec.Status != StatusReleased || rt.killCount() != 1 {
-		t.Fatalf("status=%s kills=%d", rec.Status, rt.killCount())
+	if rec := status(d, "d-rof"); rec.Status != StatusIdle || rt.killCount() != 0 {
+		t.Fatalf("Wait released before the transport acknowledged the result: %s", rec.Status)
 	}
+}
+
+func TestReleaseOnFinishKeepsTheRunWhenTheWaitResponseIsNotWritten(t *testing.T) {
+	canceled, cancel := context.WithCancel(context.Background())
+	cases := []struct {
+		name    string
+		ctx     context.Context
+		deliver func([]Entry) error
+	}{
+		{"failed write", context.Background(), func([]Entry) error { return errors.New("broken pipe") }},
+		{"request canceled during the write", canceled, func([]Entry) error { cancel(); return nil }},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			d, rt, s := finishedRun(t, "claude", TurnFinished, true)
+			s.record.Notify = false
+			_ = d.WaitAndRelease(c.ctx, []string{"d-rof"}, 0, c.deliver)
+			if rec := status(d, "d-rof"); rec.Status != StatusIdle || rt.killCount() != 0 {
+				t.Fatalf("released without a delivered response: %s kills=%d", rec.Status, rt.killCount())
+			}
+		})
+	}
+}
+
+func TestReleaseOnFinishKeepsTheRunWhenTheResultIsTruncated(t *testing.T) {
+	t.Run("leo_wait result over 32 KiB", func(t *testing.T) {
+		d, rt, s := finishedRun(t, "claude", TurnFinished, true)
+		s.record.Notify = false
+		s.record.Turns[0].Text = strings.Repeat("x", maxWaitEntryBytes+1)
+		var entry Entry
+		if err := d.WaitAndRelease(context.Background(), []string{"d-rof"}, 0, func(e []Entry) error { entry = e[0]; return nil }); err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(entry.Text, "[truncated;") {
+			t.Fatal("test setup: the wait result was not truncated")
+		}
+		if rec := status(d, "d-rof"); rec.Status != StatusIdle || rt.killCount() != 0 {
+			t.Fatalf("released after a truncated wait result: %s", rec.Status)
+		}
+	})
+	t.Run("inline notification over 8 KiB", func(t *testing.T) {
+		d, rt, s := finishedRun(t, "claude", TurnFinished, true)
+		s.record.Turns[0].Text = strings.Repeat("x", maxInlineResultBytes+1)
+		delivery := &fakeNotificationDelivery{ready: true}
+		d.SetNotificationDelivery(delivery)
+		d.SweepNotifications(context.Background())
+		if len(delivery.calls) != 1 || !strings.Contains(delivery.calls[0], "truncated") {
+			t.Fatalf("test setup: delivery = %v", delivery.calls)
+		}
+		if rec := status(d, "d-rof"); rec.Status != StatusIdle || rt.killCount() != 0 {
+			t.Fatalf("released after a truncated notification: %s", rec.Status)
+		}
+	})
+	t.Run("a result just under the caps still releases", func(t *testing.T) {
+		d, rt, _ := finishedRun(t, "claude", TurnFinished, true)
+		d.runs["d-rof"].record.Turns[0].Text = strings.Repeat("x", maxInlineResultBytes-1)
+		d.SetNotificationDelivery(&fakeNotificationDelivery{ready: true})
+		d.SweepNotifications(context.Background())
+		if rec := status(d, "d-rof"); rec.Status != StatusReleased || rt.killCount() != 1 {
+			t.Fatalf("status = %s", rec.Status)
+		}
+	})
 }
 
 func TestReleaseOnFinishSkipsRunsThatAreNotCleanlyFinished(t *testing.T) {
@@ -218,8 +285,7 @@ func TestReleaseOnFinishSkipsRunsThatAreNotCleanlyFinished(t *testing.T) {
 			c.setup(s)
 			d.SetNotificationDelivery(&fakeNotificationDelivery{ready: true})
 			d.SweepNotifications(context.Background())
-			d.Wait(context.Background(), []string{"d-rof"}, time.Millisecond)
-			if err := d.ReleaseDelivered("d-rof"); err != nil {
+			if err := d.WaitAndRelease(context.Background(), []string{"d-rof"}, time.Millisecond, func([]Entry) error { return nil }); err != nil {
 				t.Fatal(err)
 			}
 			if rec := status(d, "d-rof"); rec.Status == StatusReleased || rec.ReleasedOnFinish || rt.killCount() != 0 {

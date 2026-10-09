@@ -42,9 +42,14 @@ type apiResponse struct {
 }
 
 func writeJSON(w http.ResponseWriter, status int, resp apiResponse) {
+	_ = encodeJSON(w, status, resp)
+}
+
+// encodeJSON is writeJSON reporting whether the response was written.
+func encodeJSON(w http.ResponseWriter, status int, resp apiResponse) error {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
-	json.NewEncoder(w).Encode(resp) //nolint:errcheck
+	return json.NewEncoder(w).Encode(resp)
 }
 
 // handleAPIAgentSpawn spawns an ephemeral agent from a template.

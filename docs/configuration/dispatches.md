@@ -213,8 +213,8 @@ dispatch IDs. In interactive mode, `leo_wait` accepts either a run ID or a
 turn ID (`d-…#n`).
 
 `leo_dispatch_output(id, tail?)` reads a nonblocking snapshot of recorded
-output without collecting the dispatch (reading the finished result of a
-[`release_on_finish`](#release-on-finish) run releases it). `tail` is a positive rendered-line
+output without collecting the dispatch; it never has side effects, so a
+progress peek never releases a run. `tail` is a positive rendered-line
 count, defaults to 60, and is capped at 400. It accepts turn IDs and returns
 the parent run's stream. Use it when a wait result is truncated.
 
@@ -390,12 +390,16 @@ turn finishes **and** the result has reached the caller.
   (codex sandbox, claude permission mode, opencode), and a "read-only" template
   often still runs with bypass permissions. An explicit `release_on_finish:
   true|false` (MCP/API) or `--release-on-finish[=false]` (CLI) always wins.
-- **Trigger.** Only after delivery, never before: the inline completion
-  notification was delivered (claude callers; a bridged caller's ack counts), or
-  `leo_wait` returned the result, or `leo_dispatch_output` read it. A pointer-only
-  notification (codex and opencode callers) does not carry the result, so those
-  callers release on `leo_wait`. With `notify: false` and nobody collecting, the
-  run falls back to the normal one-hour idle close.
+- **Trigger.** Only after the complete result was delivered, never before: the
+  inline completion notification was delivered (claude callers; a bridged
+  caller's ack counts), or `leo_wait` returned the result and its HTTP response
+  was written successfully (a failed write or canceled request keeps the run).
+  A pointer-only notification (codex and opencode callers) does not carry the
+  result, so those callers release on `leo_wait`. `leo_dispatch_output` never
+  releases. A result cut at a size cap (8 KiB inline, 32 KiB in `leo_wait`) was
+  not delivered whole, so that run is kept. With `notify: false` and nobody
+  collecting, or after any of these, the run falls back to the normal one-hour
+  idle close.
 - **Never** on an `interrupted`, `lost` or `rejected` turn, a run that is
   `needs_input` or `waiting`, a follow-up that is queued or running, or a run
   that has a second turn (including one typed into the pane).

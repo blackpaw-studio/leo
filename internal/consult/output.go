@@ -116,8 +116,9 @@ func readOutputStream(reader io.Reader, renderer Renderer, tail int) ([]string, 
 func positiveInteger(value string) bool { n, err := strconv.Atoi(value); return err == nil && n > 0 }
 
 func limitWaitEntry(entry Entry) Entry {
-	entry.Text = limitWaitText(entry.ID, entry.Text)
-	entry.Err = limitWaitText(entry.ID, entry.Err)
+	text, errText := limitWaitText(entry.ID, entry.Text), limitWaitText(entry.ID, entry.Err)
+	entry.truncated = text != entry.Text || errText != entry.Err
+	entry.Text, entry.Err = text, errText
 	return entry
 }
 

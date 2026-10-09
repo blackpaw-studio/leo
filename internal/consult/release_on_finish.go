@@ -1,9 +1,11 @@
 package consult
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/blackpaw-studio/leo/internal/config"
 )
@@ -58,14 +60,6 @@ func (d *Dispatcher) releaseDeliveredLocked(id string) error {
 	return nil
 }
 
-// ReleaseDelivered releases run id if it opted into release_on_finish and
-// its finished result has just been read by a caller (leo_dispatch_output).
-func (d *Dispatcher) ReleaseDelivered(id string) error {
-	unlock := d.serialLocks([]string{id})
-	defer unlock()
-	return d.releaseDeliveredLocked(id)
-}
-
 // releasedSendError explains a send to a released run. Only a run that
 // released itself says why; a manually released run keeps its generic error.
 func releasedSendError(rec Record) error {
@@ -75,13 +69,28 @@ func releasedSendError(rec Record) error {
 	return nil
 }
 
-// releaseReturnedLocked releases each interactive run in entries whose
-// finished result the wait is about to return, and reports which it
-// released. The caller holds the runs' serial locks.
-func (d *Dispatcher) releaseReturnedLocked(ids []string, entries []Entry) []bool {
-	released := make([]bool, len(entries))
+// WaitAndRelease is Wait followed by deliver, the transport write of the
+// entries to the caller. Only once deliver succeeded with ctx still live does
+// it release the release_on_finish runs whose complete finished result those
+// entries carried and collect them; a failed write or canceled request keeps
+// every run. Wait itself never releases.
+func (d *Dispatcher) WaitAndRelease(ctx context.Context, ids []string, timeout time.Duration, deliver func([]Entry) error) error {
+	entries := d.Wait(ctx, ids, timeout)
+	if err := deliver(entries); err != nil {
+		return err
+	}
+	if ctx.Err() != nil {
+		return nil
+	}
+	d.releaseReturned(ids, entries)
+	return nil
+}
+
+func (d *Dispatcher) releaseReturned(ids []string, entries []Entry) {
+	unlock := d.serialLocks(ids)
+	defer unlock()
 	for i, e := range entries {
-		if e.Outcome != TurnFinished || e.Status != StatusIdle {
+		if e.Outcome != TurnFinished || e.Status != StatusIdle || e.truncated {
 			continue
 		}
 		runID := strings.SplitN(ids[i], "#", 2)[0]
@@ -89,7 +98,16 @@ func (d *Dispatcher) releaseReturnedLocked(ids []string, entries []Entry) []bool
 			fmt.Fprintf(os.Stderr, "dispatch %s: %v\n", runID, err)
 			continue
 		}
-		released[i] = d.stateRecord(d.runs[runID]).Status == StatusReleased
+		d.mu.Lock()
+		state := d.runs[runID]
+		released := state != nil && state.record.Status == StatusReleased
+		var done chan struct{}
+		if state != nil {
+			done = state.done
+		}
+		d.mu.Unlock()
+		if released {
+			d.collectRun(context.Background(), runID, state, done)
+		}
 	}
-	return released
 }

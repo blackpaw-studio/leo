@@ -558,7 +558,7 @@ func newRegistry(client *daemonClient, processName string, perms leotools.Permis
 	})
 
 	r.addContext(toolDef{
-		Name: "leo_dispatch_output", Description: allowNote("Read a nonblocking snapshot of a dispatch's recorded output. Use this for large results or live progress; it does not collect the dispatch (reading the finished result of a release_on_finish run does release it). tail defaults to 60 rendered lines and is capped at 400.", "read output from dispatched templates", perms.CanConsult),
+		Name: "leo_dispatch_output", Description: allowNote("Read a nonblocking snapshot of a dispatch's recorded output. Use this for large results or live progress; it does not collect the dispatch. tail defaults to 60 rendered lines and is capped at 400.", "read output from dispatched templates", perms.CanConsult),
 		InputSchema: objectSchema(map[string]any{"id": map[string]any{"type": "string"}, "tail": map[string]any{"type": "integer", "minimum": 1}}, "id"),
 	}, func(ctx context.Context, args map[string]any) (string, error) {
 		id, err := stringArg(args, "id")
@@ -628,7 +628,7 @@ func newRegistry(client *daemonClient, processName string, perms leotools.Permis
 // consultDescription is the leo_consult tool description. Named rather than
 // inlined so the permission suffix can be appended without the literal
 // swallowing the call to allowNote.
-const releaseOnFinishSchemaDescription = "interactive only: release the pane once the first turn finishes and its result has reached you (notification delivered, or leo_wait / leo_dispatch_output returned it); a later leo_send_dispatch is rejected. Defaults to true for the read-only roles explore, plan, review and review.*, false otherwise (implement, template dispatches). Explicit true/false always wins."
+const releaseOnFinishSchemaDescription = "interactive only: release the pane once the first turn finishes and its result has reached you (notification delivered, or leo_wait returned it; a result truncated at the size cap does not release); a later leo_send_dispatch is rejected. Defaults to true for the read-only roles explore, plan, review and review.*, false otherwise (implement, template dispatches). Explicit true/false always wins."
 
 const consultDescription = "Run a one-off consultant subagent for a second opinion from another model. " +
 	"Use this whenever you are asked to consult, ask, check with, or get a second opinion from another model by name — \"consult fable\", \"ask codex about this\", \"what does opus think\". " +

@@ -625,9 +625,8 @@ func (d *Dispatcher) Wait(ctx context.Context, ids []string, timeout time.Durati
 		}
 		unlockSerial := d.serialLocks(ids)
 		defer unlockSerial()
-		released := d.releaseReturnedLocked(ids, entries)
 		for i := range entries {
-			if !entries[i].Status.Terminal() && !released[i] {
+			if !entries[i].Status.Terminal() {
 				continue
 			}
 			if skipCleanup[i] {
