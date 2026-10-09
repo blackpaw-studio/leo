@@ -6,6 +6,8 @@ import (
 	"strconv"
 
 	"github.com/blackpaw-studio/leo/internal/config"
+	codexharness "github.com/blackpaw-studio/leo/internal/harness/codex"
+	opencodeharness "github.com/blackpaw-studio/leo/internal/harness/opencode"
 )
 
 // Environment variables `leo mcp-server` (internal/mcp) reads to bind itself
@@ -81,4 +83,23 @@ func DispatchChildEnv(cfg *config.Config, tmpl config.TemplateConfig, id, token 
 		env[EnvAPIToken] = token
 	}
 	return env
+}
+
+// CodexBridge is the codex harness's leo MCP bridge: the server command plus
+// the by-name env whitelist (values stay out of ps-visible argv).
+func (s Server) CodexBridge(restricted bool) *codexharness.LeoMCPBridge {
+	return &codexharness.LeoMCPBridge{
+		Command:      s.Executable(),
+		Args:         s.Args(),
+		EnvVars:      BridgeEnvNames(restricted),
+		ApprovalMode: "approve",
+		ToolTimeout:  ToolTimeout,
+	}
+}
+
+// OpencodeBridge is the opencode harness's leo MCP bridge. opencode carries
+// the server's environment inside its per-spawn config, so env travels as part
+// of the launch env overlay, never argv.
+func (s Server) OpencodeBridge(env map[string]string) *opencodeharness.LeoMCPBridge {
+	return &opencodeharness.LeoMCPBridge{Command: s.Command(), Env: env, ToolTimeout: ToolTimeout}
 }

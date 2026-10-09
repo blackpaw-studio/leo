@@ -78,6 +78,7 @@ func (d *Dispatcher) continueHeadless(cfg *config.Config, rec Record, message st
 	if opts, ok := decoded.(claudeharness.Options); ok {
 		decoded = resolveClaudeDispatchProfile(cfg, tmpl, "dispatch", opts, tmpl.Env, d.LeoMCP)
 	}
+	decoded, childEnv := d.headlessChildMCP(cfg, tmpl, decoded, rec.ID)
 	cwd, recreate, err := d.resumeWorkspace(rec)
 	if err != nil {
 		return SendResult{}, err
@@ -165,6 +166,7 @@ func (d *Dispatcher) continueHeadless(cfg *config.Config, rec Record, message st
 		d.runs[rec.ID] = state
 	}
 	state.record, state.handle = prospective, handle
+	state.mcpEnv = childEnv
 	state.done, state.cancel = done, cancel
 	d.persistLocked(state, "turn")
 	d.mu.Unlock()

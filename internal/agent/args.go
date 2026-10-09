@@ -93,24 +93,14 @@ func resolveTemplateLaunch(cfg *config.Config, tmpl config.TemplateConfig, agent
 		opts.LeoMCPToolTimeout = leomcp.ToolTimeout
 		spec.Options = opts
 	case codexharness.Options:
-		opts.LeoMCP = &codexharness.LeoMCPBridge{
-			Command:      mcp.Executable(),
-			Args:         mcp.Args(),
-			EnvVars:      leoMCPEnvVars(tmpl),
-			ApprovalMode: "approve",
-			ToolTimeout:  leomcp.ToolTimeout,
-		}
+		opts.LeoMCP = mcp.CodexBridge(!tmpl.Permissions.IsZero())
 		spec.Options = opts
 	case opencodeharness.Options:
-		opts.LeoMCP = &opencodeharness.LeoMCPBridge{
-			Command: mcp.Command(),
-			Env: mergeEnv(map[string]string{
-				"LEO_PROCESS_NAME": agentName,
-				"LEO_WEB_PORT":     strconv.Itoa(cfg.WebPort()),
-				"LEO_API_TOKEN":    webToken,
-			}, permissionsEnv(tmpl)),
-			ToolTimeout: leomcp.ToolTimeout,
-		}
+		opts.LeoMCP = mcp.OpencodeBridge(mergeEnv(map[string]string{
+			"LEO_PROCESS_NAME": agentName,
+			"LEO_WEB_PORT":     strconv.Itoa(cfg.WebPort()),
+			"LEO_API_TOKEN":    webToken,
+		}, permissionsEnv(tmpl)))
 		spec.Options = opts
 	default:
 		return h, harness.LaunchSpec{}, fmt.Errorf("harness %q returned unsupported options type %T", h.Name(), decoded)

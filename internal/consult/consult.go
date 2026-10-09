@@ -106,6 +106,10 @@ type Dispatcher struct {
 	// LeoMCP is the leo binary headless dispatches launch as their leo MCP
 	// server. The zero value runs the bare "leo" from PATH.
 	LeoMCP leomcp.Server
+	// AgentToken is the daemon's agent bearer token. Headless children get it
+	// in their process environment (never argv) so their leo MCP server runs
+	// in full mode; empty leaves children local-only.
+	AgentToken string
 	// liveUsage reads running interactive claude dispatches' transcripts.
 	liveUsage liveUsageConfig
 }
@@ -117,6 +121,10 @@ func (d *Dispatcher) SetCloseFinishedViewer(fn func(Record, func(string) error) 
 }
 
 type runState struct {
+	// mcpEnv is the leo MCP environment of the headless child (see
+	// Dispatcher.headlessChildMCP); it carries the daemon token, so it is
+	// process env only and never persisted or logged.
+	mcpEnv         map[string]string
 	record         Record
 	handle         Handle
 	done           chan struct{}
@@ -388,6 +396,8 @@ func (d *Dispatcher) Start(_ context.Context, cfg *config.Config, req Request) (
 		req.Cwd = state.record.Worktree
 		rec = cloneRecord(state.record)
 	}
+	decoded, childEnv := d.headlessChildMCP(cfg, tmpl, decoded, rec.ID)
+	state.mcpEnv = childEnv
 	spec := harness.LaunchSpec{
 		Kind: harness.KindTask, Name: req.Name, Model: model, Effort: req.Effort,
 		MaxTurns: cfg.TemplateMaxTurns(tmpl), Workspace: req.Cwd,
@@ -484,10 +494,15 @@ func (d *Dispatcher) runInvocation(parent context.Context, state *runState, done
 	d.mu.Lock()
 	dispatchID := state.record.ID
 	d.mu.Unlock()
-	// LEO_DISPATCH_ID is applied last so neither an identity the daemon
-	// inherited nor a template env can mask it: the run's own tools (leo MCP,
-	// `leo dispatch report`) rely on it to know they are inside a dispatch.
-	cmd.Env = mergedEnv(os.Environ(), harnessEnv, env, map[string]string{dispatchIDEnv: dispatchID})
+	// The leo MCP env (identity, dispatch id, daemon credentials) is applied
+	// last so neither an identity the daemon inherited nor a template env can
+	// mask it: the run's own tools (leo MCP, `leo dispatch report`) rely on it
+	// to know they are inside a dispatch. LEO_DISPATCH_ID stays authoritative
+	// even for a run that has no overlay.
+	d.mu.Lock()
+	mcpEnv := state.mcpEnv
+	d.mu.Unlock()
+	cmd.Env = mergedEnv(os.Environ(), harnessEnv, env, mcpEnv, map[string]string{dispatchIDEnv: dispatchID})
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	cmd.Cancel = func() error {
 		if cmd.Process == nil {
