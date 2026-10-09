@@ -94,9 +94,20 @@ func (s *Server) handleAPIDispatch(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, apiResponse{Error: err.Error()})
 		return
 	}
-	started, err := s.consults.Start(r.Context(), cfg, consult.Request{Caller: req.From, Template: req.Template, Model: req.Model, Effort: req.Effort, Role: req.Role, Profile: profile, Prompt: req.Prompt, Cwd: req.Cwd, Name: req.Name, Timeout: timeout, Mode: mode, Notify: req.Notify, Isolation: req.Isolation, CallerPaneID: caller.PaneID, CallerSessionID: caller.SessionID, CallerWindowID: caller.WindowID, CallerHarness: caller.Harness, CallerBridgeKey: req.CallerBridgeKey, CallerBridgeLaunch: s.bridgeLaunchID(req.CallerBridgeKey), ParentDispatchID: req.ParentDispatchID})
+	dispatchReq := consult.Request{Caller: req.From, Template: req.Template, Model: req.Model, Effort: req.Effort, Role: req.Role, Profile: profile, Prompt: req.Prompt, Cwd: req.Cwd, Name: req.Name, Timeout: timeout, Mode: mode, Notify: req.Notify, Isolation: req.Isolation, CallerPaneID: caller.PaneID, CallerSessionID: caller.SessionID, CallerWindowID: caller.WindowID, CallerHarness: caller.Harness, CallerBridgeKey: req.CallerBridgeKey, CallerBridgeLaunch: s.bridgeLaunchID(req.CallerBridgeKey), ParentDispatchID: req.ParentDispatchID}
+	started, err := s.consults.Start(r.Context(), cfg, dispatchReq)
+	var validationErr *consult.ValidationError
+	if err != nil && req.Mode == "" && mode == consult.ModeInteractive && !errors.As(err, &validationErr) && !errors.Is(err, context.Canceled) {
+		// The omitted-mode default must never be worse than headless was: a
+		// launch that fails at runtime (tmux up but unusable) retries without a TUI.
+		interactiveErr := err
+		mode, modeNote = consult.ModeHeadless, fmt.Sprintf("ran headless: interactive launch failed: %v", interactiveErr)
+		dispatchReq.Mode = mode
+		if started, err = s.consults.Start(r.Context(), cfg, dispatchReq); err != nil {
+			err = fmt.Errorf("%w (after interactive launch failed: %v)", err, interactiveErr)
+		}
+	}
 	if err != nil {
-		var validationErr *consult.ValidationError
 		status := http.StatusInternalServerError
 		if errors.As(err, &validationErr) {
 			status = http.StatusBadRequest

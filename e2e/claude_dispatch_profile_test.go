@@ -65,7 +65,7 @@ func TestClaudeDispatchProfile(t *testing.T) {
 	client := &http.Client{Timeout: 3 * time.Second}
 
 	var started consult.Started
-	profileAPI(t, client, token, port, http.MethodPost, "/api/dispatch", map[string]string{"template": "worker", "prompt": "work", "cwd": ws}, &started)
+	profileAPI(t, client, token, port, http.MethodPost, "/api/dispatch", map[string]string{"template": "worker", "prompt": "work", "cwd": ws, "mode": "headless"}, &started)
 	var waited []consult.Entry
 	profileAPI(t, client, token, port, http.MethodGet, "/api/dispatch/wait?id="+started.ID+"&timeout=3", nil, &waited)
 	if len(waited) != 1 || waited[0].Status != consult.StatusDone {

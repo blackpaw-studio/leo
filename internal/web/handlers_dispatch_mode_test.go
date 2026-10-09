@@ -3,6 +3,7 @@ package web
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http/httptest"
 	"os"
 	"os/exec"
@@ -19,12 +20,16 @@ import (
 type launchRecorder struct {
 	mu       sync.Mutex
 	launches []consult.LaunchRequest
+	err      error
 }
 
 func (r *launchRecorder) Launch(_ context.Context, req consult.LaunchRequest) (string, string, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.launches = append(r.launches, req)
+	if r.err != nil {
+		return "", "", r.err
+	}
 	return "%9", "dispatch", nil
 }
 func (r *launchRecorder) Inject(context.Context, string, string, func() error) error { return nil }
@@ -139,6 +144,28 @@ func TestAPIDispatchExplicitInteractiveOnOpencodeStillErrors(t *testing.T) {
 	w := httptest.NewRecorder()
 	s.handleAPIDispatch(w, httptest.NewRequest("POST", "/api/dispatch", strings.NewReader(`{"template":"local","prompt":"work","cwd":"/tmp","mode":"interactive"}`)))
 	if w.Code != 400 {
+		t.Fatalf("status %d: %s", w.Code, w.Body.String())
+	}
+}
+
+func TestAPIDispatchOmittedModeFallsBackToHeadlessWhenInteractiveLaunchFails(t *testing.T) {
+	s, rt, _ := newModeTestServer(t)
+	rt.err = errors.New("no server running on /tmp/tmux-0/leo")
+	got := postDispatch(t, s, `{"template":"coding","prompt":"work","cwd":"/tmp"}`)
+	if got.Data.Mode != consult.ModeHeadless || !strings.Contains(got.Data.Note, "interactive launch failed") || !strings.Contains(got.Data.Note, "no server running") {
+		t.Fatalf("mode=%q note=%q, want headless explaining the launch failure", got.Data.Mode, got.Data.Note)
+	}
+	if rt.count() != 1 {
+		t.Fatalf("launches=%d, want the single failed interactive attempt", rt.count())
+	}
+}
+
+func TestAPIDispatchExplicitInteractiveLaunchFailureStillErrors(t *testing.T) {
+	s, rt, _ := newModeTestServer(t)
+	rt.err = errors.New("no server running")
+	w := httptest.NewRecorder()
+	s.handleAPIDispatch(w, httptest.NewRequest("POST", "/api/dispatch", strings.NewReader(`{"template":"coding","prompt":"work","cwd":"/tmp","mode":"interactive"}`)))
+	if w.Code != 500 || !strings.Contains(w.Body.String(), "no server running") {
 		t.Fatalf("status %d: %s", w.Code, w.Body.String())
 	}
 }
