@@ -60,3 +60,41 @@ func ListClients(ctx context.Context, tmuxPath, session string) ([]Client, error
 	}
 	return clients, nil
 }
+
+// SessionClient is a tmux client together with the session it is attached to.
+type SessionClient struct {
+	Client
+	// SessionID is the attached session's id (#{session_id}, "$3").
+	SessionID string
+	// SessionName is the attached session's name (#{session_name}).
+	SessionName string
+}
+
+// ListAllClients returns every client attached to any session, in one tmux
+// call. Lines that do not parse are skipped; a failing tmux is an error, so a
+// caller can tell "no clients" from "could not look".
+func ListAllClients(ctx context.Context, tmuxPath string) ([]SessionClient, error) {
+	out, err := execCommand(ctx, tmuxPath, Args("list-clients", "-F", "#{client_pid} #{client_created} #{session_id} #{session_name}")...).Output()
+	if err != nil {
+		return nil, fmt.Errorf("listing clients: %w", err)
+	}
+	var clients []SessionClient
+	for _, line := range strings.Split(string(out), "\n") {
+		// The session name comes last: it may hold spaces.
+		f := strings.SplitN(line, " ", 4)
+		if len(f) != 4 {
+			continue
+		}
+		pid, pidErr := strconv.Atoi(f[0])
+		created, createdErr := strconv.ParseInt(f[1], 10, 64)
+		if pidErr != nil || createdErr != nil {
+			continue
+		}
+		clients = append(clients, SessionClient{
+			Client:      Client{PID: pid, Created: time.Unix(created, 0)},
+			SessionID:   f[2],
+			SessionName: f[3],
+		})
+	}
+	return clients, nil
+}

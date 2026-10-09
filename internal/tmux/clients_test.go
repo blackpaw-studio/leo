@@ -101,3 +101,39 @@ func TestListClientsErrorsWhenTmuxFails(t *testing.T) {
 		t.Fatal("ListClients error = nil, want failure")
 	}
 }
+
+func TestListAllClientsSpansEverySessionInOneCall(t *testing.T) {
+	orig := execCommand
+	defer func() { execCommand = orig }()
+	var calls [][]string
+	execCommand = func(_ context.Context, _ string, args ...string) *exec.Cmd {
+		calls = append(calls, args)
+		return exec.Command("printf", "%s", "10 1760000000 $1 leo-fetch\n20 1760000005 $3 name with spaces\nbogus\n30 x $4 bad-created\n")
+	}
+	clients, err := ListAllClients(context.Background(), "tmux")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"-L", "leo", "list-clients", "-F", "#{client_pid} #{client_created} #{session_id} #{session_name}"}
+	if len(calls) != 1 || strings.Join(calls[0], "\x00") != strings.Join(want, "\x00") {
+		t.Fatalf("argv = %v, want exactly one %v", calls, want)
+	}
+	if len(clients) != 2 {
+		t.Fatalf("clients = %+v, want the two parseable lines", clients)
+	}
+	if clients[0].PID != 10 || clients[0].Created.Unix() != 1760000000 || clients[0].SessionID != "$1" || clients[0].SessionName != "leo-fetch" {
+		t.Fatalf("clients[0] = %+v", clients[0])
+	}
+	if clients[1].SessionID != "$3" || clients[1].SessionName != "name with spaces" {
+		t.Fatalf("clients[1] = %+v, want the session name kept whole", clients[1])
+	}
+}
+
+func TestListAllClientsReportsATmuxFailure(t *testing.T) {
+	orig := execCommand
+	defer func() { execCommand = orig }()
+	execCommand = func(context.Context, string, ...string) *exec.Cmd { return exec.Command("false") }
+	if _, err := ListAllClients(context.Background(), "tmux"); err == nil {
+		t.Fatal("a failing tmux must be an error, not an empty client list")
+	}
+}

@@ -300,3 +300,59 @@ func TestAttachPlacementsClientCreatedBoundary(t *testing.T) {
 		})
 	}
 }
+
+func TestEffectivePlacement(t *testing.T) {
+	registered := func(pid int, placement string) func(*testing.T, *AttachPlacements) {
+		return func(t *testing.T, reg *AttachPlacements) { mustRegister(t, reg, "$1", pid, placement) }
+	}
+	late := attachEpoch.Add(time.Second)
+	for name, tc := range map[string]struct {
+		register []func(*testing.T, *AttachPlacements)
+		clients  []tmux.Client
+		fallback string
+		want     string
+	}{
+		"no clients is not a placement":              {nil, nil, "pane", ""},
+		"unregistered client takes the fallback":     {nil, []tmux.Client{clientAt(1, late)}, "window", "window"},
+		"registered client takes its placement":      {[]func(*testing.T, *AttachPlacements){registered(1, "background")}, []tmux.Client{clientAt(1, late)}, "pane", "background"},
+		"most visible of a mixed set wins":           {[]func(*testing.T, *AttachPlacements){registered(1, "background")}, []tmux.Client{clientAt(1, late), clientAt(2, late)}, "pane", "pane"},
+		"every client background stays background":   {[]func(*testing.T, *AttachPlacements){registered(1, "background"), registered(2, "background")}, []tmux.Client{clientAt(1, late), clientAt(2, late)}, "pane", "background"},
+		"client predating its registration is stale": {[]func(*testing.T, *AttachPlacements){registered(1, "background")}, []tmux.Client{clientAt(1, attachEpoch.Add(-time.Hour))}, "window", "window"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			now := attachEpoch
+			reg := newTestAttachPlacements(&now)
+			for _, register := range tc.register {
+				register(t, reg)
+			}
+			if got := reg.Effective(tc.clients, attachEpoch, func() string { return tc.fallback }); got != tc.want {
+				t.Fatalf("Effective = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestEffectiveOnANilRegistryIsEmpty(t *testing.T) {
+	var reg *AttachPlacements
+	if got := reg.Effective([]tmux.Client{clientAt(1, attachEpoch)}, attachEpoch, func() string { return "pane" }); got != "" {
+		t.Fatalf("Effective = %q, want empty without a registry", got)
+	}
+}
+
+func TestEffectiveReadsTheFallbackOnlyForAnUnregisteredClient(t *testing.T) {
+	now := attachEpoch
+	reg := newTestAttachPlacements(&now)
+	mustRegister(t, reg, "$1", 1, "background")
+	reads := 0
+	fallback := func() string { reads++; return "pane" }
+	late := attachEpoch.Add(time.Second)
+
+	reg.Effective([]tmux.Client{clientAt(1, late)}, attachEpoch, fallback)
+	if reads != 0 {
+		t.Fatalf("fallback read %d times for a fully registered set", reads)
+	}
+	reg.Effective([]tmux.Client{clientAt(2, late), clientAt(3, late)}, attachEpoch, fallback)
+	if reads != 1 {
+		t.Fatalf("fallback read %d times, want once for two unregistered clients", reads)
+	}
+}

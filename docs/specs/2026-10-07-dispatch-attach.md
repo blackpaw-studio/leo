@@ -13,6 +13,7 @@ checks the `features` list on the SSE `hello` before relying on a field.
 | `dispatch_removed` | the `dispatch_removed` SSE event exists |
 | `state_seq` | `GET /api/v1/state` carries `meta.seq` |
 | `attach_dispatch_placement` | `leo agent attach --dispatch-placement` steers where dispatch viewers open (see 2026-10-08-attach-dispatch-placement.md) |
+| `dispatch_placement_live` | live interactive viewers follow their session's effective placement; `ViewerKind` can be `background` (see 2026-10-08-attach-dispatch-placement.md, "Live placement") |
 
 ## 1. Viewer placement `background`
 
@@ -23,8 +24,9 @@ default stays `pane`.
 With `background`, every dispatch viewer opens as a detached window in the
 `leo-dispatch` session and never touches the caller's tmux session: interactive
 dispatches (nested ones too) and headless viewer windows alike. The recorded
-`ViewerKind` is `window`, so the pane reconciler never moves it, and the window
-is attachable (section 2).
+`ViewerKind` is `window` (since `dispatch_placement_live`, an interactive
+viewer in `leo-dispatch` is recorded as `background`), and the window is
+attachable (section 2).
 
 ## 2. `attachable` and `tmux_target`
 
@@ -37,7 +39,8 @@ payload, gains:
 | `tmux_target` | string, omitted when empty | the interactive dispatch's tmux pane id (`%N`) on Leo's tmux server (`tmux -L leo`) |
 
 `attachable` is true only for an interactive dispatch that has a pane, whose
-`ViewerKind` is `window` (the TUI is alone in its own window), and whose status
+`ViewerKind` is `window` or `background` (the TUI is alone in its own window),
+and whose status
 is not terminal (`done`, `failed`, `timeout`, `canceled`, `closed`, `released`)
 or `settling`. A `split` pane (shares the caller's window) and a `hidden` pane
 (parked) are never attachable. `tmux_target` is reported whenever the pane

@@ -24,6 +24,9 @@ func (d *Dispatcher) ApplyConfig(cfg *config.Config) {
 		return
 	}
 	d.slots.SetMax(cfg.DispatchMaxConcurrent())
+	d.mu.Lock()
+	d.placementCfg = cfg
+	d.mu.Unlock()
 }
 
 func queuedOvertakenText(id string) string {

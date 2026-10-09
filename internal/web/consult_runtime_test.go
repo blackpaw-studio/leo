@@ -77,3 +77,37 @@ func TestShutdownStopsConsultRuntimeLoop(t *testing.T) {
 		t.Fatalf("roster updated %d times after Shutdown", got-after)
 	}
 }
+
+func TestConsultRuntimeLoopPollsLivePlacementOnEachTickUntilShutdown(t *testing.T) {
+	ticks := make(chan time.Time)
+	polled := make(chan struct{})
+	s := &Server{
+		configPath:         "test.yaml",
+		leoPath:            "leo",
+		execCommand:        func(string, ...string) *exec.Cmd { return exec.Command("true") },
+		execCommandContext: func(ctx context.Context, _ string, _ ...string) *exec.Cmd { return exec.CommandContext(ctx, "true") },
+		updateRoster:       func([]consult.Record, time.Time) {},
+		placementTicks:     ticks,
+		pollPlacement: func(ctx context.Context) {
+			select {
+			case polled <- struct{}{}:
+			case <-ctx.Done():
+			}
+		},
+	}
+	s.setupConsultRuntime(Options{ParentContext: context.Background()}, func(string) (string, bool) { return "", false })
+
+	for range 3 {
+		ticks <- time.Time{}
+		<-polled
+	}
+	if err := s.Shutdown(); err != nil {
+		t.Fatalf("Shutdown: %v", err)
+	}
+	// Shutdown waits for the loop to exit, so nobody is left to take a tick.
+	select {
+	case ticks <- time.Time{}:
+		t.Fatal("placement loop still running after Shutdown")
+	default:
+	}
+}

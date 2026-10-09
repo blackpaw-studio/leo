@@ -35,3 +35,53 @@ leoterm currently runs `ssh -tt -e none host tmux -CC -L leo attach`. To opt in,
 - Resolver: zero clients → today's result. Mixed flags → most visible wins. Unflagged client → default. Stale pid or `client_created` before `registered_at` → ignored.
 - Attach argv: remote cc with the flag routes through remote leo, and the flag is forwarded. Popup path with the flag → error.
 - Nested: the root session's clients drive placement.
+
+## Live placement (follow-up, v0.42)
+
+Status: implemented. Resolution used to happen once, at dispatch start. Now a
+flip of a session's effective placement re-places its live interactive viewers.
+
+1. **Detect.** `Dispatcher.PollPlacement` runs once a second, only while some
+   interactive viewer is live. It issues one `list-clients -F '#{client_pid}
+   #{client_created} #{session_id} #{session_name}'` across all sessions
+   (`tmux.ListAllClients`) and, per root caller session, computes
+   `AttachPlacements.Effective(clients, listedAt, fallback)`: the most visible
+   placement, `""` for no clients. Polling, not tmux hooks: hooks are global to
+   the leo tmux server, which production and test daemons share.
+2. **Flip.** Only `background` <-> visible counts. The new state must hold for 2
+   polls (debounce). `""` is never a flip, and `pane` <-> `window` moves nothing.
+   Each run carries the placement it was last steered to; a flip steers every run
+   in the root's tree (queued and launching ones included) and bumps the root's
+   generation.
+3. **Launch race.** A launch reads the generation before resolving its
+   placement; if a flip committed while it resolved, the flip's placement wins
+   over the (possibly older) resolved one. A flip landing after the decision is
+   corrected by the reconcile the pane's publish triggers.
+4. **Move.** Through the per-run pane-op worker, so it orders with publish, kill,
+   hide and show. Going background: `break-pane` (split) or `move-window` (pane
+   alone in its window; never the last window of a session) into `leo-dispatch`.
+   Coming back: `join-pane` below the live caller pane when it is in the root
+   caller's session and `Coordinator.Decide` allows a split, else `move-window`
+   into the root caller's session (record `hidden` when idle, else `window`).
+   Pane ids survive. Parents move before children.
+5. **Reconciler.** While the session is background the desired placement is
+   `background`: orchestrator turns do not rejoin a pane and idle panes are not
+   hidden. A user-typed `needs_input` turn still moves nothing.
+6. **Pinning.** Before a move the pane's live session is read
+   (`list-panes -a`, ignoring `_watch-*` attach links). A pane in neither the
+   caller's session nor `leo-dispatch`, or linked into several real sessions,
+   is pinned and never touched again. The read decides; it does not protect the
+   move, so every hide, show, background and foreground runs as one tmux
+   `if-shell -F` whose format guard re-checks, on the server, that the pane is
+   still in the probed session and window and that the window is linked into as
+   many sessions (`#{window_linked_sessions}`, tmux 3.1+) as when probed, so a
+   link made later, by an attach or into another real session, refuses the move.
+   `move-window` also needs the pane alone in its window; `join-pane` needs the
+   window linked nowhere else, since emptying a window an attach linked would
+   end the attach. A false guard moves nothing and reports `ErrPaneMoved`; the
+   reconciler probes again, which pins the pane or moves it from where it is now.
+7. **Record.** `ViewerKind` gains `background` (a window of its own in
+   `leo-dispatch`); `leo dispatch attach` treats it like `window`.
+8. **Feature flag.** `dispatch_placement_live` in the SSE `hello`.
+9. **Phase 2.** Headless watch-viewer windows are keyed by window id, not pane
+   id, and are not moved yet.

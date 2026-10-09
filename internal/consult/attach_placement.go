@@ -125,17 +125,32 @@ func (a *AttachPlacements) ResolveWithFallback(ctx context.Context, session stri
 	if err != nil || len(clients) == 0 {
 		return base
 	}
-	defaultPlacement := cfg.DispatchViewerPlacement()
-	if o := fallback(); config.IsDispatchViewerPlacement(o.Placement) {
-		defaultPlacement = o.Placement
-	}
+	base.Placement = a.Effective(clients, listedAt, func() string {
+		if o := fallback(); config.IsDispatchViewerPlacement(o.Placement) {
+			return o.Placement
+		}
+		return cfg.DispatchViewerPlacement()
+	})
+	return base
+}
 
+// Effective is the placement a session's clients ask for between them: the
+// most visible one (pane > window > background). A client with a live
+// registration contributes it; any other contributes fallback(), which is read
+// at most once and only when such a client exists. It is "" when there are no
+// clients, which is no placement at all rather than a background one.
+// listedAt is when the client listing began (see ResolveWithFallback).
+func (a *AttachPlacements) Effective(clients []tmux.Client, listedAt time.Time, fallback func() string) string {
+	if a == nil || len(clients) == 0 {
+		return ""
+	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
+	defaultPlacement, haveDefault := "", false
 	best := ""
 	for _, c := range clients {
-		placement := defaultPlacement
-		if e, ok := a.entries[c.PID]; ok && clientPredates(c.Created, e.registeredAt) {
+		e, registered := a.entries[c.PID]
+		if registered && clientPredates(c.Created, e.registeredAt) {
 			// The listed process predates the registration. If the
 			// registration came first, a different process now owns the pid;
 			// if it came after the listing began, this is the previous owner
@@ -143,15 +158,20 @@ func (a *AttachPlacements) ResolveWithFallback(ctx context.Context, session stri
 			if !e.registeredAt.After(listedAt) {
 				delete(a.entries, c.PID)
 			}
-		} else if ok {
-			placement = e.placement
+			registered = false
+		}
+		placement := e.placement
+		if !registered {
+			if !haveDefault {
+				defaultPlacement, haveDefault = fallback(), true
+			}
+			placement = defaultPlacement
 		}
 		if visibility(placement) > visibility(best) {
 			best = placement
 		}
 	}
-	base.Placement = best
-	return base
+	return best
 }
 
 // clientPredates reports whether a client created at created cannot be the
@@ -217,10 +237,29 @@ func (d *Dispatcher) ApplyAttachPlacement(ctx context.Context, rec Record, base 
 // dispatch tree. A nested dispatch is requested from a subagent whose own
 // session says nothing about who is watching; the root agent's does.
 func (d *Dispatcher) rootCallerSession(rec Record) string {
+	return rootCallerSessionOf(rec, func(id string) (Record, bool) {
+		parent, _, err := d.lookup(id)
+		return parent, err == nil
+	})
+}
+
+// rootCallerSessionLocked is rootCallerSession over the runs in memory, for
+// callers holding d.mu.
+func (d *Dispatcher) rootCallerSessionLocked(rec Record) string {
+	return rootCallerSessionOf(rec, func(id string) (Record, bool) {
+		parent := d.runs[id]
+		if parent == nil {
+			return Record{}, false
+		}
+		return parent.record, true
+	})
+}
+
+func rootCallerSessionOf(rec Record, parentOf func(id string) (Record, bool)) string {
 	seen := map[string]bool{rec.ID: true}
 	for i := 0; i < maxDispatchAncestry && rec.ParentDispatchID != "" && !seen[rec.ParentDispatchID]; i++ {
-		parent, _, err := d.lookup(rec.ParentDispatchID)
-		if err != nil {
+		parent, ok := parentOf(rec.ParentDispatchID)
+		if !ok {
 			break
 		}
 		seen[parent.ID] = true
