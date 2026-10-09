@@ -11,6 +11,12 @@ import (
 	"github.com/blackpaw-studio/leo/internal/config"
 )
 
+// firstLaunch maps a newSlotDispatcher to the channel closed by its first
+// launch. A run launches from its own goroutine, so Start returning does not
+// mean the parent has launched; a test that starts a child must wait for it,
+// or the child can take the parent's "stay running" launch and hang.
+var firstLaunch sync.Map
+
 // newSlotDispatcher is a dispatcher with one slot whose first launch (the
 // parent) stays running and every later launch (a child) answers at once.
 func newSlotDispatcher(t *testing.T) *Dispatcher {
@@ -18,12 +24,16 @@ func newSlotDispatcher(t *testing.T) *Dispatcher {
 	t.Setenv("HOME", t.TempDir())
 	var mu sync.Mutex
 	launches := 0
+	launched := make(chan struct{})
 	d := NewDispatcher(nil)
+	firstLaunch.Store(d, launched)
+	t.Cleanup(func() { firstLaunch.Delete(d) })
 	d.ExecCommandContext = func(ctx context.Context, _ string, _ ...string) *exec.Cmd {
 		mu.Lock()
 		defer mu.Unlock()
 		launches++
 		if launches == 1 {
+			close(launched)
 			return exec.CommandContext(ctx, "sleep", "30")
 		}
 		return exec.CommandContext(ctx, "sh", "-c", `echo '{"type":"result","result":"child done","is_error":false}'`)
@@ -55,9 +65,24 @@ func startNestedOneSlot(t *testing.T, d *Dispatcher, req Request) Record {
 	return rec
 }
 
+// startHeadlessParent starts the top-level headless dispatch of a
+// newSlotDispatcher and returns once its process has launched, so the next
+// launch is certainly a child's.
+func startHeadlessParent(t *testing.T, d *Dispatcher, req Request) Record {
+	t.Helper()
+	parent := startNestedOneSlot(t, d, req)
+	launched, _ := firstLaunch.Load(d)
+	select {
+	case <-launched.(chan struct{}):
+	case <-time.After(10 * time.Second):
+		t.Fatal("the parent never launched")
+	}
+	return parent
+}
+
 func TestChildOfALiveDispatchRunsAtConcurrencyOne(t *testing.T) {
 	d := newSlotDispatcher(t)
-	parent := startNestedOneSlot(t, d, Request{Caller: "alpha"})
+	parent := startHeadlessParent(t, d, Request{Caller: "alpha"})
 	child := startNestedOneSlot(t, d, Request{ParentDispatchID: parent.ID})
 
 	entries := d.Wait(context.Background(), []string{child.ID}, 5*time.Second)
@@ -73,7 +98,7 @@ func TestInteractiveChildOfALiveDispatchStartsAtConcurrencyOne(t *testing.T) {
 	d := newSlotDispatcher(t)
 	rt := &fakeInteractiveRuntime{arm: true, empty: true}
 	d.SetInteractiveRuntime(rt)
-	parent := startNestedOneSlot(t, d, Request{Caller: "alpha"})
+	parent := startHeadlessParent(t, d, Request{Caller: "alpha"})
 	started, err := d.Start(context.Background(), oneSlotConfig(), Request{Template: "codex", Prompt: "q", Cwd: t.TempDir(), Mode: ModeInteractive, ParentDispatchID: parent.ID})
 	if err != nil {
 		t.Fatalf("Start: %v", err)
@@ -109,7 +134,7 @@ func TestInteractiveParentAndItsHeadlessChildShareNothingAtConcurrencyOne(t *tes
 func TestParentWaitingOnAChildThatNeedsInputCanApproveIt(t *testing.T) {
 	d := newSlotDispatcher(t)
 	d.SetInteractiveRuntime(&fakeInteractiveRuntime{arm: true, empty: true})
-	parent := startNestedOneSlot(t, d, Request{Caller: "alpha"})
+	parent := startHeadlessParent(t, d, Request{Caller: "alpha"})
 	started, err := d.Start(context.Background(), oneSlotConfig(), Request{Template: "codex", Prompt: "q", Cwd: t.TempDir(), Mode: ModeInteractive, ParentDispatchID: parent.ID})
 	if err != nil {
 		t.Fatalf("Start: %v", err)
@@ -132,7 +157,7 @@ func TestParentWaitingOnAChildThatNeedsInputCanApproveIt(t *testing.T) {
 
 func TestConsultFromADispatchRunsAtConcurrencyOne(t *testing.T) {
 	d := newSlotDispatcher(t)
-	parent := startNestedOneSlot(t, d, Request{Caller: "alpha"})
+	parent := startHeadlessParent(t, d, Request{Caller: "alpha"})
 	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
 	defer cancel()
 	res, err := d.Consult(ctx, oneSlotConfig(), Request{Template: "claude", Prompt: "q", Cwd: t.TempDir(), ParentDispatchID: parent.ID})
