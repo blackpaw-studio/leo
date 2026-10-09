@@ -416,9 +416,15 @@ func TestTmuxPaneMoveRoundTripsThroughRealTmux(t *testing.T) {
 // TestTmuxMovesKeepAdversarialDispatchNamesLiteral hides and backgrounds split
 // panes under names that are tmux syntax, format syntax or shell syntax. The
 // name rides inside the command line of an if-shell, so it must neither split
-// into a second command nor be expanded: it comes out as the window's name
-// exactly as given, and the move still happens. (Only these two moves carry a
-// name; ShowPane and ForegroundPane move a window or pane that already has one.)
+// into a second command nor be expanded: the window ends up with exactly the
+// name tmux keeps for the same string handed to break-pane as plain argv, and
+// the move still happens. (Only these two moves carry a name; ShowPane and
+// ForegroundPane move a window or pane that already has one.)
+//
+// The reference is asked of tmux rather than assumed, because what tmux stores
+// is its own business and differs by version: before 3.5 it escapes '$' in a
+// window name ("$HOME" is kept as "\$HOME"), and it always escapes a backslash.
+// The command line must be transparent to all of that, not add to it.
 func TestTmuxMovesKeepAdversarialDispatchNamesLiteral(t *testing.T) {
 	r, tm := realTmux(t)
 	ctx := context.Background()
@@ -433,6 +439,15 @@ func TestTmuxMovesKeepAdversarialDispatchNamesLiteral(t *testing.T) {
 		return loc
 	}
 	splitPane := func() string { return tm("split-window", "-d", "-P", "-F", "#{pane_id}", "-t", caller, "sleep 300") }
+	windowName := func(pane string) string { return tm("display-message", "-p", "-t", pane, "#{window_name}") }
+	// stored is the name tmux keeps when break-pane gets name as plain argv.
+	stored := func(name string) string {
+		scratch := splitPane()
+		window := tm("break-pane", "-d", "-P", "-F", "#{window_id}", "-s", scratch, "-t", "=orch:", "-n", name)
+		got := tm("display-message", "-p", "-t", window, "#{window_name}")
+		tm("kill-pane", "-t", scratch)
+		return got
+	}
 
 	names := []string{
 		`it's`, `say "hi"`, `a ; kill-server ; b`, `#{session_name}`, `}{x}}`, `$HOME`, `a\b\;c`,
@@ -441,16 +456,12 @@ func TestTmuxMovesKeepAdversarialDispatchNamesLiteral(t *testing.T) {
 		viewerWindowName(Record{ID: "d-1234abcd", Name: `it's a "name"; #{x} $HOME`}),
 	}
 	for _, name := range names {
-		want := name
-		if strings.Contains(name, `\`) {
-			// tmux escapes backslashes in window names whatever sets them, so ask
-			// it what it keeps for this name when no command line is involved.
-			scratch := splitPane()
-			window := tm("break-pane", "-d", "-P", "-F", "#{window_id}", "-s", scratch, "-t", "=orch:", "-n", name)
-			want = tm("display-message", "-p", "-t", window, "#{window_name}")
-			tm("kill-pane", "-t", scratch)
+		want := stored(name)
+		if !strings.ContainsAny(name, `$\`) && want != name {
+			// Where tmux keeps a name as given, the moves must too; this also
+			// keeps the reference honest (a format in the name is not expanded).
+			t.Fatalf("tmux stored %q as %q with no command line involved", name, want)
 		}
-		windowName := func(pane string) string { return tm("display-message", "-p", "-t", pane, "#{window_name}") }
 
 		hidden := splitPane()
 		if _, err := r.HidePane(ctx, hidden, name, probe(hidden)); err != nil {
