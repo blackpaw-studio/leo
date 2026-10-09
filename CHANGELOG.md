@@ -69,6 +69,20 @@ All notable user-visible changes to Leo are documented here.
 
 ### Added
 
+- **`release_on_finish` for interactive dispatches.** Read-only dispatches no
+  longer sit idle in their pane for an hour after answering. With
+  `release_on_finish` (`leo_dispatch`, `POST /api/dispatch`, `leo dispatch run
+  --release-on-finish[=false]`) the run is released, as by `leo_release`, once
+  its first turn finishes and the result has reached the caller: the inline
+  completion notification was delivered, or `leo_wait` returned it and its
+  response was written. A result truncated at the inline (8 KiB) or `leo_wait`
+  (32 KiB) cap does not release, and `leo_dispatch_output` never does. Never on
+  interrupted, lost, rejected or `needs_input` turns, or while a follow-up is queued. It defaults on for the `explore`,
+  `plan`, `review` and `review.*` roles and off for `implement`, `implement.hard` and
+  role-less template dispatches; an explicit value always wins. A later
+  `leo_send_dispatch` to a released run fails with a clear error. The record
+  shows `release_on_finish` and, for a run that closed this way,
+  `released_on_finish`. See `docs/configuration/dispatches.md`.
 - **Delegation profiles.** Configure stable work roles with `use_for` guidance
   and route them through an active profile to templates, models, and
   harness-specific effort. `leo_dispatch`, `/api/dispatch`, and `leo dispatch

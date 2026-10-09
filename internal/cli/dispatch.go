@@ -76,7 +76,7 @@ func dispatchHTTP(ctx context.Context, cfg *config.Config, method, path string, 
 func newDispatchRunCmd() *cobra.Command {
 	var model, effort, role, cwd, name, host, mode string
 	var isolation string
-	var notify bool
+	var notify, releaseOnFinish bool
 	var timeout time.Duration
 	cmd := &cobra.Command{Use: "run <template> <prompt> | run --role <role> <prompt>", Args: func(_ *cobra.Command, args []string) error {
 		if role != "" && len(args) == 1 {
@@ -130,6 +130,9 @@ func newDispatchRunCmd() *cobra.Command {
 			body["from"] = caller
 		}
 		body["notify"] = notify
+		if cmd.Flags().Changed("release-on-finish") {
+			body["release_on_finish"] = releaseOnFinish
+		}
 		if isolation != "" {
 			body["isolation"] = isolation
 		}
@@ -175,6 +178,7 @@ func newDispatchRunCmd() *cobra.Command {
 	cmd.Flags().StringVar(&mode, "mode", "", "execution mode: interactive (default) or headless")
 	cmd.Flags().DurationVar(&timeout, "timeout", 0, "optional run cap (unlimited when omitted)")
 	cmd.Flags().BoolVar(&notify, "notify", true, "notify the caller when the dispatch completes")
+	cmd.Flags().BoolVar(&releaseOnFinish, "release-on-finish", false, "interactive only: release the pane once the first turn finishes and its result was read (default on for the explore, plan and review roles, off otherwise; --release-on-finish=false opts out)")
 	cmd.Flags().StringVar(&isolation, "isolation", "", "execution isolation (worktree)")
 	addHostFlag(cmd, &host)
 	return cmd

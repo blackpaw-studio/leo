@@ -45,6 +45,10 @@ type Request struct {
 	// claude's launch, which the key alone does not name: a recreated
 	// agent takes its predecessor's key again. Optional.
 	CallerBridgeLaunch string
+	// ReleaseOnFinish releases an interactive run once its first turn
+	// finishes and its result reached the caller. Nil resolves from the role
+	// (see ResolveReleaseOnFinish).
+	ReleaseOnFinish *bool
 }
 
 type Result struct {

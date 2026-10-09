@@ -3,6 +3,7 @@ package consult
 import (
 	"context"
 	"fmt"
+	"os"
 	"strings"
 	"time"
 )
@@ -56,6 +57,13 @@ func inlineNotification(rec Record, key, header string) string {
 		fmt.Fprintf(&b, "\n… truncated; full output: leo_dispatch_output %s", strings.SplitN(rec.ID, "#", 2)[0])
 	}
 	return b.String()
+}
+
+// inlineTruncated reports whether the inline notification for turn key of rec
+// is cut at maxInlineResultBytes.
+func inlineTruncated(rec Record, key string) bool {
+	_, truncated := capUTF8(inlineBody(waitEntryFor(rec, key)), maxInlineResultBytes)
+	return truncated
 }
 
 func waitEntryFor(rec Record, key string) Entry {
@@ -125,6 +133,18 @@ func (d *Dispatcher) collectDelivered(ctx context.Context, item pendingNotificat
 	d.mu.Lock()
 	rec, done := cloneRecord(item.state.record), item.state.done
 	d.mu.Unlock()
+	if rec.Mode == ModeInteractive {
+		// A run that opted into release_on_finish is released now that its
+		// result was delivered; released is terminal, so it is collected below.
+		// A notification cut at the inline cap did not carry the whole
+		// result, so that run keeps its pane until the idle close.
+		if !inlineTruncated(rec, item.key) {
+			if err := d.releaseDeliveredLocked(rec.ID); err != nil {
+				fmt.Fprintf(os.Stderr, "dispatch %s: %v\n", rec.ID, err)
+			}
+			rec = d.stateRecord(item.state)
+		}
+	}
 	if !waitEntryFor(rec, item.key).Status.Terminal() || isSupersededHeadlessTurn(rec, item.key) {
 		return
 	}

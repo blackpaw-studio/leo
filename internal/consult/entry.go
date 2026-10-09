@@ -27,6 +27,9 @@ type Entry struct {
 	NeedsInput      *NeedsInput   `json:"needs_input,omitempty"`
 	// Pending summarizes the background work a waiting run is paused on.
 	Pending string `json:"pending,omitempty"`
+	// truncated marks a Text or Err cut to the wait size cap (limitWaitEntry),
+	// so the entry does not carry the complete result.
+	truncated bool
 }
 
 // MarshalJSON exposes elapsed and active time in seconds for API clients.
