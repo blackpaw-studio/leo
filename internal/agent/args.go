@@ -1,7 +1,6 @@
 package agent
 
 import (
-	"encoding/json"
 	"fmt"
 	"log"
 	"path/filepath"
@@ -162,7 +161,7 @@ func BuildTemplateArgs(cfg *config.Config, tmpl config.TemplateConfig, agentName
 // permissionsEnvVar carries the template's permission set to the leo MCP
 // server running inside the agent. Unset for unrestricted templates, so their
 // environment is byte-for-byte what it was before permissions existed.
-const permissionsEnvVar = "LEO_PERMISSIONS"
+const permissionsEnvVar = leomcp.EnvPermissions
 
 // permissionsEnv renders tmpl's permissions as the single-entry env overlay
 // the leo MCP server reads at startup, or nil when the template places no
@@ -174,19 +173,7 @@ const permissionsEnvVar = "LEO_PERMISSIONS"
 // re-resolves permissions from current config, which is how a config edit
 // takes effect.
 func permissionsEnv(tmpl config.TemplateConfig) map[string]string {
-	if tmpl.Permissions.IsZero() {
-		return nil
-	}
-	payload, err := json.Marshal(tmpl.Permissions)
-	if err != nil {
-		// Unreachable for a struct of string slices, but failing open would
-		// silently hand the agent the full tool surface. Drop the overlay and
-		// say so; the MCP server then runs unrestricted, which the log makes
-		// visible rather than silent.
-		log.Printf("[agent] marshaling permissions: %v", err)
-		return nil
-	}
-	return map[string]string{permissionsEnvVar: string(payload)}
+	return leomcp.PermissionsEnv(tmpl)
 }
 
 // applyPermissions returns a copy of env whose LEO_PERMISSIONS matches tmpl
@@ -221,19 +208,7 @@ func applyPermissions(env map[string]string, tmpl config.TemplateConfig) map[str
 }
 
 // leoMCPEnvVars returns the env-var *names* the codex bridge forwards into
-// the leo MCP server. codex forwards by name rather than value, so a variable
-// missing from this list never reaches the server no matter what the process
-// environment holds.
-//
-// LEO_DISPATCH_ID is always named: a codex run started inside a leo_dispatch
-// subagent inherits its caller's LEO_PROCESS_NAME, and the dispatch id is
-// what lets the server refuse caller-only tools (leo_surface_file) there.
-// Codex skips a named variable that is unset, so supervised agents are
-// unaffected.
+// the leo MCP server; see leomcp.BridgeEnvNames.
 func leoMCPEnvVars(tmpl config.TemplateConfig) []string {
-	names := []string{"LEO_PROCESS_NAME", "LEO_WEB_PORT", "LEO_API_TOKEN", "LEO_DISPATCH_ID"}
-	if !tmpl.Permissions.IsZero() {
-		names = append(names, permissionsEnvVar)
-	}
-	return names
+	return leomcp.BridgeEnvNames(!tmpl.Permissions.IsZero())
 }
