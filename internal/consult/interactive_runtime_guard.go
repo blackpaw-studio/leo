@@ -39,7 +39,8 @@ var tmuxBareWord = regexp.MustCompile(`^[A-Za-z0-9_@%:.=/+-]+$`)
 // target: tmux resolves a %N in a target on its own, wherever the pane is, so
 // "S:W.%N" would still hold after the pane left W. The window is targeted by id
 // and session because a window linked into a watch session answers to a bare %N
-// with the watch session. extra adds clauses to the guard.
+// with the watch session. extra adds clauses to the guard. window_linked_sessions
+// is in tmux 3.1 and later; leo requires 3.2.
 //
 // It returns ErrPaneMoved when the guard is false; a move that fails is a plain
 // error.
@@ -65,6 +66,9 @@ func checkGuardIDs(pane string, from PaneLocation) error {
 			return fmt.Errorf("move pane %s: %q is not a tmux id (the pane was not probed)", pane, id)
 		}
 	}
+	if from.LinkedSessions < 1 {
+		return fmt.Errorf("move pane %s: its linked-session count was not probed", pane)
+	}
 	return nil
 }
 
@@ -75,12 +79,18 @@ func paneRef(pane string, from PaneLocation) string {
 }
 
 // guardCondition is the format that is true while pane is still one of the
-// panes of the probed window in the probed session, plus the extra clauses. The
-// pane list is delimited on both sides so %2 does not match %20.
+// panes of the probed window in the probed session, and that window is linked
+// into as many sessions as when probed, plus the extra clauses. The count is
+// what catches a window that gained a link after the probe: every other clause
+// still holds then, yet a move would take a pane another session shows. (An
+// attach's watch link is part of the count at probe time, so it is allowed; one
+// that arrives later is not.) The pane list is delimited on both sides so %2
+// does not match %20.
 func guardCondition(pane string, from PaneLocation, extra ...string) string {
 	clauses := append([]string{
 		"#{==:#{session_id}," + from.SessionID + "}",
 		"#{==:#{window_id}," + from.WindowID + "}",
+		fmt.Sprintf("#{==:#{window_linked_sessions},%d}", from.LinkedSessions),
 		"#{m:*|" + pane + "|*,#{P:|#{pane_id}|}}",
 	}, extra...)
 	cond := clauses[len(clauses)-1]

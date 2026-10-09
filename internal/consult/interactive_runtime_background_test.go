@@ -53,7 +53,7 @@ func TestPaneLocationReadsTheLiveWindow(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := PaneLocation{SessionID: "$1", SessionName: "orch", WindowID: "@7", WindowPanes: 1, SessionWindows: 2}
+	want := PaneLocation{SessionID: "$1", SessionName: "orch", WindowID: "@7", WindowPanes: 1, SessionWindows: 2, LinkedSessions: 1}
 	if loc != want {
 		t.Fatalf("location = %+v, want %+v", loc, want)
 	}
@@ -69,8 +69,8 @@ func TestPaneLocationIgnoresWatchSessionLinks(t *testing.T) {
 	if err != nil || loc.SessionName != "orch" {
 		t.Fatalf("location = %+v, %v; want the real session, not the attach link", loc, err)
 	}
-	if !loc.WatchLinked {
-		t.Fatal("WatchLinked = false, want the attach link reported")
+	if !loc.WatchLinked || loc.LinkedSessions != 2 {
+		t.Fatalf("WatchLinked = %v, LinkedSessions = %d; want the attach link reported and counted", loc.WatchLinked, loc.LinkedSessions)
 	}
 }
 
@@ -100,9 +100,9 @@ func TestPaneLocationErrors(t *testing.T) {
 var hasBackground = tmux.Args("has-session", "-t", "=leo-dispatch")
 
 var (
-	loneInCaller   = PaneLocation{SessionID: "$1", SessionName: "orch", WindowID: "@7", WindowPanes: 1, SessionWindows: 3}
-	splitInCaller  = PaneLocation{SessionID: "$1", SessionName: "orch", WindowID: "@2", WindowPanes: 2, SessionWindows: 3}
-	loneInBackdrop = PaneLocation{SessionID: "$9", SessionName: "leo-dispatch", WindowID: "@7", WindowPanes: 1, SessionWindows: 2}
+	loneInCaller   = PaneLocation{SessionID: "$1", SessionName: "orch", WindowID: "@7", WindowPanes: 1, SessionWindows: 3, LinkedSessions: 1}
+	splitInCaller  = PaneLocation{SessionID: "$1", SessionName: "orch", WindowID: "@2", WindowPanes: 2, SessionWindows: 3, LinkedSessions: 1}
+	loneInBackdrop = PaneLocation{SessionID: "$9", SessionName: "leo-dispatch", WindowID: "@7", WindowPanes: 1, SessionWindows: 2, LinkedSessions: 1}
 )
 
 func ifShell(target, cond, move string) []string {
@@ -120,7 +120,7 @@ func TestBackgroundPaneMovesALoneWindowWithItsWindowId(t *testing.T) {
 	// the pane alone and the session to the windows it had.
 	want := [][]string{
 		hasBackground,
-		ifShell("$1:@7", guardOf("$1", "@7", "%5", "#{==:#{window_panes},1}", "#{==:#{session_windows},3}"),
+		ifShell("$1:@7", guardOf("$1", "@7", 1, "%5", "#{==:#{window_panes},1}", "#{==:#{session_windows},3}"),
 			"move-window -d -s '$1:@7' -t =leo-dispatch:"),
 	}
 	if !reflect.DeepEqual(*calls, want) {
@@ -137,7 +137,7 @@ func TestBackgroundPaneBreaksASplitOutAndReadsItsWindowFromBreakPane(t *testing.
 	}
 	want := [][]string{
 		hasBackground,
-		ifShell("$1:@2", guardOf("$1", "@2", "%5", "#{==:#{window_panes},2}"),
+		ifShell("$1:@2", guardOf("$1", "@2", 1, "%5", "#{==:#{window_panes},2}"),
 			"break-pane -d -P -F '#{window_id}' -s '$1:@2.%5' -t =leo-dispatch: -n 'impl·ab12'"),
 	}
 	if !reflect.DeepEqual(*calls, want) {
@@ -187,7 +187,7 @@ func TestForegroundPaneMovesALoneWindowBackToTheCallerSession(t *testing.T) {
 	if err != nil || window != "@7" {
 		t.Fatalf("ForegroundPane = %q, %v", window, err)
 	}
-	want := [][]string{ifShell("$9:@7", guardOf("$9", "@7", "%5", "#{==:#{window_panes},1}", "#{==:#{session_windows},2}"),
+	want := [][]string{ifShell("$9:@7", guardOf("$9", "@7", 1, "%5", "#{==:#{window_panes},1}", "#{==:#{session_windows},2}"),
 		"move-window -d -s '$9:@7' -t '$1:'")}
 	if !reflect.DeepEqual(*calls, want) {
 		t.Fatalf("argv = %#v\nwant %#v", *calls, want)
@@ -428,6 +428,9 @@ func TestTmuxGuardedMovesLeaveAPaneThatChangedPlaceSinceTheProbe(t *testing.T) {
 		// wantSession and wantPanes are where the pane must still be.
 		wantSession string
 		wantPanes   string
+		// wantShared: another real session now holds the window, so the pane
+		// has no single place to be probed at.
+		wantShared bool
 	}{
 		"hide: the user moved the split to another session": {
 			stale: func(t *testing.T, w *world) (string, func() error) {
@@ -512,6 +515,43 @@ func TestTmuxGuardedMovesLeaveAPaneThatChangedPlaceSinceTheProbe(t *testing.T) {
 			},
 			wantSession: "elsewhere", wantPanes: "1",
 		},
+		"hide: another session linked the split's window after the probe": {
+			stale: func(t *testing.T, w *world) (string, func() error) {
+				pane := w.tm("split-window", "-d", "-P", "-F", "#{pane_id}", "-t", w.caller, "sleep 300")
+				from, err := w.r.PaneLocation(context.Background(), pane)
+				if err != nil {
+					t.Fatal(err)
+				}
+				w.tm("link-window", "-d", "-s", from.WindowID, "-t", "=elsewhere:")
+				return pane, func() error { _, err := w.r.HidePane(context.Background(), pane, "x", from); return err }
+			},
+			wantShared: true,
+		},
+		"background: another session linked the window after the probe": {
+			stale: func(t *testing.T, w *world) (string, func() error) {
+				pane, window := lone(w)
+				from, err := w.r.PaneLocation(context.Background(), pane)
+				if err != nil {
+					t.Fatal(err)
+				}
+				w.tm("link-window", "-d", "-s", window, "-t", "=elsewhere:")
+				return pane, func() error { _, err := w.r.BackgroundPane(context.Background(), pane, "x", from); return err }
+			},
+			wantShared: true,
+		},
+		"background: an attach linked the window after the probe": {
+			stale: func(t *testing.T, w *world) (string, func() error) {
+				pane, window := lone(w)
+				from, err := w.r.PaneLocation(context.Background(), pane)
+				if err != nil {
+					t.Fatal(err)
+				}
+				w.tm("new-session", "-d", "-s", watch, "sleep 300")
+				w.tm("link-window", "-d", "-s", window, "-t", "="+watch+":")
+				return pane, func() error { _, err := w.r.BackgroundPane(context.Background(), pane, "x", from); return err }
+			},
+			wantSession: "orch", wantPanes: "1",
+		},
 	} {
 		t.Run(name, func(t *testing.T) {
 			w := newWorld(t)
@@ -529,9 +569,52 @@ func TestTmuxGuardedMovesLeaveAPaneThatChangedPlaceSinceTheProbe(t *testing.T) {
 				t.Fatalf("a refused move still changed tmux:\nbefore %s\nafter  %s", before, after)
 			}
 			loc, err := w.r.PaneLocation(context.Background(), pane)
+			if tc.wantShared {
+				if !errors.Is(err, ErrPaneAmbiguous) {
+					t.Fatalf("pane at %+v, %v; want it reported as shared between sessions (the dispatcher pins that)", loc, err)
+				}
+				return
+			}
 			if err != nil || loc.SessionName != tc.wantSession || itoa(loc.WindowPanes) != tc.wantPanes {
 				t.Fatalf("pane at %+v, %v; want session %s with %s pane(s)", loc, err, tc.wantSession, tc.wantPanes)
 			}
 		})
+	}
+}
+
+// TestTmuxRefusedMoveSucceedsFromAFreshProbe is the other half of the guard: an
+// attach that links the window after the probe makes the stale move refuse, and
+// the re-probe counts the link, so the retry moves the whole window and leaves
+// the attach's link in place.
+func TestTmuxRefusedMoveSucceedsFromAFreshProbe(t *testing.T) {
+	r, tm := realTmux(t)
+	ctx := context.Background()
+	const watch = DispatchWatchSessionPrefix + "d-1-x"
+	tm("new-session", "-d", "-s", "orch", "-x", "200", "-y", "50", "sleep 300")
+	tm("new-window", "-d", "-t", "=orch:", "sleep 300")
+	pane := tm("new-window", "-d", "-P", "-F", "#{pane_id}", "-t", "=orch:", "-n", "viewer", "sleep 300")
+	window := tm("display-message", "-p", "-t", pane, "#{window_id}")
+	stale, err := r.PaneLocation(ctx, pane)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tm("new-session", "-d", "-s", watch, "sleep 300")
+	tm("link-window", "-d", "-s", window, "-t", "="+watch+":")
+
+	if _, err := r.BackgroundPane(ctx, pane, "viewer", stale); !errors.Is(err, ErrPaneMoved) {
+		t.Fatalf("stale move: err = %v, want ErrPaneMoved", err)
+	}
+	fresh, err := r.PaneLocation(ctx, pane)
+	if err != nil || fresh.LinkedSessions != 2 || !fresh.WatchLinked {
+		t.Fatalf("fresh probe = %+v, %v; want the attach link counted", fresh, err)
+	}
+	if _, err := r.BackgroundPane(ctx, pane, "viewer", fresh); err != nil {
+		t.Fatal(err)
+	}
+	if loc, err := r.PaneLocation(ctx, pane); err != nil || loc.SessionName != "leo-dispatch" || loc.WindowID != window {
+		t.Fatalf("pane at %+v, %v; want the same window in leo-dispatch", loc, err)
+	}
+	if links := tm("list-windows", "-t", "="+watch+":", "-F", "#{window_id}"); !strings.Contains(links, window) {
+		t.Fatalf("the attach lost its link: %q", links)
 	}
 }

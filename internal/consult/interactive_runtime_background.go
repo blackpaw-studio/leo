@@ -21,6 +21,12 @@ type PaneLocation struct {
 	// WindowPanes is how many panes share the pane's window; SessionWindows
 	// how many windows its session has.
 	WindowPanes, SessionWindows int
+	// LinkedSessions is how many sessions the pane's window is linked into,
+	// watch sessions included (#{window_linked_sessions}): 1 for a window in its
+	// session alone. A guarded move holds it to the count seen at the probe, so
+	// a link made after the probe, by an attach or into another real session,
+	// refuses the move.
+	LinkedSessions int
 	// WatchLinked is set while `leo dispatch attach` has the pane's window
 	// linked into a watch session of its own. Emptying that window (join-pane)
 	// would end the attach; moving it whole keeps the link.
@@ -63,11 +69,13 @@ func (r *TmuxInteractiveRuntime) PaneLocation(ctx context.Context, pane string) 
 	}
 	var found []PaneLocation
 	watchLinked := false
+	linkedSessions := 0
 	for _, line := range strings.Split(string(out), "\n") {
 		f := strings.Split(line, "\t")
 		if len(f) != 6 || f[0] != pane {
 			continue
 		}
+		linkedSessions++
 		if strings.HasPrefix(f[2], DispatchWatchSessionPrefix) {
 			watchLinked = true
 			continue
@@ -83,7 +91,7 @@ func (r *TmuxInteractiveRuntime) PaneLocation(ctx context.Context, pane string) 
 	case 0:
 		return PaneLocation{}, fmt.Errorf("locate pane %s: %w", pane, ErrPaneNotFound)
 	case 1:
-		found[0].WatchLinked = watchLinked
+		found[0].WatchLinked, found[0].LinkedSessions = watchLinked, linkedSessions
 		return found[0], nil
 	}
 	return PaneLocation{}, fmt.Errorf("locate pane %s: %w", pane, ErrPaneAmbiguous)

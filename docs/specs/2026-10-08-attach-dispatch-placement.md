@@ -73,11 +73,13 @@ flip of a session's effective placement re-places its live interactive viewers.
    is pinned and never touched again. The read decides; it does not protect the
    move, so every hide, show, background and foreground runs as one tmux
    `if-shell -F` whose format guard re-checks, on the server, that the pane is
-   still in the probed session and window (and, for `move-window`, alone in it;
-   for `join-pane`, that the window is linked nowhere else, since emptying a
-   window an attach linked would end the attach). A false guard moves nothing and
-   reports `ErrPaneMoved`; the reconciler probes again, which pins the pane or
-   moves it from where it is now.
+   still in the probed session and window and that the window is linked into as
+   many sessions (`#{window_linked_sessions}`, tmux 3.1+) as when probed, so a
+   link made later, by an attach or into another real session, refuses the move.
+   `move-window` also needs the pane alone in its window; `join-pane` needs the
+   window linked nowhere else, since emptying a window an attach linked would
+   end the attach. A false guard moves nothing and reports `ErrPaneMoved`; the
+   reconciler probes again, which pins the pane or moves it from where it is now.
 7. **Record.** `ViewerKind` gains `background` (a window of its own in
    `leo-dispatch`); `leo dispatch attach` treats it like `window`.
 8. **Feature flag.** `dispatch_placement_live` in the SSE `hello`.

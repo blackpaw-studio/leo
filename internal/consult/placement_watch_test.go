@@ -90,6 +90,10 @@ func (r *bgRuntime) locate(pane string) (PaneLocation, error) {
 		loc = inCallerWindow(2) // an unlaunched pane: the caller's own
 	}
 	loc.WatchLinked = r.watchLinked[pane]
+	loc.LinkedSessions = 1
+	if loc.WatchLinked {
+		loc.LinkedSessions = 2
+	}
 	return loc, nil
 }
 
@@ -116,9 +120,18 @@ func (r *bgRuntime) link(pane string) {
 	r.locMu.Unlock()
 }
 
+// linkIntoAnotherSession has the pane's window linked into a second real
+// session, which a probe reports as ErrPaneAmbiguous.
+func (r *bgRuntime) linkIntoAnotherSession(pane string) {
+	r.locMu.Lock()
+	r.locErr[pane] = fmt.Errorf("locate pane %s: %w", pane, ErrPaneAmbiguous)
+	r.locMu.Unlock()
+}
+
 // guard stands in for the check tmux makes in the same command as the move:
-// the pane must still be where the dispatcher probed it, and unlinked when the
-// move would empty its window.
+// the pane must still be where the dispatcher probed it, with the window linked
+// into as many sessions as then, and unlinked when the move would empty its
+// window.
 func (r *bgRuntime) guard(pane string, from PaneLocation, unlinked bool) error {
 	r.locMu.Lock()
 	race := r.race
@@ -129,9 +142,11 @@ func (r *bgRuntime) guard(pane string, from PaneLocation, unlinked bool) error {
 	}
 	cur, err := r.locate(pane)
 	if err != nil {
-		return err
+		// Whatever stops the probe (a second session linking the window, the
+		// pane gone) also fails tmux's guard.
+		return fmt.Errorf("guard on %s: %v: %w", pane, err, ErrPaneMoved)
 	}
-	if cur.SessionID != from.SessionID || cur.WindowID != from.WindowID || unlinked && cur.WatchLinked {
+	if cur.SessionID != from.SessionID || cur.WindowID != from.WindowID || cur.LinkedSessions != from.LinkedSessions || unlinked && cur.WatchLinked {
 		return fmt.Errorf("guard on %s: %w", pane, ErrPaneMoved)
 	}
 	return nil
@@ -983,5 +998,43 @@ func TestMoveRetriesFromAFreshProbeWhenThePaneOnlyChangedWindows(t *testing.T) {
 	f.poll(2)
 	if f.rt.count("background") != 1 || f.kind(started.ID) != "background" || f.pinned(started.ID) {
 		t.Fatalf("moves = %v, kind = %q, pinned = %v; want the retry to have backgrounded it", f.rt.moves(), f.kind(started.ID), f.pinned(started.ID))
+	}
+}
+
+func TestHideRacingASecondSessionLinkingTheWindowIsRefusedAndPinsThePane(t *testing.T) {
+	f := newLiveFixture(t)
+	started := f.start(nil)
+	waitForInjection(t, f.rt.fakeInteractiveRuntime)
+	_ = f.d.Report(started.ID, hook(t, "UserPromptSubmit", "a"))
+	f.rt.raceOnce(func() { f.rt.linkIntoAnotherSession(started.Pane) })
+	_ = f.d.Report(started.ID, hook(t, "Stop", "a"))
+	f.flush(started.ID)
+
+	if f.rt.count("hide") != 0 || f.kind(started.ID) != "split" || !f.pinned(started.ID) {
+		t.Fatalf("events = %v, kind = %q, pinned = %v; want the shared pane left alone", f.rt.log(), f.kind(started.ID), f.pinned(started.ID))
+	}
+}
+
+func TestBackgroundRacingASecondSessionLinkingTheWindowIsRefusedAndPinsThePane(t *testing.T) {
+	f := newLiveFixture(t)
+	started := f.start(nil)
+	f.rt.raceOnce(func() { f.rt.linkIntoAnotherSession(started.Pane) })
+
+	f.clients.set(f.attach("background", 10))
+	f.poll(2)
+	if f.rt.count("background") != 0 || f.kind(started.ID) != "split" || !f.pinned(started.ID) {
+		t.Fatalf("moves = %v, kind = %q, pinned = %v; want the shared pane left alone", f.rt.moves(), f.kind(started.ID), f.pinned(started.ID))
+	}
+}
+
+func TestBackgroundRacingAnAttachRetriesFromAFreshProbe(t *testing.T) {
+	f := newLiveFixture(t)
+	started := f.start(func(r *Request) { r.CallerPaneID = "" }) // a window of its own
+	f.rt.raceOnce(func() { f.rt.link(started.Pane) })
+
+	f.clients.set(f.attach("background", 10))
+	f.poll(2)
+	if f.rt.count("background") != 1 || f.kind(started.ID) != "background" || f.pinned(started.ID) {
+		t.Fatalf("moves = %v, kind = %q, pinned = %v; want the move retried with the attach link counted", f.rt.moves(), f.kind(started.ID), f.pinned(started.ID))
 	}
 }
