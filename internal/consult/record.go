@@ -159,6 +159,10 @@ type Record struct {
 	// nested dispatch (headless parents included). Records written before it
 	// existed name their parent only through CallerBridgeKey.
 	ParentDispatchID string `json:"parent_dispatch_id,omitempty"`
+	// SlotExempt marks a run started under a live dispatch: it takes no slot
+	// from the shared pool (its parent holds its own while it waits), and is
+	// bounded by the per-root descendant cap instead.
+	SlotExempt bool `json:"slot_exempt,omitempty"`
 	// CallerBridgeLaunch is the caller's launch id (see
 	// Request.CallerBridgeLaunch): a digest, never the launch token.
 	CallerBridgeLaunch string                  `json:"caller_bridge_launch,omitempty"`

@@ -54,7 +54,7 @@ func (d *Dispatcher) queueSendLocked(s *runState, message string, waiter *slotWa
 func (d *Dispatcher) dequeueSendLocked(s *runState, turnID string) {
 	if q := s.queuedSend; q != nil && q.turnID == turnID {
 		s.queuedSend = nil
-		d.slots.Cancel(q.waiter)
+		d.slotsFor(s).Cancel(q.waiter)
 		close(q.cancel)
 	}
 }
@@ -85,13 +85,13 @@ func (d *Dispatcher) runQueuedSend(s *runState, q *queuedSend, message string, w
 	// the lock: whoever resolved it already left the line.
 	if s.queuedSend != q || s.record.Status.Terminal() || s.record.Status == StatusSettling || turnByID(s.record, q.turnID).Outcome != "" {
 		d.mu.Unlock()
-		d.slots.Cancel(waiter)
+		d.slotsFor(s).Cancel(waiter)
 		return
 	}
 	if d.daemonCtx.Err() != nil {
 		d.closeTurnLocked(s, q.turnID, TurnInterrupted, shutdownQueuedText(s.record.ID))
 		d.mu.Unlock()
-		d.slots.Cancel(waiter)
+		d.slotsFor(s).Cancel(waiter)
 		return
 	}
 	// Admission: the slot now belongs to the turn, released once by whatever

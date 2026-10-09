@@ -2,6 +2,10 @@ package mcp
 
 import (
 	"encoding/json"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/blackpaw-studio/leo/internal/leotools"
@@ -38,6 +42,27 @@ func TestLeoDispatchNamesTheCallingDispatchAsParent(t *testing.T) {
 		}
 		if got != tc.want {
 			t.Fatalf("parent_dispatch_id = %v, want %q (body %v)", got, tc.want, gotBody)
+		}
+	}
+}
+
+// leo_consult inside a dispatch names that dispatch (so the daemon parents the
+// consult under it) and, like leo_dispatch, not its synthetic process name.
+func TestLeoConsultNamesTheCallingDispatch(t *testing.T) {
+	for _, tc := range []struct{ dispatchID, wantParent, wantFrom string }{{"d-self", "d-self", ""}, {"", "", "assistant"}} {
+		var got map[string]string
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			body, _ := io.ReadAll(r.Body)
+			_ = json.Unmarshal(body, &got)
+			_, _ = w.Write([]byte(`{"ok":true,"data":{"id":"c-1","harness":"claude","model":"m","text":"hi"}}`))
+		}))
+		reg := newRegistry(newDaemonClient(strings.TrimPrefix(srv.URL, "http://127.0.0.1:"), "tok"), "assistant", leotools.Permissions{}, withDispatchID(tc.dispatchID))
+		if _, err := callTool(reg, "leo_consult", map[string]any{"template": "claude", "prompt": "q"}); err != nil {
+			t.Fatal(err)
+		}
+		srv.Close()
+		if got["parent_dispatch_id"] != tc.wantParent || got["from"] != tc.wantFrom {
+			t.Fatalf("dispatchID %q: parent=%q from=%q, want %q / %q", tc.dispatchID, got["parent_dispatch_id"], got["from"], tc.wantParent, tc.wantFrom)
 		}
 	}
 }

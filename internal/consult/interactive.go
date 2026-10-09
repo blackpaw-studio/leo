@@ -182,7 +182,7 @@ func (d *Dispatcher) startInteractive(ctx context.Context, s *runState, req Requ
 	if harnessName == "opencode" {
 		return Started{}, invalidf("interactive dispatch is not supported by harness %q", harnessName)
 	}
-	waiter, acquired := d.slots.AcquireOrEnqueue()
+	waiter, acquired := d.slotsFor(s).AcquireOrEnqueue()
 	if !acquired {
 		return d.queueInteractive(ctx, s, req, harnessName, model, cfg, rt, waiter), nil
 	}
@@ -215,10 +215,10 @@ func (d *Dispatcher) launchWhenSlotFree(ctx context.Context, s *runState, req Re
 	select {
 	case <-waiter.Ready():
 	case <-s.done:
-		d.slots.Cancel(waiter)
+		d.slotsFor(s).Cancel(waiter)
 		return
 	case <-ctx.Done():
-		d.slots.Cancel(waiter)
+		d.slotsFor(s).Cancel(waiter)
 		d.mu.Lock()
 		s.awaitingSlot = false
 		d.finishInteractiveLocked(s, StatusCanceled)
@@ -228,7 +228,7 @@ func (d *Dispatcher) launchWhenSlotFree(ctx context.Context, s *runState, req Re
 	d.mu.Lock()
 	if s.record.Status.Terminal() || s.record.Status == StatusSettling || turnByID(s.record, turnID).Outcome != "" {
 		d.mu.Unlock()
-		d.slots.Release()
+		d.slotsFor(s).Release()
 		return
 	}
 	// Admission: from here the slot belongs to the turn (released once, by
@@ -556,7 +556,7 @@ func (d *Dispatcher) closeTurnLocked(s *runState, id string, outcome TurnOutcome
 		}
 		if t.SlotHeld {
 			t.SlotHeld = false
-			d.slots.Release()
+			d.slotsFor(s).Release()
 		}
 		if t.Queued {
 			t.Queued = false
@@ -766,7 +766,7 @@ func (d *Dispatcher) Send(ctx context.Context, id, message string) (SendResult, 
 		// which a late ack is matched by.
 		message = f.FrameMessage(s.record.PaneID, message)
 	}
-	waiter, acquired := d.slots.AcquireOrEnqueue()
+	waiter, acquired := d.slotsFor(s).AcquireOrEnqueue()
 	if !acquired {
 		res := d.queueSendLocked(s, message, waiter)
 		d.mu.Unlock()

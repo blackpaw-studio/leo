@@ -329,7 +329,13 @@ func newRegistry(client *daemonClient, processName string, perms leotools.Permis
 			return "", err
 		}
 		model, _ := args["model"].(string)
-		data, err := client.consult(ctx, processName, template, model, prompt)
+		// Inside a dispatch the process name is the child's own and names no
+		// agent; the dispatch id parents the consult under it.
+		from := processName
+		if r.dispatchID != "" {
+			from = ""
+		}
+		data, err := client.consult(ctx, from, r.dispatchID, template, model, prompt)
 		if err != nil {
 			return "", err
 		}

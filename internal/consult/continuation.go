@@ -96,16 +96,33 @@ func (d *Dispatcher) continueHeadless(cfg *config.Config, rec Record, message st
 		return SendResult{}, fmt.Errorf("building %s resume env: %w", h.Name(), err)
 	}
 
+	// A continuation makes a finished run live again, so a nested one passes
+	// the same depth and descendant admission as a start, atomically with
+	// going live (nestMu is held until the state is registered below).
+	d.nestMu.Lock()
+	nestHeld := true
+	defer func() {
+		if nestHeld {
+			d.nestMu.Unlock()
+		}
+	}()
+	if rec.ParentDispatchID != "" {
+		if _, err := d.admitNested(rec.ParentDispatchID); err != nil {
+			return SendResult{}, err
+		}
+	}
+
 	d.mu.Lock()
 	// With every slot busy the continuation takes a place in the shared FIFO
 	// line instead of being rejected; a nil waiter means the slot is held.
-	waiter, _ := d.slots.AcquireOrEnqueue()
+	slots := d.limiter(rec.SlotExempt)
+	waiter, _ := slots.AcquireOrEnqueue()
 	giveUpSlot := func() {
 		if waiter != nil {
-			d.slots.Cancel(waiter)
+			slots.Cancel(waiter)
 			return
 		}
-		d.slots.Release()
+		slots.Release()
 	}
 	if recreate {
 		if err := os.MkdirAll(filepath.Dir(rec.Worktree), dirPerm); err != nil {
@@ -162,7 +179,7 @@ func (d *Dispatcher) continueHeadless(cfg *config.Config, rec Record, message st
 		return SendResult{}, errors.Join(fmt.Errorf("reopening dispatch recording: %w", openErr), rollbackErr)
 	}
 	if state == nil {
-		state = &runState{}
+		state = newRunState(prospective, handle, done, cancel)
 		d.runs[rec.ID] = state
 	}
 	state.record, state.handle = prospective, handle
@@ -170,6 +187,8 @@ func (d *Dispatcher) continueHeadless(cfg *config.Config, rec Record, message st
 	state.done, state.cancel = done, cancel
 	d.persistLocked(state, "turn")
 	d.mu.Unlock()
+	d.nestMu.Unlock()
+	nestHeld = false
 	go d.runInvocation(runCtx, state, done, h, rec.Model, tmpl.Env, args, harnessEnv, cwd, rec.Timeout, waiter)
 	return SendResult{TurnID: turn.TurnID, Delivered: waiter == nil, Queued: waiter != nil}, nil
 }

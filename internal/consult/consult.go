@@ -52,7 +52,12 @@ func invalidf(format string, args ...any) error {
 }
 
 type Dispatcher struct {
-	slots              *slotLimiter
+	slots *slotLimiter
+	// exempt is the unlimited limiter runs started under a live dispatch use
+	// in place of slots, so every slot code path works unchanged for them.
+	exempt *slotLimiter
+	// nestMu makes a nested start's cap check and its registration atomic.
+	nestMu             sync.Mutex
 	recorder           Recorder
 	ExecCommandContext func(ctx context.Context, name string, args ...string) *exec.Cmd
 	ProcessCommand     func(ctx context.Context, name string, args ...string) *exec.Cmd
@@ -121,6 +126,9 @@ func (d *Dispatcher) SetCloseFinishedViewer(fn func(Record, func(string) error) 
 }
 
 type runState struct {
+	// slotExempt mirrors Record.SlotExempt; fixed at creation, so it is read
+	// without the lock (see slotsFor).
+	slotExempt bool
 	// mcpEnv is the leo MCP environment of the headless child (see
 	// Dispatcher.headlessChildMCP); it carries the daemon token, so it is
 	// process env only and never persisted or logged.
@@ -214,6 +222,7 @@ func NewDispatcherWithOnStart(rec Recorder, parent context.Context, onStart func
 	}
 	d := &Dispatcher{
 		slots:              newSlotLimiter(DefaultMaxConcurrent),
+		exempt:             newSlotLimiter(0),
 		recorder:           rec,
 		ExecCommandContext: exec.CommandContext,
 		ProcessCommand:     exec.CommandContext,
@@ -352,6 +361,19 @@ func (d *Dispatcher) Start(_ context.Context, cfg *config.Config, req Request) (
 	if caller == "" {
 		caller = req.Caller
 	}
+	// Admit a nested start atomically with registering it, so concurrent
+	// starts cannot overshoot the per-root cap. Held until d.runs has the run.
+	d.nestMu.Lock()
+	nestHeld := true
+	defer func() {
+		if nestHeld {
+			d.nestMu.Unlock()
+		}
+	}()
+	exempt, err := d.admitNested(parentID)
+	if err != nil {
+		return Started{}, err
+	}
 	rec := Record{
 		ID: newID(), Caller: caller, ParentDispatchID: parentID, Template: req.Template, Role: req.Role, Profile: req.Profile,
 		Kind: kind, Harness: h.Name(), Model: model, Cwd: req.Cwd, Name: req.Name, Timeout: timeout,
@@ -361,6 +383,7 @@ func (d *Dispatcher) Start(_ context.Context, cfg *config.Config, req Request) (
 		ReleaseOnFinish: mode == ModeInteractive && kind == "dispatch" && ResolveReleaseOnFinish(req.Role, req.ReleaseOnFinish),
 		CallerPaneID:    req.CallerPaneID, CallerHarness: req.CallerHarness, CallerSessionID: req.CallerSessionID, CallerWindowID: req.CallerWindowID,
 		CallerBridgeKey: req.CallerBridgeKey, CallerBridgeLaunch: req.CallerBridgeLaunch,
+		SlotExempt: exempt,
 	}
 	handle, err := d.recorder.Open(rec)
 	if err != nil {
@@ -373,7 +396,7 @@ func (d *Dispatcher) Start(_ context.Context, cfg *config.Config, req Request) (
 		handle = nopHandle{}
 	}
 	runCtx, cancel := context.WithCancel(d.daemonCtx)
-	state := &runState{record: rec, handle: handle, done: make(chan struct{}), cancel: cancel}
+	state := newRunState(rec, handle, make(chan struct{}), cancel)
 	if mode == ModeHeadless {
 		state.record.Turns = append(state.record.Turns, Turn{TurnID: rec.ID + "#1", Source: TurnSourceOrchestrator, StartedAt: rec.StartedAt, Delivered: true, Text: req.Prompt})
 		d.beginUsageInvocationLocked(state)
@@ -387,6 +410,8 @@ func (d *Dispatcher) Start(_ context.Context, cfg *config.Config, req Request) (
 	d.runs[rec.ID] = state
 	d.pruneTerminalRunsLocked()
 	d.mu.Unlock()
+	d.nestMu.Unlock()
+	nestHeld = false
 	if req.Isolation == "worktree" {
 		if err := d.prepareWorktree(state, req); err != nil {
 			d.complete(state, StatusFailed, "", err)
@@ -396,8 +421,13 @@ func (d *Dispatcher) Start(_ context.Context, cfg *config.Config, req Request) (
 		req.Cwd = state.record.Worktree
 		rec = cloneRecord(state.record)
 	}
-	decoded, childEnv := d.headlessChildMCP(cfg, tmpl, decoded, rec.ID)
-	state.mcpEnv = childEnv
+	// Only a dispatch is a subagent with leo's tools; a consult is a leaf
+	// answer and gets no daemon credentials.
+	if rec.Kind == "dispatch" {
+		var childEnv map[string]string
+		decoded, childEnv = d.headlessChildMCP(cfg, tmpl, decoded, rec.ID)
+		state.mcpEnv = childEnv
+	}
 	spec := harness.LaunchSpec{
 		Kind: harness.KindTask, Name: req.Name, Model: model, Effort: req.Effort,
 		MaxTurns: cfg.TemplateMaxTurns(tmpl), Workspace: req.Cwd,
@@ -451,13 +481,13 @@ func (d *Dispatcher) Start(_ context.Context, cfg *config.Config, req Request) (
 	}
 	// Take the place in line before returning, so a later send or start cannot
 	// overtake this run while its goroutine is still being scheduled.
-	waiter, _ := d.slots.AcquireOrEnqueue()
+	waiter, _ := d.slotsFor(state).AcquireOrEnqueue()
 	go d.runInvocation(runCtx, state, state.done, h, model, tmpl.Env, args, harnessEnv, req.Cwd, timeout, waiter)
 	return Started{ID: rec.ID, Harness: h.Name(), Model: model, Cwd: req.Cwd}, nil
 }
 
 func (d *Dispatcher) run(parent context.Context, state *runState, h harness.Harness, model string, env map[string]string, args []string, harnessEnv map[string]string, cwd string, timeout time.Duration) {
-	waiter, _ := d.slots.AcquireOrEnqueue()
+	waiter, _ := d.slotsFor(state).AcquireOrEnqueue()
 	d.runInvocation(parent, state, state.done, h, model, env, args, harnessEnv, cwd, timeout, waiter)
 }
 
@@ -467,12 +497,12 @@ func (d *Dispatcher) runInvocation(parent context.Context, state *runState, done
 		select {
 		case <-waiter.Ready():
 		case <-parent.Done():
-			d.slots.Cancel(waiter)
+			d.slotsFor(state).Cancel(waiter)
 			d.complete(state, StatusCanceled, "", parent.Err())
 			return
 		}
 	}
-	defer d.slots.Release()
+	defer d.slotsFor(state).Release()
 	// A queued run can be canceled at the same instant a concurrency slot
 	// opens. Do not publish a misleading running transition in that race.
 	if err := parent.Err(); err != nil {
@@ -494,15 +524,17 @@ func (d *Dispatcher) runInvocation(parent context.Context, state *runState, done
 	d.mu.Lock()
 	dispatchID := state.record.ID
 	d.mu.Unlock()
-	// The leo MCP env (identity, dispatch id, daemon credentials) is applied
-	// last so neither an identity the daemon inherited nor a template env can
-	// mask it: the run's own tools (leo MCP, `leo dispatch report`) rely on it
+	// The leo MCP env (identity, dispatch id, daemon credentials) is leo's
+	// alone: reserved variables from the daemon's environment or a template
+	// are dropped first, so a child that is not given credentials is truly
+	// local-only rather than running on the daemon's, and the child's own
+	// values are applied last. Neither can mask the other: the run's own tools (leo MCP, `leo dispatch report`) rely on it
 	// to know they are inside a dispatch. LEO_DISPATCH_ID stays authoritative
 	// even for a run that has no overlay.
 	d.mu.Lock()
 	mcpEnv := state.mcpEnv
 	d.mu.Unlock()
-	cmd.Env = mergedEnv(os.Environ(), harnessEnv, env, mcpEnv, map[string]string{dispatchIDEnv: dispatchID})
+	cmd.Env = mergedEnv(leomcp.WithoutReserved(os.Environ()), leomcp.WithoutReservedMap(harnessEnv), leomcp.WithoutReservedMap(env), mcpEnv, map[string]string{dispatchIDEnv: dispatchID})
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	cmd.Cancel = func() error {
 		if cmd.Process == nil {
@@ -1242,7 +1274,9 @@ func (d *Dispatcher) trackRestartKill(rec Record) {
 		}
 		done := make(chan struct{})
 		close(done)
-		d.runs[rec.ID] = &runState{record: rec, handle: handle, done: done, killPending: true}
+		state := newRunState(rec, handle, done, nil)
+		state.killPending = true
+		d.runs[rec.ID] = state
 		return
 	}
 	d.runs[rec.ID].killPending = true

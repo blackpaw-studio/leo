@@ -346,6 +346,9 @@ func (s *Server) handleAPIConsult(w http.ResponseWriter, r *http.Request) {
 		Template string `json:"template"`
 		Model    string `json:"model,omitempty"`
 		Prompt   string `json:"prompt"`
+		// ParentDispatchID is the calling dispatch (its LEO_DISPATCH_ID), if
+		// any; the consult is filed and bounded under it.
+		ParentDispatchID string `json:"parent_dispatch_id,omitempty"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSON(w, http.StatusBadRequest, apiResponse{Error: fmt.Sprintf("invalid request: %v", err)})
@@ -353,6 +356,10 @@ func (s *Server) handleAPIConsult(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.Template == "" || req.Prompt == "" {
 		writeJSON(w, http.StatusBadRequest, apiResponse{Error: "template and prompt are required"})
+		return
+	}
+	if req.ParentDispatchID != "" && !consult.ValidDispatchID(req.ParentDispatchID) {
+		writeJSON(w, http.StatusBadRequest, apiResponse{Error: "invalid parent_dispatch_id"})
 		return
 	}
 
@@ -376,7 +383,7 @@ func (s *Server) handleAPIConsult(w http.ResponseWriter, r *http.Request) {
 
 	result, err := s.consults.Consult(r.Context(), cfg, consult.Request{
 		Template: req.Template, Model: req.Model, Prompt: req.Prompt,
-		Cwd: workspace, Caller: req.From,
+		Cwd: workspace, Caller: req.From, ParentDispatchID: req.ParentDispatchID,
 	})
 	if err != nil {
 		status := http.StatusBadGateway

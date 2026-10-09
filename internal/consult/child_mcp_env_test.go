@@ -25,10 +25,16 @@ func childMCPConfig() *config.Config {
 // process environment the harness child was launched with.
 func runHeadlessChild(t *testing.T, cfg *config.Config, template string, token string) (id string, args []string, env map[string]string) {
 	t.Helper()
-	t.Setenv("HOME", t.TempDir())
 	for _, k := range []string{"LEO_API_TOKEN", "LEO_WEB_PORT", "LEO_PROCESS_NAME", "LEO_DISPATCH_ID"} {
 		t.Setenv(k, "")
 	}
+	return runHeadlessChildKeepingEnv(t, cfg, template, token)
+}
+
+// runHeadlessChildKeepingEnv leaves the test's ambient environment alone.
+func runHeadlessChildKeepingEnv(t *testing.T, cfg *config.Config, template string, token string) (id string, args []string, env map[string]string) {
+	t.Helper()
+	t.Setenv("HOME", t.TempDir())
 	var captured *exec.Cmd
 	d := NewDispatcher(nil)
 	d.AgentToken = token
@@ -139,4 +145,66 @@ func TestHeadlessChildStaysLocalOnlyWhenDaemonListenerUnavailable(t *testing.T) 
 			assertTokenNotInArgv(t, args)
 		}
 	}
+}
+
+// reservedLeoEnv are the variables a child's leo MCP server trusts. Whatever
+// the daemon, a template, or tmux's global environment carries for them must
+// never survive into a child that was not given them.
+var ambientLeoEnv = map[string]string{
+	"LEO_API_TOKEN":    "ambient-token",
+	"LEO_WEB_PORT":     "7777",
+	"LEO_PROCESS_NAME": "alpha",
+	"LEO_PERMISSIONS":  `{"deny_tools":["x"]}`,
+	"LEO_DISPATCH_ID":  "d-ambient",
+}
+
+func TestHeadlessChildDropsAmbientLeoCredentialsWhenLocalOnly(t *testing.T) {
+	cfg := testConfig() // web disabled: the child must be local-only
+	cfg.Templates["claude"] = config.TemplateConfig{Harness: "claude", Model: "opus", Env: map[string]string{"LEO_API_TOKEN": "template-token", "LEO_WEB_PORT": "8888"}}
+	cfg.HomePath = os.TempDir()
+	t.Setenv("HOME", t.TempDir())
+	var captured *exec.Cmd
+	d := NewDispatcher(nil)
+	d.AgentToken = childToken
+	d.ExecCommandContext = func(ctx context.Context, _ string, _ ...string) *exec.Cmd {
+		captured = exec.CommandContext(ctx, "sh", "-c", `echo '{"type":"result","result":"ok","is_error":false}'`)
+		return captured
+	}
+	for k, v := range ambientLeoEnv {
+		t.Setenv(k, v)
+	}
+	started, err := d.Start(context.Background(), cfg, Request{Template: "claude", Prompt: "q", Cwd: t.TempDir(), Kind: "dispatch"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	d.Wait(context.Background(), []string{started.ID}, 3*time.Second)
+	env := envMap(captured.Env)
+	for _, k := range []string{"LEO_API_TOKEN", "LEO_WEB_PORT", "LEO_PERMISSIONS"} {
+		if env[k] != "" {
+			t.Errorf("%s = %q leaked into a local-only child", k, env[k])
+		}
+	}
+	if env["LEO_PROCESS_NAME"] != "dispatch:"+started.ID || env["LEO_DISPATCH_ID"] != started.ID {
+		t.Errorf("identity = %q / %q, want the child's own", env["LEO_PROCESS_NAME"], env["LEO_DISPATCH_ID"])
+	}
+}
+
+func TestHeadlessChildCredentialsComeFromTheDaemonNotTheAmbientEnv(t *testing.T) {
+	for k, v := range ambientLeoEnv {
+		t.Setenv(k, v)
+	}
+	id, _, env := runHeadlessChildKeepingEnv(t, childMCPConfig(), "claude", childToken)
+	if env["LEO_API_TOKEN"] != childToken || env["LEO_WEB_PORT"] != "9100" || env["LEO_PERMISSIONS"] != "" || env["LEO_PROCESS_NAME"] != "dispatch:"+id {
+		t.Fatalf("child env = token %q port %q perms %q name %q", env["LEO_API_TOKEN"], env["LEO_WEB_PORT"], env["LEO_PERMISSIONS"], env["LEO_PROCESS_NAME"])
+	}
+}
+
+func envMap(entries []string) map[string]string {
+	env := map[string]string{}
+	for _, entry := range entries {
+		if k, v, ok := strings.Cut(entry, "="); ok {
+			env[k] = v
+		}
+	}
+	return env
 }

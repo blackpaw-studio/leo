@@ -181,8 +181,11 @@ func (c *daemonClient) stopAgent(name string) (json.RawMessage, error) {
 }
 
 // consult runs a one-off consultant via the daemon and waits for its answer.
-func (c *daemonClient) consult(ctx context.Context, from, template, model, prompt string) (json.RawMessage, error) {
+func (c *daemonClient) consult(ctx context.Context, from, parentDispatchID, template, model, prompt string) (json.RawMessage, error) {
 	body := map[string]string{"from": from, "template": template, "prompt": prompt}
+	if parentDispatchID != "" {
+		body["parent_dispatch_id"] = parentDispatchID
+	}
 	if model != "" {
 		body["model"] = model
 	}
