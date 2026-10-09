@@ -3,7 +3,9 @@ package leomcp
 import (
 	"encoding/json"
 	"log"
+	"slices"
 	"strconv"
+	"strings"
 
 	"github.com/blackpaw-studio/leo/internal/config"
 	codexharness "github.com/blackpaw-studio/leo/internal/harness/codex"
@@ -20,6 +22,36 @@ const (
 	EnvDispatchID  = "LEO_DISPATCH_ID"
 	EnvPermissions = "LEO_PERMISSIONS"
 )
+
+// ReservedEnv are the variables `leo mcp-server` trusts for identity and
+// credentials. Leo alone sets them for a dispatch child: whatever the daemon's
+// environment, a template's env, or tmux's global environment carries for them
+// must not reach a child (see WithoutReserved).
+var ReservedEnv = []string{EnvAPIToken, EnvWebPort, EnvProcessName, EnvPermissions, EnvDispatchID}
+
+// WithoutReserved returns a copy of the KEY=VALUE entries without any
+// reserved variable.
+func WithoutReserved(entries []string) []string {
+	out := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		key, _, _ := strings.Cut(entry, "=")
+		if !slices.Contains(ReservedEnv, key) {
+			out = append(out, entry)
+		}
+	}
+	return out
+}
+
+// WithoutReservedMap returns a copy of env without any reserved variable.
+func WithoutReservedMap(env map[string]string) map[string]string {
+	out := make(map[string]string, len(env))
+	for k, v := range env {
+		if !slices.Contains(ReservedEnv, k) {
+			out[k] = v
+		}
+	}
+	return out
+}
 
 // DispatchProcessPrefix prefixes the LEO_PROCESS_NAME of a dispatch child.
 // The name deliberately matches no supervised agent, so tools keyed on it

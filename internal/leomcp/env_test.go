@@ -56,3 +56,14 @@ func TestBridgeEnvNamesAddsPermissionsOnlyWhenRestricted(t *testing.T) {
 		t.Fatalf("restricted = %v", got)
 	}
 }
+
+func TestWithoutReservedDropsEveryTrustedVariable(t *testing.T) {
+	in := []string{"PATH=/bin", "LEO_API_TOKEN=x", "LEO_WEB_PORT=1", "LEO_PROCESS_NAME=a", "LEO_PERMISSIONS={}", "LEO_DISPATCH_ID=d", "LEO_CONFIG=/c"}
+	if got := WithoutReserved(in); !reflect.DeepEqual(got, []string{"PATH=/bin", "LEO_CONFIG=/c"}) {
+		t.Fatalf("slice = %v", got)
+	}
+	got := WithoutReservedMap(map[string]string{"A": "1", "LEO_API_TOKEN": "x", "LEO_PERMISSIONS": "{}"})
+	if !reflect.DeepEqual(got, map[string]string{"A": "1"}) {
+		t.Fatalf("map = %v", got)
+	}
+}

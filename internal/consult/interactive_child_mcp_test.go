@@ -74,7 +74,7 @@ func assertInteractiveMCPEnv(t *testing.T, got interactiveLaunch, tokenFile stri
 			t.Fatalf("API token leaked into tmux argv: %q", got.argv)
 		}
 	}
-	if want := `LEO_API_TOKEN="$(cat '` + tokenFile + `' 2>/dev/null)"`; !strings.Contains(got.command, want) {
+	if want := `export LEO_API_TOKEN="$(cat '` + tokenFile + `' 2>/dev/null)";`; !strings.Contains(got.command, want) {
 		t.Errorf("pane command does not read the token file (%s): %q", want, got.command)
 	}
 }
@@ -111,11 +111,11 @@ func TestInteractiveChildStaysLocalOnlyWithoutADaemonListener(t *testing.T) {
 	cfg := testConfig()
 	cfg.Templates = map[string]config.TemplateConfig{"claude": {Harness: "claude", Model: "sonnet"}}
 	got := launchInteractiveChild(t, cfg, "claude", writeTokenFile(t)) // web disabled
-	if strings.Contains(got.command, "LEO_API_TOKEN") {
-		t.Errorf("token expression present with web disabled: %q", got.command)
+	if strings.Contains(got.command, "export LEO_API_TOKEN") || !strings.Contains(got.command, "unset LEO_API_TOKEN;") {
+		t.Errorf("a local-only child must have its token unset, not read: %q", got.command)
 	}
-	if _, ok := got.envFlag["LEO_WEB_PORT"]; ok {
-		t.Errorf("web port set with web disabled: %q", got.argv)
+	if v, ok := got.envFlag["LEO_WEB_PORT"]; !ok || v != "" {
+		t.Errorf("web port = %q (set=%v) with web disabled, want an explicit empty value: %q", v, ok, got.argv)
 	}
 }
 
@@ -138,5 +138,88 @@ func TestLaunchCommandWordsExpandTheTokenFromItsFileWithoutPuttingItInTheCommand
 	out, err = exec.Command("sh", "-c", strings.Join(words, " ")).Output()
 	if err != nil || strings.TrimSpace(string(out)) != "" {
 		t.Fatalf("missing token file: out=%q err=%v", out, err)
+	}
+}
+
+func TestInteractiveChildBlanksAmbientLeoEnvItIsNotGiven(t *testing.T) {
+	cfg := testConfig() // web disabled: local-only
+	cfg.Templates = map[string]config.TemplateConfig{"claude": {Harness: "claude", Model: "sonnet", Env: map[string]string{"LEO_API_TOKEN": "template-token", "LEO_WEB_PORT": "8888", "LEO_PERMISSIONS": "{}"}}}
+	got := launchInteractiveChild(t, cfg, "claude", writeTokenFile(t))
+	// tmux's global environment would otherwise show through: each reserved
+	// variable the child is not given is set empty explicitly.
+	for _, k := range []string{"LEO_WEB_PORT", "LEO_PERMISSIONS"} {
+		v, ok := got.envFlag[k]
+		if !ok || v != "" {
+			t.Errorf("tmux -e %s = %q (set=%v), want an explicit empty value", k, v, ok)
+		}
+	}
+	if !strings.Contains(got.command, "unset LEO_API_TOKEN;") {
+		t.Errorf("pane command does not clear an ambient token: %q", got.command)
+	}
+	for _, arg := range got.argv {
+		if strings.Contains(arg, "template-token") {
+			t.Fatalf("template-supplied token reached argv: %q", got.argv)
+		}
+	}
+}
+
+// stubBin writes an executable script into dir that records its argv (one
+// argument per line) to <name>.argv, then runs exec.
+func stubBin(t *testing.T, dir, name, exec string) {
+	t.Helper()
+	script := "#!/bin/sh\nfor a in \"$@\"; do printf '%s\\n' \"$a\"; done > '" + filepath.Join(dir, name+".argv") + "'\n" + exec + "\n"
+	if err := os.WriteFile(filepath.Join(dir, name), []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestLaunchCommandNeverPutsTheTokenInAnyProcessArgv(t *testing.T) {
+	tokenFile := writeTokenFile(t)
+	bin := t.TempDir()
+	// Shadow env so its own argv is observable, then hand over to the real one.
+	stubBin(t, bin, "env", `exec /usr/bin/env "$@"`)
+	stubBin(t, bin, "harness", `printf '%s' "$LEO_API_TOKEN" > '`+filepath.Join(bin, "harness.token")+`'`)
+	command := strings.Join(launchCommandWords("d-child01", filepath.Join(bin, "harness"), []string{"--flag"}, tokenFile), " ")
+	if strings.Contains(command, interactiveToken) {
+		t.Fatalf("token inside the command string: %q", command)
+	}
+	cmd := exec.Command("sh", "-c", command)
+	cmd.Env = append(os.Environ(), "PATH="+bin+":"+os.Getenv("PATH"), "LEO_API_TOKEN=ambient-token")
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("run %q: %v: %s", command, err, out)
+	}
+	for _, name := range []string{"env.argv", "harness.argv"} {
+		argv, err := os.ReadFile(filepath.Join(bin, name))
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		if strings.Contains(string(argv), interactiveToken) {
+			t.Errorf("token reached %s: %q", name, argv)
+		}
+	}
+	got, _ := os.ReadFile(filepath.Join(bin, "harness.token"))
+	if string(got) != interactiveToken {
+		t.Fatalf("harness saw LEO_API_TOKEN=%q, want the token file's contents", got)
+	}
+}
+
+func TestLaunchCommandClearsAnAmbientTokenWithoutATokenFile(t *testing.T) {
+	bin := t.TempDir()
+	stubBin(t, bin, "harness", `printf '%s' "$LEO_API_TOKEN" > '`+filepath.Join(bin, "harness.token")+`'`)
+	command := strings.Join(launchCommandWords("d-child01", filepath.Join(bin, "harness"), nil, ""), " ")
+	cmd := exec.Command("sh", "-c", command)
+	cmd.Env = append(os.Environ(), "LEO_API_TOKEN=ambient-token")
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("run: %v: %s", err, out)
+	}
+	if got, _ := os.ReadFile(filepath.Join(bin, "harness.token")); len(got) != 0 {
+		t.Fatalf("ambient token survived into a local-only child: %q", got)
+	}
+}
+
+func TestPaneLookupStillFindsTheDispatchIDInTheTokenCommand(t *testing.T) {
+	command := strings.Join(launchCommandWords("d-child01", "/opt/claude", []string{"--model", "x"}, "/state/agent.token"), " ")
+	if !startCommandHasDispatchID(command, "d-child01") || startCommandHasDispatchID(command, "d-other") {
+		t.Fatalf("startCommandHasDispatchID mismatches %q", command)
 	}
 }

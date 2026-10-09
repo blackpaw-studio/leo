@@ -161,7 +161,7 @@ func TestInteractiveLaunchArgv(t *testing.T) {
 			t.Fatalf("API token leaked into tmux argv: %#v", launch)
 		}
 	}
-	if got := launch[len(launch)-1]; !strings.Contains(got, `'env' 'LEO_DISPATCH_ID=d-deadbeef' LEO_API_TOKEN="$(cat '`+tokenFile+`' 2>/dev/null)" `) {
+	if got := launch[len(launch)-1]; !strings.Contains(got, `export LEO_API_TOKEN="$(cat '`+tokenFile+`' 2>/dev/null)"; exec 'env' 'LEO_DISPATCH_ID=d-deadbeef' `) {
 		t.Fatalf("launch command does not read the token from its file: %q", got)
 	}
 	if got := launch[len(launch)-1]; !containsAll(got, "/opt/leo --config /tmp/leo.yaml dispatch report") {
@@ -718,9 +718,9 @@ func TestInteractiveSplitArgv(t *testing.T) {
 		t.Fatalf("pre-split remain-on-exit=%#v", calls[1])
 	}
 	launch := calls[2]
-	wantPrefix := []string{"-L", "leo", "split-window", "-d", "-P", "-F", "#{pane_id}", "-t", "%1", "-c", cwd, "-e", "CODEX_HOME=" + codexHome, "-e", "LEO_BRIDGE_AGENT=", "-e", "LEO_BRIDGE_BIN=", "-e", "LEO_BRIDGE_HOME=", "-e", "LEO_BRIDGE_LAUNCH=", "-e", "LEO_CONFIG=/tmp/leo.yaml", "-e", "LEO_DISPATCH_ID=d-abc", "-e", "LEO_PROCESS_NAME=dispatch:d-abc"}
+	wantPrefix := []string{"-L", "leo", "split-window", "-d", "-P", "-F", "#{pane_id}", "-t", "%1", "-c", cwd, "-e", "CODEX_HOME=" + codexHome, "-e", "LEO_BRIDGE_AGENT=", "-e", "LEO_BRIDGE_BIN=", "-e", "LEO_BRIDGE_HOME=", "-e", "LEO_BRIDGE_LAUNCH=", "-e", "LEO_CONFIG=/tmp/leo.yaml", "-e", "LEO_DISPATCH_ID=d-abc", "-e", "LEO_PERMISSIONS=", "-e", "LEO_PROCESS_NAME=dispatch:d-abc", "-e", "LEO_WEB_PORT="}
 	resolved, _ := filepath.EvalSymlinks(cwd)
-	wantCommand := "'env' 'LEO_DISPATCH_ID=d-abc' 'codex' '-a' 'never' '--model' 'gpt-5' '-c' 'sandbox_workspace_write.writable_roots=[\"" + resolved + "/.agents\"]' '-c' 'check_for_update_on_startup=false'"
+	wantCommand := "unset LEO_API_TOKEN; exec 'env' 'LEO_DISPATCH_ID=d-abc' 'codex' '-a' 'never' '--model' 'gpt-5' '-c' 'sandbox_workspace_write.writable_roots=[\"" + resolved + "/.agents\"]' '-c' 'check_for_update_on_startup=false'"
 	wantLaunch := append(append([]string(nil), wantPrefix...), wantCommand)
 	if !reflect.DeepEqual(launch, wantLaunch) {
 		t.Fatalf("launch=%#v", launch)
@@ -751,8 +751,8 @@ func TestInteractiveSplitFallbackArgv(t *testing.T) {
 		t.Fatal(err)
 	}
 	resolved, _ := filepath.EvalSymlinks(cwd)
-	command := "'env' 'LEO_DISPATCH_ID=d-abc' 'codex' '-a' 'never' '--model' 'sonnet' '-c' 'sandbox_workspace_write.writable_roots=[\"" + resolved + "/.agents\"]' '-c' 'check_for_update_on_startup=false'"
-	suffix := []string{"-c", cwd, "-e", "CODEX_HOME=" + codexHome, "-e", "LEO_BRIDGE_AGENT=", "-e", "LEO_BRIDGE_BIN=", "-e", "LEO_BRIDGE_HOME=", "-e", "LEO_BRIDGE_LAUNCH=", "-e", "LEO_CONFIG=/tmp/leo.yaml", "-e", "LEO_DISPATCH_ID=d-abc", "-e", "LEO_PROCESS_NAME=dispatch:d-abc", command}
+	command := "unset LEO_API_TOKEN; exec 'env' 'LEO_DISPATCH_ID=d-abc' 'codex' '-a' 'never' '--model' 'sonnet' '-c' 'sandbox_workspace_write.writable_roots=[\"" + resolved + "/.agents\"]' '-c' 'check_for_update_on_startup=false'"
+	suffix := []string{"-c", cwd, "-e", "CODEX_HOME=" + codexHome, "-e", "LEO_BRIDGE_AGENT=", "-e", "LEO_BRIDGE_BIN=", "-e", "LEO_BRIDGE_HOME=", "-e", "LEO_BRIDGE_LAUNCH=", "-e", "LEO_CONFIG=/tmp/leo.yaml", "-e", "LEO_DISPATCH_ID=d-abc", "-e", "LEO_PERMISSIONS=", "-e", "LEO_PROCESS_NAME=dispatch:d-abc", "-e", "LEO_WEB_PORT=", command}
 	want := [][]string{
 		{"-L", "leo", "has-session", "-t", "=leo-dispatch"},
 		{"-L", "leo", "set-window-option", "-t", "", "remain-on-exit", "on"},
@@ -786,11 +786,11 @@ func TestInteractiveSplitEmptyPaneIDUnsetsWindowOption(t *testing.T) {
 		t.Fatalf("err=%v", err)
 	}
 	resolved, _ := filepath.EvalSymlinks(cwd)
-	command := "'env' 'LEO_DISPATCH_ID=d-abc' 'codex' '-a' 'never' '--model' 'sonnet' '-c' 'sandbox_workspace_write.writable_roots=[\"" + resolved + "/.agents\"]' '-c' 'check_for_update_on_startup=false'"
+	command := "unset LEO_API_TOKEN; exec 'env' 'LEO_DISPATCH_ID=d-abc' 'codex' '-a' 'never' '--model' 'sonnet' '-c' 'sandbox_workspace_write.writable_roots=[\"" + resolved + "/.agents\"]' '-c' 'check_for_update_on_startup=false'"
 	want := [][]string{
 		{"-L", "leo", "has-session", "-t", "=leo-dispatch"},
 		{"-L", "leo", "set-window-option", "-t", "@1", "remain-on-exit", "on"},
-		{"-L", "leo", "split-window", "-d", "-P", "-F", "#{pane_id}", "-t", "%1", "-c", cwd, "-e", "CODEX_HOME=" + codexHome, "-e", "LEO_BRIDGE_AGENT=", "-e", "LEO_BRIDGE_BIN=", "-e", "LEO_BRIDGE_HOME=", "-e", "LEO_BRIDGE_LAUNCH=", "-e", "LEO_CONFIG=/tmp/leo.yaml", "-e", "LEO_DISPATCH_ID=d-abc", "-e", "LEO_PROCESS_NAME=dispatch:d-abc", command},
+		{"-L", "leo", "split-window", "-d", "-P", "-F", "#{pane_id}", "-t", "%1", "-c", cwd, "-e", "CODEX_HOME=" + codexHome, "-e", "LEO_BRIDGE_AGENT=", "-e", "LEO_BRIDGE_BIN=", "-e", "LEO_BRIDGE_HOME=", "-e", "LEO_BRIDGE_LAUNCH=", "-e", "LEO_CONFIG=/tmp/leo.yaml", "-e", "LEO_DISPATCH_ID=d-abc", "-e", "LEO_PERMISSIONS=", "-e", "LEO_PROCESS_NAME=dispatch:d-abc", "-e", "LEO_WEB_PORT=", command},
 		{"-L", "leo", "set-window-option", "-u", "-t", "@1", "remain-on-exit"},
 	}
 	if !reflect.DeepEqual(calls, want) {

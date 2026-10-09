@@ -202,10 +202,11 @@ func TestBridgedClaudeDispatchLaunch(t *testing.T) {
 	}
 	command := launch[len(launch)-1]
 	words := shellCommandWords(command)
-	if len(words) < 5 || words[2] != "claude" || words[3] != bridgemod.PluginDirFlag {
+	bin := slices.Index(words, "claude")
+	if bin < 0 || len(words) < bin+3 || words[bin+1] != bridgemod.PluginDirFlag {
 		t.Fatalf("command words = %q, want --plugin-dir right after claude", words)
 	}
-	if _, err := os.Stat(filepath.Join(words[4], ".claude-plugin", "plugin.json")); err != nil {
+	if _, err := os.Stat(filepath.Join(words[bin+2], ".claude-plugin", "plugin.json")); err != nil {
 		t.Fatalf("--plugin-dir %q is not the materialized mod: %v", words[4], err)
 	}
 	if strings.Contains(command, "$(cat") || strings.Contains(command, brief) {
