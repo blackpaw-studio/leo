@@ -345,8 +345,8 @@ func newRegistry(client *daemonClient, processName string, perms leotools.Permis
 	})
 
 	r.addContext(toolDef{
-		Name: "leo_dispatch", Description: allowNote("Run a subagent on the template's harness/model in your project directory. mode interactive runs a real TUI, usually split as a pane in your current tmux window (falling back to a separate window, or a background session if your caller can't be resolved), that the user may watch; the result comes from the harness's own turn hooks. Send every follow-up through leo_send_dispatch; never ask the user to type into the pane. Returns immediately. With notify on (default), end your turn: the completion message carries the result. leo_wait only to block within this turn or if it says truncated (or leo_dispatch_output); codex/opencode callers collect with leo_wait.", "dispatch to these templates", perms.CanConsult),
-		InputSchema: objectSchema(map[string]any{"template": map[string]any{"type": "string"}, "role": map[string]any{"type": "string"}, "prompt": map[string]any{"type": "string"}, "model": map[string]any{"type": "string"}, "effort": map[string]any{"type": "string"}, "cwd": map[string]any{"type": "string"}, "name": map[string]any{"type": "string"}, "mode": map[string]any{"type": "string", "enum": []string{"headless", "interactive"}}, "notify": map[string]any{"type": "boolean", "description": "notify the caller when complete; defaults to true"}, "isolation": map[string]any{"type": "string", "enum": []string{"worktree"}, "description": "run from a managed Git worktree created at the current committed HEAD"}, "timeout_seconds": map[string]any{"type": "number", "description": "optional run cap in seconds; unlimited when omitted"}}, "prompt"),
+		Name: "leo_dispatch", Description: allowNote("Run a subagent on the template's harness/model in your project directory. By default (mode interactive) it runs a real TUI, usually split as a pane in your current tmux window (falling back to a separate window, or a background session if your caller can't be resolved), that the user may watch; the result comes from the harness's own turn hooks. Pass mode headless for a plain background run with no TUI (the daemon also falls back to headless, and says so, when interactive is impossible). Send every follow-up through leo_send_dispatch; never ask the user to type into the pane. Returns immediately. With notify on (default), end your turn: the completion message carries the result. leo_wait only to block within this turn or if it says truncated (or leo_dispatch_output); codex/opencode callers collect with leo_wait.", "dispatch to these templates", perms.CanConsult),
+		InputSchema: objectSchema(map[string]any{"template": map[string]any{"type": "string"}, "role": map[string]any{"type": "string"}, "prompt": map[string]any{"type": "string"}, "model": map[string]any{"type": "string"}, "effort": map[string]any{"type": "string"}, "cwd": map[string]any{"type": "string"}, "name": map[string]any{"type": "string"}, "mode": map[string]any{"type": "string", "enum": []string{"headless", "interactive"}, "description": "defaults to interactive; headless runs without a TUI"}, "notify": map[string]any{"type": "boolean", "description": "notify the caller when complete; defaults to true"}, "isolation": map[string]any{"type": "string", "enum": []string{"worktree"}, "description": "run from a managed Git worktree created at the current committed HEAD"}, "timeout_seconds": map[string]any{"type": "number", "description": "optional run cap in seconds; unlimited when omitted"}}, "prompt"),
 	}, func(ctx context.Context, args map[string]any) (string, error) {
 		template, _ := args["template"].(string)
 		role, _ := args["role"].(string)
@@ -375,11 +375,12 @@ func newRegistry(client *daemonClient, processName string, perms leotools.Permis
 			cwd, _ = os.Getwd()
 		}
 		name, _ := args["name"].(string)
-		mode := consult.ModeHeadless
+		// An omitted mode is resolved by the daemon (interactive by default).
+		var mode consult.Mode
 		if raw, ok := args["mode"].(string); ok && raw != "" {
 			mode = consult.Mode(raw)
 		}
-		if mode != consult.ModeHeadless && mode != consult.ModeInteractive {
+		if mode != "" && mode != consult.ModeHeadless && mode != consult.ModeInteractive {
 			return "", fmt.Errorf("mode must be headless or interactive")
 		}
 		timeout, err := optionalTimeout(args, "timeout_seconds")
@@ -401,6 +402,9 @@ func newRegistry(client *daemonClient, processName string, perms leotools.Permis
 			return "", err
 		}
 		placement := formatDispatchPlacement(started)
+		if started.Note != "" {
+			placement += "\n" + started.Note
+		}
 		prefix := ""
 		if role != "" {
 			prefix = role + "→" + resolvedTemplate + " · "

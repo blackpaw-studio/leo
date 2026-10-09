@@ -203,7 +203,7 @@ func TestAPIDispatchLifecycle(t *testing.T) {
 		return exec.CommandContext(ctx, "echo", `{"type":"result","result":"done","is_error":false,"usage":{"input_tokens":3,"output_tokens":0},"total_cost_usd":0,"num_turns":0}`)
 	}
 	w := httptest.NewRecorder()
-	s.handleAPIDispatch(w, httptest.NewRequest("POST", "/api/dispatch", strings.NewReader(`{"from":"caller","template":"coding","prompt":"work","cwd":"/tmp"}`)))
+	s.handleAPIDispatch(w, httptest.NewRequest("POST", "/api/dispatch", strings.NewReader(`{"from":"caller","template":"coding","prompt":"work","cwd":"/tmp","mode":"headless"}`)))
 	if w.Code != http.StatusOK {
 		t.Fatalf("start: %d %s", w.Code, w.Body.String())
 	}
@@ -282,7 +282,7 @@ func TestAPIDispatchIgnoresUnknownJSONFields(t *testing.T) {
 		return exec.CommandContext(ctx, "echo", `{"type":"result","result":"done","is_error":false}`)
 	}
 	w := httptest.NewRecorder()
-	s.handleAPIDispatch(w, httptest.NewRequest("POST", "/api/dispatch", strings.NewReader(`{"template":"coding","prompt":"work","cwd":"/tmp","future_field":true}`)))
+	s.handleAPIDispatch(w, httptest.NewRequest("POST", "/api/dispatch", strings.NewReader(`{"template":"coding","prompt":"work","cwd":"/tmp","mode":"headless","future_field":true}`)))
 	if w.Code != http.StatusOK {
 		t.Fatalf("status %d: %s", w.Code, w.Body.String())
 	}

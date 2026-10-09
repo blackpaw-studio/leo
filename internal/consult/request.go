@@ -72,6 +72,11 @@ type Started struct {
 	// concurrency slot was taken: it has no pane yet and launches, placed as
 	// usual, once a slot frees.
 	Queued bool `json:"queued,omitempty"`
+	// Mode is the execution mode the daemon resolved for the request. Note,
+	// when set, explains a deviation from the default: an omitted mode
+	// resolves to interactive, and Note says why it ran headless instead.
+	Mode Mode   `json:"mode,omitempty"`
+	Note string `json:"note,omitempty"`
 }
 
 func requestKind(req Request) string {

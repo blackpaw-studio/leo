@@ -2,7 +2,8 @@
 
 Leo can run a template's harness/model as a one-shot subagent. `leo_consult`
 and headless dispatches receive a self-contained prompt and retain no
-conversation after they finish. Dispatches can also run interactively.
+conversation after they finish. Dispatches run interactively by default;
+headless is opt-in.
 
 ## Viewer placement
 
@@ -135,8 +136,9 @@ starts work asynchronously and immediately returns an ID. Use it for
 implementation, review, or exploration that can proceed while the caller does
 other work. The prompt must say exactly what the subagent should do; it has no
 access to the caller's conversation. `cwd` defaults to the caller's working
-directory. `mode` is `headless` by default; set it to `interactive` to start a
-TUI the user may watch (see [Interactive mode](#interactive-mode)).
+directory. `mode` is `interactive` by default, which starts a TUI the user may
+watch (see [Interactive mode](#interactive-mode)); set `mode: headless` for a
+plain background run with no TUI.
 
 Dispatch notifications default to enabled. Set `notify: false` (or CLI
 `--notify=false`) to disable the eventual completion wake-up. Synchronous
@@ -272,10 +274,21 @@ reads and writes) and the session's running cost.
 
 ## Interactive mode
 
-Set `mode: interactive` on `leo_dispatch`, include `"mode": "interactive"`
-in `POST /api/dispatch`, or run `leo dispatch run <template> <prompt> --mode
-interactive`. Headless remains the default. Interactive dispatch is not
-supported by the opencode harness.
+Interactive is the default for `leo_dispatch`, `POST /api/dispatch`, and
+`leo dispatch run`, for every role and template. Pass `mode: headless` (or
+`--mode headless`) to opt out. The daemon resolves an omitted mode in one place
+(`POST /api/dispatch`); `leo_consult` stays headless.
+
+Interactive dispatch is not supported by the opencode harness, and needs tmux.
+When the mode is omitted and interactive is impossible (an opencode template,
+no tmux binary, or no interactive runtime), the dispatch runs headless instead
+of failing, and the start reply carries a note (`ran headless: ...`) that
+`leo_dispatch` and `leo dispatch run` print. An explicit `mode: interactive`
+still fails with the underlying error.
+
+Callers with no resolvable tmux client (cron and oneshot tasks, codex and
+opencode callers, anything without a live caller pane) are fine: the TUI opens
+as a standalone window in the `leo-dispatch` tmux session.
 
 Leo opens a real Codex or Claude TUI, placed the same way as the viewer
 (usually a split pane in the caller's own tmux window, falling back to a

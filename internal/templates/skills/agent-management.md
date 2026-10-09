@@ -8,9 +8,10 @@ notifications on (the default), end your turn: a claude caller's completion
 message carries the result inline (capped at 8 KiB; if it says truncated, read
 `leo_dispatch_output`). Use `leo_wait` only to block within the same turn, to
 wait on a follow-up turn id you are blocked on, or when you are a codex or
-opencode caller (whose notification is a pointer only). It is headless by default; pass
-`mode: "interactive"` to run a Codex/Claude TUI in the caller's tmux session
-that the user may watch. Send follow-ups through `leo_send_dispatch` (only
+opencode caller (whose notification is a pointer only). It is interactive by default (a
+Codex/Claude TUI the user may watch, in the caller's tmux session); pass
+`mode: "headless"` for a plain background run. It falls back to headless, and
+says so, when interactive is impossible. Send follow-ups through `leo_send_dispatch` (only
 when the run is idle); never ask the user to type into a dispatch pane. Once review
 passes, release an interactive dispatch with `leo_release`. Use
 `leo_consult` for a synchronous second opinion, and `leo_cancel` to stop an

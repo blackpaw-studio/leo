@@ -52,7 +52,7 @@ func TestDispatchWorktreeThroughDaemonKeepsFakeHarnessChanges(t *testing.T) {
 	}
 	s.restartDaemon(t)
 	var started consult.Started
-	s.request(t, http.MethodPost, "/api/dispatch", map[string]string{"template": "headless", "prompt": "write", "cwd": repo, "isolation": "worktree"}, &started)
+	s.request(t, http.MethodPost, "/api/dispatch", map[string]string{"template": "headless", "prompt": "write", "cwd": repo, "isolation": "worktree", "mode": "headless"}, &started)
 	entry := s.wait(t, started.ID)
 	if entry.Worktree == "" || entry.Branch == "" {
 		t.Fatalf("retained worktree not reported: %+v", entry)
