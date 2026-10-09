@@ -405,3 +405,16 @@ func (d *DelegationConfig) HasRole(name string) bool {
 	}
 	return false
 }
+
+// IsReadOnlyRole reports whether role is one of the stable read-only roles:
+// explore, plan, review, or a review sub-role such as review.security. A
+// role's template is user-chosen and the harnesses share no write-permission
+// signal (codex sandbox, claude permission mode, opencode), so the role name
+// is the one contract that holds across all of them.
+func IsReadOnlyRole(role string) bool {
+	switch role {
+	case "explore", "plan", "review":
+		return true
+	}
+	return strings.HasPrefix(role, "review.")
+}

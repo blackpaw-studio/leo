@@ -135,6 +135,9 @@ type runState struct {
 	idleSince   time.Time
 	killPending bool
 	releasing   bool
+	// releasingOnFinish marks a release triggered by release_on_finish, so
+	// the record says why the run closed.
+	releasingOnFinish bool
 	// pgid is the headless command's private process group. It is retained
 	// after Wait so worktree cleanup can prove no detached child remains.
 	pgid            int
@@ -347,7 +350,8 @@ func (d *Dispatcher) Start(_ context.Context, cfg *config.Config, req Request) (
 		Effort: req.Effort,
 		Prompt: req.Prompt, Status: StatusQueued, StartedAt: d.now(), Mode: mode,
 		Notify: notify, Isolation: req.Isolation, SourceCwd: req.Cwd,
-		CallerPaneID: req.CallerPaneID, CallerHarness: req.CallerHarness, CallerSessionID: req.CallerSessionID, CallerWindowID: req.CallerWindowID,
+		ReleaseOnFinish: mode == ModeInteractive && kind == "dispatch" && ResolveReleaseOnFinish(req.Role, req.ReleaseOnFinish),
+		CallerPaneID:    req.CallerPaneID, CallerHarness: req.CallerHarness, CallerSessionID: req.CallerSessionID, CallerWindowID: req.CallerWindowID,
 		CallerBridgeKey: req.CallerBridgeKey, CallerBridgeLaunch: req.CallerBridgeLaunch,
 	}
 	handle, err := d.recorder.Open(rec)
@@ -621,8 +625,9 @@ func (d *Dispatcher) Wait(ctx context.Context, ids []string, timeout time.Durati
 		}
 		unlockSerial := d.serialLocks(ids)
 		defer unlockSerial()
+		released := d.releaseReturnedLocked(ids, entries)
 		for i := range entries {
-			if !entries[i].Status.Terminal() {
+			if !entries[i].Status.Terminal() && !released[i] {
 				continue
 			}
 			if skipCleanup[i] {

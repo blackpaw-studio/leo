@@ -13,7 +13,12 @@ Codex/Claude TUI the user may watch, in the caller's tmux session); pass
 `mode: "headless"` for a plain background run. It falls back to headless, and
 says so, when interactive is impossible. Send follow-ups through `leo_send_dispatch` (only
 when the run is idle); never ask the user to type into a dispatch pane. Once review
-passes, release an interactive dispatch with `leo_release`. Use
+passes, release an interactive dispatch with `leo_release`. Read-only roles
+(`explore`, `plan`, `review`, `review.*`) release themselves once their first
+answer reaches you (`release_on_finish`, default on for them, off for
+`implement` and role-less dispatches), so a later `leo_send_dispatch` to one is
+rejected: start a new dispatch, or pass `release_on_finish: false` when you
+expect a follow-up. Use
 `leo_consult` for a synchronous second opinion, and `leo_cancel` to stop an
 in-flight dispatch. Call `leo dispatch watch <id>` to inspect the retained
 event feed; headless dispatches also open a viewer pane beneath the caller,

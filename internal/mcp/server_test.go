@@ -608,6 +608,29 @@ func TestLeoDispatchUsesDefaultCWD(t *testing.T) {
 	}
 }
 
+func TestLeoDispatchToolForwardsReleaseOnFinish(t *testing.T) {
+	var gotBody map[string]any
+	d := newFakeDaemon(func(method, path string, body []byte) (int, string) {
+		gotBody = nil
+		_ = json.Unmarshal(body, &gotBody)
+		return 200, `{"ok":true,"data":{"id":"d-test","harness":"codex","model":"gpt","cwd":"/tmp"}}`
+	})
+	defer d.close()
+	reg := newRegistry(newDaemonClient(d.port(), "tok"), "assistant", leotools.Permissions{})
+	runRequest(t, reg, map[string]any{"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": map[string]any{"name": "leo_dispatch", "arguments": map[string]any{"role": "explore", "prompt": "look", "release_on_finish": false}}})
+	if gotBody["release_on_finish"] != false {
+		t.Fatalf("body = %#v", gotBody)
+	}
+	runRequest(t, reg, map[string]any{"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": map[string]any{"name": "leo_dispatch", "arguments": map[string]any{"role": "explore", "prompt": "look"}}})
+	if _, set := gotBody["release_on_finish"]; set {
+		t.Fatalf("unset must stay unset: %#v", gotBody)
+	}
+	tools := runRequest(t, reg, map[string]any{"jsonrpc": "2.0", "id": 3, "method": "tools/list"})
+	if !strings.Contains(fmt.Sprint(tools), "release_on_finish") {
+		t.Fatal("leo_dispatch schema does not advertise release_on_finish")
+	}
+}
+
 func TestLeoDispatchRejectsCallerPaneFromAnotherTmuxServer(t *testing.T) {
 	tmuxTmp := t.TempDir()
 	t.Setenv("TMUX_TMPDIR", tmuxTmp)

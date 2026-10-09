@@ -184,6 +184,12 @@ type Record struct {
 	// PendingWork is the background work a waiting run is paused on.
 	PendingWork  *PendingWork `json:"pending_work,omitempty"`
 	HookActivity time.Time    `json:"-"`
+	// ReleaseOnFinish is the resolved release_on_finish setting: an
+	// interactive run releases itself once its first turn finishes and the
+	// result has reached the caller. ReleasedOnFinish says that is why a
+	// released run closed.
+	ReleaseOnFinish  bool `json:"release_on_finish"`
+	ReleasedOnFinish bool `json:"released_on_finish,omitempty"`
 }
 
 func (r *Record) startActive(now time.Time) {

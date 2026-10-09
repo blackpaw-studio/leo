@@ -28,6 +28,7 @@ func (s *Server) handleAPIDispatch(w http.ResponseWriter, r *http.Request) {
 		Mode                                                   consult.Mode `json:"mode"`
 		TimeoutSeconds                                         *float64     `json:"timeout_seconds"`
 		Notify                                                 *bool        `json:"notify"`
+		ReleaseOnFinish                                        *bool        `json:"release_on_finish"`
 		Isolation                                              string       `json:"isolation"`
 		CallerPaneID                                           string       `json:"caller_pane_id"`
 		CallerBridgeKey                                        string       `json:"caller_bridge_key"`
@@ -94,7 +95,7 @@ func (s *Server) handleAPIDispatch(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, apiResponse{Error: err.Error()})
 		return
 	}
-	dispatchReq := consult.Request{Caller: req.From, Template: req.Template, Model: req.Model, Effort: req.Effort, Role: req.Role, Profile: profile, Prompt: req.Prompt, Cwd: req.Cwd, Name: req.Name, Timeout: timeout, Mode: mode, Notify: req.Notify, Isolation: req.Isolation, CallerPaneID: caller.PaneID, CallerSessionID: caller.SessionID, CallerWindowID: caller.WindowID, CallerHarness: caller.Harness, CallerBridgeKey: req.CallerBridgeKey, CallerBridgeLaunch: s.bridgeLaunchID(req.CallerBridgeKey), ParentDispatchID: req.ParentDispatchID}
+	dispatchReq := consult.Request{Caller: req.From, Template: req.Template, Model: req.Model, Effort: req.Effort, Role: req.Role, Profile: profile, Prompt: req.Prompt, Cwd: req.Cwd, Name: req.Name, Timeout: timeout, Mode: mode, Notify: req.Notify, ReleaseOnFinish: req.ReleaseOnFinish, Isolation: req.Isolation, CallerPaneID: caller.PaneID, CallerSessionID: caller.SessionID, CallerWindowID: caller.WindowID, CallerHarness: caller.Harness, CallerBridgeKey: req.CallerBridgeKey, CallerBridgeLaunch: s.bridgeLaunchID(req.CallerBridgeKey), ParentDispatchID: req.ParentDispatchID}
 	started, err := s.consults.Start(r.Context(), cfg, dispatchReq)
 	var validationErr *consult.ValidationError
 	if err != nil && req.Mode == "" && mode == consult.ModeInteractive && !errors.As(err, &validationErr) && !errors.Is(err, context.Canceled) {

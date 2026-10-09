@@ -131,7 +131,7 @@ bridged claude session can fork: its leo-bridge mod answers the call in-session,
 so a fork consult never reaches the daemon and leaves no consult record. Any
 other caller gets "fork consult needs a bridged claude session".
 
-`leo_dispatch(template? | role?, prompt, model?, effort?, cwd?, name?, mode?, timeout_seconds?, notify?, isolation?)`
+`leo_dispatch(template? | role?, prompt, model?, effort?, cwd?, name?, mode?, timeout_seconds?, notify?, release_on_finish?, isolation?)`
 starts work asynchronously and immediately returns an ID. Use it for
 implementation, review, or exploration that can proceed while the caller does
 other work. The prompt must say exactly what the subagent should do; it has no
@@ -213,7 +213,8 @@ dispatch IDs. In interactive mode, `leo_wait` accepts either a run ID or a
 turn ID (`d-…#n`).
 
 `leo_dispatch_output(id, tail?)` reads a nonblocking snapshot of recorded
-output without collecting the dispatch. `tail` is a positive rendered-line
+output without collecting the dispatch (reading the finished result of a
+[`release_on_finish`](#release-on-finish) run releases it). `tail` is a positive rendered-line
 count, defaults to 60, and is capped at 400. It accepts turn IDs and returns
 the parent run's stream. Use it when a wait result is truncated.
 
@@ -231,6 +232,7 @@ permissions apply to both consult and dispatch targets.
 leo dispatch run codex-implementer "Add the parser tests" --cwd "$PWD"
 leo dispatch run --role implement --effort high "Add the parser tests"
 leo dispatch run codex-implementer "Inspect only" --notify=false
+leo dispatch run --role explore "Where is X handled?" --release-on-finish=false
 leo dispatch list
 leo dispatch watch d-12ab34
 leo dispatch attach d-12ab34
@@ -371,7 +373,42 @@ waiting run is rejected like a send to a running one; cancel works as usual.
 An interactive dispatch is bound to its caller's tmux session. It closes on
 cancel, TUI exit, one hour of empty-composer idle time, or the session timeout.
 Nothing survives a daemon restart, and interactive panes never close merely
-because their result was collected.
+because their result was collected, unless the run opted into
+[`release_on_finish`](#release-on-finish).
+
+### Release on finish
+
+Read-only dispatches (explore, plan, review) are rarely followed up, yet an
+idle interactive pane stays open for an hour after it answers. `release_on_finish`
+releases the run, with the same effect as `leo_release`, as soon as its first
+turn finishes **and** the result has reached the caller.
+
+- **Default.** On for the read-only roles `explore`, `plan`, `review` and any
+  `review.*` sub-role; off for `implement`, `implement.hard`, every other role,
+  and template dispatches that name no role. The role name is the signal, not
+  the template's permissions: the harnesses share no write-permission setting
+  (codex sandbox, claude permission mode, opencode), and a "read-only" template
+  often still runs with bypass permissions. An explicit `release_on_finish:
+  true|false` (MCP/API) or `--release-on-finish[=false]` (CLI) always wins.
+- **Trigger.** Only after delivery, never before: the inline completion
+  notification was delivered (claude callers; a bridged caller's ack counts), or
+  `leo_wait` returned the result, or `leo_dispatch_output` read it. A pointer-only
+  notification (codex and opencode callers) does not carry the result, so those
+  callers release on `leo_wait`. With `notify: false` and nobody collecting, the
+  run falls back to the normal one-hour idle close.
+- **Never** on an `interrupted`, `lost` or `rejected` turn, a run that is
+  `needs_input` or `waiting`, a follow-up that is queued or running, or a run
+  that has a second turn (including one typed into the pane).
+- **After release.** The recorded result stays readable (`leo_wait`,
+  `leo_dispatch_output`, `leo dispatch show`). `leo_send_dispatch` to the run
+  fails with `dispatch d-… was released after finishing (release_on_finish);
+  start a new dispatch`. Pass `release_on_finish: false` when you expect a
+  follow-up.
+- **Visibility.** The record (`leo dispatch show`, `GET /api/dispatch/{id}`)
+  carries the resolved `release_on_finish`, and `released_on_finish: true` on a
+  run that closed this way, to tell it from a manual release or an idle close.
+- Headless dispatches ignore the setting (it records `false`); headless
+  continuation is unchanged.
 
 Known limitations: turns are attributed by the harness's own ids (claude's
 `prompt_id`, the bridge's turn id, codex's `turn_id`), not by arrival order

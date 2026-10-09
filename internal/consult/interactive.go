@@ -720,7 +720,12 @@ func (d *Dispatcher) Send(ctx context.Context, id, message string) (SendResult, 
 			return SendResult{}, invalidf("message contains control characters")
 		}
 	}
-	_, s, err := d.lookup(id)
+	rec, s, err := d.lookup(id)
+	if err == nil && rec.Status == StatusReleased {
+		if releasedErr := releasedSendError(rec); releasedErr != nil {
+			return SendResult{}, releasedErr
+		}
+	}
 	if err != nil || s == nil {
 		return SendResult{}, fmt.Errorf("unknown dispatch %s", id)
 	}

@@ -76,6 +76,7 @@ func (d *Dispatcher) releaseLocked(id string, layout func(string) error) (Record
 		d.mu.Lock()
 		current := state.record
 		current.Status, current.PaneID, current.ViewerPaneID, current.ViewerKind = StatusReleased, "", "", ""
+		current.ReleasedOnFinish = state.releasingOnFinish
 		if current.EndedAt.IsZero() {
 			current.EndedAt = d.now()
 		}

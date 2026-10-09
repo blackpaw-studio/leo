@@ -32,6 +32,30 @@ func TestDispatchClientForwardsFoundationOptions(t *testing.T) {
 	}
 }
 
+func TestDispatchClientForwardsReleaseOnFinishOnlyWhenSet(t *testing.T) {
+	var body map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body = nil
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		_, _ = w.Write([]byte(`{"ok":true,"data":{"id":"d-x"}}`))
+	}))
+	defer srv.Close()
+	c := newDaemonClient(strings.TrimPrefix(srv.URL, "http://127.0.0.1:"), "")
+	if _, err := c.dispatch(context.Background(), consult.Request{Role: "implement", Prompt: "go", Cwd: "/tmp"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, set := body["release_on_finish"]; set {
+		t.Fatalf("an unset release_on_finish must be left to the daemon's role default: %#v", body)
+	}
+	off := false
+	if _, err := c.dispatch(context.Background(), consult.Request{Role: "explore", Prompt: "go", Cwd: "/tmp", ReleaseOnFinish: &off}); err != nil {
+		t.Fatal(err)
+	}
+	if body["release_on_finish"] != false {
+		t.Fatalf("body = %#v", body)
+	}
+}
+
 func TestDispatchOutputClientAndSchema(t *testing.T) {
 	var path string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

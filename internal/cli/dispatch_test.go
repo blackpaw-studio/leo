@@ -134,3 +134,64 @@ func TestDispatchRunOmittedModeLeavesDefaultToDaemonAndWaitsOnItsChoice(t *testi
 		t.Fatalf("wait query %q, want the interactive opening turn d-x#1", waitQuery)
 	}
 }
+
+func TestDispatchRunSendsReleaseOnFinishOnlyWhenTheFlagIsGiven(t *testing.T) {
+	cases := []struct {
+		name string
+		args []string
+		want string
+	}{
+		{"omitted", nil, ""},
+		{"bare flag", []string{"--release-on-finish"}, `"release_on_finish":true`},
+		{"explicit opt-out", []string{"--release-on-finish=false"}, `"release_on_finish":false`},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			var postBody string
+			listener, err := net.Listen("tcp", "127.0.0.1:0")
+			if err != nil {
+				t.Fatal(err)
+			}
+			server := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				switch r.URL.Path {
+				case "/api/dispatch":
+					b, _ := io.ReadAll(r.Body)
+					postBody = string(b)
+					_, _ = w.Write([]byte(`{"ok":true,"data":{"id":"d-x","mode":"interactive"}}`))
+				case "/api/dispatch/wait":
+					_, _ = w.Write([]byte(`{"ok":true,"data":[{"id":"d-x","status":"idle","outcome":"finished","text":"ok"}]}`))
+				}
+			})}
+			go func() { _ = server.Serve(listener) }()
+			t.Cleanup(func() { _ = server.Close() })
+			home := t.TempDir()
+			if err := os.MkdirAll(filepath.Join(home, "state"), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(home, "state", "api.token"), []byte("tok"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			configPath := filepath.Join(home, "leo.yaml")
+			if err := os.WriteFile(configPath, []byte(fmt.Sprintf("web:\n  port: %d\ntasks: {}\n", listener.Addr().(*net.TCPAddr).Port)), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			oldCfg, oldOut := cfgFile, consultStdout
+			cfgFile, consultStdout = configPath, io.Discard
+			t.Cleanup(func() { cfgFile, consultStdout = oldCfg, oldOut })
+			cmd := newDispatchRunCmd()
+			cmd.SetArgs(append([]string{"--role", "explore", "look", "--cwd", home}, c.args...))
+			if err := cmd.Execute(); err != nil {
+				t.Fatal(err)
+			}
+			if c.want == "" {
+				if strings.Contains(postBody, "release_on_finish") {
+					t.Fatalf("omitted flag must not be sent: %s", postBody)
+				}
+				return
+			}
+			if !strings.Contains(postBody, c.want) {
+				t.Fatalf("body %s, want %s", postBody, c.want)
+			}
+		})
+	}
+}
