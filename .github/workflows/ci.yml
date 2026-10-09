@@ -1,10 +1,9 @@
 name: CI
 
+# Runs only when called: prerelease.yml (every PR), unstable.yml (pushes to
+# main) and release.yml (tags) gate their builds on it. Direct push/PR
+# triggers would run every job twice.
 on:
-  push:
-    branches: [main]
-  pull_request:
-    branches: [main]
   workflow_call:
 
 permissions:
