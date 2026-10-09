@@ -11,6 +11,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/blackpaw-studio/leo/internal/consult"
 )
@@ -167,5 +168,38 @@ func TestAPIDispatchExplicitInteractiveLaunchFailureStillErrors(t *testing.T) {
 	s.handleAPIDispatch(w, httptest.NewRequest("POST", "/api/dispatch", strings.NewReader(`{"template":"coding","prompt":"work","cwd":"/tmp","mode":"interactive"}`)))
 	if w.Code != 500 || !strings.Contains(w.Body.String(), "no server running") {
 		t.Fatalf("status %d: %s", w.Code, w.Body.String())
+	}
+}
+
+// The headless retry after a failed interactive launch is a fresh headless
+// Start: its child must get the same daemon-backed leo MCP env and token, in
+// process env only.
+func TestAPIDispatchHeadlessFallbackChildGetsLeoMCPEnv(t *testing.T) {
+	s, rt, _ := newModeTestServer(t)
+	rt.err = errors.New("no server running")
+	s.consults.AgentToken = "fallback-token"
+	var captured *exec.Cmd
+	var argv []string
+	s.consults.ExecCommandContext = func(ctx context.Context, _ string, args ...string) *exec.Cmd {
+		argv = args
+		captured = exec.CommandContext(ctx, "echo", `{"type":"result","result":"done","is_error":false}`)
+		return captured
+	}
+	got := postDispatch(t, s, `{"template":"coding","prompt":"work","cwd":"/tmp"}`)
+	if got.Data.Mode != consult.ModeHeadless {
+		t.Fatalf("mode=%q, want the headless fallback", got.Data.Mode)
+	}
+	s.consults.Wait(context.Background(), []string{got.Data.ID}, 5*time.Second)
+	env := map[string]string{}
+	for _, entry := range captured.Env {
+		if k, v, ok := strings.Cut(entry, "="); ok {
+			env[k] = v
+		}
+	}
+	if env["LEO_API_TOKEN"] != "fallback-token" || env["LEO_WEB_PORT"] != "8370" || env["LEO_DISPATCH_ID"] != got.Data.ID || env["LEO_PROCESS_NAME"] != "dispatch:"+got.Data.ID {
+		t.Fatalf("fallback child env: token=%q port=%q id=%q name=%q", env["LEO_API_TOKEN"], env["LEO_WEB_PORT"], env["LEO_DISPATCH_ID"], env["LEO_PROCESS_NAME"])
+	}
+	if strings.Contains(strings.Join(argv, "\x00"), "fallback-token") {
+		t.Fatalf("token in argv: %q", argv)
 	}
 }

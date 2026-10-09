@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/blackpaw-studio/leo/internal/bridge"
+	"github.com/blackpaw-studio/leo/internal/config"
 	"github.com/blackpaw-studio/leo/internal/consult"
 	"github.com/blackpaw-studio/leo/internal/observe"
 	"github.com/blackpaw-studio/leo/internal/tmux"
@@ -84,7 +85,8 @@ func (s *Server) setupConsultRuntime(opts Options, resolveCallerSession func(str
 	}
 	runtime := consult.NewInteractiveRuntime(s.configPath, s.loadConfig, resolveCallerSession, findTmuxPath(), interactiveLeoPath)
 	runtime.ExecCommandContext = s.execCommandContext
-	runtime.AgentToken = s.agentToken
+	runtime.AgentTokenFile = func(cfg *config.Config) string { return AgentTokenPath(cfg.StatePath()) }
+	s.consults.AgentToken = s.agentToken
 	runtime.LeoMCP = opts.LeoMCP
 	s.bridgeRouter = opts.Bridge.Router
 	var pusher *consult.StatePusher

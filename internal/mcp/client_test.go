@@ -145,7 +145,7 @@ func TestConsultPropagatesCallerCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() {
-		_, err := c.consult(ctx, "caller", "coding", "", "question")
+		_, err := c.consult(ctx, "caller", "", "coding", "", "question")
 		done <- err
 	}()
 	<-requestStarted

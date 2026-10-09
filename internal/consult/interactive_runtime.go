@@ -82,7 +82,12 @@ type TmuxInteractiveRuntime struct {
 	config               func() (*config.Config, error)
 	resolveCallerSession func(string) (string, bool)
 	tmuxPath, leoPath    string
-	AgentToken           string
+	// AgentTokenFile resolves the 0600 file holding the daemon's agent bearer
+	// token for cfg. The token reaches a child only by its pane's shell
+	// reading this file (see launchCommandWords): tmux -e flags and the pane
+	// command string are both argv, visible in ps. A nil func, an empty path
+	// or a disabled web listener leaves the child local-only.
+	AgentTokenFile func(*config.Config) string
 	// LeoMCP is the leo binary interactive dispatches launch as their leo
 	// MCP server. The zero value runs the bare "leo" from PATH.
 	LeoMCP              leomcp.Server
@@ -133,8 +138,11 @@ func (r *TmuxInteractiveRuntime) Launch(ctx context.Context, req LaunchRequest) 
 	if err != nil {
 		return "", "", err
 	}
+	childEnv := leomcp.DispatchChildEnv(cfg, tmpl, req.ID)
 	if claudeOpts, ok := opts.(claudeharness.Options); ok && req.Dispatched {
 		opts = resolveClaudeDispatchProfile(cfg, tmpl, "dispatch", claudeOpts, tmpl.Env, r.LeoMCP)
+	} else if req.Dispatched {
+		opts = withLeoMCPBridge(opts, r.LeoMCP, tmpl, childEnv)
 	}
 	spec := harness.LaunchSpec{Kind: harness.KindAgent, Name: req.Name, Model: req.Model, Effort: req.Effort, MaxTurns: cfg.TemplateMaxTurns(tmpl), Workspace: req.Cwd, Options: opts, Dispatched: req.Dispatched}
 	// Claude delivers the opening brief as a launch-time argv positional
@@ -217,9 +225,22 @@ func (r *TmuxInteractiveRuntime) Launch(ctx context.Context, req LaunchRequest) 
 			return "", "", err
 		}
 	}
-	env[dispatchIDEnv], env["LEO_CONFIG"] = req.ID, r.configPath
-	if r.AgentToken != "" {
-		env["LEO_API_TOKEN"] = r.AgentToken
+	// The leo MCP env is leo's: applied over any template env, and the token
+	// is stripped from the tmux -e set entirely (it rides tokenFile instead).
+	env = leomcp.WithoutReservedMap(env)
+	for _, k := range leomcp.ReservedEnv {
+		// Set empty rather than left out: tmux's global environment would
+		// otherwise show through for anything the child is not given.
+		env[k] = ""
+	}
+	for k, v := range childEnv {
+		env[k] = v
+	}
+	env["LEO_CONFIG"] = r.configPath
+	delete(env, leomcp.EnvAPIToken) // rides tokenFile, never a tmux -e (argv) flag
+	tokenFile := ""
+	if r.AgentTokenFile != nil && cfg.Web.Enabled {
+		tokenFile = r.AgentTokenFile(cfg)
 	}
 	for _, k := range bridgeEnvKeys {
 		env[k] = ""
@@ -237,7 +258,7 @@ func (r *TmuxInteractiveRuntime) Launch(ctx context.Context, req LaunchRequest) 
 		}
 	}
 	label := viewerWindowName(Record{ID: req.ID, Name: req.Name, Template: req.Template})
-	words := launchCommandWords(req.ID, h.Binary(), args)
+	words := launchCommandWords(req.ID, h.Binary(), args, tokenFile)
 	if briefPath != "" {
 		// Appended after the per-word shellQuote pass on purpose: shellQuote
 		// wraps its input in single quotes, which would disable the
@@ -252,7 +273,7 @@ func (r *TmuxInteractiveRuntime) Launch(ctx context.Context, req LaunchRequest) 
 			legacyPaste: briefPath == "" && req.Prompt != "",
 		}
 		if r.queueBridgedOpening(bd, req.Prompt) {
-			words = launchCommandWords(req.ID, h.Binary(), bridgePlan.Args(args))
+			words = launchCommandWords(req.ID, h.Binary(), bridgePlan.Args(args), tokenFile)
 			for k, v := range bridgePlan.Env {
 				env[k] = v
 			}
@@ -329,15 +350,27 @@ func (r *TmuxInteractiveRuntime) Launch(ctx context.Context, req LaunchRequest) 
 	return pane, label, nil
 }
 
-// launchCommandWords is the shell-quoted `env LEO_DISPATCH_ID=<id> <binary>
-// <args...>` a dispatch pane runs.
-func launchCommandWords(id, binary string, args []string) []string {
-	command := make([]string, 0, len(args)+3)
-	command = append(command, "env", dispatchIDEnv+"="+id, binary)
-	command = append(command, args...)
-	words := make([]string, len(command))
-	for i, word := range command {
-		words[i] = shellQuote(word)
+// launchCommandWords is the shell command a dispatch pane runs:
+//
+//	export LEO_API_TOKEN="$(cat <tokenFile>)"; exec env LEO_DISPATCH_ID=<id> <binary> <args...>
+//
+// The token is a shell assignment rather than an `env VAR=value` word, so it
+// is never argv of any process (env's own included, which ps would show before
+// it execs): the pane's shell reads it from the 0600 file and exports it, and
+// the secret itself never enters this ps-visible command string. A missing or
+// unreadable file expands to an empty token and the child's leo MCP server
+// runs local-only; with no tokenFile any token inherited from tmux's global
+// environment is unset. `env LEO_DISPATCH_ID=<id>` stays adjacent for
+// startCommandHasDispatchID. The prefix bypasses per-word quoting, which
+// would disable the substitution.
+func launchCommandWords(id, binary string, args []string, tokenFile string) []string {
+	token := "unset " + leomcp.EnvAPIToken + ";"
+	if tokenFile != "" {
+		token = "export " + leomcp.EnvAPIToken + `="$(cat ` + shellQuote(tokenFile) + ` 2>/dev/null)";`
+	}
+	words := []string{token, "exec", shellQuote("env"), shellQuote(dispatchIDEnv + "=" + id), shellQuote(binary)}
+	for _, arg := range args {
+		words = append(words, shellQuote(arg))
 	}
 	return words
 }

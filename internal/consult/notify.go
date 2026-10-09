@@ -136,7 +136,7 @@ func (d *Dispatcher) restorePendingNotifications(rec Record) {
 				if rec.Status.Terminal() {
 					close(done)
 				}
-				d.runs[rec.ID] = &runState{record: rec, handle: handle, done: done}
+				d.runs[rec.ID] = newRunState(rec, handle, done, nil)
 			}
 			d.mu.Unlock()
 			return
