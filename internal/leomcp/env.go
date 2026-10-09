@@ -16,7 +16,7 @@ import (
 const (
 	EnvProcessName = "LEO_PROCESS_NAME"
 	EnvWebPort     = "LEO_WEB_PORT"
-	EnvAPIToken    = "LEO_API_TOKEN"
+	EnvAPIToken    = "LEO_API_TOKEN" // #nosec G101 -- the variable name, not a credential
 	EnvDispatchID  = "LEO_DISPATCH_ID"
 	EnvPermissions = "LEO_PERMISSIONS"
 )
@@ -64,13 +64,12 @@ func PermissionsEnv(tmpl config.TemplateConfig) map[string]string {
 // DispatchChildEnv is the leo MCP environment of a leo_dispatch subagent with
 // the given dispatch id: its own attributable process name, the dispatch id
 // (which scopes the server's dispatch-only restrictions and parents nested
-// dispatches), the template's permissions, and — only when the daemon's web
-// listener is enabled and token is non-empty — the port and token that put the
-// server in full mode. Otherwise the child stays local-only, as before.
-//
-// The token is a secret: callers must deliver it through process environment
-// or a file, never argv (see the interactive runtime).
-func DispatchChildEnv(cfg *config.Config, tmpl config.TemplateConfig, id, token string) map[string]string {
+// dispatches), the template's permissions, and — when the daemon's web
+// listener is enabled — the port. It deliberately omits EnvAPIToken: the
+// server only runs in full mode once the caller also supplies the token, and
+// the token is a secret each launch path must deliver through process
+// environment or a file, never argv (see the interactive runtime).
+func DispatchChildEnv(cfg *config.Config, tmpl config.TemplateConfig, id string) map[string]string {
 	env := map[string]string{
 		EnvProcessName: DispatchProcessPrefix + id,
 		EnvDispatchID:  id,
@@ -78,9 +77,8 @@ func DispatchChildEnv(cfg *config.Config, tmpl config.TemplateConfig, id, token 
 	for k, v := range PermissionsEnv(tmpl) {
 		env[k] = v
 	}
-	if cfg != nil && cfg.Web.Enabled && token != "" {
+	if cfg != nil && cfg.Web.Enabled {
 		env[EnvWebPort] = strconv.Itoa(cfg.WebPort())
-		env[EnvAPIToken] = token
 	}
 	return env
 }

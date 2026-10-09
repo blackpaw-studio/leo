@@ -196,9 +196,3 @@ func applyPermissions(env map[string]string, tmpl config.TemplateConfig) map[str
 	}
 	return out
 }
-
-// leoMCPEnvVars returns the env-var *names* the codex bridge forwards into
-// the leo MCP server; see leomcp.BridgeEnvNames.
-func leoMCPEnvVars(tmpl config.TemplateConfig) []string {
-	return leomcp.BridgeEnvNames(!tmpl.Permissions.IsZero())
-}

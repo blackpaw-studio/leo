@@ -130,8 +130,8 @@ func TestHeadlessChildStaysLocalOnlyWhenDaemonListenerUnavailable(t *testing.T) 
 	} {
 		for _, template := range []string{"claude", "codex", "opencode"} {
 			id, args, env := runHeadlessChild(t, tc.cfg, template, tc.token)
-			if env["LEO_API_TOKEN"] != "" || env["LEO_WEB_PORT"] != "" {
-				t.Errorf("%s/%s: daemon creds present: token=%q port=%q", tc.name, template, env["LEO_API_TOKEN"], env["LEO_WEB_PORT"])
+			if env["LEO_API_TOKEN"] != "" {
+				t.Errorf("%s/%s: token present: %q", tc.name, template, env["LEO_API_TOKEN"])
 			}
 			if env["LEO_DISPATCH_ID"] != id {
 				t.Errorf("%s/%s: dispatch id = %q", tc.name, template, env["LEO_DISPATCH_ID"])

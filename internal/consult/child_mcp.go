@@ -33,6 +33,9 @@ func withLeoMCPBridge(decoded any, mcp leomcp.Server, tmpl config.TemplateConfig
 // overlay is applied last at launch so neither a template env nor an env the
 // daemon inherited can mask the child's identity or credentials.
 func (d *Dispatcher) headlessChildMCP(cfg *config.Config, tmpl config.TemplateConfig, decoded any, id string) (any, map[string]string) {
-	env := leomcp.DispatchChildEnv(cfg, tmpl, id, d.AgentToken)
+	env := leomcp.DispatchChildEnv(cfg, tmpl, id)
+	if cfg != nil && cfg.Web.Enabled && d.AgentToken != "" {
+		env[leomcp.EnvAPIToken] = d.AgentToken
+	}
 	return withLeoMCPBridge(decoded, d.LeoMCP, tmpl, env), env
 }
