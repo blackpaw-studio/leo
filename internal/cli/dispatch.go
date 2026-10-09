@@ -108,7 +108,7 @@ func newDispatchRunCmd() *cobra.Command {
 			return err
 		}
 		var started consult.Started
-		if mode != "headless" && mode != "interactive" {
+		if mode != "" && mode != "headless" && mode != "interactive" {
 			return fmt.Errorf("mode must be headless or interactive")
 		}
 		template, prompt := "", ""
@@ -117,7 +117,10 @@ func newDispatchRunCmd() *cobra.Command {
 		} else {
 			template, prompt = args[0], args[1]
 		}
-		body := map[string]any{"prompt": prompt, "model": model, "effort": effort, "cwd": cwd, "name": name, "mode": mode}
+		body := map[string]any{"prompt": prompt, "model": model, "effort": effort, "cwd": cwd, "name": name}
+		if mode != "" {
+			body["mode"] = mode
+		}
 		if role != "" {
 			body["role"] = role
 		} else {
@@ -141,8 +144,13 @@ func newDispatchRunCmd() *cobra.Command {
 		}
 		var entries []consult.Entry
 		waitID := started.ID
-		if mode == "interactive" {
+		// The daemon resolves an omitted mode, so wait on what it chose.
+		interactive := started.Mode == consult.ModeInteractive
+		if interactive {
 			waitID += "#1"
+		}
+		if started.Note != "" {
+			fmt.Fprintln(os.Stderr, started.Note)
 		}
 		if err := dispatchHTTP(cmd.Context(), cfg, http.MethodGet, "/api/dispatch/wait?id="+url.QueryEscape(waitID)+"&timeout="+fmt.Sprintf("%g", timeout.Seconds()), nil, &entries); err != nil {
 			return err
@@ -151,7 +159,7 @@ func newDispatchRunCmd() *cobra.Command {
 			return fmt.Errorf("daemon returned no dispatch result")
 		}
 		fmt.Fprintln(consultStdout, entries[0].Text)
-		if mode == "interactive" && entries[0].Outcome == consult.TurnFinished {
+		if interactive && entries[0].Outcome == consult.TurnFinished {
 			return nil
 		}
 		if entries[0].Status != consult.StatusDone {
@@ -164,7 +172,7 @@ func newDispatchRunCmd() *cobra.Command {
 	cmd.Flags().StringVar(&role, "role", "", "delegation role")
 	cmd.Flags().StringVar(&cwd, "cwd", "", "working directory")
 	cmd.Flags().StringVar(&name, "name", "", "run name")
-	cmd.Flags().StringVar(&mode, "mode", "headless", "execution mode (headless or interactive)")
+	cmd.Flags().StringVar(&mode, "mode", "", "execution mode: interactive (default) or headless")
 	cmd.Flags().DurationVar(&timeout, "timeout", 0, "optional run cap (unlimited when omitted)")
 	cmd.Flags().BoolVar(&notify, "notify", true, "notify the caller when the dispatch completes")
 	cmd.Flags().StringVar(&isolation, "isolation", "", "execution isolation (worktree)")

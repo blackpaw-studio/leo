@@ -820,3 +820,20 @@ func TestSendMessageSendsSenderIdentityStructurally(t *testing.T) {
 		t.Errorf("delivered text = %q, want %q (text must not change)", sent.Text, want)
 	}
 }
+
+func TestDispatchMCPOmittedModeSendsNoModeAndShowsFallbackNote(t *testing.T) {
+	var dispatchBody map[string]any
+	d := newFakeDaemon(func(method, path string, body []byte) (int, string) {
+		_ = json.Unmarshal(body, &dispatchBody)
+		return 200, `{"ok":true,"data":{"id":"d-test","harness":"opencode","model":"m","cwd":"/tmp","mode":"headless","note":"ran headless: the opencode harness has no interactive dispatch"}}`
+	})
+	defer d.close()
+	reg := newRegistry(newDaemonClient(d.port(), "tok"), "assistant", leotools.Permissions{})
+	resp := runRequest(t, reg, map[string]any{"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": map[string]any{"name": "leo_dispatch", "arguments": map[string]any{"template": "local", "prompt": "go", "cwd": "/tmp"}}})
+	if _, sent := dispatchBody["mode"]; sent {
+		t.Fatalf("omitted mode must be left to the daemon, body %+v", dispatchBody)
+	}
+	if got := resp["result"].(map[string]any)["content"].([]any)[0].(map[string]any)["text"].(string); !strings.Contains(got, "ran headless: the opencode harness") {
+		t.Fatalf("dispatch reply lacks the fallback note: %q", got)
+	}
+}

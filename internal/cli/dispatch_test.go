@@ -2,6 +2,7 @@ package cli
 
 import (
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"os"
@@ -85,5 +86,51 @@ func TestDispatchReportTreatsBlankIdentityAsUnset(t *testing.T) {
 				t.Fatalf("report posted %d times with a blank identity", n)
 			}
 		})
+	}
+}
+
+func TestDispatchRunOmittedModeLeavesDefaultToDaemonAndWaitsOnItsChoice(t *testing.T) {
+	var postBody, waitQuery string
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/dispatch":
+			b, _ := io.ReadAll(r.Body)
+			postBody = string(b)
+			_, _ = w.Write([]byte(`{"ok":true,"data":{"id":"d-x","mode":"interactive"}}`))
+		case "/api/dispatch/wait":
+			waitQuery = r.URL.RawQuery
+			_, _ = w.Write([]byte(`{"ok":true,"data":[{"id":"d-x","status":"idle","outcome":"finished","text":"ok"}]}`))
+		}
+	})}
+	go func() { _ = server.Serve(listener) }()
+	t.Cleanup(func() { _ = server.Close() })
+	home := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(home, "state"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(home, "state", "api.token"), []byte("tok"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	configPath := filepath.Join(home, "leo.yaml")
+	if err := os.WriteFile(configPath, []byte(fmt.Sprintf("web:\n  port: %d\ntasks: {}\n", listener.Addr().(*net.TCPAddr).Port)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	oldCfg, oldOut := cfgFile, consultStdout
+	cfgFile, consultStdout = configPath, io.Discard
+	t.Cleanup(func() { cfgFile, consultStdout = oldCfg, oldOut })
+	cmd := newDispatchRunCmd()
+	cmd.SetArgs([]string{"coding", "work", "--cwd", home})
+	if err := cmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(postBody, `"mode"`) {
+		t.Fatalf("omitted --mode must not be sent: %s", postBody)
+	}
+	if !strings.Contains(waitQuery, "id=d-x%231") {
+		t.Fatalf("wait query %q, want the interactive opening turn d-x#1", waitQuery)
 	}
 }

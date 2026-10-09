@@ -30,6 +30,12 @@ All notable user-visible changes to Leo are documented here.
 
 ### Changed
 
+- **Dispatches are interactive by default.** An omitted `mode` on
+  `leo_dispatch`, `POST /api/dispatch`, and `leo dispatch run` now resolves to
+  `interactive` for every role (the daemon resolves it in one place); pass
+  `mode: headless` to opt out. When interactive is impossible (opencode
+  template, no tmux, no interactive runtime) an omitted mode falls back to
+  headless and the start reply says why. `leo_consult` stays headless.
 - **BREAKING: the codex harness option `sandbox` is now `permission_mode`.**
   Configs carrying `harness_options.sandbox` under a codex-harness scope fail
   validation with an explicit "renamed to" error — and because validation runs

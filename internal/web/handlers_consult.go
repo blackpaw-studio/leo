@@ -17,7 +17,8 @@ import (
 	"github.com/blackpaw-studio/leo/internal/consult"
 )
 
-// handleAPIDispatch starts a headless subagent without tying its lifetime to
+// handleAPIDispatch starts a subagent (interactive unless the request asks
+// for headless) without tying its lifetime to
 // the request. Unlike consult, callers must state the target workspace.
 func (s *Server) handleAPIDispatch(w http.ResponseWriter, r *http.Request) {
 	_ = http.NewResponseController(w).SetWriteDeadline(time.Time{})
@@ -80,9 +81,9 @@ func (s *Server) handleAPIDispatch(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, apiResponse{Error: err.Error()})
 		return
 	}
-	mode := req.Mode
+	mode, modeNote := req.Mode, ""
 	if mode == "" {
-		mode = consult.ModeHeadless
+		mode, modeNote = s.defaultDispatchMode(cfg, req.Template)
 	}
 	if mode != consult.ModeHeadless && mode != consult.ModeInteractive {
 		writeJSON(w, http.StatusBadRequest, apiResponse{Error: "mode must be headless or interactive"})
@@ -103,6 +104,7 @@ func (s *Server) handleAPIDispatch(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, status, apiResponse{Error: err.Error()})
 		return
 	}
+	started.Mode, started.Note = mode, modeNote
 	writeJSON(w, http.StatusOK, apiResponse{OK: true, Data: started})
 }
 
