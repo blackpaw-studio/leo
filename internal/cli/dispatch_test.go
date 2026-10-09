@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -193,5 +194,22 @@ func TestDispatchRunSendsReleaseOnFinishOnlyWhenTheFlagIsGiven(t *testing.T) {
 				t.Fatalf("body %s, want %s", postBody, c.want)
 			}
 		})
+	}
+}
+
+func TestDispatchCallerFieldsAttributeChildrenToTheirParentDispatch(t *testing.T) {
+	for name, tc := range map[string]struct {
+		env  map[string]string
+		want map[string]any
+	}{
+		"supervised agent": {map[string]string{"LEO_PROCESS_NAME": "alpha"}, map[string]any{"from": "alpha"}},
+		"dispatch child":   {map[string]string{"LEO_PROCESS_NAME": "dispatch:d-abc", "LEO_DISPATCH_ID": "d-abc"}, map[string]any{"parent_dispatch_id": "d-abc"}},
+		"invalid id":       {map[string]string{"LEO_PROCESS_NAME": "alpha", "LEO_DISPATCH_ID": "../x"}, map[string]any{"from": "alpha"}},
+		"neither":          {map[string]string{}, nil},
+	} {
+		got := dispatchCallerFields(func(k string) string { return tc.env[k] })
+		if !reflect.DeepEqual(got, tc.want) {
+			t.Errorf("%s: fields = %v, want %v", name, got, tc.want)
+		}
 	}
 }

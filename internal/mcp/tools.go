@@ -397,7 +397,13 @@ func newRegistry(client *daemonClient, processName string, perms leotools.Permis
 		}
 		isolation, _ := args["isolation"].(string)
 		callerPane, _ := tmux.CallerPaneFromEnv(os.Environ())
-		request := consult.Request{Caller: processName, ParentDispatchID: r.dispatchID, CallerPaneID: callerPane, CallerBridgeKey: os.Getenv(bridgemod.EnvAgent), Template: template, Role: role, Model: model, Effort: effort, Prompt: prompt, Cwd: cwd, Name: name, Timeout: timeout, Mode: mode, Notify: notify, ReleaseOnFinish: releaseOnFinish, Isolation: isolation}
+		// Inside a dispatch the process name is the child's own (dispatch:<id>)
+		// and names no agent; the parent dispatch carries the attribution.
+		caller := processName
+		if r.dispatchID != "" {
+			caller = ""
+		}
+		request := consult.Request{Caller: caller, ParentDispatchID: r.dispatchID, CallerPaneID: callerPane, CallerBridgeKey: os.Getenv(bridgemod.EnvAgent), Template: template, Role: role, Model: model, Effort: effort, Prompt: prompt, Cwd: cwd, Name: name, Timeout: timeout, Mode: mode, Notify: notify, ReleaseOnFinish: releaseOnFinish, Isolation: isolation}
 		if role != "" {
 			request.Template = resolvedTemplate
 		}

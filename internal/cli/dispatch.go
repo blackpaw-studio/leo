@@ -73,6 +73,20 @@ func dispatchHTTP(ctx context.Context, cfg *config.Config, method, path string, 
 	return json.Unmarshal(envelope.Data, out)
 }
 
+// dispatchCallerFields names who is dispatching. A leo_dispatch child
+// (LEO_DISPATCH_ID set) is identified by its parent dispatch: the daemon files
+// the new run under the root caller of that parent, and the child's own
+// LEO_PROCESS_NAME (dispatch:<id>) names no agent, so it is not sent as "from".
+func dispatchCallerFields(getenv func(string) string) map[string]any {
+	if parent := getenv("LEO_DISPATCH_ID"); consult.ValidDispatchID(parent) {
+		return map[string]any{"parent_dispatch_id": parent}
+	}
+	if caller := getenv("LEO_PROCESS_NAME"); caller != "" {
+		return map[string]any{"from": caller}
+	}
+	return nil
+}
+
 func newDispatchRunCmd() *cobra.Command {
 	var model, effort, role, cwd, name, host, mode string
 	var isolation string
@@ -126,8 +140,8 @@ func newDispatchRunCmd() *cobra.Command {
 		} else {
 			body["template"] = template
 		}
-		if caller := os.Getenv("LEO_PROCESS_NAME"); caller != "" {
-			body["from"] = caller
+		for k, v := range dispatchCallerFields(os.Getenv) {
+			body[k] = v
 		}
 		body["notify"] = notify
 		if cmd.Flags().Changed("release-on-finish") {

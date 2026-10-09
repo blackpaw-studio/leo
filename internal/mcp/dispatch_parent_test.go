@@ -20,6 +20,15 @@ func TestLeoDispatchNamesTheCallingDispatchAsParent(t *testing.T) {
 		reg := newRegistry(newDaemonClient(d.port(), "tok"), "assistant", leotools.Permissions{}, withDispatchID(tc.dispatchID))
 		runRequest(t, reg, map[string]any{"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": map[string]any{"name": "leo_dispatch", "arguments": map[string]any{"template": "codex", "prompt": "do it", "cwd": "/tmp"}}})
 		d.close()
+		// The calling dispatch's own process name names no agent, so it is
+		// the parent id, not "from", that attributes the new dispatch.
+		wantFrom := "assistant"
+		if tc.dispatchID != "" {
+			wantFrom = ""
+		}
+		if gotBody["from"] != wantFrom {
+			t.Fatalf("from = %v, want %q (body %v)", gotBody["from"], wantFrom, gotBody)
+		}
 		got, present := gotBody["parent_dispatch_id"]
 		if tc.want == "" {
 			if present {
