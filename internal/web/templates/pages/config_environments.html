@@ -4,6 +4,11 @@
 {{range .Data.Environments}}
 <div class="card">
   <div class="card-head"><b>{{.Name}}</b></div>
+  <form hx-post="{{.RenameURL}}" hx-target="#flash-container" hx-swap="innerHTML" class="inline-rename">
+    <input type="text" name="new_name" value="{{.Name}}" required
+           pattern="[A-Za-z0-9._-]+" aria-label="New name for environment {{.Name}}" />
+    <button type="submit" class="btn">Rename</button>
+  </form>
   {{template "config_form" .Form}}
 </div>
 {{else}}
