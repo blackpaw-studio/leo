@@ -17,6 +17,10 @@ var codexHookPayloadKeys = map[string][]string{
 	"Stop":             {"session_id", "turn_id", "transcript_path", "cwd", "hook_event_name", "model", "permission_mode", "stop_hook_active", "last_assistant_message"},
 	"Interrupt":        {"session_id", "turn_id", "transcript_path", "cwd", "hook_event_name", "model", "permission_mode"},
 	"SessionEnd":       {"session_id", "transcript_path", "cwd", "hook_event_name", "reason"},
+	// From the hooks documentation (not yet observed live): leo keys open
+	// tools on tool_use_id.
+	"PreToolUse":  {"session_id", "turn_id", "transcript_path", "cwd", "hook_event_name", "model", "permission_mode", "tool_name", "tool_input", "tool_use_id"},
+	"PostToolUse": {"session_id", "turn_id", "transcript_path", "cwd", "hook_event_name", "model", "permission_mode", "tool_name", "tool_input", "tool_response", "tool_use_id"},
 }
 
 func TestHookPayloadKeysDocumentation(t *testing.T) {
@@ -249,8 +253,8 @@ func TestPrepareInteractiveConcurrent(t *testing.T) {
 		t.Fatal(err)
 	}
 	entries, untrusted := hookTrustEntries(filepath.Join(home, "hooks.json"), hooks, nil)
-	if len(untrusted) != 0 || len(entries) != 4 {
-		t.Fatalf("Leo entries = %d, untrusted = %v; want 4, none", len(entries), untrusted)
+	if len(untrusted) != 0 || len(entries) != len(codexHookEvents) {
+		t.Fatalf("Leo entries = %d, untrusted = %v; want %d, none", len(entries), untrusted, len(codexHookEvents))
 	}
 	config, err := os.ReadFile(filepath.Join(home, "config.toml"))
 	if err != nil {
@@ -275,5 +279,53 @@ func TestTrustHash(t *testing.T) {
 	const want = "sha256:617a7a87a057bbeb8b9819d2a45b79d309f506dab52b4fdb0331a67fa568a7cd"
 	if got := trustHash("Stop", nil, map[string]any{"type": "command", "command": command}); got != want {
 		t.Fatalf("trustHash() = %q, want persisted Codex hash %q", got, want)
+	}
+}
+
+// Tool hooks keep a dispatch inside a long tool call from reading stalled.
+// Codex has no PostToolUseFailure, so only these two are installed, and each
+// must be trusted under the hash codex computes or codex asks for review.
+func TestPrepareInteractiveInstallsTrustedToolHooks(t *testing.T) {
+	home := t.TempDir()
+	const command = "/opt/leo dispatch report"
+	prepareLeoHookCommand = func() string { return command }
+	t.Cleanup(func() { prepareLeoHookCommand = defaultLeoHookCommand })
+	// Resolved before the file exists, as PrepareInteractive keys it.
+	hooksPath, err := canonicalPath(filepath.Join(home, "hooks.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := (Codex{}).PrepareInteractive(home, ""); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(hooksPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var file struct {
+		Hooks map[string][]struct {
+			Matcher string `json:"matcher"`
+			Hooks   []struct{ Type, Command string }
+		}
+	}
+	if err := json.Unmarshal(raw, &file); err != nil {
+		t.Fatal(err)
+	}
+	config, err := os.ReadFile(filepath.Join(home, "config.toml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, event := range []string{"PreToolUse", "PostToolUse"} {
+		groups := file.Hooks[event]
+		if len(groups) != 1 || groups[0].Matcher != "" || len(groups[0].Hooks) != 1 || groups[0].Hooks[0].Type != "command" || groups[0].Hooks[0].Command != command {
+			t.Fatalf("%s hooks = %+v, want one unmatched group running %q", event, groups, command)
+		}
+		want := trustEntry(hooksPath+":"+eventLabel(event)+":0:0", trustHash(event, nil, map[string]any{"type": "command", "command": command}))
+		if !strings.Contains(string(config), want) {
+			t.Fatalf("config.toml missing trust entry for %s:\n%s\nwant\n%s", event, config, want)
+		}
+	}
+	if _, ok := file.Hooks["PostToolUseFailure"]; ok {
+		t.Fatal("PostToolUseFailure installed; codex has no such event")
 	}
 }

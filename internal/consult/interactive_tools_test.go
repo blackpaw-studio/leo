@@ -1,6 +1,7 @@
 package consult
 
 import (
+	"context"
 	"encoding/json"
 	"testing"
 	"time"
@@ -175,5 +176,54 @@ func TestInteractiveNewTurnSubmitClearsOpenTools(t *testing.T) {
 	reportAll(t, d, id, claudeHook(t, "typed", "UserPromptSubmit", "next thing"))
 	if got := idleRecord(t, d, id).OpenTools; len(got) != 0 {
 		t.Fatalf("open tools after a new turn started: %v", got)
+	}
+}
+
+// codexToolHook is a PreToolUse / PostToolUse report in the shape Codex
+// posts it: turn_id rides along, tool_use_id names the call.
+func codexToolHook(t *testing.T, eventID, event, toolUseID string) HookReport {
+	t.Helper()
+	b, err := json.Marshal(map[string]any{"hook_event_name": event, "session_id": "s-1", "turn_id": "turn-1", "tool_name": "Bash", "tool_use_id": toolUseID, "tool_input": map[string]any{"command": "go test ./..."}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return HookReport{EventID: eventID, Payload: b}
+}
+
+// Codex's tool hooks key OpenTools on tool_use_id like Claude's, and the
+// turn_id they carry does not make them turn events.
+func TestInteractiveCodexToolHooksTrackOpenToolsWithoutTouchingTheTurn(t *testing.T) {
+	now := time.Date(2026, time.October, 9, 12, 0, 0, 0, time.UTC)
+	d := NewDispatcher(newFakeRecorder())
+	d.now = sharedClock(&now)
+	rt := &fakeInteractiveRuntime{arm: true, empty: true}
+	d.SetInteractiveRuntime(rt)
+	started, err := d.Start(context.Background(), testConfig(), Request{Template: "codex", Prompt: "hello", Cwd: t.TempDir(), Mode: ModeInteractive})
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := started.ID
+	waitForInjection(t, rt)
+	submit, _ := json.Marshal(map[string]any{"hook_event_name": "UserPromptSubmit", "session_id": "s-1", "turn_id": "turn-1", "prompt": rt.firstInjection()})
+	reportAll(t, d, id, HookReport{EventID: "submit", Payload: submit})
+	before := idleRecord(t, d, id)
+	if len(before.Turns) != 1 || !before.Turns[0].Delivered {
+		t.Fatalf("setup: turns=%+v", before.Turns)
+	}
+
+	reportAll(t, d, id, codexToolHook(t, "pre", "PreToolUse", "call-1"))
+	if stalledAt(t, d, id, now.Add(stalledAfter+time.Minute)) {
+		t.Fatal("codex run stalled inside an open tool call")
+	}
+	if _, open := idleRecord(t, d, id).OpenTools["call-1"]; !open {
+		t.Fatalf("OpenTools = %v, want call-1", idleRecord(t, d, id).OpenTools)
+	}
+	reportAll(t, d, id, codexToolHook(t, "post", "PostToolUse", "call-1"))
+	if !stalledAt(t, d, id, now.Add(stalledAfter)) {
+		t.Fatal("codex run not stalled after its tool closed and went quiet")
+	}
+	after := idleRecord(t, d, id)
+	if after.Status != before.Status || after.Steered || len(after.Turns) != 1 || after.Turns[0].Outcome != "" {
+		t.Fatalf("tool hooks changed the turn: before=%+v after=%+v", before, after)
 	}
 }

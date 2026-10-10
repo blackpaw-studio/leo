@@ -23,7 +23,11 @@ var defaultLeoHookCommand = func() string {
 
 var prepareLeoHookCommand = defaultLeoHookCommand
 
-var codexHookEvents = []string{"Stop", "UserPromptSubmit", "Interrupt", "SessionEnd"}
+// codexHookEvents are the events leo's report command is installed for.
+// PreToolUse and PostToolUse are activity only: a foreground tool sends no
+// hooks between them, so they keep a long tool call from reading stalled.
+// Codex has no PostToolUseFailure.
+var codexHookEvents = []string{"Stop", "UserPromptSubmit", "Interrupt", "SessionEnd", "PreToolUse", "PostToolUse"}
 
 var prepareInteractiveMu sync.Mutex
 
