@@ -175,3 +175,50 @@ func TestInlineDeliveryDoesNotConsumeTheResultForLeoWait(t *testing.T) {
 		t.Fatalf("entries after inline delivery = %+v", entries)
 	}
 }
+
+func waitedRecord(wait, final string) Record {
+	return Record{ID: "d-1", Name: "job", Status: StatusIdle, Mode: ModeInteractive, Turns: []Turn{{
+		TurnID: "d-1#1", Outcome: TurnFinished, Delivered: true,
+		Text: wait + "\n\n" + final, FinalText: final,
+	}}}
+}
+
+// A waiting summary longer than the cap must not hide or cut the closing
+// answer: the earlier text is trimmed first and the elision marked.
+func TestInlineNotificationKeepsClosingTextWhenWaitingTextOverflows(t *testing.T) {
+	wait := strings.Repeat("summary line\n", maxInlineResultBytes/4)
+	rec := waitedRecord(wait, "Killed.")
+	got := inlineNotification(rec, "d-1#1", inlineHeader)
+	if !strings.Contains(got, "…[earlier output trimmed]\n\nKilled.\n"+inlineEnd) {
+		t.Fatalf("closing text not intact after the elision marker: %q", got[len(got)-200:])
+	}
+	if !strings.HasPrefix(strings.SplitN(got, "\n", 3)[2], "summary line") {
+		t.Fatal("head of the waiting text was not kept")
+	}
+	body := strings.SplitN(strings.SplitN(got, inlineBegin+"\n", 2)[1], "\n"+inlineEnd, 2)[0]
+	if len(body) > maxInlineResultBytes {
+		t.Fatalf("body %d bytes over cap", len(body))
+	}
+	if !strings.Contains(got, "truncated; full output: leo_dispatch_output d-1") || !inlineTruncated(rec, "d-1#1") {
+		t.Fatal("an elided result must still point at the full output and count as truncated")
+	}
+}
+
+func TestInlineNotificationLongClosingTextKeepsItsOwnCap(t *testing.T) {
+	final := strings.Repeat("b", 2*maxInlineResultBytes)
+	got := inlineNotification(waitedRecord("short summary", final), "d-1#1", inlineHeader)
+	if strings.Contains(got, "short summary") || !strings.Contains(got, strings.Repeat("b", maxInlineResultBytes-1)) {
+		t.Fatal("closing text should take the whole budget")
+	}
+	if !inlineTruncated(waitedRecord("short summary", final), "d-1#1") {
+		t.Fatal("cut closing text must count as truncated")
+	}
+}
+
+func TestInlineNotificationWaitedResultThatFitsIsUntouched(t *testing.T) {
+	rec := waitedRecord("summary", "Killed.")
+	got := inlineNotification(rec, "d-1#1", inlineHeader)
+	if !strings.Contains(got, "summary\n\nKilled.") || strings.Contains(got, "trimmed") || inlineTruncated(rec, "d-1#1") {
+		t.Fatalf("got %q", got)
+	}
+}

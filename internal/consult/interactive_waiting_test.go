@@ -427,3 +427,25 @@ func TestTurnWaitTextRoundTripsThroughJSON(t *testing.T) {
 		t.Fatalf("out=%+v err=%v", out, err)
 	}
 }
+
+// A daemon restart while a turn waits loses it, but keeps what it said.
+func TestMarkInterruptedKeepsWaitingTextOfLostTurn(t *testing.T) {
+	state := t.TempDir()
+	fr := NewFileRecorder(state)
+	rec := Record{ID: "d-wait", Mode: ModeInteractive, Status: StatusWaiting, StartedAt: time.Now(), Turns: []Turn{{
+		TurnID: "d-wait#1", Source: TurnSourceOrchestrator, Delivered: true, Text: "the prompt",
+		WaitText: []string{longSummary}, Pending: &PendingWork{Wakeups: 1},
+	}}}
+	if _, err := fr.Open(rec); err != nil {
+		t.Fatal(err)
+	}
+	NewDispatcher(fr).MarkInterrupted()
+	got, err := LoadOne(state, "d-wait")
+	if err != nil {
+		t.Fatal(err)
+	}
+	turn := got.Turns[0]
+	if turn.Outcome != TurnLost || turn.Text != longSummary || turn.WaitText != nil || turn.Pending != nil {
+		t.Fatalf("turn=%+v", turn)
+	}
+}

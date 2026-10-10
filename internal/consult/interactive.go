@@ -552,10 +552,7 @@ func (d *Dispatcher) closeTurnLocked(s *runState, id string, outcome TurnOutcome
 		t.Outcome = outcome
 		t.Pending = nil
 		t.EndedAt = boundary
-		if text = joinStopTexts(t.WaitText, text); text != "" {
-			t.Text = text
-		}
-		t.WaitText = nil
+		t.mergeWaitText(text)
 		if t.SlotHeld {
 			t.SlotHeld = false
 			d.slotsFor(s).Release()
@@ -1114,6 +1111,19 @@ func appendStopText(texts []string, text string) []string {
 		return texts
 	}
 	return append(slices.Clone(texts), text)
+}
+
+// mergeWaitText ends t's result: text, the closing words, preceded by what
+// each Stop that paused the turn said. WaitText is spent afterwards.
+func (t *Turn) mergeWaitText(closing string) {
+	if text := joinStopTexts(t.WaitText, closing); text != "" {
+		t.Text = text
+		t.FinalText = ""
+		if len(t.WaitText) > 0 && strings.TrimSpace(closing) != "" {
+			t.FinalText = closing
+		}
+	}
+	t.WaitText = nil
 }
 
 // joinStopTexts is the result of a turn that paused on background work: what
