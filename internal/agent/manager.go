@@ -399,6 +399,13 @@ type StopOptions struct {
 // best-effort persistence op) and results in a missing restore entry on next
 // daemon start.
 func (m *Manager) Spawn(ctx context.Context, spec SpawnSpec) (Record, error) {
+	// Every entry point spawns through here, so a hostile or tmux-unsafe name
+	// ("../x", "a:b") is refused before any reservation or filesystem work.
+	if spec.Name != "" {
+		if _, err := NormalizeAgentName(spec.Name); err != nil {
+			return Record{}, err
+		}
+	}
 	cfg, err := m.cfgLoader()
 	if err != nil {
 		return Record{}, fmt.Errorf("loading config: %w", err)
@@ -412,12 +419,9 @@ func (m *Manager) Spawn(ctx context.Context, spec SpawnSpec) (Record, error) {
 		}
 		return m.spawnFromAgent(ctx, cfg, spec)
 	}
-	if spec.Template == "" {
-		return Record{}, fmt.Errorf("template is required")
-	}
 	tmpl, ok := cfg.Templates[spec.Template]
 	if !ok {
-		return Record{}, fmt.Errorf("template %q not found", spec.Template)
+		return Record{}, &UnknownTemplateError{Name: spec.Template}
 	}
 	return m.spawnResolved(ctx, cfg, tmpl, spec)
 }
@@ -2120,4 +2124,15 @@ func sanitizeConfigErrors(load ConfigLoader) ConfigLoader {
 		}
 		return cfg, nil
 	}
+}
+
+// UnknownTemplateError reports a spawn that names no template, or one config
+// does not define. The caller's mistake: API layers map it to 400.
+type UnknownTemplateError struct{ Name string }
+
+func (e *UnknownTemplateError) Error() string {
+	if e.Name == "" {
+		return "template is required"
+	}
+	return fmt.Sprintf("template %q not found", e.Name)
 }

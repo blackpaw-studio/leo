@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"strings"
 	"testing"
@@ -1634,5 +1635,29 @@ func TestAgentSetEnvironmentHandlerErrors(t *testing.T) {
 	resp.Body.Close()
 	if resp.StatusCode != http.StatusBadRequest {
 		t.Fatalf("want 400 for a malformed body, got %d", resp.StatusCode)
+	}
+}
+
+// Caller mistakes reach daemon IPC clients (the CLI) as 4xx, never 500.
+func TestWriteAgentErrorClassifiesSpawnValidation(t *testing.T) {
+	tests := []struct {
+		name   string
+		err    error
+		status int
+	}{
+		{"bad name", fmt.Errorf("%w: bad", agent.ErrInvalidAgentName), http.StatusBadRequest},
+		{"unknown template", &agent.UnknownTemplateError{Name: "nope"}, http.StatusBadRequest},
+		{"duplicate environments", &config.InvalidEnvironmentsError{Problems: []string{"dup"}}, http.StatusBadRequest},
+		{"persistent task", &agent.PersistentTaskError{Agent: "a", Task: "t"}, http.StatusConflict},
+		{"harness mismatch", &agent.HarnessMismatchError{Agent: "a", Template: "t", Have: "claude", Want: "codex"}, http.StatusConflict},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rec := httptest.NewRecorder()
+			writeAgentError(rec, tt.err)
+			if rec.Code != tt.status {
+				t.Fatalf("status = %d, want %d: %s", rec.Code, tt.status, rec.Body.String())
+			}
+		})
 	}
 }

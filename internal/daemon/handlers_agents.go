@@ -588,8 +588,18 @@ func (s *Server) handleAgentRename(w http.ResponseWriter, r *http.Request) {
 // errors.Is matches on the other side of the socket.
 func writeAgentError(w http.ResponseWriter, err error) {
 	var nf *agent.ErrNotFound
-	var unknownEnv *config.UnknownEnvironmentError
+	var (
+		unknownEnv  *config.UnknownEnvironmentError
+		invalidEnvs *config.InvalidEnvironmentsError
+		unknownTmpl *agent.UnknownTemplateError
+		bound       *agent.PersistentTaskError
+		mismatch    *agent.HarnessMismatchError
+	)
 	switch {
+	case errors.As(err, &invalidEnvs), errors.As(err, &unknownTmpl), errors.Is(err, agent.ErrInvalidAgentName):
+		writeError(w, http.StatusBadRequest, err.Error())
+	case errors.As(err, &bound), errors.As(err, &mismatch):
+		writeError(w, http.StatusConflict, err.Error())
 	case errors.As(err, &nf):
 		writeJSON(w, http.StatusNotFound, Response{OK: false, Error: err.Error(), Code: ErrorCodeNotFound})
 	case errors.As(err, &unknownEnv):

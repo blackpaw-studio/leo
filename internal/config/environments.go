@@ -1,7 +1,6 @@
 package config
 
 import (
-	"errors"
 	"fmt"
 	"maps"
 	"sort"
@@ -125,10 +124,17 @@ func (c *Config) TaskEnv(t TaskConfig) (map[string]string, error) {
 // none may repeat. Config files get the same checks from Validate.
 func (c *Config) ValidateEnvironmentNames(names []string) error {
 	if errs := c.validateEnvironmentList("environments", names); len(errs) > 0 {
-		return errors.New(strings.Join(errs, "; "))
+		return &InvalidEnvironmentsError{Problems: errs}
 	}
 	return nil
 }
+
+// InvalidEnvironmentsError reports a caller-supplied environment list that is
+// malformed — a repeated or undefined name. It is the caller's mistake, not a
+// server fault, so API layers map it to 400.
+type InvalidEnvironmentsError struct{ Problems []string }
+
+func (e *InvalidEnvironmentsError) Error() string { return strings.Join(e.Problems, "; ") }
 
 // EnvironmentWarnings flags path-valued keys (CLAUDE_CONFIG_DIR, CODEX_HOME)
 // that start with a literal "~": environment values are never expanded, so

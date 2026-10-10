@@ -2,6 +2,7 @@ package web
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -163,6 +164,7 @@ func TestV1EnvironmentErrorsCarryTypedCodes(t *testing.T) {
 		{"unknown", &config.UnknownEnvironmentError{Name: "nope"}, http.StatusBadRequest, "unknown_environment"},
 		{"persistent task", &agent.PersistentTaskError{Agent: "leo-coding-leo", Task: "nightly"}, http.StatusConflict, "persistent_task"},
 		{"harness", &agent.HarnessMismatchError{Agent: "leo-coding-leo", Template: "coding", Have: "claude", Want: "codex"}, http.StatusConflict, "harness_mismatch"},
+		{"duplicate names", &config.InvalidEnvironmentsError{Problems: []string{"duplicate"}}, http.StatusBadRequest, "invalid_environments"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -222,6 +224,34 @@ func TestAPIConfigFailuresDoNotLeakConfigContents(t *testing.T) {
 		}
 		if !strings.Contains(w.Body.String(), "config unavailable") {
 			t.Errorf("GET %s = %s, want a generic config-unavailable error", path, w.Body.String())
+		}
+	}
+}
+
+// Caller mistakes in a spawn are 400s with a stable code, never 500s.
+func TestV1SpawnValidationErrorsAre400(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+		code string
+	}{
+		{"unknown template", &agent.UnknownTemplateError{Name: "nope"}, "unknown_template"},
+		{"missing template", &agent.UnknownTemplateError{}, "unknown_template"},
+		{"bad name", fmt.Errorf("%w: %q has invalid characters", agent.ErrInvalidAgentName, "a:b"), "invalid_name"},
+		{"duplicate environments", &config.InvalidEnvironmentsError{Problems: []string{"duplicate"}}, "invalid_environments"},
+	}
+	for _, tt := range tests {
+		for _, path := range []string{"/api/v1/agents/spawn", "/api/agent/spawn"} {
+			t.Run(tt.name+path, func(t *testing.T) {
+				s, svc := newV1EnvironmentsServer(t)
+				svc.spawnErr = tt.err
+				w := postJSON(t, s, path, `{"template":"x"}`)
+				var body struct{ Error, Code string }
+				_ = json.Unmarshal(w.Body.Bytes(), &body)
+				if w.Code != http.StatusBadRequest || body.Code != tt.code {
+					t.Fatalf("got %d %+v, want 400 code %q", w.Code, body, tt.code)
+				}
+			})
 		}
 	}
 }

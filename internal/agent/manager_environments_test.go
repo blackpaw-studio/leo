@@ -565,3 +565,71 @@ func TestManagerConfigLoadErrorsAreSanitized(t *testing.T) {
 		}
 	}
 }
+
+func spawnForValidation(t *testing.T, spec SpawnSpec) (error, *capturingSupervisor, string) {
+	t.Helper()
+	home, ws, a, b := t.TempDir(), t.TempDir(), t.TempDir(), t.TempDir()
+	cfg := envTestConfig(home, ws, a, b)
+	sup := &capturingSupervisor{}
+	_, err := envManager(cfg, sup).Spawn(context.Background(), spec)
+	return err, sup, ws
+}
+
+// Every entry point (web, /api/v1, daemon IPC, MCP) spawns through
+// Manager.Spawn, so a bad name must be refused there, before a reservation or
+// any filesystem work.
+func TestSpawnRejectsUnsafeNamesBeforeAnySideEffect(t *testing.T) {
+	for _, name := range []string{"invalid:name", "../outside", "a/b", "has space", "dot.name", "-", "LEO-"} {
+		t.Run(name, func(t *testing.T) {
+			err, sup, ws := spawnForValidation(t, SpawnSpec{Template: "coding", Name: name})
+			if !errors.Is(err, ErrInvalidAgentName) {
+				t.Fatalf("err = %v, want ErrInvalidAgentName", err)
+			}
+			entries, _ := os.ReadDir(ws)
+			if len(sup.reservations) != 0 || sup.spawnCall != nil || len(entries) != 0 {
+				t.Fatalf("side effects before validation: reservations=%v spawn=%v dirs=%d", sup.reservations, sup.spawnCall, len(entries))
+			}
+		})
+	}
+	if err, _, _ := spawnForValidation(t, SpawnSpec{Template: "coding", Name: "scratch-1"}); err != nil {
+		t.Fatalf("a valid name was rejected: %v", err)
+	}
+}
+
+func TestSpawnRejectsPathTraversalInRepo(t *testing.T) {
+	for _, repo := range []string{"..", "../outside", "owner/..", "./x", "."} {
+		if err := ValidateRepo(repo); err == nil {
+			t.Errorf("ValidateRepo(%q) accepted a traversal segment", repo)
+		}
+	}
+	if err := ValidateRepo("owner/repo.git"); err != nil {
+		t.Errorf("ValidateRepo rejected a normal repo: %v", err)
+	}
+}
+
+func TestSpawnValidationErrorsAreTyped(t *testing.T) {
+	var unknownTmpl *UnknownTemplateError
+	for _, tmpl := range []string{"", "nope"} {
+		err, _, _ := spawnForValidation(t, SpawnSpec{Template: tmpl})
+		if !errors.As(err, &unknownTmpl) || unknownTmpl.Name != tmpl {
+			t.Fatalf("template %q: err = %v, want *UnknownTemplateError", tmpl, err)
+		}
+	}
+
+	err, sup, _ := spawnForValidation(t, SpawnSpec{Template: "coding", Environments: []string{"acct-a", "acct-a"}})
+	var invalid *config.InvalidEnvironmentsError
+	if !errors.As(err, &invalid) || sup.spawnCall != nil || len(sup.reservations) != 0 {
+		t.Fatalf("duplicate names: err = %v spawn=%v", err, sup.spawnCall)
+	}
+
+	// set-environment shares the validation.
+	home, tws, a, b := t.TempDir(), t.TempDir(), t.TempDir(), t.TempDir()
+	cfg := envTestConfig(home, tws, a, b)
+	_, sup2 := savedLayeredAgent(t, cfg, nil)
+	if _, err := envManager(cfg, sup2).SetEnvironments("leo-x", []string{"acct-b", "acct-b"}); !errors.As(err, &invalid) {
+		t.Fatalf("set duplicate: err = %v", err)
+	}
+	if len(sup2.stopCalls) != 0 {
+		t.Fatal("a rejected set must not stop the agent")
+	}
+}

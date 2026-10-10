@@ -578,10 +578,13 @@ func parseEnvironmentsCSV(raw string) []string {
 
 // Error codes of the environment endpoints.
 const (
-	codeUnknownEnvironment = "unknown_environment"
-	codePersistentTask     = "persistent_task"
-	codeHarnessMismatch    = "harness_mismatch"
-	codeConfigUnavailable  = "config_unavailable"
+	codeUnknownEnvironment  = "unknown_environment"
+	codePersistentTask      = "persistent_task"
+	codeHarnessMismatch     = "harness_mismatch"
+	codeConfigUnavailable   = "config_unavailable"
+	codeUnknownTemplate     = "unknown_template"
+	codeInvalidEnvironments = "invalid_environments"
+	codeInvalidName         = "invalid_name"
 )
 
 // classifyEnvironmentError picks the HTTP status and stable error code for a
@@ -589,13 +592,21 @@ const (
 // unclassified 500 with no code.
 func classifyEnvironmentError(err error) (int, string) {
 	var (
-		unknown  *config.UnknownEnvironmentError
-		bound    *agent.PersistentTaskError
-		mismatch *agent.HarnessMismatchError
+		unknown     *config.UnknownEnvironmentError
+		invalidEnvs *config.InvalidEnvironmentsError
+		unknownTmpl *agent.UnknownTemplateError
+		bound       *agent.PersistentTaskError
+		mismatch    *agent.HarnessMismatchError
 	)
 	switch {
 	case errors.As(err, &unknown):
 		return http.StatusBadRequest, codeUnknownEnvironment
+	case errors.As(err, &invalidEnvs):
+		return http.StatusBadRequest, codeInvalidEnvironments
+	case errors.As(err, &unknownTmpl):
+		return http.StatusBadRequest, codeUnknownTemplate
+	case errors.Is(err, agent.ErrInvalidAgentName):
+		return http.StatusBadRequest, codeInvalidName
 	case errors.As(err, &bound):
 		return http.StatusConflict, codePersistentTask
 	case errors.As(err, &mismatch):
