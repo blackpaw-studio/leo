@@ -64,7 +64,7 @@ Each harness derives its files from the agent's resolved env, not from `$HOME`:
 
 Leo does not manage logins. Prepare a second config dir yourself:
 
-1. Create it and log in once under it: `CLAUDE_CONFIG_DIR=/Users/you/.claude-b claude` → `/login`. Each dir gets its own keychain item (`Claude Code-credentials-<hash>`, Claude Code ≥ ~2.1.121).
+1. Create it and log in once under it: `CLAUDE_CONFIG_DIR=/Users/you/.claude-b claude` → `/login`. Credentials stay per dir: on macOS with Claude Code 2.1.296, a non-default dir stores its login in `<dir>/.credentials.json` (mode 0600) rather than the keychain, so the default login is untouched.
 2. Symlink the shared pieces back to `~/.claude`: `settings.json`, `CLAUDE.md`, `rules`, `skills`, `agents`, `commands`, `hooks`, `plugins`, and **`projects`**. Sharing `projects` keeps transcripts, `--resume` and auto-memory common to both accounts, which is what lets `set-environment` resume a conversation.
 3. Leave `.claude.json` (login, trust, user-scope MCP servers) and `history.jsonl` per directory. User-scope MCP servers must therefore be moved into a local plugin to appear under both.
 4. Add `environments.acct-b: {CLAUDE_CONFIG_DIR: /Users/you/.claude-b}` and reference it as above.
