@@ -41,6 +41,7 @@ leo agent set-environment fetch                      # clear the override → te
 ```
 
 - **MCP:** `leo_spawn_agent` takes `environments`; `leo_set_agent_environments` switches an existing agent. The switch tool honors `deny_tools`, and the caller's `can_spawn` must cover the target agent's template (otherwise a narrowed spawner could move an agent onto credentials it was never given).
+- **Observability API:** `GET /api/v1/environments`, `GET /api/v1/templates`, the agent `environments` fields and `POST /api/v1/agents/spawn` / `POST /api/v1/agents/{name}/environments` (names only; see the [observability spec](../specs/2026-07-31-observability-api.md#named-environments)).
 - **Web UI:** the *Environments* page edits the map (delete is refused while anything still names an environment); the Agents page has an environments field on the spawn form and a per-agent *Set env* action.
 - **Dispatches and consults** run under their template's resolved environments. Per-dispatch environment selection is not implemented.
 

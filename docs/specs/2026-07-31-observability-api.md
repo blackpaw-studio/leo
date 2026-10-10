@@ -97,6 +97,8 @@ envelope.
     Escape it before rendering, never parse it or branch on its contents, and handle it
     being absent or garbage.
 - `model` / `harness` — resolved values after the defaults→template→agent cascade.
+- `environments`, `environments_source`, `environment_error` — advertised by the
+  `agent_environments` feature; see [Named environments](#named-environments) below.
 - `surfaced_files` — files this agent pushed to the user's attention with the
   `leo_surface_file` MCP tool, oldest first, at most 20 (older ones are dropped). Omitted
   when empty. Each entry is exactly the `file_surfaced` event body (see SurfacedFile
@@ -284,7 +286,7 @@ Event types:
 |---|---|
 | `hello` | `version`, `server_time` |
 | `agent_spawned` | full `Agent` object |
-| `agent_state_changed` | `agent`, `status`, `restarts`, `wake_on_message` |
+| `agent_state_changed` | `agent`, `status`, `restarts`, `wake_on_message`; plus `environments`, `environments_source` when the agent's environments just changed |
 | `agent_activity` | `agent`, `activity`, `current_action` |
 | `agent_stopped` | `agent`, `wake_on_message` |
 | `task_run_started` | `TaskRun` |
@@ -337,6 +339,49 @@ process state has.
 Slow consumers are dropped rather than buffered without bound: each subscriber gets a
 bounded channel, and a subscriber that fills it is disconnected (it will reconnect and
 resnapshot).
+
+## Named environments
+
+Advertised on the SSE `hello` as the `agent_environments` feature. **Names only: an
+environment's variables can hold credentials and never cross this API.**
+
+- **Agent fields** (every `Agent`, in `/state` and `agent_spawned`):
+  - `environments` — the effective ordered names: the agent's own override, else its
+    template's (or task's) `environments`, else `defaults.environments`. Always an array.
+  - `environments_source` — `"override"` (the agent was given its own list at spawn or by
+    set-environment) or `"default"`.
+  - `environment_error` — a string or `null`. Non-null when a name in the list is no longer
+    defined in config, so a restart would be refused; computed for live and stopped agents
+    alike, with the check restart, start and the stale-agent report share.
+- `agent_state_changed` carries `environments` / `environments_source` when set-environment
+  restarted the agent, so a subscriber updates the row without refetching. Absent on every
+  other state change (leave the row's value alone); `environments` is also absent when the
+  new effective list is empty.
+- `GET /api/v1/environments` → `{"ok":true,"data":[{"name":"base"},{"name":"work"}]}`.
+  Alphabetical: the config map loses YAML order at parse and every web-UI save rewrites it
+  sorted, so only a sorted list is stable. No harness field: an environment is a bare env map
+  any template can run under.
+- `GET /api/v1/templates` → `data: [{"name","harness","model","environments":[...]}]`, sorted
+  by name; `environments` is the template's own default list (`[]` when it sets none, in
+  which case `defaults.environments` applies). A template's `env` is never included.
+- `POST /api/v1/agents/spawn` — the `/api/agent/spawn` body (`template`, `repo`, `name`,
+  `branch`, `base`, `prompt`, `env`) plus `environments: ["a","b"]`, overriding the template's
+  list for this agent.
+- `POST /api/v1/agents/{name}/environments` `{"environments":["a","b"]}` — switch a live or
+  stopped agent: its env is rebuilt, it restarts and its conversation is resumed where the
+  new account can read it. An empty list clears the override. See
+  [Environments](../configuration/environments.md#set-environment).
+
+Both writes require the **operator** token, like the other `/api/v1/agents/...` writes (the
+agent token is refused with 403). Failures are `{"ok":false,"error":"...","code":"..."}`:
+
+| `code` | Status | Meaning |
+|---|---|---|
+| `unknown_environment` | 400 | a name is not defined in config |
+| `persistent_task` | 409 | the agent backs a persistent task; set the task's `environments` in config |
+| `harness_mismatch` | 409 | the agent's harness differs from its template's current harness |
+
+Other failures (unknown agent 404, malformed body 400, internal 500) carry no `code`.
 
 ## Access
 
