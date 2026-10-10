@@ -1006,7 +1006,13 @@ func defaultSupervisedExec(opts RunSupervisedOptions) error {
 	}
 
 	// Restore ephemeral agents from previous run
-	restored := RestoreAgents(homePath, tmuxPath, webToken, supervisor, leoMCP)
+	var restoreOpts []RestoreOption
+	if cfg, err := config.Load(configPath); err != nil {
+		fmt.Fprintf(os.Stderr, "warning: restoring agents without checking their named environments: %v\n", err)
+	} else {
+		restoreOpts = append(restoreOpts, WithRestoreConfig(cfg))
+	}
+	restored := RestoreAgents(homePath, tmuxPath, webToken, supervisor, leoMCP, restoreOpts...)
 	if restored > 0 {
 		fmt.Fprintf(os.Stdout, "restored %d ephemeral agent(s)\n", restored)
 	}

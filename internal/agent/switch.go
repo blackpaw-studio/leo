@@ -329,3 +329,17 @@ func templateOf(cfg *config.Config, rec agentstore.Record) (config.TemplateConfi
 	tmpl, ok := cfg.Templates[rec.Template]
 	return tmpl, ok
 }
+
+// CheckEnvironments reports whether every named environment rec's launch is
+// built from (its own override, else its template's list) still exists in cfg.
+// The error is a *config.UnknownEnvironmentError. Boot-time restoration uses
+// it to refuse a fresh launch from an env snapshot whose environment was
+// deleted, without re-resolving the snapshot itself.
+func CheckEnvironments(cfg *config.Config, rec agentstore.Record) error {
+	var templateNames []string
+	if tmpl, ok := templateOf(cfg, rec); ok {
+		templateNames = tmpl.Environments
+	}
+	_, err := cfg.MergeEnvironments(cfg.EnvironmentNames(rec.Environments, templateNames))
+	return err
+}
