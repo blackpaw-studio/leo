@@ -90,8 +90,8 @@ func TestEventsRouteStreamsBusEventAndPing(t *testing.T) {
 func TestLocalMetadataRoutesUseExactEnvelopeShapes(t *testing.T) {
 	dir := t.TempDir()
 	cfgPath := filepath.Join(dir, "leo.yaml")
-	cfg := &config.Config{Templates: map[string]config.TemplateConfig{
-		"coding": {Model: "opus", Workspace: "/work", HarnessOptions: map[string]any{"agent": "reviewer"}},
+	cfg := &config.Config{Environments: map[string]map[string]string{"work": {"A": "1"}, "base": {"B": "2"}}, Templates: map[string]config.TemplateConfig{
+		"coding": {Model: "opus", Workspace: "/work", Environments: []string{"base"}, HarnessOptions: map[string]any{"agent": "reviewer"}},
 	}}
 	if err := config.Save(cfgPath, cfg); err != nil {
 		t.Fatal(err)
@@ -106,8 +106,13 @@ func TestLocalMetadataRoutesUseExactEnvelopeShapes(t *testing.T) {
 	}
 	w = httptest.NewRecorder()
 	s.Handler().ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/templates", nil))
-	if got, want := w.Body.String(), "{\"ok\":true,\"data\":[{\"name\":\"coding\",\"model\":\"opus\",\"agent\":\"reviewer\",\"workspace\":\"/work\"}]}\n"; got != want {
+	if got, want := w.Body.String(), "{\"ok\":true,\"data\":[{\"name\":\"coding\",\"model\":\"opus\",\"agent\":\"reviewer\",\"workspace\":\"/work\",\"environments\":[\"base\"]}]}\n"; got != want {
 		t.Fatalf("/templates = %s, want %s", got, want)
+	}
+	w = httptest.NewRecorder()
+	s.Handler().ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/environments", nil))
+	if got, want := w.Body.String(), "{\"ok\":true,\"data\":[{\"name\":\"base\"},{\"name\":\"work\"}]}\n"; got != want {
+		t.Fatalf("/environments = %s, want %s", got, want)
 	}
 }
 

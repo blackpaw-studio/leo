@@ -22,12 +22,18 @@ func (s *Server) handleAPIEnvironments(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	writeJSON(w, http.StatusOK, apiResponse{OK: true, Data: ListEnvironments(cfg)})
+}
+
+// ListEnvironments is the payload of GET /api/v1/environments, shared with the
+// daemon's unix-socket GET /environments so both serve one shape.
+func ListEnvironments(cfg *config.Config) []observe.Environment {
 	names := environmentNames(cfg)
 	out := make([]observe.Environment, 0, len(names))
 	for _, name := range names {
 		out = append(out, observe.Environment{Name: name})
 	}
-	writeJSON(w, http.StatusOK, apiResponse{OK: true, Data: out})
+	return out
 }
 
 // handleAPITemplatesV1 lists the configured templates with their default

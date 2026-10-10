@@ -232,6 +232,7 @@ func New(sockPath, configPath string, processes ProcessStateProvider, opts ...Op
 	mux.HandleFunc("GET /events", s.handleEvents)
 	mux.HandleFunc("GET /state", s.handleState)
 	mux.HandleFunc("GET /templates", s.handleTemplates)
+	mux.HandleFunc("GET /environments", s.handleEnvironments)
 	mux.HandleFunc("POST /cron/install", s.handleCronInstall)
 	mux.HandleFunc("POST /cron/remove", s.handleCronRemove)
 	mux.HandleFunc("GET /cron/list", s.handleCronList)
@@ -267,6 +268,8 @@ func New(sockPath, configPath string, processes ProcessStateProvider, opts ...Op
 	mux.HandleFunc("POST /agents/{name}/restart", s.handleAgentRestart)
 	mux.HandleFunc("POST /agents/{name}/set-template", s.handleAgentSetTemplate)
 	mux.HandleFunc("POST /agents/{name}/set-environment", s.handleAgentSetEnvironment)
+	// Socket twin of POST /api/v1/agents/{name}/environments (Leo Term's path).
+	mux.HandleFunc("POST /agents/{name}/environments", s.handleAgentSetEnvironment)
 	mux.HandleFunc("DELETE /agents/{name}", s.handleAgentDelete)
 	mux.HandleFunc("GET /agents/{name}/delete-plan", s.handleAgentDeletePlan)
 	mux.HandleFunc("POST /agents/{name}/rename", s.handleAgentRename)

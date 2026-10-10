@@ -42,7 +42,7 @@ type apiResponse struct {
 	Data  any    `json:"data,omitempty"`
 	Error string `json:"error,omitempty"`
 	// Code is a stable machine-readable error class, set only where an
-	// endpoint documents one (see classifyEnvironmentError).
+	// endpoint documents one (see ClassifyEnvironmentError).
 	Code string `json:"code,omitempty"`
 }
 
@@ -587,10 +587,11 @@ const (
 	codeInvalidName         = "invalid_name"
 )
 
-// classifyEnvironmentError picks the HTTP status and stable error code for a
+// ClassifyEnvironmentError picks the HTTP status and stable error code for a
 // spawn / set-environment failure from its typed error. Anything else is an
-// unclassified 500 with no code.
-func classifyEnvironmentError(err error) (int, string) {
+// unclassified 500 with no code. The daemon's socket routes reuse it so both
+// transports report the same codes.
+func ClassifyEnvironmentError(err error) (int, string) {
 	var (
 		unknown     *config.UnknownEnvironmentError
 		invalidEnvs *config.InvalidEnvironmentsError
@@ -617,7 +618,7 @@ func classifyEnvironmentError(err error) (int, string) {
 
 // writeEnvironmentError renders a spawn / set-environment failure.
 func writeEnvironmentError(w http.ResponseWriter, err error) {
-	status, code := classifyEnvironmentError(err)
+	status, code := ClassifyEnvironmentError(err)
 	writeJSON(w, status, apiResponse{Error: err.Error(), Code: code})
 }
 
