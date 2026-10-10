@@ -174,7 +174,7 @@ func (m *Manager) SetEnvironments(name string, names []string) (SetEnvironmentsR
 // observability stream as an ordinary agent_state_changed, so a subscriber
 // updates its row without refetching the snapshot.
 func (m *Manager) publishEnvironmentsChanged(cfg *config.Config, rec agentstore.Record, rawStatus string) {
-	names, source, _ := ResolveAgentEnvironments(cfg, rec.Name, rec.Template, rec.Environments)
+	names, source, errMsg := EnvironmentsView(cfg, rec.Name, rec.Template, rec.Environments)
 	restarts := 0
 	if st, ok := m.sup.EphemeralAgents()[rec.Name]; ok {
 		restarts = st.Restarts
@@ -182,13 +182,14 @@ func (m *Manager) publishEnvironmentsChanged(cfg *config.Config, rec agentstore.
 	status, wake := observe.AgentDormancy(rawStatus, rec.WakeOnMessage)
 	m.publish(observe.Event{
 		Type: observe.EventAgentStateChanged,
-		Payload: &observe.AgentStateChangedPayload{
+		Payload: &observe.AgentEnvironmentsChangedPayload{
 			Agent:              rec.Name,
 			Status:             status,
 			Restarts:           restarts,
 			WakeOnMessage:      wake,
 			Environments:       names,
 			EnvironmentsSource: source,
+			EnvironmentError:   errMsg,
 		},
 	})
 }

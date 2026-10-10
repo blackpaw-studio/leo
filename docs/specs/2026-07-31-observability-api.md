@@ -286,7 +286,7 @@ Event types:
 |---|---|
 | `hello` | `version`, `server_time` |
 | `agent_spawned` | full `Agent` object |
-| `agent_state_changed` | `agent`, `status`, `restarts`, `wake_on_message`; plus `environments`, `environments_source` when the agent's environments just changed |
+| `agent_state_changed` | `agent`, `status`, `restarts`, `wake_on_message`; plus `environments`, `environments_source`, `environment_error` when the agent's environments just changed |
 | `agent_activity` | `agent`, `activity`, `current_action` |
 | `agent_stopped` | `agent`, `wake_on_message` |
 | `task_run_started` | `TaskRun` |
@@ -354,9 +354,10 @@ environment's variables can hold credentials and never cross this API.**
     defined in config, so a restart would be refused; computed for live and stopped agents
     alike, with the check restart, start and the stale-agent report share.
 - `agent_state_changed` carries `environments` / `environments_source` when set-environment
-  restarted the agent, so a subscriber updates the row without refetching. Absent on every
-  other state change (leave the row's value alone); `environments` is also absent when the
-  new effective list is empty.
+  restarted the agent, so a subscriber updates the row without refetching. That event always
+  carries all three of `environments` (`[]` when the effective list is empty),
+  `environments_source` and `environment_error` (an explicit `null` when it resolves).
+  Ordinary lifecycle state changes carry none of them: absent means "leave the row alone".
 - `GET /api/v1/environments` → `{"ok":true,"data":[{"name":"base"},{"name":"work"}]}`.
   Alphabetical: the config map loses YAML order at parse and every web-UI save rewrites it
   sorted, so only a sorted list is stable. No harness field: an environment is a bare env map
@@ -378,10 +379,13 @@ agent token is refused with 403). Failures are `{"ok":false,"error":"...","code"
 | `code` | Status | Meaning |
 |---|---|---|
 | `unknown_environment` | 400 | a name is not defined in config |
+| `unknown_template` | 400 | spawn named no template, or one config does not define |
+| `invalid_environments` | 400 | a duplicate or undefined name in the list |
+| `invalid_name` | 400 | the spawn `name` is not a valid agent name (`a-z`, `0-9`, `-`) |
 | `persistent_task` | 409 | the agent backs a persistent task; set the task's `environments` in config |
 | `harness_mismatch` | 409 | the agent's harness differs from its template's current harness |
 
-Other failures (unknown agent 404, malformed body 400, internal 500) carry no `code`.
+`config_unavailable` (500) means the config would not load; the cause is in the daemon log only. Other failures (unknown agent 404, malformed body 400) carry no `code`.
 
 ## Access
 

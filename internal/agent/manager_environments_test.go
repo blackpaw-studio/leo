@@ -521,33 +521,61 @@ func TestSetEnvironmentsPublishesStateChangeWithNewEnvironments(t *testing.T) {
 	if _, err := m.SetEnvironments("leo-x", []string{"base", "acct-b"}); err != nil {
 		t.Fatal(err)
 	}
-	var got *observe.AgentStateChangedPayload
-	for _, ev := range pub.events {
-		if p, ok := ev.Payload.(*observe.AgentStateChangedPayload); ok && ev.Type == observe.EventAgentStateChanged && p.Agent == "leo-x" {
-			got = p
-		}
-	}
-	if got == nil {
-		t.Fatalf("no agent_state_changed published: %+v", pub.events)
-	}
-	if !slices.Equal(got.Environments, []string{"base", "acct-b"}) || got.EnvironmentsSource != "override" {
-		t.Fatalf("payload = %+v", got)
-	}
-	raw, _ := json.Marshal(got)
-	if !strings.Contains(string(raw), `"environments":["base","acct-b"]`) {
-		t.Fatalf("wire form = %s", raw)
+	wire := lastEnvironmentsEvent(t, pub)
+	if !strings.Contains(wire, `"environments":["base","acct-b"]`) || !strings.Contains(wire, `"environments_source":"override"`) || !strings.Contains(wire, `"environment_error":null`) {
+		t.Fatalf("wire form = %s", wire)
 	}
 
 	// Clearing the override reports the default list, source "default".
 	pub.events = nil
-	sup.stopCalls = nil
 	if _, err := m.SetEnvironments("leo-x", nil); err != nil {
 		t.Fatal(err)
 	}
-	last := pub.events[len(pub.events)-1].Payload.(*observe.AgentStateChangedPayload)
-	if !slices.Equal(last.Environments, []string{"base", "acct-a"}) || last.EnvironmentsSource != "default" {
-		t.Fatalf("cleared payload = %+v", last)
+	wire = lastEnvironmentsEvent(t, pub)
+	if !strings.Contains(wire, `"environments":["base","acct-a"]`) || !strings.Contains(wire, `"environments_source":"default"`) {
+		t.Fatalf("cleared wire form = %s", wire)
 	}
+}
+
+// Every environments update carries all three fields on the wire — [] when the
+// effective list is empty, an explicit null error when resolved — so a client
+// never has to guess whether an absent field means "unchanged" or "cleared".
+func TestEnvironmentsEventAlwaysCarriesAllFields(t *testing.T) {
+	cfg := &config.Config{Templates: map[string]config.TemplateConfig{"bare": {}}}
+	pub := &recordingObservePublisher{}
+	m := envManager(cfg, &capturingSupervisor{})
+	m.SetPublisher(pub)
+
+	m.publishEnvironmentsChanged(cfg, agentstore.Record{Name: "leo-x", Template: "bare"}, "starting")
+	wire := lastEnvironmentsEvent(t, pub)
+	for _, want := range []string{`"environments":[]`, `"environments_source":"default"`, `"environment_error":null`} {
+		if !strings.Contains(wire, want) {
+			t.Errorf("cleared event %s missing %s", wire, want)
+		}
+	}
+
+	pub.events = nil
+	m.publishEnvironmentsChanged(cfg, agentstore.Record{Name: "leo-x", Template: "bare", Environments: []string{"gone"}}, "starting")
+	wire = lastEnvironmentsEvent(t, pub)
+	if !strings.Contains(wire, `"environment_error":"`) || !strings.Contains(wire, "gone") {
+		t.Errorf("unresolvable event %s must carry the error string", wire)
+	}
+}
+
+func lastEnvironmentsEvent(t *testing.T, pub *recordingObservePublisher) string {
+	t.Helper()
+	for i := len(pub.events) - 1; i >= 0; i-- {
+		ev := pub.events[i]
+		if p, ok := ev.Payload.(*observe.AgentEnvironmentsChangedPayload); ok && ev.Type == observe.EventAgentStateChanged {
+			raw, err := json.Marshal(p)
+			if err != nil {
+				t.Fatal(err)
+			}
+			return string(raw)
+		}
+	}
+	t.Fatalf("no environments agent_state_changed published: %+v", pub.events)
+	return ""
 }
 
 // The loader's error can quote a rejected config's contents; Manager errors
