@@ -52,7 +52,7 @@ func (s *Server) buildForm(section schema.Section, target any, cfg *config.Confi
 	var defaults any
 	if section != schema.SectionDefaults &&
 		section != schema.SectionClientHost && section != schema.SectionWeb &&
-		section != schema.SectionClient {
+		section != schema.SectionClient && section != schema.SectionEnvironment {
 		defaults = &cfg.Defaults
 	}
 	fd := formData{Action: action, SubmitLabel: "Save"}

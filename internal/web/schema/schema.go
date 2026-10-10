@@ -44,14 +44,25 @@ const (
 	// rendered as an extra field group inside the template form rather than
 	// as a page of its own — see handleTemplateEditPage.
 	SectionPermissions Section = "permissions"
+	// SectionEnvironment is one entry of the top-level environments map. The
+	// map's values are bare env maps, so the form edits them through
+	// EnvironmentEntry.
+	SectionEnvironment Section = "environment"
 )
+
+// EnvironmentEntry is the form-facing view of one named environment: its env
+// map under the single `env` key. It exists only so the schema machinery has
+// a struct to render and apply; config stores the bare map.
+type EnvironmentEntry struct {
+	Env map[string]string `yaml:"env"`
+}
 
 // AllSections returns every section in stable order.
 func AllSections() []Section {
 	return []Section{
 		SectionDefaults, SectionTask, SectionTemplate,
 		SectionClientHost, SectionWeb,
-		SectionClient, SectionPermissions,
+		SectionClient, SectionPermissions, SectionEnvironment,
 	}
 }
 
@@ -72,6 +83,8 @@ func StructFor(s Section) reflect.Type {
 		return reflect.TypeOf(config.ClientConfig{})
 	case SectionPermissions:
 		return reflect.TypeOf(leotools.Permissions{})
+	case SectionEnvironment:
+		return reflect.TypeOf(EnvironmentEntry{})
 	}
 	panic("schema: unknown section " + string(s))
 }

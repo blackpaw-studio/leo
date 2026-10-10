@@ -520,6 +520,7 @@ func New(configPath string, processes ProcessStateProvider, scheduler SchedulerP
 	mux.HandleFunc("GET /config/templates", s.handlePage("config_templates", "Templates", s.buildTemplatesData))
 	mux.HandleFunc("GET /config/templates/{name}", s.handleTemplateEditPage)
 	mux.HandleFunc("GET /config/delegation", s.handlePage("config_delegation", "Delegation", s.buildDelegationData))
+	mux.HandleFunc("GET /config/environments", s.handlePage("config_environments", "Environments", s.buildEnvironmentsData))
 	mux.HandleFunc("GET /config/settings", s.handlePage("config_settings", "Settings", s.buildSettingsData))
 	mux.HandleFunc("GET /service", s.handlePage("service", "Service", s.buildServiceData))
 
@@ -573,6 +574,9 @@ func New(configPath string, processes ProcessStateProvider, scheduler SchedulerP
 	mux.HandleFunc("POST /web/config/web", s.handleConfigWebSave)
 	mux.HandleFunc("POST /web/config/client", s.handleConfigClientSave)
 	mux.HandleFunc("POST /web/config/host/{name}", s.handleConfigHostSave)
+	mux.HandleFunc("POST /web/config/environment/{name}", s.handleConfigEnvironmentSave)
+	mux.HandleFunc("POST /web/environment/add", s.handleEnvironmentAdd)
+	mux.HandleFunc("DELETE /web/environment/{name}", s.handleEnvironmentDelete)
 	mux.HandleFunc("POST /web/host/add", s.handleHostAdd)
 	mux.HandleFunc("DELETE /web/host/{name}", s.handleHostDelete)
 

@@ -142,6 +142,11 @@ var registry = map[Section][]Field{
 			Help: "Templates this template may consult. Empty means any"},
 	},
 
+	SectionEnvironment: {
+		{Key: "env", Label: "Variables", Kind: KindEnvMap, Group: "General",
+			Help: "KEY=VALUE, one per line. Absolute paths only — a literal ~ is not expanded"},
+	},
+
 	SectionClientHost: {
 		{Key: "ssh", Label: "SSH", Group: "General", Help: "user@host"},
 		{Key: "ssh_args", Label: "SSH args", Group: "General"},

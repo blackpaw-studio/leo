@@ -204,6 +204,8 @@ type templateInfo struct {
 	Channels  []string `json:"channels,omitempty"`
 	AddDirs   []string `json:"add_dirs,omitempty"`
 	EnvKeys   []string `json:"env_keys,omitempty"`
+	// Environments are the template's named environments (names only).
+	Environments []string `json:"environments,omitempty"`
 }
 
 // handleAPITemplateList returns all configured templates.
@@ -226,6 +228,8 @@ func (s *Server) handleAPITemplateList(w http.ResponseWriter, r *http.Request) {
 			Channels:  tmpl.Channels,
 			AddDirs:   tmpl.AddDirs,
 			EnvKeys:   redact.Keys(tmpl.Env),
+
+			Environments: tmpl.Environments,
 		})
 	}
 	// Config maps iterate in random order; sort so the listing is stable
