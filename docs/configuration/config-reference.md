@@ -17,6 +17,7 @@ Settings inherited by all tasks and templates unless overridden.
 | `max_turns` | int | No | Default maximum agent turns per execution. Defaults to `15`. Ignored by `codex` and `opencode` (no per-turn cap upstream). |
 | `harness` | string | No | Adapter name for this scope and everything that cascades from it. One of `claude`, `codex`, `opencode`. Defaults to `claude`. All three run every leo primitive (tasks, ephemeral agents, persistent tasks) — see [Harnesses](harnesses.md). |
 | `harness_options` | map | No | Adapter-specific options, strictly validated by the resolved harness. For `claude`: `permission_mode`, `bypass_permissions`, `remote_control`, `agent`, `allowed_tools`, `disallowed_tools`, `append_system_prompt`. For `codex`: `permission_mode`. For `opencode`: `permission`. See [Harnesses](harnesses.md) for the full reference and merge rules. |
+| `environments` | list | No | Ordered [named environments](environments.md) applied to everything that does not set its own list. |
 | `idle_suspend_after` | string | No | Idle interval (Go duration, e.g. `24h`) after which an ephemeral agent is auto-stopped (dormant, auto-wakes on the next message). Empty/unset disables it. See [Idle-suspend](#idle-suspend). |
 | `dispatch.viewer` | map | No | Dispatch viewer settings: `placement` (`pane`, `window` or `background`, default `pane`), `max_panes` (1–6, default 3), and `main_pane_height` (20–90 percent, default 60). |
 | `dispatch.max_concurrent` | int | No | Cap on dispatch turns running at once (default `6`, `0` = unlimited, negative is rejected). New dispatches and interactive follow-ups beyond the cap queue in one FIFO line instead of being rejected. See [Dispatches → Records and limits](dispatches.md#records-and-limits). |
@@ -206,6 +207,10 @@ Validation matches `channels` — each entry must be a valid plugin ID.
 
 Claude Code displays a confirmation prompt before loading development channels. For supervised agents, Leo watches the tmux pane and auto-accepts the prompt so the agent starts non-interactively. Silent/nonexistent entries are ignored by Claude Code without warning — verify spellings carefully.
 
+## `environments`
+
+Top-level map of named env maps (`environments.<name>.<KEY>: value`), referenced by name from `defaults`, `templates`, `tasks` and `leo agent spawn --environment`. See [Environments](environments.md).
+
 ## `tasks`
 
 Each task is a named entry under the `tasks` map. Tasks are invoked by the in-process cron scheduler or manually via `leo run <task>`.
@@ -229,6 +234,7 @@ tasks:
 | `harness` | string | No | `defaults.harness` | Adapter override for this task. `claude`, `codex`, and `opencode` all support one-shot and `runtime: persistent` tasks (persistent tasks deliver into agents, which all three harnesses support). See [Harnesses](harnesses.md). |
 | `harness_options` | map | No | merged with `defaults.harness_options` (same harness only) | Adapter-specific options — for `claude`: `permission_mode`, `bypass_permissions`, `allowed_tools`, `disallowed_tools`, `append_system_prompt`. `bypass_permissions` at task scope is honored (not defaults-only). For `codex`: `permission_mode`. For `opencode`: `permission`. See [Harnesses](harnesses.md). |
 | `max_turns` | int | No | `defaults.max_turns` | Max turns override. Ignored by `codex`/`opencode`. |
+| `environments` | list | No | `defaults.environments` | Ordered [named environments](environments.md) for this task's run (or implicit persistent agent). Not allowed on a persistent task that names a `template:`. |
 | `timeout` | string | No | `30m` | Max duration before kill (e.g., `30m`, `1h`). |
 | `retries` | int | No | `0` | Retry attempts on failure. |
 | `channels` | list | No | -- | Channel plugin IDs used by `notify_on_fail` (oneshot tasks) or reply delivery (persistent tasks). Only valid on a channel-supporting harness. For a `runtime: persistent` task with `template:` set, must be a subset of the target template's `channels:`. |
@@ -269,7 +275,8 @@ templates:
 | `max_turns` | int | No | `defaults.max_turns` | Max turns. |
 | `mcp_config` | string | No | -- | Path to MCP config file. |
 | `add_dirs` | list | No | -- | Additional directories. |
-| `env` | map | No | -- | Environment variables. |
+| `env` | map | No | -- | Environment variables. Wins over `environments`. |
+| `environments` | list | No | `defaults.environments` | Ordered [named environments](environments.md); replaces (does not extend) the inherited list. |
 | `idle_suspend_after` | string | No | `defaults.idle_suspend_after` | Idle interval (Go duration) before agents from this template are auto-stopped (dormant, auto-wakes on the next message). Empty inherits the default. |
 | `isolation` | string | No | -- | `worktree` runs every dispatch and consult of this template from a throwaway managed Git worktree at the caller's committed HEAD — the same as passing `isolation: "worktree"` to `leo_dispatch`, which takes precedence when given. The subagent's prompt names the worktree and warns that uncommitted changes in the caller's tree are not visible. Lets a reviewer run tests with a writable sandbox (e.g. codex `permission_mode: workspace-write`) without touching the real tree. See [Dispatches](dispatches.md). |
 | `permissions` | map | No | -- | Narrows the leo MCP tool surface for agents spawned from this template (`deny_tools`) and which agents/templates they may message, spawn, or consult (`can_message`, `can_spawn`, `can_consult`). See [Permissions](permissions.md). |

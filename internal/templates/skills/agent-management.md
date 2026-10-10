@@ -54,8 +54,11 @@ Content-Type: application/json
   "repo": "owner/repo"       // clones from GitHub if not local
   // OR
   "repo": "project-name"     // uses template workspace, no cloning
+  "environments": ["acct-b"] // optional: named environments for this agent only
 }
 ```
+
+To move a live agent onto other environments (e.g. another account) and resume its conversation: `POST /api/agent/{name}/environments {"environments": ["acct-b"]}` (empty list clears the override), or `leo agent set-environment <name> acct-b`.
 
 Response: `{"ok": true, "data": {"name": "leo-coding-repo", "workspace": "/path/to/workspace"}}`
 

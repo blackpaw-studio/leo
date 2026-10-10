@@ -96,6 +96,8 @@ leo agent spawn coding --repo blackpaw-studio/leo
 leo agent spawn coding --repo my-app --name scratch
 ```
 
+`--environment a,b` (repeatable or comma-separated) runs this agent under those [named environments](../configuration/environments.md) instead of the template's list; an unknown name is rejected before anything is created.
+
 `--name` overrides the auto-derived name (the template name for a repo-less spawn, `leo-<template>-<repo>` otherwise). When the agent already exists, Leo appends a numeric suffix (`-2`, `-3`, …) so repeated spawns never collide.
 
 #### Worktree Spawns
@@ -235,6 +237,17 @@ Reset an agent to a brand-new conversation: stops any live process/tmux session,
 ```bash
 leo agent reset leo-coding-owner-fetch
 ```
+
+### `leo agent set-environment <name> [environments]`
+
+Re-point an agent at a different ordered list of [named environments](../configuration/environments.md) (for example another account), restarting it with its conversation resumed. Omit the list to clear the override so the template's environments apply. A dormant agent is rewritten in place. Agents backing a persistent task are refused. Without `--json` the output states what happened to the process.
+
+```bash
+leo agent set-environment fetch acct-b
+leo agent set-environment fetch          # back to the template default
+```
+
+Gated like other agent-control tools: `deny_tools` can hide `leo_set_agent_environments`, and `can_spawn` must cover the target agent's template.
 
 ### `leo agent set-template <name> <template>`
 

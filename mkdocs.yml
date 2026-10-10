@@ -85,6 +85,7 @@ nav:
       - Workspace Structure: configuration/workspace-structure.md
       - Persistent Tasks: configuration/persistent-tasks.md
       - Harnesses: configuration/harnesses.md
+      - Environments: configuration/environments.md
       - Dispatches: configuration/dispatches.md
       - Delegation Profiles: configuration/delegation.md
       - Permissions: configuration/permissions.md
