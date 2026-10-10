@@ -21,7 +21,7 @@ func waitingRun(t *testing.T) (*Dispatcher, *runState, string, *time.Time) {
 	d.runs[s.record.ID] = s
 	id := d.openTurnLocked(s, TurnSourceUser, "", false).TurnID
 	d.bindKeyLocked(s, id, "p:a")
-	d.waitOnBackgroundLocked(s, pendingWorkFromStop(shellAndMonitor), &s.record.Turns[0])
+	d.waitOnBackgroundLocked(s, pendingWorkFromStop(shellAndMonitor), "", &s.record.Turns[0])
 	if s.record.Status != StatusWaiting {
 		t.Fatalf("setup status = %s", s.record.Status)
 	}

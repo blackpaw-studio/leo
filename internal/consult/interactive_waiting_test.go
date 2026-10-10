@@ -88,7 +88,7 @@ func TestInteractiveWaitingTurnFinishesAfterNotificationContinuation(t *testing.
 	}
 	select {
 	case entries := <-done:
-		if len(entries) != 1 || entries[0].Outcome != TurnFinished || entries[0].Text != "Build passed." || entries[0].Status != StatusIdle {
+		if len(entries) != 1 || entries[0].Outcome != TurnFinished || entries[0].Text != "I'll wait for the build.\n\nBuild passed." || entries[0].Status != StatusIdle {
 			t.Fatalf("entries=%+v", entries)
 		}
 	case <-time.After(5 * time.Second):
@@ -342,5 +342,88 @@ func TestInteractiveStopLongAfterArmedOpeningWithPendingWorkWaits(t *testing.T) 
 	rec, _ := d.Get(id)
 	if rec.Status != StatusWaiting || !rec.Turns[0].Delivered || rec.Turns[0].Outcome != "" {
 		t.Fatalf("status=%s turns=%+v", rec.Status, rec.Turns)
+	}
+}
+
+const longSummary = "Implemented the change.\nAll tests pass.\nCommit abc123."
+
+var nothingPending = map[string]any{"background_tasks": []any{}, "session_crons": []any{}}
+
+// A turn that ends with background work pending and later closes on a terse
+// wake reply keeps the summary it wrote before pausing.
+func TestInteractiveWaitingStopTextSurvivesIdLessWake(t *testing.T) {
+	now := time.Date(2026, time.October, 7, 12, 0, 0, 0, time.UTC)
+	d, _, id := startClaudeInteractive(t, &now)
+	reportAll(t, d, id,
+		claudeStop(t, "stop-1", longSummary, shellAndMonitor),
+		claudeHook(t, "submit-2", "UserPromptSubmit", taskNotification),
+		claudeStop(t, "stop-2", "Killed.", nothingPending))
+	rec, _ := d.Get(id)
+	if got, want := rec.Turns[0].Text, longSummary+"\n\nKilled."; got != want || rec.Turns[0].Outcome != TurnFinished {
+		t.Fatalf("turn=%+v want text %q", rec.Turns[0], want)
+	}
+}
+
+func TestPromptIDWaitingStopTextSurvivesWake(t *testing.T) {
+	d, _, id, _ := startArmedClaude(t)
+	reportAll(t, d, id,
+		idSubmit(t, "u1", "a", openingText), idStopWaiting(t, "s1", "a", longSummary),
+		idSubmit(t, "u2", "w", taskNotification), idStopWaiting(t, "s2", "w", "Still waiting."),
+		idStop(t, "s3", "w", "Killed."))
+	rec := idleRecord(t, d, id)
+	if got, want := rec.Turns[0].Text, longSummary+"\n\nStill waiting.\n\nKilled."; got != want {
+		t.Fatalf("text = %q, want %q", got, want)
+	}
+}
+
+// Empty pieces and a piece repeating the previous one add nothing.
+func TestPromptIDWaitingStopTextSkipsEmptyAndRepeats(t *testing.T) {
+	d, _, id, _ := startArmedClaude(t)
+	reportAll(t, d, id,
+		idSubmit(t, "u1", "a", openingText), idStopWaiting(t, "s1", "a", longSummary),
+		idSubmit(t, "u2", "w", taskNotification), idStopWaiting(t, "s2", "w", ""),
+		idStop(t, "s3", "w", longSummary))
+	rec := idleRecord(t, d, id)
+	if got := rec.Turns[0].Text; got != longSummary {
+		t.Fatalf("text = %q, want %q", got, longSummary)
+	}
+}
+
+// An interrupt that closes a waiting turn with no words of its own still
+// delivers what the turn said before it paused.
+func TestInteractiveWaitingStopTextSurvivesInterrupt(t *testing.T) {
+	now := time.Date(2026, time.October, 7, 12, 0, 0, 0, time.UTC)
+	d, _, id := startClaudeInteractive(t, &now)
+	reportAll(t, d, id, claudeStop(t, "stop-1", longSummary, shellAndMonitor),
+		HookReport{EventID: "int-1", Payload: []byte(`{"hook_event_name":"Interrupt"}`)})
+	rec, _ := d.Get(id)
+	if rec.Turns[0].Outcome != TurnInterrupted || rec.Turns[0].Text != longSummary {
+		t.Fatalf("turn=%+v", rec.Turns[0])
+	}
+}
+
+func TestInteractiveWaitingStopTextSurvivesSettlement(t *testing.T) {
+	now := time.Date(2026, time.October, 7, 12, 0, 0, 0, time.UTC)
+	d, _, id := startClaudeInteractive(t, &now)
+	reportAll(t, d, id, claudeStop(t, "stop-1", longSummary, shellAndMonitor))
+	d.mu.Lock()
+	s := d.runs[id]
+	d.finishInteractiveLocked(s, StatusClosed)
+	d.mu.Unlock()
+	rec, _ := d.Get(id)
+	if rec.Turns[0].Text != longSummary {
+		t.Fatalf("turn=%+v", rec.Turns[0])
+	}
+}
+
+func TestTurnWaitTextRoundTripsThroughJSON(t *testing.T) {
+	in := Turn{TurnID: "d-1#1", WaitText: []string{"a", "b"}}
+	b, err := json.Marshal(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out Turn
+	if err := json.Unmarshal(b, &out); err != nil || len(out.WaitText) != 2 || out.WaitText[1] != "b" {
+		t.Fatalf("out=%+v err=%v", out, err)
 	}
 }

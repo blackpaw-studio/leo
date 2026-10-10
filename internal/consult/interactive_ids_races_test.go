@@ -90,7 +90,7 @@ func TestPromptIDWakeBeforeTheWorkingTurnsPendingWorkStopAliasesIt(t *testing.T)
 	}
 	reportAll(t, d, id, idStop(t, "s2", "w", "Build passed."))
 	rec = idleRecord(t, d, id)
-	if len(rec.Turns) != 1 || rec.Turns[0].Outcome != TurnFinished || rec.Turns[0].Text != "Build passed." || rec.Status != StatusIdle {
+	if len(rec.Turns) != 1 || rec.Turns[0].Outcome != TurnFinished || rec.Turns[0].Text != "I'll wait for the build.\n\nBuild passed." || rec.Status != StatusIdle {
 		t.Fatalf("the wake's stop did not finish the turn: %+v", rec)
 	}
 }
@@ -202,7 +202,7 @@ func TestBridgedTurnStoppingWithNothingPendingLeavesTheWaitingTurnWaiting(t *tes
 	}
 	reportAll(t, d, id, bridgeWake(t, "e5", "t4", taskNotification), bridgeStop(t, "e6", "t4", "Build passed."))
 	rec = idleRecord(t, d, id)
-	if w := turnByID(rec, waiting.TurnID); w.Outcome != TurnFinished || w.Text != "Build passed." || rec.Status != StatusIdle || rec.PendingWork != nil || len(rec.Turns) != 3 {
+	if w := turnByID(rec, waiting.TurnID); w.Outcome != TurnFinished || w.Text != "waiting\n\nBuild passed." || rec.Status != StatusIdle || rec.PendingWork != nil || len(rec.Turns) != 3 {
 		t.Fatalf("the wake did not finish the waiting turn: %+v", rec)
 	}
 	if d.slots.InUse() != 0 {
@@ -223,7 +223,7 @@ func TestPendingWorkIsOnlyClearedByItsOwnTurnsStop(t *testing.T) {
 	d.bindKeyLocked(s, waitingID, "p:a")
 	otherID := d.openTurnLocked(s, TurnSourceUser, "", false).TurnID
 	d.bindKeyLocked(s, otherID, "p:h")
-	d.waitOnBackgroundLocked(s, pendingWorkFromStop(shellAndMonitor), &s.record.Turns[turnIndexByID(s.record.Turns, waitingID)])
+	d.waitOnBackgroundLocked(s, pendingWorkFromStop(shellAndMonitor), "", &s.record.Turns[turnIndexByID(s.record.Turns, waitingID)])
 	d.mu.Unlock()
 
 	reportAll(t, d, s.record.ID, idStop(t, "s1", "h", "human done"))

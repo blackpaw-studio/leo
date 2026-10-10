@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"slices"
 	"strings"
 	"time"
 
@@ -551,9 +552,10 @@ func (d *Dispatcher) closeTurnLocked(s *runState, id string, outcome TurnOutcome
 		t.Outcome = outcome
 		t.Pending = nil
 		t.EndedAt = boundary
-		if text != "" {
+		if text = joinStopTexts(t.WaitText, text); text != "" {
 			t.Text = text
 		}
+		t.WaitText = nil
 		if t.SlotHeld {
 			t.SlotHeld = false
 			d.slotsFor(s).Release()
@@ -1088,10 +1090,11 @@ func (d *Dispatcher) closeWorkingLocked(s *runState, o TurnOutcome, text string)
 // the session is paused, not done, so the turns the Stop ended stay open
 // (leo_wait keeps blocking), each holding that work, and the run reads
 // waiting until it wakes them.
-func (d *Dispatcher) waitOnBackgroundLocked(s *runState, w *PendingWork, turns ...*Turn) {
+func (d *Dispatcher) waitOnBackgroundLocked(s *runState, w *PendingWork, text string, turns ...*Turn) {
 	old := s.record.Status
 	for _, t := range turns {
 		t.Pending = w
+		t.WaitText = appendStopText(t.WaitText, text)
 	}
 	d.recomputeStatusLocked(s, d.now())
 	if s.record.Status != StatusRunning {
@@ -1102,6 +1105,21 @@ func (d *Dispatcher) waitOnBackgroundLocked(s *runState, w *PendingWork, turns .
 	} else {
 		d.persistLocked(s, "")
 	}
+}
+
+// appendStopText returns texts with text added, unless it is empty or repeats
+// the last piece.
+func appendStopText(texts []string, text string) []string {
+	if strings.TrimSpace(text) == "" || (len(texts) > 0 && texts[len(texts)-1] == text) {
+		return texts
+	}
+	return append(slices.Clone(texts), text)
+}
+
+// joinStopTexts is the result of a turn that paused on background work: what
+// each pausing Stop said, then what the closing one said, blank-line separated.
+func joinStopTexts(waiting []string, closing string) string {
+	return strings.Join(appendStopText(waiting, closing), "\n\n")
 }
 
 // confirmArmedLocked marks the oldest open turn delivered when it is a sent
