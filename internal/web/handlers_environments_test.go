@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/blackpaw-studio/leo/internal/agentstore"
+	"github.com/blackpaw-studio/leo/internal/config"
 )
 
 func getRequest(t *testing.T, s *Server, path string) *httptest.ResponseRecorder {
@@ -172,5 +173,26 @@ func TestEnvironmentRenameRejections(t *testing.T) {
 				t.Errorf("config changed on rejected rename: %v", got)
 			}
 		})
+	}
+}
+
+func TestEnvironmentRenameFormUsesEscapedURLForSlashedName(t *testing.T) {
+	s, cfgPath := newTestServerWithConfigFile(t, &config.Config{
+		Environments: map[string]map[string]string{"aws/prod": {"A": "1"}},
+	})
+
+	page := readBody(t, getRequest(t, s, "/config/environments"))
+	const wantURL = "/web/environment/aws%2Fprod/rename"
+	if !strings.Contains(page, wantURL) {
+		t.Fatalf("page missing escaped rename URL %q", wantURL)
+	}
+
+	w := postForm(t, s, wantURL, url.Values{"new_name": {"aws-prod"}})
+	if body := readBody(t, w); strings.Contains(body, "flash-error") || w.Code != http.StatusOK {
+		t.Fatalf("rename: %d %s", w.Code, body)
+	}
+	got := loadConfigFile(t, cfgPath).Environments
+	if _, ok := got["aws-prod"]; !ok || len(got) != 1 {
+		t.Errorf("environments after rename = %v", got)
 	}
 }

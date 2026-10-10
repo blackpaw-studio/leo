@@ -16,8 +16,9 @@ import (
 // environmentCard is one entry of the Environments page: a name paired with
 // the schema-driven form for its env map.
 type environmentCard struct {
-	Name string
-	Form formData
+	Name      string
+	RenameURL string
+	Form      formData
 }
 
 // environmentsPageData feeds page_config_environments.
@@ -42,7 +43,11 @@ func (s *Server) buildEnvironmentsData(r *http.Request) (any, error) {
 		entry := schema.EnvironmentEntry{Env: cfg.Environments[name]}
 		form := s.buildForm(schema.SectionEnvironment, &entry, cfg, "/web/config/environment/"+url.PathEscape(name))
 		form.DeleteURL = "/web/environment/" + url.PathEscape(name)
-		cards = append(cards, environmentCard{Name: name, Form: form})
+		cards = append(cards, environmentCard{
+			Name:      name,
+			RenameURL: "/web/environment/" + url.PathEscape(name) + "/rename",
+			Form:      form,
+		})
 	}
 	return environmentsPageData{Environments: cards}, nil
 }
