@@ -269,3 +269,25 @@ func TestPreLaunchTrustsOnlyForAlternateConfigDir(t *testing.T) {
 		t.Fatalf("alternate config dir was not trusted: %v", err)
 	}
 }
+
+// The default-dir comparison must use the agent's own HOME, not a config dir
+// inherited from the daemon's environment.
+func TestPreLaunchIgnoresDaemonConfigDirWhenComparingToDefault(t *testing.T) {
+	t.Setenv("CLAUDE_CONFIG_DIR", t.TempDir())
+	home, cwd := t.TempDir(), t.TempDir()
+	pre := func(env map[string]string) {
+		t.Helper()
+		if err := preLaunch(harness.SessionHandle{Workspace: cwd, Env: env}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	def := filepath.Join(home, ".claude")
+	pre(map[string]string{"HOME": home, "CLAUDE_CONFIG_DIR": def})
+	pre(map[string]string{"HOME": home, "CLAUDE_CONFIG_DIR": ""})
+	for _, p := range []string{filepath.Join(def, ".claude.json"), filepath.Join(home, ".claude.json")} {
+		if _, err := os.Stat(p); !os.IsNotExist(err) {
+			t.Fatalf("default-account agent was touched at %s, stat err = %v", p, err)
+		}
+	}
+}

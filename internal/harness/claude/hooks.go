@@ -83,7 +83,9 @@ func preLaunch(h harness.SessionHandle) error {
 	if dir == "" {
 		return nil
 	}
-	if def, err := session.ConfigDir(map[string]string{"HOME": h.Env["HOME"]}); err == nil && filepath.Clean(dir) == filepath.Clean(def) {
+	// Compare against the agent's own default (its HOME), never a config dir
+	// the daemon's environment happens to carry.
+	if home, err := session.HomeDir(h.Env); err == nil && filepath.Clean(dir) == filepath.Join(home, ".claude") {
 		return nil
 	}
 	return (Claude{}).PrepareInteractive(h.Env, h.Workspace)
