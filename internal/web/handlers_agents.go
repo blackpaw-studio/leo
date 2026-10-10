@@ -6,9 +6,11 @@ import (
 	"fmt"
 	"net/http"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/blackpaw-studio/leo/internal/agent"
+	"github.com/blackpaw-studio/leo/internal/config"
 	"github.com/blackpaw-studio/leo/internal/redact"
 )
 
@@ -68,6 +70,9 @@ func (s *Server) handleAPIAgentSpawn(w http.ResponseWriter, r *http.Request) {
 		Base     string            `json:"base,omitempty"`
 		Prompt   string            `json:"prompt,omitempty"`
 		Env      map[string]string `json:"env,omitempty"`
+		// Environments overrides the template's named environments for this
+		// agent only.
+		Environments []string `json:"environments,omitempty"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSON(w, http.StatusBadRequest, apiResponse{Error: fmt.Sprintf("invalid request: %v", err)})
@@ -82,9 +87,11 @@ func (s *Server) handleAPIAgentSpawn(w http.ResponseWriter, r *http.Request) {
 		Base:     req.Base,
 		Prompt:   req.Prompt,
 		Env:      req.Env,
+
+		Environments: req.Environments,
 	})
 	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, apiResponse{Error: err.Error()})
+		writeJSON(w, environmentErrorStatus(err), apiResponse{Error: err.Error()})
 		return
 	}
 
@@ -249,6 +256,9 @@ type agentData struct {
 	Restarts  int
 	Branch    string
 	Bridge    string // agent.Record.BridgeSummary
+	// Environments is the agent's own override, comma-joined for the inline
+	// edit form; empty means the template's list applies.
+	Environments string
 }
 
 // handleWebAgentSpawn spawns an agent via the web UI (form post).
@@ -270,7 +280,11 @@ func (s *Server) handleWebAgentSpawn(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	rec, err := s.agentSvc.Spawn(r.Context(), agent.SpawnSpec{Template: templateName, Repo: repo})
+	rec, err := s.agentSvc.Spawn(r.Context(), agent.SpawnSpec{
+		Template:     templateName,
+		Repo:         repo,
+		Environments: parseEnvironmentsCSV(r.FormValue("environments")),
+	})
 	if err != nil {
 		s.renderFlash(w, "error", err.Error())
 		return
@@ -545,4 +559,75 @@ func (s *Server) handleAPITaskToggle(w http.ResponseWriter, r *http.Request) {
 		action = "disabled"
 	}
 	writeJSON(w, http.StatusOK, apiResponse{OK: true, Data: map[string]string{"name": name, "status": action}})
+}
+
+// parseEnvironmentsCSV splits a comma-separated environment list from a form
+// field, trimming blanks. An empty field yields nil ("no override").
+func parseEnvironmentsCSV(raw string) []string {
+	var names []string
+	for _, part := range strings.Split(raw, ",") {
+		if part = strings.TrimSpace(part); part != "" {
+			names = append(names, part)
+		}
+	}
+	return names
+}
+
+// environmentErrorStatus maps an unknown-environment failure (the caller named
+// something that is not configured) to 400 and everything else to 500.
+func environmentErrorStatus(err error) int {
+	var unknown *config.UnknownEnvironmentError
+	if errors.As(err, &unknown) {
+		return http.StatusBadRequest
+	}
+	return http.StatusInternalServerError
+}
+
+// handleAPIAgentSetEnvironments re-points an agent at a different ordered list
+// of named environments, restarting it with its conversation resumed. An empty
+// list clears the override so the template's environments apply.
+// POST /api/agent/{name}/environments  {environments: ["work"]}
+func (s *Server) handleAPIAgentSetEnvironments(w http.ResponseWriter, r *http.Request) {
+	if s.agentSvc == nil {
+		writeJSON(w, http.StatusServiceUnavailable, apiResponse{Error: "agent service not available"})
+		return
+	}
+	var req struct {
+		Environments []string `json:"environments"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, apiResponse{Error: fmt.Sprintf("invalid request: %v", err)})
+		return
+	}
+	rec, status, err := resolveAgentQuery(s.agentSvc, r.PathValue("name"))
+	if err != nil {
+		writeJSON(w, status, apiResponse{Error: err.Error()})
+		return
+	}
+	res, err := s.agentSvc.SetEnvironments(rec.Name, req.Environments)
+	if err != nil {
+		writeJSON(w, environmentErrorStatus(err), apiResponse{Error: err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, apiResponse{OK: true, Data: res})
+}
+
+// handleWebAgentSetEnvironments is the agents-list form for
+// handleAPIAgentSetEnvironments: success re-renders the list in place, failure
+// flashes to the shared container (same convention as rename).
+func (s *Server) handleWebAgentSetEnvironments(w http.ResponseWriter, r *http.Request) {
+	if s.agentSvc == nil {
+		s.renderFlashToContainer(w, "error", "Agent service not available")
+		return
+	}
+	rec, _, err := resolveAgentQuery(s.agentSvc, r.PathValue("name"))
+	if err != nil {
+		s.renderFlashToContainer(w, "error", err.Error())
+		return
+	}
+	if _, err := s.agentSvc.SetEnvironments(rec.Name, parseEnvironmentsCSV(r.FormValue("environments"))); err != nil {
+		s.renderFlashToContainer(w, "error", fmt.Sprintf("Failed to set environments: %v", err))
+		return
+	}
+	s.handlePartialAgents(w, r)
 }

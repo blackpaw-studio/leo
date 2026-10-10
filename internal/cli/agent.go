@@ -70,6 +70,7 @@ so remote calls use your existing SSH setup.`,
 		newAgentResetCmd(),
 		newAgentRestartCmd(),
 		newAgentSetTemplateCmd(),
+		newAgentSetEnvironmentCmd(),
 		newAgentRenameCmd(),
 		newAgentLogsCmd(),
 		newAgentSessionNameCmd(),
@@ -191,7 +192,7 @@ func newAgentListCmd() *cobra.Command {
 
 func newAgentSpawnCmd() *cobra.Command {
 	var host, repo, name, branch, base, prompt, idleSuspend string
-	var envPairs []string
+	var envPairs, environments []string
 	var reuseOwner, attachExisting, asJSON bool
 	cmd := &cobra.Command{
 		Use:   "spawn <template> [repo]",
@@ -282,6 +283,9 @@ unless --attach-existing or --reuse-owner is set. Flags override the prompt:
 				for _, p := range envPairs {
 					extra = append(extra, "--env", p)
 				}
+				if len(environments) > 0 {
+					extra = append(extra, "--environment", strings.Join(environments, ","))
+				}
 				if idleSuspend != "" {
 					extra = append(extra, "--idle-suspend", idleSuspend)
 				}
@@ -355,14 +359,15 @@ unless --attach-existing or --reuse-owner is set. Flags override the prompt:
 			}
 
 			rec, err := daemon.AgentSpawn(cmd.Context(), cfg.HomePath, daemon.AgentSpawnRequest{
-				Template:    template,
-				Repo:        repo,
-				Name:        name,
-				Branch:      branch,
-				Base:        base,
-				Prompt:      prompt,
-				Env:         env,
-				IdleSuspend: idleSuspend,
+				Template:     template,
+				Repo:         repo,
+				Name:         name,
+				Branch:       branch,
+				Base:         base,
+				Prompt:       prompt,
+				Env:          env,
+				IdleSuspend:  idleSuspend,
+				Environments: environments,
 			})
 			if err != nil {
 				return fmt.Errorf("spawning agent: %w", err)
@@ -389,6 +394,7 @@ unless --attach-existing or --reuse-owner is set. Flags override the prompt:
 	cmd.Flags().StringVar(&base, "base", "", "base ref for new branches (defaults to origin HEAD)")
 	cmd.Flags().StringVar(&prompt, "prompt", "", "opening prompt delivered as the agent's first interactive turn")
 	cmd.Flags().StringArrayVar(&envPairs, "env", nil, "extra env var as KEY=VALUE (repeatable); overrides template env on collision")
+	cmd.Flags().StringSliceVar(&environments, "environment", nil, "named environments to run under, comma-separated and merged left to right (later wins); replaces the template's default list")
 	cmd.Flags().BoolVar(&reuseOwner, "reuse-owner", false, "on collision, spawn using the existing agent's canonical owner/repo")
 	cmd.Flags().BoolVar(&attachExisting, "attach-existing", false, "on collision, attach to the existing agent instead of spawning")
 	cmd.Flags().StringVar(&idleSuspend, "idle-suspend", "", "suspend agent after this idle interval (e.g. \"24h\", \"30m\"); overrides template/defaults idle_suspend_after")

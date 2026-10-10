@@ -8,6 +8,7 @@ import (
 	"strconv"
 
 	"github.com/blackpaw-studio/leo/internal/agent"
+	"github.com/blackpaw-studio/leo/internal/config"
 	"github.com/blackpaw-studio/leo/internal/harness"
 )
 
@@ -54,15 +55,16 @@ func (s *Server) handleAgentSpawn(w http.ResponseWriter, r *http.Request) {
 	}
 
 	rec, err := s.agentMgr.Spawn(r.Context(), agent.SpawnSpec{
-		Template:    req.Template,
-		FromAgent:   req.FromAgent,
-		Repo:        req.Repo,
-		Name:        req.Name,
-		Branch:      req.Branch,
-		Base:        req.Base,
-		Prompt:      req.Prompt,
-		Env:         req.Env,
-		IdleSuspend: req.IdleSuspend,
+		Template:     req.Template,
+		FromAgent:    req.FromAgent,
+		Repo:         req.Repo,
+		Name:         req.Name,
+		Branch:       req.Branch,
+		Base:         req.Base,
+		Prompt:       req.Prompt,
+		Env:          req.Env,
+		IdleSuspend:  req.IdleSuspend,
+		Environments: req.Environments,
 	})
 	if err != nil {
 		writeAgentError(w, err)
@@ -236,6 +238,41 @@ func (s *Server) handleAgentSetTemplate(w http.ResponseWriter, r *http.Request) 
 	data, err := json.Marshal(result)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, fmt.Sprintf("marshaling switch result: %v", err))
+		return
+	}
+	writeJSON(w, http.StatusOK, Response{OK: true, Data: data})
+}
+
+// handleAgentSetEnvironment changes an agent's named environments via POST
+// /agents/{name}/set-environment: the server resolves the query to a canonical
+// agent, rebuilds its env from current config and restarts it (resuming its
+// session) when live, or rewrites the record in place when dormant.
+func (s *Server) handleAgentSetEnvironment(w http.ResponseWriter, r *http.Request) {
+	if s.agentMgr == nil {
+		writeError(w, http.StatusServiceUnavailable, "agent manager not attached")
+		return
+	}
+	query := r.PathValue("name")
+	if query == "" {
+		writeError(w, http.StatusBadRequest, "agent name is required")
+		return
+	}
+	var req AgentSetEnvironmentRequest
+	if !decodeJSON(w, r, &req) {
+		return
+	}
+	rec, ok := s.resolveAgentOrError(w, query)
+	if !ok {
+		return
+	}
+	result, err := s.agentMgr.SetEnvironments(rec.Name, req.Environments)
+	if err != nil {
+		writeAgentError(w, err)
+		return
+	}
+	data, err := json.Marshal(result)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, fmt.Sprintf("marshaling result: %v", err))
 		return
 	}
 	writeJSON(w, http.StatusOK, Response{OK: true, Data: data})
@@ -427,8 +464,9 @@ func (s *Server) handleAgentResolve(w http.ResponseWriter, r *http.Request) {
 	}
 	data, err := json.Marshal(AgentResolveResponse{
 		Name:    rec.Name,
-		Session: s.agentMgr.SessionName(rec.Name),
-		Repo:    rec.Repo,
+		Session:  s.agentMgr.SessionName(rec.Name),
+		Repo:     rec.Repo,
+		Template: rec.Template,
 	})
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, fmt.Sprintf("marshaling resolve: %v", err))
@@ -550,9 +588,12 @@ func (s *Server) handleAgentRename(w http.ResponseWriter, r *http.Request) {
 // errors.Is matches on the other side of the socket.
 func writeAgentError(w http.ResponseWriter, err error) {
 	var nf *agent.ErrNotFound
+	var unknownEnv *config.UnknownEnvironmentError
 	switch {
 	case errors.As(err, &nf):
 		writeJSON(w, http.StatusNotFound, Response{OK: false, Error: err.Error(), Code: ErrorCodeNotFound})
+	case errors.As(err, &unknownEnv):
+		writeError(w, http.StatusBadRequest, err.Error())
 	case errors.Is(err, agent.ErrWorktreeRequiresSlash):
 		writeJSON(w, http.StatusBadRequest, Response{OK: false, Error: err.Error(), Code: ErrorCodeWorktreeRequireSep})
 	case errors.Is(err, agent.ErrAgentStillRunning):

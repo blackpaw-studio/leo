@@ -3,6 +3,7 @@ package cli
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	"github.com/blackpaw-studio/leo/internal/daemon"
 	"github.com/spf13/cobra"
@@ -13,13 +14,14 @@ import (
 // from the source agent's record and works for any git workspace.
 func newAgentWorktreeCmd() *cobra.Command {
 	var (
-		host     string
-		name     string
-		base     string
-		template string
-		prompt   string
-		envPairs []string
-		asJSON   bool
+		host         string
+		name         string
+		base         string
+		template     string
+		prompt       string
+		envPairs     []string
+		environments []string
+		asJSON       bool
 	)
 	cmd := &cobra.Command{
 		Use:   "worktree <agent> <branch>",
@@ -87,6 +89,9 @@ The new agent is named <agent>-<branch-slug> and its worktree lives under
 				for _, p := range envPairs {
 					extra = append(extra, "--env", p)
 				}
+				if len(environments) > 0 {
+					extra = append(extra, "--environment", strings.Join(environments, ","))
+				}
 				return runRemote(res, extra)
 			}
 
@@ -98,6 +103,8 @@ The new agent is named <agent>-<branch-slug> and its worktree lives under
 				Name:      name,
 				Prompt:    prompt,
 				Env:       env,
+
+				Environments: environments,
 			})
 			if err != nil {
 				return fmt.Errorf("spawning worktree agent: %w", err)
@@ -119,5 +126,6 @@ The new agent is named <agent>-<branch-slug> and its worktree lives under
 	cmd.Flags().StringVar(&template, "template", "", "override the template that builds the new agent (source repo is still used; source env is not inherited)")
 	cmd.Flags().StringVar(&prompt, "prompt", "", "opening prompt delivered as the agent's first interactive turn")
 	cmd.Flags().StringArrayVar(&envPairs, "env", nil, "extra env var as KEY=VALUE (repeatable); overrides inherited env on collision")
+	cmd.Flags().StringSliceVar(&environments, "environment", nil, "named environments for the new agent, comma-separated and merged left to right; default inherits the source agent's")
 	return cmd
 }

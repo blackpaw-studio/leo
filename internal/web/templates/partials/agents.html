@@ -22,6 +22,16 @@
                     <div class="form-help">Use owner/repo to clone from GitHub, a plain name to reuse the template workspace under a subdir, or leave blank to run the template as-is (agent named after the template)</div>
                 </div>
             </div>
+            <div class="frow">
+                <label for="spawn-environments">Environments (optional)</label>
+                <div class="fctl">
+                    <input type="text" name="environments" id="spawn-environments" list="environment-names" placeholder="comma-separated, e.g. work,proxy" autocomplete="off">
+                    <div class="form-help">Named environments for this agent only, overriding the template's list. Later names win on conflicts. Leave blank to use the template's.</div>
+                </div>
+            </div>
+            <datalist id="environment-names">
+                {{range .EnvironmentNames}}<option value="{{.}}">{{end}}
+            </datalist>
             <div class="form-actions">
                 <button type="submit" class="btn hot">Spawn Agent</button>
             </div>
@@ -45,12 +55,18 @@
                 {{if uptime .StartedAt}}{{uptime .StartedAt}}{{end}}
                 {{if gt .Restarts 0}}&middot; {{.Restarts}} restart{{if gt .Restarts 1}}s{{end}}{{end}}
                 {{if .Bridge}}&middot; bridge: {{.Bridge}}{{end}}
+                {{if .Environments}}&middot; env: {{.Environments}}{{end}}
             </div>
             <div class="process-actions">
                 <form class="agent-rename" hx-post="/web/agent/{{.Name}}/rename" hx-target="#agents-content" hx-swap="outerHTML"
                       onsubmit="return this.new_name.value.trim() !== '';">
                     <input type="text" name="new_name" placeholder="new name" aria-label="Rename {{displayName .Name}}" autocomplete="off">
                     <button type="submit" class="btn btn-sm">Rename</button>
+                </form>
+                <form class="agent-rename" hx-post="/web/agent/{{.Name}}/environments" hx-target="#agents-content" hx-swap="outerHTML"
+                      hx-confirm="Restart this agent under the new environments? Its conversation is resumed where possible.">
+                    <input type="text" name="environments" value="{{.Environments}}" list="environment-names" placeholder="template default" aria-label="Environments for {{displayName .Name}}" autocomplete="off">
+                    <button type="submit" class="btn btn-sm">Set env</button>
                 </form>
                 {{if eq .Status "stopped"}}
                 <button class="btn btn-sm hot" hx-post="/web/agent/{{.Name}}/start" hx-target="#agents-content" hx-swap="outerHTML">Start</button>

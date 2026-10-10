@@ -70,6 +70,11 @@ type mockAgentService struct {
 	renameResult  agent.Record
 	renameErr     error
 
+	setEnvCalled bool
+	setEnvName   string
+	setEnvNames  []string
+	setEnvErr    error
+
 	wakeCalled bool
 	wakeName   string
 	wakeErr    error
@@ -177,6 +182,16 @@ func (m *mockAgentService) Resolve(query string) (agent.Record, error) {
 		}
 	}
 	return agent.Record{}, &agent.ErrNotFound{Query: query}
+}
+
+func (m *mockAgentService) SetEnvironments(name string, names []string) (agent.SetEnvironmentsResult, error) {
+	m.setEnvCalled = true
+	m.setEnvName = name
+	m.setEnvNames = names
+	if m.setEnvErr != nil {
+		return agent.SetEnvironmentsResult{}, m.setEnvErr
+	}
+	return agent.SetEnvironmentsResult{Name: name, To: names, Effective: names, Status: "running"}, nil
 }
 
 func (m *mockAgentService) Wakeable(name string) bool {

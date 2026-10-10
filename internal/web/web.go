@@ -64,6 +64,9 @@ type AgentService interface {
 	Resolve(query string) (agent.Record, error)
 	Rename(query, newName string) (agent.Record, error)
 	Stop(name string, opts agent.StopOptions) error
+	// SetEnvironments re-points an agent at a different ordered list of
+	// named environments and restarts it with its conversation resumed.
+	SetEnvironments(name string, names []string) (agent.SetEnvironmentsResult, error)
 	// Wakeable reports whether name has a persisted, dormant record with
 	// WakeOnMessage=true — the only dormant agents an inbound message is
 	// allowed to auto-start.
@@ -589,6 +592,7 @@ func New(configPath string, processes ProcessStateProvider, scheduler SchedulerP
 	mux.HandleFunc("POST /web/agent/{name}/start", s.handleWebAgentStart)
 	mux.HandleFunc("DELETE /web/agent/{name}", s.handleWebAgentDelete)
 	mux.HandleFunc("POST /web/agent/{name}/rename", s.handleWebAgentRename)
+	mux.HandleFunc("POST /web/agent/{name}/environments", s.handleWebAgentSetEnvironments)
 	mux.HandleFunc("POST /web/agent/{name}/send", s.handleWebAgentSendKeys)
 	mux.HandleFunc("POST /web/agent/{name}/interrupt", s.handleWebAgentInterrupt)
 	mux.HandleFunc("POST /web/agent/{name}/message", s.handleWebAgentMessage)
@@ -603,6 +607,7 @@ func New(configPath string, processes ProcessStateProvider, scheduler SchedulerP
 	apiMux.HandleFunc("POST /api/agent/stop", s.handleAPIAgentStop)
 	apiMux.HandleFunc("POST /api/agent/start", s.handleAPIAgentStart)
 	apiMux.HandleFunc("POST /api/agent/{name}/rename", s.handleAPIAgentRename)
+	apiMux.HandleFunc("POST /api/agent/{name}/environments", s.handleAPIAgentSetEnvironments)
 	apiMux.HandleFunc("POST /api/agent/hook", s.handleAPIAgentHook)
 	apiMux.HandleFunc("POST /api/agent/{name}/surface-file", s.handleAPIAgentSurfaceFile)
 	apiMux.HandleFunc("POST /api/consult", s.handleAPIConsult)

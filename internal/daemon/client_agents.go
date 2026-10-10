@@ -191,6 +191,25 @@ func AgentSwitchTemplate(ctx context.Context, workDir, name, template string) (a
 	return out, nil
 }
 
+// AgentSetEnvironment sends POST /agents/{name}/set-environment, changing the
+// agent's ordered named environments (an empty list clears its override). A
+// live agent is restarted with its session resumed. Backs `leo agent
+// set-environment`.
+func AgentSetEnvironment(ctx context.Context, workDir, name string, environments []string) (agent.SetEnvironmentsResult, error) {
+	resp, err := Send(ctx, workDir, "POST", "/agents/"+url.PathEscape(name)+"/set-environment", AgentSetEnvironmentRequest{Environments: environments})
+	if err != nil {
+		return agent.SetEnvironmentsResult{}, err
+	}
+	if !resp.OK {
+		return agent.SetEnvironmentsResult{}, responseError(resp, name)
+	}
+	var out agent.SetEnvironmentsResult
+	if err := json.Unmarshal(resp.Data, &out); err != nil {
+		return agent.SetEnvironmentsResult{}, fmt.Errorf("decoding set-environment response: %w", err)
+	}
+	return out, nil
+}
+
 // AgentStale sends GET /agents/stale, returning the running agents whose
 // wiring would change if they were restarted. `leo update` uses it to decide
 // whether to offer a restart after swapping the binary.

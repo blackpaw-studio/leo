@@ -51,6 +51,9 @@ type AgentManager interface {
 	// SwitchTemplate re-points an agent at a different template, swapping its
 	// wiring and which per-template conversation is live.
 	SwitchTemplate(name, template string) (agent.SwitchResult, error)
+	// SetEnvironments changes an agent's named environments, restarting it
+	// (resuming its session) when live.
+	SetEnvironments(name string, names []string) (agent.SetEnvironmentsResult, error)
 	RestartAll() agent.RestartResult
 	// StaleAgents reports running agents whose wiring would change if they
 	// were restarted — what `leo update` offers to bounce after a binary swap.
@@ -263,6 +266,7 @@ func New(sockPath, configPath string, processes ProcessStateProvider, opts ...Op
 	mux.HandleFunc("POST /agents/{name}/reset", s.handleAgentReset)
 	mux.HandleFunc("POST /agents/{name}/restart", s.handleAgentRestart)
 	mux.HandleFunc("POST /agents/{name}/set-template", s.handleAgentSetTemplate)
+	mux.HandleFunc("POST /agents/{name}/set-environment", s.handleAgentSetEnvironment)
 	mux.HandleFunc("DELETE /agents/{name}", s.handleAgentDelete)
 	mux.HandleFunc("GET /agents/{name}/delete-plan", s.handleAgentDeletePlan)
 	mux.HandleFunc("POST /agents/{name}/rename", s.handleAgentRename)
