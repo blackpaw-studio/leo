@@ -463,7 +463,7 @@ func (s *Server) handleAgentResolve(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	data, err := json.Marshal(AgentResolveResponse{
-		Name:    rec.Name,
+		Name:     rec.Name,
 		Session:  s.agentMgr.SessionName(rec.Name),
 		Repo:     rec.Repo,
 		Template: rec.Template,
