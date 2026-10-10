@@ -214,5 +214,6 @@ func mergeStored(r *Record, stored map[string]agentstore.Record) {
 	r.Workspace = s.Workspace
 	r.Branch = s.Branch
 	r.CanonicalPath = s.CanonicalPath
+	r.Environments = s.Environments
 	r.WakeOnMessage = s.WakeOnMessage
 }

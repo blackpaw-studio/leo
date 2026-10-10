@@ -1,6 +1,7 @@
 package config
 
 import (
+	"errors"
 	"fmt"
 	"maps"
 	"sort"
@@ -111,6 +112,22 @@ func (c *Config) validateEnvironmentList(path string, names []string) []string {
 		seen[n] = true
 	}
 	return errs
+}
+
+// TaskEnv is the environment a task's process runs with: the task's (or
+// defaults') named environments beneath its literal `env:` map.
+func (c *Config) TaskEnv(t TaskConfig) (map[string]string, error) {
+	return c.ResolveEnv(c.EnvironmentNames(nil, t.Environments), t.Env, nil)
+}
+
+// ValidateEnvironmentNames checks an ordered list of environment names a
+// caller supplied (a spawn flag, an MCP argument): each must be defined and
+// none may repeat. Config files get the same checks from Validate.
+func (c *Config) ValidateEnvironmentNames(names []string) error {
+	if errs := c.validateEnvironmentList("environments", names); len(errs) > 0 {
+		return errors.New(strings.Join(errs, "; "))
+	}
+	return nil
 }
 
 // EnvironmentWarnings flags path-valued keys (CLAUDE_CONFIG_DIR, CODEX_HOME)
