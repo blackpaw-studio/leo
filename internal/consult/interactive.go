@@ -862,7 +862,7 @@ func (d *Dispatcher) Report(id string, r HookReport) error {
 		return nil
 	}
 	event := str(p, "hook_event_name")
-	event = strings.ToLower(strings.ReplaceAll(event, "_", ""))
+	event = normalizeHookEvent(event)
 	if event == "" {
 		return nil
 	}
@@ -900,7 +900,6 @@ func (d *Dispatcher) Report(id string, r HookReport) error {
 		if s.record.Status == StatusSettling {
 			return nil
 		}
-		s.record.OpenTools = nil
 		if key := harnessKey(p); key != "" {
 			s.idMode = true
 			d.submitKeyedLocked(s, key, p)
@@ -915,8 +914,10 @@ func (d *Dispatcher) Report(id string, r HookReport) error {
 		var delivered *Turn
 		if !injected && s.armedTurn != "" && d.now().Before(s.armedUntil) {
 			delivered = d.deliverTurnLocked(s, s.armedTurn, "")
+			s.record.OpenTools = nil
 		} else if matched := d.matchSubmitLocked(s, prompt, "", injected); matched != nil {
 			delivered = matched
+			s.record.OpenTools = nil
 		} else {
 			// Only a prompt a human typed steers the run; Claude Code's own
 			// injections (background-task notifications) do not.
@@ -938,6 +939,8 @@ func (d *Dispatcher) Report(id string, r HookReport) error {
 				}
 				return nil
 			}
+			// A genuinely new turn: tools open in an earlier one are over.
+			s.record.OpenTools = nil
 			if injected {
 				// Claude started a turn on its own; a sent prompt still
 				// waiting to submit keeps waiting rather than being lost.

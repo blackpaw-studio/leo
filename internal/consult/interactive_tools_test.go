@@ -93,7 +93,7 @@ func TestInteractiveParallelToolsStayOpenUntilAllSettle(t *testing.T) {
 // is over, so none may suppress the next turn's stall.
 func TestInteractiveTurnBoundariesClearOpenTools(t *testing.T) {
 	for _, tc := range []struct{ name, event string }{
-		{"stop", "Stop"}, {"interrupt", "Interrupt"}, {"prompt submit", "UserPromptSubmit"},
+		{"stop", "Stop"}, {"interrupt", "Interrupt"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			now := time.Date(2026, time.October, 9, 12, 0, 0, 0, time.UTC)
@@ -143,5 +143,37 @@ func TestInteractiveToolEventsAreActivityOnly(t *testing.T) {
 	}
 	if !after.HookActivity.Equal(now) {
 		t.Fatalf("HookActivity = %v, want %v", after.HookActivity, now)
+	}
+}
+
+// Claude drains a finished background task's notification inside the
+// running turn; a tool still in flight is not over, so the submit keeps it.
+func TestInteractiveMidTurnInjectedSubmitKeepsOpenTools(t *testing.T) {
+	now := time.Date(2026, time.October, 9, 12, 0, 0, 0, time.UTC)
+	d, _, id := startClaudeInteractive(t, &now)
+	reportAll(t, d, id, toolHook(t, "pre-1", "PreToolUse", "tool-1"))
+	opened := now
+	now = now.Add(time.Minute)
+	reportAll(t, d, id, claudeHook(t, "notify", "UserPromptSubmit", taskNotification))
+	if stalledAt(t, d, id, opened.Add(stalledAfter+time.Minute)) {
+		t.Fatal("run stalled after a mid-turn task-notification dropped its open tool")
+	}
+	if got := len(idleRecord(t, d, id).OpenTools); got != 1 {
+		t.Fatalf("open tools = %d, want 1", got)
+	}
+}
+
+// A submit that starts a new turn closes the books on the old one's tools.
+func TestInteractiveNewTurnSubmitClearsOpenTools(t *testing.T) {
+	now := time.Date(2026, time.October, 9, 12, 0, 0, 0, time.UTC)
+	d, _, id := startClaudeInteractive(t, &now)
+	reportAll(t, d, id, toolHook(t, "pre-1", "PreToolUse", "tool-1"))
+	// The turn ended without a Stop reaching us (the hook was lost).
+	d.mu.Lock()
+	d.closeTurnLocked(d.runs[id], id+"#1", TurnFinished, "done")
+	d.mu.Unlock()
+	reportAll(t, d, id, claudeHook(t, "typed", "UserPromptSubmit", "next thing"))
+	if got := idleRecord(t, d, id).OpenTools; len(got) != 0 {
+		t.Fatalf("open tools after a new turn started: %v", got)
 	}
 }

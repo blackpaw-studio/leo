@@ -1,7 +1,9 @@
 package consult
 
 import (
+	"encoding/json"
 	"maps"
+	"strings"
 	"time"
 )
 
@@ -32,4 +34,25 @@ func applyToolEvent(open map[string]time.Time, event, toolUseID string, now time
 		return nil
 	}
 	return next
+}
+
+// IsToolActivityReport reports whether a hook payload is a tool lifecycle
+// event, which is activity only: it carries no turn or session meaning, so a
+// bridge that owns turn state still wants it applied.
+func IsToolActivityReport(payload []byte) bool {
+	var p struct {
+		Event string `json:"hook_event_name"`
+	}
+	if json.Unmarshal(payload, &p) != nil {
+		return false
+	}
+	return isToolActivityEvent(normalizeHookEvent(p.Event))
+}
+
+func isToolActivityEvent(event string) bool {
+	return event == "pretooluse" || event == "posttooluse" || event == "posttoolusefailure"
+}
+
+func normalizeHookEvent(event string) string {
+	return strings.ToLower(strings.ReplaceAll(event, "_", ""))
 }

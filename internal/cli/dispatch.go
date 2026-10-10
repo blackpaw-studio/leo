@@ -332,16 +332,27 @@ func reportAttention(stdin io.Reader, token, port string) error {
 		return err
 	}
 	path := fmt.Sprintf("http://127.0.0.1:%s/api/agent/hook", port)
-	return postReport(path, os.Getenv("LEO_API_TOKEN"), body, deadline)
+	return postReport(path, os.Getenv("LEO_API_TOKEN"), body, deadline, reportAttempts)
 }
 
 func reportDispatch(stdin io.Reader, id, configPath string) error {
 	deadline := time.Now().Add(20 * time.Second)
-	cfg, err := config.Load(configPath)
+	payload, err := readHookPayload(stdin, deadline)
 	if err != nil {
 		return err
 	}
-	payload, err := readHookPayload(stdin, deadline)
+	if consult.IsToolActivityReport(payload) {
+		// Tool hooks run on every tool call and only keep the run from
+		// reading stalled, so a lost one costs nothing: one quick attempt,
+		// never a hook error in the agent's own UI.
+		_ = postDispatchReport(id, configPath, payload, time.Now().Add(toolReportTimeout), 1)
+		return nil
+	}
+	return postDispatchReport(id, configPath, payload, deadline, reportAttempts)
+}
+
+func postDispatchReport(id, configPath string, payload []byte, deadline time.Time, attempts int) error {
+	cfg, err := config.Load(configPath)
 	if err != nil {
 		return err
 	}
@@ -355,7 +366,7 @@ func reportDispatch(stdin io.Reader, id, configPath string) error {
 		return err
 	}
 	path := fmt.Sprintf("http://127.0.0.1:%d/api/dispatch/%s/report", cfg.WebPort(), url.PathEscape(id))
-	return postReport(path, os.Getenv("LEO_API_TOKEN"), body, deadline)
+	return postReport(path, os.Getenv("LEO_API_TOKEN"), body, deadline, attempts)
 }
 
 // readHookPayload reads the hook's JSON stdin, bounded in size and time.
@@ -380,10 +391,18 @@ func readHookPayload(stdin io.Reader, deadline time.Time) ([]byte, error) {
 	}
 }
 
-// postReport POSTs body with up to three attempts before deadline.
-func postReport(path, token string, body []byte, deadline time.Time) error {
+// reportAttempts is how often a turn or session report is tried before the
+// hook gives up.
+const reportAttempts = 3
+
+// toolReportTimeout bounds a tool-event hook, which runs synchronously on
+// every tool call.
+var toolReportTimeout = 1500 * time.Millisecond
+
+// postReport POSTs body with up to attempts tries before deadline.
+func postReport(path, token string, body []byte, deadline time.Time, attempts int) error {
 	var last error
-	for attempt := 0; attempt < 3 && time.Now().Before(deadline); attempt++ {
+	for attempt := 0; attempt < attempts && time.Now().Before(deadline); attempt++ {
 		ctx, cancel := context.WithDeadline(context.Background(), minTime(deadline, time.Now().Add(3*time.Second)))
 		req, err := http.NewRequestWithContext(ctx, http.MethodPost, path, bytes.NewReader(body))
 		if err == nil {
@@ -406,7 +425,7 @@ func postReport(path, token string, body []byte, deadline time.Time) error {
 			last = err
 		}
 		cancel()
-		if attempt < 2 {
+		if attempt < attempts-1 {
 			select {
 			case <-time.After(time.Duration(attempt+1) * 200 * time.Millisecond):
 			case <-time.After(time.Until(deadline)):
