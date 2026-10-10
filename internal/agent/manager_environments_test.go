@@ -594,13 +594,13 @@ func TestManagerConfigLoadErrorsAreSanitized(t *testing.T) {
 	}
 }
 
-func spawnForValidation(t *testing.T, spec SpawnSpec) (error, *capturingSupervisor, string) {
+func spawnForValidation(t *testing.T, spec SpawnSpec) (*capturingSupervisor, string, error) {
 	t.Helper()
 	home, ws, a, b := t.TempDir(), t.TempDir(), t.TempDir(), t.TempDir()
 	cfg := envTestConfig(home, ws, a, b)
 	sup := &capturingSupervisor{}
 	_, err := envManager(cfg, sup).Spawn(context.Background(), spec)
-	return err, sup, ws
+	return sup, ws, err
 }
 
 // Every entry point (web, /api/v1, daemon IPC, MCP) spawns through
@@ -609,7 +609,7 @@ func spawnForValidation(t *testing.T, spec SpawnSpec) (error, *capturingSupervis
 func TestSpawnRejectsUnsafeNamesBeforeAnySideEffect(t *testing.T) {
 	for _, name := range []string{"invalid:name", "../outside", "a/b", "has space", "dot.name", "-", "LEO-"} {
 		t.Run(name, func(t *testing.T) {
-			err, sup, ws := spawnForValidation(t, SpawnSpec{Template: "coding", Name: name})
+			sup, ws, err := spawnForValidation(t, SpawnSpec{Template: "coding", Name: name})
 			if !errors.Is(err, ErrInvalidAgentName) {
 				t.Fatalf("err = %v, want ErrInvalidAgentName", err)
 			}
@@ -619,7 +619,7 @@ func TestSpawnRejectsUnsafeNamesBeforeAnySideEffect(t *testing.T) {
 			}
 		})
 	}
-	if err, _, _ := spawnForValidation(t, SpawnSpec{Template: "coding", Name: "scratch-1"}); err != nil {
+	if _, _, err := spawnForValidation(t, SpawnSpec{Template: "coding", Name: "scratch-1"}); err != nil {
 		t.Fatalf("a valid name was rejected: %v", err)
 	}
 }
@@ -638,13 +638,13 @@ func TestSpawnRejectsPathTraversalInRepo(t *testing.T) {
 func TestSpawnValidationErrorsAreTyped(t *testing.T) {
 	var unknownTmpl *UnknownTemplateError
 	for _, tmpl := range []string{"", "nope"} {
-		err, _, _ := spawnForValidation(t, SpawnSpec{Template: tmpl})
+		_, _, err := spawnForValidation(t, SpawnSpec{Template: tmpl})
 		if !errors.As(err, &unknownTmpl) || unknownTmpl.Name != tmpl {
 			t.Fatalf("template %q: err = %v, want *UnknownTemplateError", tmpl, err)
 		}
 	}
 
-	err, sup, _ := spawnForValidation(t, SpawnSpec{Template: "coding", Environments: []string{"acct-a", "acct-a"}})
+	sup, _, err := spawnForValidation(t, SpawnSpec{Template: "coding", Environments: []string{"acct-a", "acct-a"}})
 	var invalid *config.InvalidEnvironmentsError
 	if !errors.As(err, &invalid) || sup.spawnCall != nil || len(sup.reservations) != 0 {
 		t.Fatalf("duplicate names: err = %v spawn=%v", err, sup.spawnCall)
