@@ -114,6 +114,35 @@ type Agent struct {
 	// Bridge is the claude mod bridge's link state; empty (omitted) for
 	// non-claude harnesses.
 	Bridge BridgeState `json:"bridge,omitempty"`
+
+	// Environments is the agent's effective ordered list of named
+	// environments (names only, never values): its own override, else its
+	// template's (or task's) default, else the defaults. Always present.
+	Environments []string `json:"environments"`
+	// EnvironmentsSource is "override" when the agent was given its own list
+	// at spawn or by set-environment, else "default".
+	EnvironmentsSource string `json:"environments_source"`
+	// EnvironmentError is why the agent's environments cannot be resolved
+	// from current config (a named environment was deleted), else null. It is
+	// the check restart, start and the stale-agent report share.
+	EnvironmentError *string `json:"environment_error"`
+}
+
+// Environment names have no harness: an environment is a bare env map.
+
+// Environment is one configured named environment. Names only: its variables
+// can hold credentials and never cross the API.
+type Environment struct {
+	Name string `json:"name"`
+}
+
+// Template is a configured agent template as a spawn picker needs it. Its
+// env map is deliberately absent, as in /api/template/list.
+type Template struct {
+	Name         string   `json:"name"`
+	Harness      string   `json:"harness,omitempty"`
+	Model        string   `json:"model,omitempty"`
+	Environments []string `json:"environments"`
 }
 
 // BridgeState is whether a claude agent's mod bridge is connected.

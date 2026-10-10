@@ -7,7 +7,27 @@ import (
 	"slices"
 
 	"github.com/blackpaw-studio/leo/internal/agentstore"
+	"github.com/blackpaw-studio/leo/internal/config"
+	"github.com/blackpaw-studio/leo/internal/observe"
 )
+
+// PersistentTaskError reports a set-environment refused because the agent
+// backs a persistent task, whose environments belong in config.
+type PersistentTaskError struct{ Agent, Task string }
+
+func (e *PersistentTaskError) Error() string {
+	return fmt.Sprintf("agent %q backs persistent task %q — set tasks.%s.environments in config instead of overriding the agent", e.Agent, e.Task, e.Task)
+}
+
+// HarnessMismatchError reports a set-environment refused because the agent's
+// harness differs from the one its template is now configured for: the rebuilt
+// launch would not fit the running agent.
+type HarnessMismatchError struct{ Agent, Template, Have, Want string }
+
+func (e *HarnessMismatchError) Error() string {
+	return fmt.Sprintf("harness mismatch: agent %q runs on %s but template %q is now configured for %s — switch it to another template ('leo agent set-template') or re-create it first, then change its environments",
+		e.Agent, e.Have, e.Template, e.Want)
+}
 
 // SetEnvironmentsResult describes what SetEnvironments did.
 type SetEnvironmentsResult struct {
@@ -60,9 +80,7 @@ func (m *Manager) SetEnvironments(name string, names []string) (SetEnvironmentsR
 		return SetEnvironmentsResult{}, fmt.Errorf("no agentstore record for %q (cannot set the environments of an unpersisted agent)", name)
 	}
 	if task, bound := persistentTaskFor(cfg, name); bound {
-		return SetEnvironmentsResult{}, fmt.Errorf(
-			"agent %q backs persistent task %q — set tasks.%s.environments in config instead of overriding the agent",
-			name, task, task)
+		return SetEnvironmentsResult{}, &PersistentTaskError{Agent: name, Task: task}
 	}
 	tmpl, ok := cfg.Templates[rec.Template]
 	if !ok {
@@ -70,9 +88,7 @@ func (m *Manager) SetEnvironments(name string, names []string) (SetEnvironmentsR
 	}
 
 	if cfgHarness, recHarness := normalizeHarness(cfg.TemplateHarness(tmpl)), normalizeHarness(rec.Harness); cfgHarness != recHarness {
-		return SetEnvironmentsResult{}, fmt.Errorf(
-			"harness mismatch: agent %q runs on %s but template %q is now configured for %s — switch it to another template ('leo agent set-template') or re-create it first, then change its environments",
-			name, recHarness, rec.Template, cfgHarness)
+		return SetEnvironmentsResult{}, &HarnessMismatchError{Agent: name, Template: rec.Template, Have: recHarness, Want: cfgHarness}
 	}
 
 	_, live := m.sup.EphemeralAgents()[name]
@@ -123,6 +139,7 @@ func (m *Manager) SetEnvironments(name string, names []string) (SetEnvironmentsR
 		if err := agentstore.Save(cfg.HomePath, next); err != nil {
 			return SetEnvironmentsResult{}, fmt.Errorf("saving agent record: %w", err)
 		}
+		m.publishEnvironmentsChanged(cfg, next, "stopped")
 		return result, nil
 	}
 
@@ -149,7 +166,31 @@ func (m *Manager) SetEnvironments(name string, names []string) (SetEnvironmentsR
 		}
 		return SetEnvironmentsResult{}, fmt.Errorf("respawning %q on its new environments: %w (the agent is stopped — 'leo agent start %s' brings it back)", name, err, name)
 	}
+	m.publishEnvironmentsChanged(cfg, next, "starting")
 	return result, nil
+}
+
+// publishEnvironmentsChanged announces the agent's new environments on the
+// observability stream as an ordinary agent_state_changed, so a subscriber
+// updates its row without refetching the snapshot.
+func (m *Manager) publishEnvironmentsChanged(cfg *config.Config, rec agentstore.Record, rawStatus string) {
+	names, source, _ := ResolveAgentEnvironments(cfg, rec.Name, rec.Template, rec.Environments)
+	restarts := 0
+	if st, ok := m.sup.EphemeralAgents()[rec.Name]; ok {
+		restarts = st.Restarts
+	}
+	status, wake := observe.AgentDormancy(rawStatus, rec.WakeOnMessage)
+	m.publish(observe.Event{
+		Type: observe.EventAgentStateChanged,
+		Payload: &observe.AgentStateChangedPayload{
+			Agent:              rec.Name,
+			Status:             status,
+			Restarts:           restarts,
+			WakeOnMessage:      wake,
+			Environments:       names,
+			EnvironmentsSource: source,
+		},
+	})
 }
 
 // relaunchAfterFailedSave undoes a set-environment whose record could not be

@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -12,6 +13,7 @@ import (
 
 	"github.com/blackpaw-studio/leo/internal/agentstore"
 	"github.com/blackpaw-studio/leo/internal/config"
+	"github.com/blackpaw-studio/leo/internal/observe"
 	"github.com/blackpaw-studio/leo/internal/session"
 )
 
@@ -433,5 +435,117 @@ func TestSetEnvironmentsSaveFailureRelaunchesOnTheOldEnvironment(t *testing.T) {
 	}
 	if got := loadRec(t, home, "leo-x"); got.Stopped || !slices.Equal(got.Environments, rec.Environments) {
 		t.Fatalf("stored record changed: %+v", got)
+	}
+}
+
+func TestResolveAgentEnvironmentsReportsEffectiveNamesAndSource(t *testing.T) {
+	cfg := envTestConfig(t.TempDir(), t.TempDir(), "/a", "/b")
+	cfg.Defaults.Environments = []string{"base"}
+
+	tests := []struct {
+		name     string
+		template string
+		override []string
+		want     []string
+		source   string
+	}{
+		{"override wins", "coding", []string{"acct-b"}, []string{"acct-b"}, "override"},
+		{"template default", "coding", nil, []string{"base", "acct-a"}, "default"},
+		{"unknown template falls to defaults", "gone", nil, []string{"base"}, "default"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, source, err := ResolveAgentEnvironments(cfg, "leo-x", tt.template, tt.override)
+			if err != nil || !slices.Equal(got, tt.want) || source != tt.source {
+				t.Fatalf("got %v %q %v, want %v %q", got, source, err, tt.want, tt.source)
+			}
+		})
+	}
+}
+
+func TestResolveAgentEnvironmentsReportsAMissingEnvironment(t *testing.T) {
+	cfg := envTestConfig(t.TempDir(), t.TempDir(), "/a", "/b")
+	got, source, err := ResolveAgentEnvironments(cfg, "leo-x", "coding", []string{"acct-b", "deleted"})
+	var unknown *config.UnknownEnvironmentError
+	if !errors.As(err, &unknown) || unknown.Name != "deleted" {
+		t.Fatalf("err = %v", err)
+	}
+	if !slices.Equal(got, []string{"acct-b", "deleted"}) || source != "override" {
+		t.Fatalf("names must still be reported alongside the error: %v %q", got, source)
+	}
+}
+
+func TestSetEnvironmentsErrorsAreTyped(t *testing.T) {
+	home, tws, a, b := t.TempDir(), t.TempDir(), t.TempDir(), t.TempDir()
+	cfg := envTestConfig(home, tws, a, b)
+	_, sup := savedLayeredAgent(t, cfg, nil)
+	m := envManager(cfg, sup)
+
+	var unknown *config.UnknownEnvironmentError
+	if _, err := m.SetEnvironments("leo-x", []string{"nope"}); !errors.As(err, &unknown) {
+		t.Fatalf("unknown name: err = %v", err)
+	}
+
+	tmpl := cfg.Templates["coding"]
+	tmpl.Harness = "codex"
+	cfg.Templates["coding"] = tmpl
+	var mismatch *HarnessMismatchError
+	if _, err := m.SetEnvironments("leo-x", []string{"acct-b"}); !errors.As(err, &mismatch) {
+		t.Fatalf("harness change: err = %v", err)
+	}
+	tmpl.Harness = ""
+	cfg.Templates["coding"] = tmpl
+
+	cfg.Tasks = map[string]config.TaskConfig{"nightly": {Runtime: "persistent", Template: "coding"}}
+	rec := loadRec(t, home, "leo-x")
+	rec.Name = "coding"
+	_ = agentstore.Save(home, rec)
+	sup.agents["coding"] = ProcessState{Name: "coding", Status: "running"}
+	var bound *PersistentTaskError
+	if _, err := m.SetEnvironments("coding", []string{"acct-b"}); !errors.As(err, &bound) || bound.Task != "nightly" {
+		t.Fatalf("persistent task: err = %v", err)
+	}
+}
+
+// The restart set-environment performs must reach /api/v1/events subscribers
+// as a normal agent_state_changed carrying the new environments.
+func TestSetEnvironmentsPublishesStateChangeWithNewEnvironments(t *testing.T) {
+	t.Setenv("CLAUDE_CONFIG_DIR", "")
+	home, tws, a, b := t.TempDir(), t.TempDir(), t.TempDir(), t.TempDir()
+	cfg := envTestConfig(home, tws, a, b)
+	_, sup := savedLayeredAgent(t, cfg, nil)
+	pub := &recordingObservePublisher{}
+	m := envManager(cfg, sup)
+	m.SetPublisher(pub)
+
+	if _, err := m.SetEnvironments("leo-x", []string{"base", "acct-b"}); err != nil {
+		t.Fatal(err)
+	}
+	var got *observe.AgentStateChangedPayload
+	for _, ev := range pub.events {
+		if p, ok := ev.Payload.(*observe.AgentStateChangedPayload); ok && ev.Type == observe.EventAgentStateChanged && p.Agent == "leo-x" {
+			got = p
+		}
+	}
+	if got == nil {
+		t.Fatalf("no agent_state_changed published: %+v", pub.events)
+	}
+	if !slices.Equal(got.Environments, []string{"base", "acct-b"}) || got.EnvironmentsSource != "override" {
+		t.Fatalf("payload = %+v", got)
+	}
+	raw, _ := json.Marshal(got)
+	if !strings.Contains(string(raw), `"environments":["base","acct-b"]`) {
+		t.Fatalf("wire form = %s", raw)
+	}
+
+	// Clearing the override reports the default list, source "default".
+	pub.events = nil
+	sup.stopCalls = nil
+	if _, err := m.SetEnvironments("leo-x", nil); err != nil {
+		t.Fatal(err)
+	}
+	last := pub.events[len(pub.events)-1].Payload.(*observe.AgentStateChangedPayload)
+	if !slices.Equal(last.Environments, []string{"base", "acct-a"}) || last.EnvironmentsSource != "default" {
+		t.Fatalf("cleared payload = %+v", last)
 	}
 }

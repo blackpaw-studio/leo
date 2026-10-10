@@ -330,16 +330,37 @@ func templateOf(cfg *config.Config, rec agentstore.Record) (config.TemplateConfi
 	return tmpl, ok
 }
 
+// Sources of an agent's effective environments.
+const (
+	EnvironmentsOverride = "override"
+	EnvironmentsDefault  = "default"
+)
+
+// ResolveAgentEnvironments returns the effective ordered environment names for
+// an agent (its own override, else its template's or task's list, else the
+// defaults), whether they are the agent's "override" or the "default", and an
+// error — a *config.UnknownEnvironmentError — when a name is no longer defined.
+// The names are reported even alongside the error.
+func ResolveAgentEnvironments(cfg *config.Config, name, template string, override []string) ([]string, string, error) {
+	var templateNames []string
+	if tmpl, ok := templateOf(cfg, agentstore.Record{Name: name, Template: template}); ok {
+		templateNames = tmpl.Environments
+	}
+	names := cfg.EnvironmentNames(override, templateNames)
+	source := EnvironmentsDefault
+	if len(override) > 0 {
+		source = EnvironmentsOverride
+	}
+	_, err := cfg.MergeEnvironments(names)
+	return names, source, err
+}
+
 // CheckEnvironments reports whether every named environment rec's launch is
 // built from (its own override, else its template's list) still exists in cfg.
 // The error is a *config.UnknownEnvironmentError. Boot-time restoration uses
 // it to refuse a fresh launch from an env snapshot whose environment was
 // deleted, without re-resolving the snapshot itself.
 func CheckEnvironments(cfg *config.Config, rec agentstore.Record) error {
-	var templateNames []string
-	if tmpl, ok := templateOf(cfg, rec); ok {
-		templateNames = tmpl.Environments
-	}
-	_, err := cfg.MergeEnvironments(cfg.EnvironmentNames(rec.Environments, templateNames))
+	_, _, err := ResolveAgentEnvironments(cfg, rec.Name, rec.Template, rec.Environments)
 	return err
 }

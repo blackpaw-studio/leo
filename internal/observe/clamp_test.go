@@ -65,7 +65,7 @@ func TestClampAttentionReason(t *testing.T) {
 }
 
 func TestFeaturesMatchContract(t *testing.T) {
-	want := []string{"bridge_turns", "attention_reason", "dispatch_tree", "agent_usage", "agent_control", "dispatch_attach", "dispatch_removed", "state_seq", "attach_dispatch_placement", "dispatch_placement_live"}
+	want := []string{"bridge_turns", "attention_reason", "dispatch_tree", "agent_usage", "agent_control", "dispatch_attach", "dispatch_removed", "state_seq", "attach_dispatch_placement", "dispatch_placement_live", "agent_environments"}
 	got := Features()
 	if strings.Join(got, ",") != strings.Join(want, ",") {
 		t.Fatalf("Features() = %v, want %v", got, want)

@@ -68,11 +68,16 @@ const (
 	// detach, moving between the caller's session and leo-dispatch (the
 	// `background` viewer_kind).
 	FeatureDispatchPlacementLive = "dispatch_placement_live"
+	// FeatureAgentEnvironments: agents carry environments /
+	// environments_source / environment_error, agent_state_changed may carry
+	// environments, and the environment routes exist (names only, never
+	// values).
+	FeatureAgentEnvironments = "agent_environments"
 )
 
 // Features returns the hello's features list, a fresh copy each call.
 func Features() []string {
-	return []string{FeatureBridgeTurns, FeatureAttentionReason, FeatureDispatchTree, FeatureAgentUsage, FeatureAgentControl, FeatureDispatchAttach, FeatureDispatchRemoved, FeatureStateSeq, FeatureAttachDispatchPlacement, FeatureDispatchPlacementLive}
+	return []string{FeatureBridgeTurns, FeatureAttentionReason, FeatureDispatchTree, FeatureAgentUsage, FeatureAgentControl, FeatureDispatchAttach, FeatureDispatchRemoved, FeatureStateSeq, FeatureAttachDispatchPlacement, FeatureDispatchPlacementLive, FeatureAgentEnvironments}
 }
 
 // ActivityMinInterval is the most often agent_activity is published per
@@ -142,6 +147,13 @@ type AgentStateChangedPayload struct {
 	// is StatusStopped, always present, always set alongside Status via
 	// AgentDormancy so the two can never disagree.
 	WakeOnMessage bool `json:"wake_on_message"`
+	// Environments and EnvironmentsSource are set only by a change to the
+	// agent's environments (set-environment): the new effective ordered
+	// names and whether they are the agent's "override" or the "default".
+	// Absent on every other state change, which leaves them as they were.
+	// Environments is absent when the effective list is empty.
+	Environments       []string `json:"environments,omitempty"`
+	EnvironmentsSource string   `json:"environments_source,omitempty"`
 }
 
 // AgentActivityPayload reports the tracker's latest reading for one agent.
