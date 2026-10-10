@@ -37,9 +37,11 @@ func ConfigDir(env map[string]string) (string, error) {
 }
 
 // ExplicitConfigDir returns CLAUDE_CONFIG_DIR from env, else from the
-// daemon's own environment, or "" when claude would use its default dir.
+// daemon's own environment, or "" when claude would use its default dir. A key
+// present in env wins even when empty: claude treats an empty value as unset,
+// so it is how an agent opts out of a CLAUDE_CONFIG_DIR the daemon inherited.
 func ExplicitConfigDir(env map[string]string) string {
-	if dir := env["CLAUDE_CONFIG_DIR"]; dir != "" {
+	if dir, ok := env["CLAUDE_CONFIG_DIR"]; ok {
 		return dir
 	}
 	return os.Getenv("CLAUDE_CONFIG_DIR")

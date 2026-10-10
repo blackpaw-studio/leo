@@ -245,3 +245,19 @@ func TestLatestSession(t *testing.T) {
 		t.Errorf("expected a result with maxAge=0 even when files are old")
 	}
 }
+
+func TestPresentEmptyConfigDirOverridesDaemonEnv(t *testing.T) {
+	t.Setenv("CLAUDE_CONFIG_DIR", "/daemon/dir")
+	home := t.TempDir()
+
+	if got := ExplicitConfigDir(map[string]string{"HOME": home}); got != "/daemon/dir" {
+		t.Fatalf("absent key must inherit the daemon's dir, got %q", got)
+	}
+	cleared := map[string]string{"HOME": home, "CLAUDE_CONFIG_DIR": ""}
+	if got := ExplicitConfigDir(cleared); got != "" {
+		t.Fatalf("present-but-empty key must mean claude's default, got %q", got)
+	}
+	if got, err := ConfigDir(cleared); err != nil || got != filepath.Join(home, ".claude") {
+		t.Fatalf("ConfigDir = %q, %v; want the agent's HOME/.claude", got, err)
+	}
+}
