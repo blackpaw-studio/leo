@@ -1,6 +1,6 @@
 # Environments
 
-Named, composable env maps that are independent of templates. Any template or task can run under any environment, so one template can run on two accounts without being duplicated. Leo has no concept of an "account": an environment is just a set of variables, and the harness reads its home directory from them.
+Named, composable env maps that are independent of templates. Any template or task can run under any environment, so one template can run with different variables without being duplicated. An environment is just a set of variables; harnesses that read their home directory from env (`CLAUDE_CONFIG_DIR`, `CODEX_HOME`) follow it.
 
 ```yaml
 environments:
@@ -51,7 +51,7 @@ The agent record stores the override **names**, never resolved values, so editin
 
 Rebuilds the agent's env from current config (so variables of the departing environment disappear), stops it, and respawns it with its conversation resumed. A dormant agent is rewritten in place and picks the environments up at its next start. If the respawn fails the agent is left dormant — `leo agent start` recovers it. Agents backing a `runtime: persistent` task are refused: change the task or template instead.
 
-Resume across accounts only works when both config dirs share `projects` (see below); otherwise the new account cannot find the transcript and the agent starts a fresh conversation.
+If the switch changes `CLAUDE_CONFIG_DIR`, resume only works when both config dirs share `projects` (see the example below); otherwise the transcript is not found and the agent starts a fresh conversation.
 
 ## Harness paths
 
@@ -60,7 +60,7 @@ Each harness derives its files from the agent's resolved env, not from `$HOME`:
 - **claude:** `CLAUDE_CONFIG_DIR` (default `~/.claude`) for transcripts (`projects/`), plugins, and the workspace-trust write (`$CLAUDE_CONFIG_DIR/.claude.json`). Leo pre-trusts the workspace only when the config dir differs from the default, so default-account agents behave exactly as before.
 - **codex:** `CODEX_HOME` (default `~/.codex`).
 
-## Setting up a second Claude account
+## Example: a second Claude config dir
 
 Leo does not manage logins. Prepare a second config dir yourself:
 
@@ -73,5 +73,5 @@ Leo does not manage logins. Prepare a second config dir yourself:
 
 - Implicit persistent-task agents (a persistent task with no `template:`) keep their stored env across restarts; they do not re-resolve environments.
 - `~` and `$VAR` are not expanded.
-- Resume across accounts needs a shared `projects` directory.
+- Resume across Claude config dirs needs a shared `projects` directory.
 - Environments are not selectable per dispatch or per delegation profile.
