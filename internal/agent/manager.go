@@ -183,7 +183,7 @@ func (m *Manager) publish(ev observe.Event) {
 // the daemon's API bearer token; pass the empty string to leave LEO_API_TOKEN unset
 // (the MCP server will fail fast, matching the "web auth required" invariant).
 func New(cfgLoader ConfigLoader, sup Supervisor, tmuxPath, webToken string) *Manager {
-	return &Manager{cfgLoader: cfgLoader, sup: sup, tmuxPath: tmuxPath, webToken: webToken}
+	return &Manager{cfgLoader: sanitizeConfigErrors(cfgLoader), sup: sup, tmuxPath: tmuxPath, webToken: webToken}
 }
 
 // SpawnSpec describes a spawn request in terms of high-level intent.
@@ -2099,5 +2099,25 @@ func rewriteNameArg(args []string, newName string) []string {
 func (m *Manager) clearSurfacedFiles(names ...string) {
 	for _, name := range names {
 		m.surfacedFiles.Remove(name)
+	}
+}
+
+// ErrConfigUnavailable is the only thing a failed config load says to a
+// Manager caller. The loader's own error can quote the rejected file's contents
+// (a YAML type error echoes the offending value), and Manager errors reach API
+// clients, so the detail is logged here and goes no further.
+var ErrConfigUnavailable = errors.New("config unavailable")
+
+func sanitizeConfigErrors(load ConfigLoader) ConfigLoader {
+	if load == nil {
+		return nil
+	}
+	return func() (*config.Config, error) {
+		cfg, err := load()
+		if err != nil {
+			log.Printf("agent manager: loading config: %v", err)
+			return nil, ErrConfigUnavailable
+		}
+		return cfg, nil
 	}
 }

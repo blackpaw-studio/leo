@@ -214,9 +214,8 @@ type templateInfo struct {
 // handleAPITemplateList returns all configured templates.
 // GET /api/template/list
 func (s *Server) handleAPITemplateList(w http.ResponseWriter, r *http.Request) {
-	cfg, err := s.loadConfig()
-	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, apiResponse{Error: err.Error()})
+	cfg, ok := s.loadConfigForAPI(w)
+	if !ok {
 		return
 	}
 
@@ -478,9 +477,8 @@ type taskInfo struct {
 // handleAPITaskList returns all tasks with their status.
 // GET /api/task/list
 func (s *Server) handleAPITaskList(w http.ResponseWriter, r *http.Request) {
-	cfg, err := s.loadConfig()
-	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, apiResponse{Error: err.Error()})
+	cfg, ok := s.loadConfigForAPI(w)
+	if !ok {
 		return
 	}
 
@@ -512,9 +510,8 @@ func (s *Server) handleAPITaskList(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleAPITaskRun(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")
 
-	cfg, err := s.loadConfig()
-	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, apiResponse{Error: err.Error()})
+	cfg, ok := s.loadConfigForAPI(w)
+	if !ok {
 		return
 	}
 	if _, ok := cfg.Tasks[name]; !ok {
@@ -538,9 +535,8 @@ func (s *Server) handleAPITaskToggle(w http.ResponseWriter, r *http.Request) {
 	defer s.lockConfigWrite()()
 	name := r.PathValue("name")
 
-	cfg, err := s.loadConfig()
-	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, apiResponse{Error: err.Error()})
+	cfg, ok := s.loadConfigForAPI(w)
+	if !ok {
 		return
 	}
 	task, ok := cfg.Tasks[name]
@@ -585,6 +581,7 @@ const (
 	codeUnknownEnvironment = "unknown_environment"
 	codePersistentTask     = "persistent_task"
 	codeHarnessMismatch    = "harness_mismatch"
+	codeConfigUnavailable  = "config_unavailable"
 )
 
 // classifyEnvironmentError picks the HTTP status and stable error code for a

@@ -3,6 +3,7 @@ package web
 import (
 	"context"
 	"fmt"
+	"log"
 	"net/http"
 	"sort"
 	"time"
@@ -41,7 +42,8 @@ func (s *Server) handleAPIState(w http.ResponseWriter, r *http.Request) {
 		seq := s.eventSeq()
 		cfg, err := s.loadConfig()
 		if err != nil {
-			return nil, err
+			log.Printf("web: loading config for /api/v1/state: %v", err)
+			return nil, errConfigUnavailable
 		}
 
 		var records []agent.Record

@@ -549,3 +549,19 @@ func TestSetEnvironmentsPublishesStateChangeWithNewEnvironments(t *testing.T) {
 		t.Fatalf("cleared payload = %+v", last)
 	}
 }
+
+// The loader's error can quote a rejected config's contents; Manager errors
+// reach API clients, so they carry a generic message and the detail is logged.
+func TestManagerConfigLoadErrorsAreSanitized(t *testing.T) {
+	const secret = "sk-live-do-not-leak"
+	loader := func() (*config.Config, error) { return nil, errors.New("yaml: cannot unmarshal " + secret) }
+	m := New(loader, &capturingSupervisor{}, "", "tok")
+
+	_, spawnErr := m.Spawn(context.Background(), SpawnSpec{Template: "coding"})
+	_, setErr := m.SetEnvironments("leo-x", []string{"work"})
+	for _, err := range []error{spawnErr, setErr} {
+		if err == nil || strings.Contains(err.Error(), secret) || !strings.Contains(err.Error(), "config unavailable") {
+			t.Fatalf("err = %v, want a sanitized config-unavailable error", err)
+		}
+	}
+}

@@ -198,3 +198,30 @@ func TestV1EnvironmentWritesAreOperatorOnly(t *testing.T) {
 		}
 	}
 }
+
+// A config that fails to parse quotes the offending value in its error. That
+// text must reach the daemon log, never an API response: /api/* is reachable
+// with the agent token.
+func TestAPIConfigFailuresDoNotLeakConfigContents(t *testing.T) {
+	const secret = "sk-live-do-not-leak"
+	s, dir, _ := newTestServerWithAgents(t)
+	bad := "defaults:\n  max_turns: " + secret + "\n"
+	if err := os.WriteFile(filepath.Join(dir, "leo.yaml"), []byte(bad), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range []string{
+		"/api/v1/environments", "/api/v1/templates", "/api/v1/state",
+		"/api/template/list", "/api/task/list",
+	} {
+		w := getRequest(t, s, path)
+		if w.Code != http.StatusInternalServerError {
+			t.Errorf("GET %s = %d, want 500", path, w.Code)
+		}
+		if strings.Contains(w.Body.String(), secret) {
+			t.Errorf("GET %s leaked config contents: %s", path, w.Body.String())
+		}
+		if !strings.Contains(w.Body.String(), "config unavailable") {
+			t.Errorf("GET %s = %s, want a generic config-unavailable error", path, w.Body.String())
+		}
+	}
+}
