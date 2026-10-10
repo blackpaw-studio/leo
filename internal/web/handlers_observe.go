@@ -282,6 +282,7 @@ func buildAgent(rec agent.Record, states map[string]ProcessStateInfo, views agen
 			a.Harness = cfg.TemplateHarness(tmpl)
 		}
 	}
+	setAgentEnvironments(&a, rec, cfg)
 
 	if act, ok := views.activities[rec.Name]; ok {
 		a.Activity = act.Activity
@@ -524,4 +525,11 @@ func (s *Server) handleAPIEvents(w http.ResponseWriter, r *http.Request) {
 	httpapi.ServeEvents(w, r, httpapi.EventsOptions{
 		Source: s.events, Heartbeat: s.sseHeartbeat, WriteTimeout: s.sseWriteTimeout, Buffer: sseSubscriberBuffer,
 	})
+}
+
+// setAgentEnvironments fills a's environment view from current config: the
+// effective ordered names (never values), whether they are the agent's own
+// override, and the same unknown-environment check restart and stale run.
+func setAgentEnvironments(a *observe.Agent, rec agent.Record, cfg *config.Config) {
+	a.Environments, a.EnvironmentsSource, a.EnvironmentError = agent.EnvironmentsView(cfg, rec.Name, rec.Template, rec.Environments)
 }

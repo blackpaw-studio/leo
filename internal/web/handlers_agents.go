@@ -41,6 +41,9 @@ type apiResponse struct {
 	OK    bool   `json:"ok"`
 	Data  any    `json:"data,omitempty"`
 	Error string `json:"error,omitempty"`
+	// Code is a stable machine-readable error class, set only where an
+	// endpoint documents one (see classifyEnvironmentError).
+	Code string `json:"code,omitempty"`
 }
 
 func writeJSON(w http.ResponseWriter, status int, resp apiResponse) {
@@ -91,7 +94,7 @@ func (s *Server) handleAPIAgentSpawn(w http.ResponseWriter, r *http.Request) {
 		Environments: req.Environments,
 	})
 	if err != nil {
-		writeJSON(w, environmentErrorStatus(err), apiResponse{Error: err.Error()})
+		writeEnvironmentError(w, err)
 		return
 	}
 
@@ -577,14 +580,37 @@ func parseEnvironmentsCSV(raw string) []string {
 	return names
 }
 
-// environmentErrorStatus maps an unknown-environment failure (the caller named
-// something that is not configured) to 400 and everything else to 500.
-func environmentErrorStatus(err error) int {
-	var unknown *config.UnknownEnvironmentError
-	if errors.As(err, &unknown) {
-		return http.StatusBadRequest
+// Error codes of the environment endpoints.
+const (
+	codeUnknownEnvironment = "unknown_environment"
+	codePersistentTask     = "persistent_task"
+	codeHarnessMismatch    = "harness_mismatch"
+)
+
+// classifyEnvironmentError picks the HTTP status and stable error code for a
+// spawn / set-environment failure from its typed error. Anything else is an
+// unclassified 500 with no code.
+func classifyEnvironmentError(err error) (int, string) {
+	var (
+		unknown  *config.UnknownEnvironmentError
+		bound    *agent.PersistentTaskError
+		mismatch *agent.HarnessMismatchError
+	)
+	switch {
+	case errors.As(err, &unknown):
+		return http.StatusBadRequest, codeUnknownEnvironment
+	case errors.As(err, &bound):
+		return http.StatusConflict, codePersistentTask
+	case errors.As(err, &mismatch):
+		return http.StatusConflict, codeHarnessMismatch
 	}
-	return http.StatusInternalServerError
+	return http.StatusInternalServerError, ""
+}
+
+// writeEnvironmentError renders a spawn / set-environment failure.
+func writeEnvironmentError(w http.ResponseWriter, err error) {
+	status, code := classifyEnvironmentError(err)
+	writeJSON(w, status, apiResponse{Error: err.Error(), Code: code})
 }
 
 // handleAPIAgentSetEnvironments re-points an agent at a different ordered list
@@ -610,7 +636,7 @@ func (s *Server) handleAPIAgentSetEnvironments(w http.ResponseWriter, r *http.Re
 	}
 	res, err := s.agentSvc.SetEnvironments(rec.Name, req.Environments)
 	if err != nil {
-		writeJSON(w, environmentErrorStatus(err), apiResponse{Error: err.Error()})
+		writeEnvironmentError(w, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, apiResponse{OK: true, Data: res})

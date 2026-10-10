@@ -687,16 +687,16 @@ func (s *Supervisor) RenameAgent(oldName, newName string) error {
 		Type:    observe.EventAgentStopped,
 		Payload: &observe.AgentStoppedPayload{Agent: oldName},
 	})
+	renamed := observe.Agent{
+		Name:      newName,
+		Status:    observe.StatusRunning,
+		Restarts:  restarts,
+		StartedAt: startedAt,
+	}
+	renamed.Environments, renamed.EnvironmentsSource, renamed.EnvironmentError = s.environmentsViewOf(oldName)
 	s.publish(observe.Event{
-		Type: observe.EventAgentSpawned,
-		Payload: &observe.AgentSpawnedPayload{
-			Agent: observe.Agent{
-				Name:      newName,
-				Status:    observe.StatusRunning,
-				Restarts:  restarts,
-				StartedAt: startedAt,
-			},
-		},
+		Type:    observe.EventAgentSpawned,
+		Payload: &observe.AgentSpawnedPayload{Agent: renamed},
 	})
 	return nil
 }

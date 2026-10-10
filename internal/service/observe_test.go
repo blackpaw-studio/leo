@@ -4,8 +4,11 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"reflect"
+	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/blackpaw-studio/leo/internal/agentstore"
 	"github.com/blackpaw-studio/leo/internal/daemon"
@@ -371,5 +374,34 @@ func TestSpawnAgentResumedPublishesAgentStateChanged(t *testing.T) {
 	}
 	if payload.Agent != "agent-a" || payload.Status != observe.StatusStarting {
 		t.Fatalf("unexpected payload: %+v", payload)
+	}
+}
+
+func TestSpawnedAgentViewCarriesEnvironments(t *testing.T) {
+	home := t.TempDir()
+	cfgPath := filepath.Join(home, "leo.yaml")
+	cfgYAML := "environments:\n  work:\n    CLAUDE_CONFIG_DIR: /acct/work\ntemplates:\n  coding:\n    model: sonnet\n    environments: [work]\n"
+	if err := os.WriteFile(cfgPath, []byte(cfgYAML), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := agentstore.Save(home, agentstore.Record{Name: "a", Template: "coding"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := agentstore.Save(home, agentstore.Record{Name: "b", Template: "coding", Environments: []string{"gone"}}); err != nil {
+		t.Fatal(err)
+	}
+	sv := &Supervisor{homePath: home, configPath: cfgPath}
+
+	a := sv.spawnedAgentView(daemon.AgentSpawnSpec{Name: "a"}, time.Now())
+	if !reflect.DeepEqual(a.Environments, []string{"work"}) || a.EnvironmentsSource != "default" || a.EnvironmentError != nil {
+		t.Fatalf("a = %+v", a)
+	}
+	b := sv.spawnedAgentView(daemon.AgentSpawnSpec{Name: "b"}, time.Now())
+	if b.EnvironmentsSource != "override" || b.EnvironmentError == nil || !strings.Contains(*b.EnvironmentError, "gone") {
+		t.Fatalf("b = %+v", b)
+	}
+	bare := (&Supervisor{}).spawnedAgentView(daemon.AgentSpawnSpec{Name: "x"}, time.Now())
+	if bare.Environments == nil {
+		t.Fatal("environments must serialize as [] even with no record or config")
 	}
 }

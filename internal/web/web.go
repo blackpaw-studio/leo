@@ -643,6 +643,10 @@ func New(configPath string, processes ProcessStateProvider, scheduler SchedulerP
 	// only. The agent token passes the bearer check below, so each route
 	// refuses it itself; agents drive one another through /web/agent/*.
 	s.registerControlRoutes(apiMux, "/api/v1/agents", s.requireOperatorToken)
+	apiMux.HandleFunc("GET /api/v1/environments", s.handleAPIEnvironments)
+	apiMux.HandleFunc("GET /api/v1/templates", s.handleAPITemplatesV1)
+	apiMux.HandleFunc("POST /api/v1/agents/spawn", s.requireOperatorToken(s.handleAPIAgentSpawn))
+	apiMux.HandleFunc("POST /api/v1/agents/{name}/environments", s.requireOperatorToken(s.handleAPIAgentSetEnvironments))
 	// /api/* is the agent-facing surface: both tokens work there.
 	protectedAPI := bearerAuthMiddleware([]string{s.apiToken, s.agentToken}, s.trustedProxies, apiMux)
 

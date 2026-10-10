@@ -355,6 +355,28 @@ func ResolveAgentEnvironments(cfg *config.Config, name, template string, overrid
 	return names, source, err
 }
 
+// EnvironmentsView is ResolveAgentEnvironments shaped for the observability
+// wire: names is never nil, and a resolution failure becomes the message string
+// (nil when healthy). A nil cfg reports the agent's override, if any, unchecked.
+func EnvironmentsView(cfg *config.Config, name, template string, override []string) (names []string, source string, errMsg *string) {
+	if cfg == nil {
+		source = EnvironmentsDefault
+		if len(override) > 0 {
+			source = EnvironmentsOverride
+		}
+		return append([]string{}, override...), source, nil
+	}
+	names, source, err := ResolveAgentEnvironments(cfg, name, template, override)
+	if names == nil {
+		names = []string{}
+	}
+	if err != nil {
+		msg := err.Error()
+		errMsg = &msg
+	}
+	return names, source, errMsg
+}
+
 // CheckEnvironments reports whether every named environment rec's launch is
 // built from (its own override, else its template's list) still exists in cfg.
 // The error is a *config.UnknownEnvironmentError. Boot-time restoration uses

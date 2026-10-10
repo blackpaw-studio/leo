@@ -2020,6 +2020,7 @@ func (m *Manager) announceRename(cfg *config.Config, rec Record, oldName, newNam
 		Branch:    rec.Branch,
 	}
 	agent.Status, agent.WakeOnMessage = observe.AgentDormancy("stopped", rec.WakeOnMessage)
+	agent.Environments, agent.EnvironmentsSource, agent.EnvironmentError = EnvironmentsView(cfg, newName, rec.Template, rec.Environments)
 	if cfg != nil && rec.Template != "" {
 		if tmpl, ok := cfg.Templates[rec.Template]; ok {
 			agent.Model = cfg.TemplateModel(tmpl)
