@@ -6,12 +6,14 @@ import (
 	"os"
 	"os/exec"
 	"testing"
+
+	"github.com/blackpaw-studio/leo/internal/testenv"
 )
 
 // TestMain points TMUX_TMPDIR at a private directory and drops the caller's
 // TMUX/TMUX_PANE so tests that exercise the real exec seams (Server.New
 // defaults to exec.Command) can never open dispatch viewer windows on the
-// production `tmux -L leo` server (issue #213).
+// production `tmux -L leo` server (issue #213). It also isolates HOME (#203).
 func TestMain(m *testing.M) {
 	os.Exit(runIsolated(m))
 }
@@ -28,6 +30,12 @@ func runIsolated(m *testing.M) int {
 		return 1
 	}
 	defer os.RemoveAll(dir)
+	restoreHome, err := testenv.Isolate()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "isolating home: %v\n", err)
+		return 1
+	}
+	defer restoreHome()
 	defer killIsolatedLeoServer(dir)
 	return m.Run()
 }
