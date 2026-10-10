@@ -183,3 +183,52 @@ func TestAgentWorktreeRequiresTwoArgs(t *testing.T) {
 		t.Errorf("expected no error for 2 args, got %v", err)
 	}
 }
+
+func TestAgentSpawnAndWorktreeSendEnvironmentsInOrder(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		args []string
+	}{
+		{"spawn", []string{"agent", "spawn", "coding", "--environment", "base,acct-b", "--environment", "extra"}},
+		{"worktree", []string{"agent", "worktree", "chronicle", "a11y", "--environment", "base,acct-b", "--environment", "extra"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			path, home := newAgentWorktreeTestConfig(t)
+			withStubStdio(t)
+			var got daemon.AgentSpawnRequest
+			startStubDaemonSocket(t, home, func(w http.ResponseWriter, r *http.Request) {
+				_ = json.NewDecoder(r.Body).Decode(&got)
+				data, _ := json.Marshal(agent.Record{Name: "leo-x", Workspace: "/tmp/ws"})
+				json.NewEncoder(w).Encode(daemon.Response{OK: true, Data: data}) //nolint:errcheck
+			})
+			root := newRootCmd()
+			root.SetArgs(append([]string{"--config", path}, tc.args...))
+			if err := root.Execute(); err != nil {
+				t.Fatalf("execute: %v", err)
+			}
+			if want := []string{"base", "acct-b", "extra"}; strings.Join(got.Environments, ",") != strings.Join(want, ",") {
+				t.Fatalf("Environments = %v, want %v", got.Environments, want)
+			}
+		})
+	}
+}
+
+func TestAgentSpawnAndWorktreeRemoteForwardEnvironment(t *testing.T) {
+	for _, args := range [][]string{
+		{"agent", "spawn", "coding", "--environment", "base,acct-b"},
+		{"agent", "worktree", "chronicle", "a11y", "--environment", "base,acct-b"},
+	} {
+		path := newAgentCLITestConfig(t)
+		stub := withStubExec(t)
+		withStubStdio(t)
+		root := newRootCmd()
+		root.SetArgs(append([]string{"--config", path}, args...))
+		if err := root.Execute(); err != nil {
+			t.Fatalf("execute %v: %v", args, err)
+		}
+		joined := strings.Join(stub.calls[0], " ")
+		if !strings.Contains(joined, "--environment base,acct-b") {
+			t.Errorf("%v: remote call lacks --environment: %s", args, joined)
+		}
+	}
+}

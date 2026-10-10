@@ -150,12 +150,46 @@ func (c *daemonClient) listTemplates() (json.RawMessage, error) {
 	return c.do(http.MethodGet, "/api/template/list", nil)
 }
 
-func (c *daemonClient) spawnAgent(template, repo, name string) (json.RawMessage, error) {
-	body := map[string]string{"template": template, "repo": repo}
+func (c *daemonClient) spawnAgent(template, repo, name string, environments []string) (json.RawMessage, error) {
+	body := map[string]any{"template": template, "repo": repo}
 	if name != "" {
 		body["name"] = name
 	}
+	if len(environments) > 0 {
+		body["environments"] = environments
+	}
 	return c.do(http.MethodPost, "/api/agent/spawn", body)
+}
+
+// agentTemplate returns the template the named agent was spawned from, read
+// from the agent listing (exact name match, as leo_list_agents prints it).
+func (c *daemonClient) agentTemplate(name string) (string, error) {
+	data, err := c.listAgents()
+	if err != nil {
+		return "", err
+	}
+	var agents []struct {
+		Name     string `json:"name"`
+		Template string `json:"template"`
+	}
+	if err := json.Unmarshal(data, &agents); err != nil {
+		return "", fmt.Errorf("decode agent list: %w", err)
+	}
+	for _, a := range agents {
+		if a.Name == name {
+			return a.Template, nil
+		}
+	}
+	return "", fmt.Errorf("no agent named %q (see leo_list_agents)", name)
+}
+
+// setAgentEnvironments re-points an agent at a different ordered list of named
+// environments; an empty list clears its override.
+func (c *daemonClient) setAgentEnvironments(name string, environments []string) (json.RawMessage, error) {
+	if environments == nil {
+		environments = []string{}
+	}
+	return c.do(http.MethodPost, "/api/agent/"+url.PathEscape(name)+"/environments", map[string]any{"environments": environments})
 }
 
 func (c *daemonClient) listAgents() (json.RawMessage, error) {

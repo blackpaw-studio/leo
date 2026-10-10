@@ -76,6 +76,15 @@ type AgentSpawnRequest struct {
 	// IdleSuspend, when non-empty, overrides the template/defaults
 	// idle_suspend_after for this spawn (e.g. "24h", "30m"). Empty inherits.
 	IdleSuspend string `json:"idle_suspend,omitempty"`
+	// Environments, when non-empty, replaces the template's ordered list of
+	// named environments for this agent (later names win on collision).
+	Environments []string `json:"environments,omitempty"`
+}
+
+// AgentSetEnvironmentRequest is the body for POST /agents/{name}/set-environment.
+// An empty list clears the agent's override so the template default applies.
+type AgentSetEnvironmentRequest struct {
+	Environments []string `json:"environments"`
 }
 
 // AgentDeleteRequest is the body for DELETE /agents/{name}. It removes the
@@ -132,6 +141,9 @@ type AgentResolveResponse struct {
 	Name    string `json:"name"`
 	Session string `json:"session"`
 	Repo    string `json:"repo,omitempty"`
+	// Template is the template the agent was spawned from; callers gate
+	// template-scoped permissions (can_spawn) on it.
+	Template string `json:"template,omitempty"`
 }
 
 // AgentRenameRequest is the body for POST /agents/{name}/rename.

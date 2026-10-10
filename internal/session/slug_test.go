@@ -31,29 +31,63 @@ func TestProjectSlug(t *testing.T) {
 	}
 }
 
-func TestJSONLPath(t *testing.T) {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		t.Fatalf("UserHomeDir: %v", err)
+func TestConfigDir(t *testing.T) {
+	t.Setenv("CLAUDE_CONFIG_DIR", "")
+	tests := []struct {
+		name string
+		env  map[string]string
+		want string
+	}{
+		{"CLAUDE_CONFIG_DIR wins", map[string]string{"CLAUDE_CONFIG_DIR": "/acct-b", "HOME": "/h"}, "/acct-b"},
+		{"HOME fallback", map[string]string{"HOME": "/h"}, "/h/.claude"},
 	}
-	got, err := JSONLPath("/Users/alice/.leo/workspace", "abc-123")
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := ConfigDir(tt.env)
+			if err != nil || got != tt.want {
+				t.Fatalf("ConfigDir = %q, %v; want %q", got, err, tt.want)
+			}
+		})
+	}
+
+	t.Run("daemon environment fallback", func(t *testing.T) {
+		t.Setenv("CLAUDE_CONFIG_DIR", "/from-daemon")
+		got, _ := ConfigDir(map[string]string{"HOME": "/h"})
+		if got != "/from-daemon" {
+			t.Fatalf("got %q", got)
+		}
+	})
+
+	t.Run("nil env uses the user home", func(t *testing.T) {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			t.Skip("no home directory")
+		}
+		got, _ := ConfigDir(nil)
+		if got != filepath.Join(home, ".claude") {
+			t.Fatalf("got %q", got)
+		}
+	})
+}
+
+func TestJSONLPathUsesConfigDir(t *testing.T) {
+	env := map[string]string{"CLAUDE_CONFIG_DIR": "/acct-b"}
+	got, err := JSONLPath(env, "/Users/alice/.leo/workspace", "abc-123")
 	if err != nil {
 		t.Fatalf("JSONLPath: %v", err)
 	}
-	want := filepath.Join(home, ".claude", "projects", "-Users-alice--leo-workspace", "abc-123.jsonl")
+	want := filepath.Join("/acct-b", "projects", "-Users-alice--leo-workspace", "abc-123.jsonl")
 	if got != want {
 		t.Errorf("JSONLPath = %q, want %q", got, want)
 	}
 }
 
-// TestIsResumeStale exercises the staleness decision by creating a jsonl at the
-// real ~/.claude/projects/<slug>/<sid>.jsonl location, calling os.Chtimes to
+// TestIsResumeStale exercises the staleness decision by creating a jsonl under a
+// temporary config dir, calling os.Chtimes to
 // back-date it, and asserting the result. It cleans up after itself.
 func TestIsResumeStale(t *testing.T) {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		t.Fatalf("UserHomeDir: %v", err)
-	}
+	configDir := t.TempDir()
+	env := map[string]string{"CLAUDE_CONFIG_DIR": configDir}
 	// Use a unique cwd that nothing else would claim.
 	cwd := filepath.Join(t.TempDir(), "leotest-workspace")
 	if err := os.MkdirAll(cwd, 0o755); err != nil {
@@ -62,11 +96,10 @@ func TestIsResumeStale(t *testing.T) {
 	sid := "test-session-" + t.Name()
 
 	slug := ProjectSlug(cwd)
-	projDir := filepath.Join(home, ".claude", "projects", slug)
+	projDir := filepath.Join(configDir, "projects", slug)
 	if err := os.MkdirAll(projDir, 0o755); err != nil {
 		t.Fatalf("mkdir proj: %v", err)
 	}
-	t.Cleanup(func() { _ = os.RemoveAll(projDir) })
 
 	jsonlPath := filepath.Join(projDir, sid+".jsonl")
 	if err := os.WriteFile(jsonlPath, []byte("{}\n"), 0o600); err != nil {
@@ -74,7 +107,7 @@ func TestIsResumeStale(t *testing.T) {
 	}
 
 	// Fresh file — not stale.
-	stale, age, err := IsResumeStale(cwd, sid, 12*time.Hour)
+	stale, age, err := IsResumeStale(env, cwd, sid, 12*time.Hour)
 	if err != nil {
 		t.Fatalf("IsResumeStale (fresh): %v", err)
 	}
@@ -87,7 +120,7 @@ func TestIsResumeStale(t *testing.T) {
 	if err := os.Chtimes(jsonlPath, old, old); err != nil {
 		t.Fatalf("Chtimes: %v", err)
 	}
-	stale, age, err = IsResumeStale(cwd, sid, 12*time.Hour)
+	stale, age, err = IsResumeStale(env, cwd, sid, 12*time.Hour)
 	if err != nil {
 		t.Fatalf("IsResumeStale (old): %v", err)
 	}
@@ -99,7 +132,7 @@ func TestIsResumeStale(t *testing.T) {
 	}
 
 	// Missing file — not stale (claude will create it).
-	stale, age, err = IsResumeStale(cwd, "nonexistent-"+sid, 12*time.Hour)
+	stale, age, err = IsResumeStale(env, cwd, "nonexistent-"+sid, 12*time.Hour)
 	if err != nil {
 		t.Fatalf("IsResumeStale (missing): %v", err)
 	}
@@ -108,7 +141,7 @@ func TestIsResumeStale(t *testing.T) {
 	}
 
 	// Disabled (maxAge=0) — not stale.
-	stale, _, err = IsResumeStale(cwd, sid, 0)
+	stale, _, err = IsResumeStale(env, cwd, sid, 0)
 	if err != nil {
 		t.Fatalf("IsResumeStale (disabled): %v", err)
 	}
@@ -117,7 +150,7 @@ func TestIsResumeStale(t *testing.T) {
 	}
 
 	// Empty session ID — not stale.
-	stale, _, err = IsResumeStale(cwd, "", 12*time.Hour)
+	stale, _, err = IsResumeStale(env, cwd, "", 12*time.Hour)
 	if err != nil {
 		t.Fatalf("IsResumeStale (empty sid): %v", err)
 	}
@@ -129,21 +162,18 @@ func TestIsResumeStale(t *testing.T) {
 // TestLatestSession covers the newest-jsonl lookup used by supervisor and
 // agent restore to avoid resuming stale sessions after a /clear.
 func TestLatestSession(t *testing.T) {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		t.Fatalf("UserHomeDir: %v", err)
-	}
+	configDir := t.TempDir()
+	env := map[string]string{"CLAUDE_CONFIG_DIR": configDir}
 	cwd := filepath.Join(t.TempDir(), "leotest-latest")
 	if err := os.MkdirAll(cwd, 0o755); err != nil {
 		t.Fatalf("mkdir cwd: %v", err)
 	}
 
 	slug := ProjectSlug(cwd)
-	projDir := filepath.Join(home, ".claude", "projects", slug)
-	t.Cleanup(func() { _ = os.RemoveAll(projDir) })
+	projDir := filepath.Join(configDir, "projects", slug)
 
 	// 1. Project dir does not exist yet → empty result, no error.
-	sid, mt, err := LatestSession(cwd, 0)
+	sid, mt, err := LatestSession(env, cwd, 0)
 	if err != nil {
 		t.Fatalf("LatestSession (missing dir): %v", err)
 	}
@@ -156,7 +186,7 @@ func TestLatestSession(t *testing.T) {
 	}
 
 	// 2. Empty dir → empty result.
-	sid, _, err = LatestSession(cwd, 0)
+	sid, _, err = LatestSession(env, cwd, 0)
 	if err != nil {
 		t.Fatalf("LatestSession (empty dir): %v", err)
 	}
@@ -179,7 +209,7 @@ func TestLatestSession(t *testing.T) {
 		t.Fatalf("Chtimes older: %v", err)
 	}
 
-	sid, mt, err = LatestSession(cwd, 0)
+	sid, mt, err = LatestSession(env, cwd, 0)
 	if err != nil {
 		t.Fatalf("LatestSession (two files): %v", err)
 	}
@@ -198,7 +228,7 @@ func TestLatestSession(t *testing.T) {
 	if err := os.Chtimes(newer, tooOld, tooOld); err != nil {
 		t.Fatalf("Chtimes newer: %v", err)
 	}
-	sid, _, err = LatestSession(cwd, 12*time.Hour)
+	sid, _, err = LatestSession(env, cwd, 12*time.Hour)
 	if err != nil {
 		t.Fatalf("LatestSession (all stale): %v", err)
 	}
@@ -207,11 +237,27 @@ func TestLatestSession(t *testing.T) {
 	}
 
 	// 5. maxAge=0 disables the staleness check — same stale files still return.
-	sid, _, err = LatestSession(cwd, 0)
+	sid, _, err = LatestSession(env, cwd, 0)
 	if err != nil {
 		t.Fatalf("LatestSession (maxAge=0 stale): %v", err)
 	}
 	if sid == "" {
 		t.Errorf("expected a result with maxAge=0 even when files are old")
+	}
+}
+
+func TestPresentEmptyConfigDirOverridesDaemonEnv(t *testing.T) {
+	t.Setenv("CLAUDE_CONFIG_DIR", "/daemon/dir")
+	home := t.TempDir()
+
+	if got := ExplicitConfigDir(map[string]string{"HOME": home}); got != "/daemon/dir" {
+		t.Fatalf("absent key must inherit the daemon's dir, got %q", got)
+	}
+	cleared := map[string]string{"HOME": home, "CLAUDE_CONFIG_DIR": ""}
+	if got := ExplicitConfigDir(cleared); got != "" {
+		t.Fatalf("present-but-empty key must mean claude's default, got %q", got)
+	}
+	if got, err := ConfigDir(cleared); err != nil || got != filepath.Join(home, ".claude") {
+		t.Fatalf("ConfigDir = %q, %v; want the agent's HOME/.claude", got, err)
 	}
 }

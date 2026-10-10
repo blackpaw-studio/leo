@@ -2132,3 +2132,50 @@ func TestLeoMCPEnvUsesAgentToken(t *testing.T) {
 		t.Errorf("LEO_API_TOKEN = %q, want the agent token", env["LEO_API_TOKEN"])
 	}
 }
+
+// TestRunTaskNamedEnvironmentsLayerBelowLiteralEnv verifies a task runs under
+// its named environments (merged left to right) with the literal env: map
+// winning over them, asserted on the spawned process's real environment.
+func TestRunTaskNamedEnvironmentsLayerBelowLiteralEnv(t *testing.T) {
+	orig := execCommand
+	defer func() { execCommand = orig }()
+
+	dir := t.TempDir()
+	ws := filepath.Join(dir, "workspace")
+	os.MkdirAll(ws, 0755)
+	os.WriteFile(filepath.Join(ws, "task.md"), []byte("test prompt"), 0644)
+	acct := filepath.Join(dir, "acct-b")
+
+	cfg := &config.Config{
+		HomePath: dir,
+		Defaults: config.DefaultsConfig{Model: "sonnet", MaxTurns: 15},
+		Environments: map[string]map[string]string{
+			"base":   {"FROM_BASE": "1", "CONTESTED": "base"},
+			"acct-b": {"CLAUDE_CONFIG_DIR": acct, "CONTESTED": "acct-b"},
+		},
+		Tasks: map[string]config.TaskConfig{
+			"mytask": {
+				PromptFile: "task.md", Schedule: "0 * * * *", Enabled: true,
+				Environments: []string{"base", "acct-b"},
+				Env:          map[string]string{"LITERAL_WINS": "literal"},
+			},
+		},
+	}
+	os.MkdirAll(cfg.StatePath(), 0750)
+	execCommand = func(name string, args ...string) *exec.Cmd { return exec.Command("sh", "-c", "env") }
+
+	if err := Run(cfg, "mytask", nil, leomcp.Server{}); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	logFiles, _ := filepath.Glob(filepath.Join(dir, "state", "logs", "mytask-*.log"))
+	if len(logFiles) == 0 {
+		t.Fatal("no log files found")
+	}
+	logData, _ := os.ReadFile(logFiles[0])
+	got := string(logData)
+	for _, want := range []string{"CLAUDE_CONFIG_DIR=" + acct, "FROM_BASE=1", "CONTESTED=acct-b", "LITERAL_WINS=literal"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("spawned env missing %q:\n%s", want, got)
+		}
+	}
+}

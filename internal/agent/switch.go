@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"errors"
 	"fmt"
 	"log"
 	"maps"
@@ -135,9 +136,12 @@ func (m *Manager) SwitchTemplate(name, template string) (SwitchResult, error) {
 	// Resolve the new wiring BEFORE stopping anything: a template that cannot
 	// produce launch args must fail the switch with the agent still running,
 	// not leave it dead on a template it never reached.
-	args, env, built := resolveTemplateWiring(cfg, next, tmpl, m.webToken, m.leoMCP, rebuildEnvFromTemplate)
-	if !built {
+	args, env, err := resolveTemplateWiring(cfg, next, tmpl, m.webToken, m.leoMCP, rebuildEnvFromTemplate)
+	if errors.Is(err, errWiringNotBuilt) {
 		return SwitchResult{}, fmt.Errorf("building %s wiring for template %q failed (agent left on %q; see the daemon log)", next.Harness, template, rec.Template)
+	}
+	if err != nil {
+		return SwitchResult{}, fmt.Errorf("switching to template %q: %w (agent left on %q)", template, err, rec.Template)
 	}
 	if isClaude {
 		if resumeID != "" {
@@ -155,6 +159,7 @@ func (m *Manager) SwitchTemplate(name, template string) (SwitchResult, error) {
 	// id re-arms post-hoc discovery for a fresh conversation.
 	next.ClaudeArgs = args
 	next.Env = env
+	next.EnvLayered = true // the env was just rebuilt layer by layer
 	// next started as a copy of rec (see withTemplate), so it still carries
 	// the DEPARTING template's OpeningBriefID — a claude-only field that has
 	// no meaning for the arriving template (which may not even be claude) and
@@ -309,4 +314,75 @@ func persistentTaskFor(cfg *config.Config, name string) (string, bool) {
 		}
 	}
 	return "", false
+}
+
+// templateOf returns the template an existing agent's wiring is rebuilt from.
+// An implicit persistent-task agent has no entry in cfg.Templates — its
+// template is synthesized from the task's own fields — so it is reconstructed
+// via ResolveTaskTarget; every other agent is looked up by its record's name.
+func templateOf(cfg *config.Config, rec agentstore.Record) (config.TemplateConfig, bool) {
+	if task, bound := persistentTaskFor(cfg, rec.Name); bound {
+		if _, tmpl, implicit, err := cfg.ResolveTaskTarget(task); err == nil && implicit {
+			return tmpl, true
+		}
+	}
+	tmpl, ok := cfg.Templates[rec.Template]
+	return tmpl, ok
+}
+
+// Sources of an agent's effective environments.
+const (
+	EnvironmentsOverride = "override"
+	EnvironmentsDefault  = "default"
+)
+
+// ResolveAgentEnvironments returns the effective ordered environment names for
+// an agent (its own override, else its template's or task's list, else the
+// defaults), whether they are the agent's "override" or the "default", and an
+// error — a *config.UnknownEnvironmentError — when a name is no longer defined.
+// The names are reported even alongside the error.
+func ResolveAgentEnvironments(cfg *config.Config, name, template string, override []string) ([]string, string, error) {
+	var templateNames []string
+	if tmpl, ok := templateOf(cfg, agentstore.Record{Name: name, Template: template}); ok {
+		templateNames = tmpl.Environments
+	}
+	names := cfg.EnvironmentNames(override, templateNames)
+	source := EnvironmentsDefault
+	if len(override) > 0 {
+		source = EnvironmentsOverride
+	}
+	_, err := cfg.MergeEnvironments(names)
+	return names, source, err
+}
+
+// EnvironmentsView is ResolveAgentEnvironments shaped for the observability
+// wire: names is never nil, and a resolution failure becomes the message string
+// (nil when healthy). A nil cfg reports the agent's override, if any, unchecked.
+func EnvironmentsView(cfg *config.Config, name, template string, override []string) (names []string, source string, errMsg *string) {
+	if cfg == nil {
+		source = EnvironmentsDefault
+		if len(override) > 0 {
+			source = EnvironmentsOverride
+		}
+		return append([]string{}, override...), source, nil
+	}
+	names, source, err := ResolveAgentEnvironments(cfg, name, template, override)
+	if names == nil {
+		names = []string{}
+	}
+	if err != nil {
+		msg := err.Error()
+		errMsg = &msg
+	}
+	return names, source, errMsg
+}
+
+// CheckEnvironments reports whether every named environment rec's launch is
+// built from (its own override, else its template's list) still exists in cfg.
+// The error is a *config.UnknownEnvironmentError. Boot-time restoration uses
+// it to refuse a fresh launch from an env snapshot whose environment was
+// deleted, without re-resolving the snapshot itself.
+func CheckEnvironments(cfg *config.Config, rec agentstore.Record) error {
+	_, _, err := ResolveAgentEnvironments(cfg, rec.Name, rec.Template, rec.Environments)
+	return err
 }

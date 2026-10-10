@@ -96,7 +96,11 @@ type Config struct {
 	APIClients map[string]APIClientConfig `yaml:"api_clients,omitempty"`
 	Tasks      map[string]TaskConfig      `yaml:"tasks"`
 	Templates  map[string]TemplateConfig  `yaml:"templates,omitempty"`
-	Delegation *DelegationConfig          `yaml:"delegation,omitempty"`
+	// Environments are named, composable env maps independent of templates.
+	// Templates, tasks, defaults and agent spawns reference them by name via
+	// `environments:`; see environments.go for the merge and cascade rules.
+	Environments map[string]map[string]string `yaml:"environments,omitempty"`
+	Delegation   *DelegationConfig            `yaml:"delegation,omitempty"`
 	// Providers was removed with the harness abstraction. The field survives
 	// only so Validate() can emit a precise removal error (yaml.v3 silently
 	// ignores unknown keys).
@@ -216,6 +220,9 @@ type DefaultsConfig struct {
 	Harness        string         `yaml:"harness,omitempty"`
 	HarnessOptions map[string]any `yaml:"harness_options,omitempty"`
 	Dispatch       DispatchConfig `yaml:"dispatch,omitempty"`
+	// Environments is the default ordered list of named environments applied
+	// when a template, task or spawn does not set its own.
+	Environments []string `yaml:"environments,omitempty"`
 }
 
 type DispatchConfig struct {
@@ -316,7 +323,8 @@ type TaskConfig struct {
 	DevChannels    []string          `yaml:"dev_channels,omitempty"`   // loaded via --dangerously-load-development-channels
 	NotifyOnFail   bool              `yaml:"notify_on_fail,omitempty"` // spawn a child claude to notify configured channels on failure
 	Env            map[string]string `yaml:"env,omitempty"`
-	Runtime        string            `yaml:"runtime,omitempty"` // "oneshot" (default) | "persistent"
+	Environments   []string          `yaml:"environments,omitempty"` // named environments, merged left to right
+	Runtime        string            `yaml:"runtime,omitempty"`      // "oneshot" (default) | "persistent"
 	Template       string            `yaml:"template,omitempty"`
 	QueueMax       int               `yaml:"queue_max,omitempty"` // 0 → use default (5)
 	Harness        string            `yaml:"harness,omitempty"`
@@ -334,6 +342,9 @@ type TemplateConfig struct {
 	MCPConfig   string            `yaml:"mcp_config,omitempty"`
 	AddDirs     []string          `yaml:"add_dirs,omitempty"`
 	Env         map[string]string `yaml:"env,omitempty"`
+	// Environments are the template's default named environments, merged left
+	// to right beneath Env; a spawn's own list replaces them.
+	Environments []string `yaml:"environments,omitempty"`
 	// IdleSuspendAfter overrides defaults.idle_suspend_after for agents spawned
 	// from this template. A Go duration ("24h"); empty inherits the default.
 	IdleSuspendAfter string         `yaml:"idle_suspend_after,omitempty"`
@@ -702,6 +713,7 @@ func (c *Config) Validate() error {
 	}
 
 	errs = append(errs, c.validateDelegation()...)
+	errs = append(errs, c.validateEnvironments()...)
 
 	if len(errs) > 0 {
 		return fmt.Errorf("config validation failed:\n  - %s", strings.Join(errs, "\n  - "))

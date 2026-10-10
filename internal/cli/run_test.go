@@ -113,7 +113,7 @@ func TestTaskDryRunEnv(t *testing.T) {
 	for _, tc := range cases {
 		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
-			got := taskDryRunEnv(tc.task)
+			got := taskDryRunEnv(&config.Config{}, tc.task)
 			if len(got) != len(tc.want) {
 				t.Fatalf("len mismatch: got %v want %v", got, tc.want)
 			}
@@ -123,5 +123,14 @@ func TestTaskDryRunEnv(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestTaskDryRunEnvShowsNamedEnvironments(t *testing.T) {
+	cfg := &config.Config{Environments: map[string]map[string]string{"acct-b": {"CLAUDE_CONFIG_DIR": "/b", "SHARED": "env"}}}
+	got := taskDryRunEnv(cfg, config.TaskConfig{Environments: []string{"acct-b"}, Env: map[string]string{"SHARED": "literal"}})
+	want := []envPair{{key: "CLAUDE_CONFIG_DIR", display: "/b"}, {key: "SHARED", display: "literal"}}
+	if len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
+		t.Fatalf("got %+v, want %+v", got, want)
 	}
 }

@@ -26,9 +26,12 @@ type StaleAgent struct {
 	// redacted: "--model sonnet -> opus", "--append-system-prompt changed",
 	// "+--remote-control". Empty when only env drifted.
 	ArgsChanged []string `json:"args_changed,omitempty"`
-	EnvAdded    []string `json:"env_added,omitempty"`
-	EnvChanged  []string `json:"env_changed,omitempty"`
-	EnvRemoved  []string `json:"env_removed,omitempty"`
+	// EnvironmentError is set when a restart would fail because a named
+	// environment the agent uses is no longer defined in config.
+	EnvironmentError string   `json:"environment_error,omitempty"`
+	EnvAdded         []string `json:"env_added,omitempty"`
+	EnvChanged       []string `json:"env_changed,omitempty"`
+	EnvRemoved       []string `json:"env_removed,omitempty"`
 }
 
 // StaleAgents reports which running agents would actually change if restarted.
@@ -59,7 +62,12 @@ func (m *Manager) StaleAgents() []StaleAgent {
 		if !ok {
 			continue
 		}
-		newArgs, newEnv := resolveRestartArgs(cfg, rec, m.webToken, m.leoMCP)
+		newArgs, newEnv, err := resolveRestartArgs(cfg, rec, m.webToken, m.leoMCP)
+		if err != nil {
+			// A restart would refuse: surface why instead of reporting no drift.
+			out = append(out, StaleAgent{Name: name, EnvironmentError: err.Error()})
+			continue
+		}
 		// resolveRestartArgs returns the record's own args verbatim when it
 		// can't re-resolve. Comparing identical slices reports no drift, so
 		// those records fall out here without a special case.

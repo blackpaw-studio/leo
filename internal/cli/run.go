@@ -2,6 +2,7 @@ package cli
 
 import (
 	"fmt"
+	"maps"
 	"os"
 	"strings"
 
@@ -56,7 +57,7 @@ func newRunCmd() *cobra.Command {
 					}
 
 					// Show the env vars that would be set on the child claude process.
-					envPairs := taskDryRunEnv(task)
+					envPairs := taskDryRunEnv(cfg, task)
 					if len(envPairs) > 0 {
 						fmt.Println()
 						info.Println("Environment:")
@@ -93,13 +94,19 @@ type envPair struct {
 // taskDryRunEnv returns the env vars that would be exported to the child
 // claude process for a dry-run, redacting sensitive values. Sorted by key for
 // deterministic output.
-func taskDryRunEnv(task config.TaskConfig) []envPair {
+func taskDryRunEnv(cfg *config.Config, task config.TaskConfig) []envPair {
 	// Mirror run.Run's merge order: task.Env is the base layer and leo's own
 	// vars win on collision, so a task that sets LEO_CHANNELS in its env
 	// shows the value it will actually get — one entry, not two.
-	env := make(map[string]string, len(task.Env)+2)
-	for k, v := range task.Env {
-		env[k] = v
+	env, err := cfg.TaskEnv(task)
+	if err != nil {
+		// Validate rejects unknown names, so this is a config that never
+		// loaded; show what the literal env alone would export.
+		env = task.Env
+	}
+	env = maps.Clone(env)
+	if env == nil {
+		env = map[string]string{}
 	}
 	if len(task.Channels) > 0 {
 		env["LEO_CHANNELS"] = strings.Join(task.Channels, ",")

@@ -95,6 +95,26 @@ func gateSpawnTemplateFor(label, template string) error {
 	return nil
 }
 
+// gateEnvironmentSwitch is the permission check for changing an agent's named
+// environments: it stops and relaunches the agent, possibly onto another
+// account, so it needs its own tool permission AND the agent's template in
+// can_spawn — otherwise a template barred from spawning a template could still
+// reach its (account-scoped) environment through an existing agent.
+func gateEnvironmentSwitch(label, agentTemplate string) error {
+	if err := gateToolFor(label, "leo_set_agent_environments"); err != nil {
+		return err
+	}
+	perms, ok := permissionsFromEnv()
+	if !ok {
+		return malformedPermissionsError(label)
+	}
+	if !perms.AllowsSpawn(agentTemplate) {
+		return fmt.Errorf("%s: not permitted to change environments of an agent on template %q; allowed templates: %s",
+			label, agentTemplate, strings.Join(perms.CanSpawn, ", "))
+	}
+	return nil
+}
+
 // gateTemplateSwitch is the permission check for re-pointing an agent at
 // another template, applied at both doors: `leo agent set-template` and the
 // attach picker's template menu. A switch stops the agent and launches the

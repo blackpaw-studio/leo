@@ -75,8 +75,12 @@ func (d *Dispatcher) continueHeadless(cfg *config.Config, rec Record, message st
 	if err != nil {
 		return SendResult{}, fmt.Errorf("template %q harness_options: %w", rec.Template, err)
 	}
+	tmplEnv, err := cfg.TemplateEnv(tmpl)
+	if err != nil {
+		return SendResult{}, fmt.Errorf("template %q: %w", rec.Template, err)
+	}
 	if opts, ok := decoded.(claudeharness.Options); ok {
-		decoded = resolveClaudeDispatchProfile(cfg, tmpl, "dispatch", opts, tmpl.Env, d.LeoMCP)
+		decoded = resolveClaudeDispatchProfile(cfg, tmpl, "dispatch", opts, tmplEnv, d.LeoMCP)
 	}
 	decoded, childEnv := d.headlessChildMCP(cfg, tmpl, decoded, rec.ID)
 	cwd, recreate, err := d.resumeWorkspace(rec)
@@ -189,7 +193,7 @@ func (d *Dispatcher) continueHeadless(cfg *config.Config, rec Record, message st
 	d.mu.Unlock()
 	d.nestMu.Unlock()
 	nestHeld = false
-	go d.runInvocation(runCtx, state, done, h, rec.Model, tmpl.Env, args, harnessEnv, cwd, rec.Timeout, waiter)
+	go d.runInvocation(runCtx, state, done, h, rec.Model, tmplEnv, args, harnessEnv, cwd, rec.Timeout, waiter)
 	return SendResult{TurnID: turn.TurnID, Delivered: waiter == nil, Queued: waiter != nil}, nil
 }
 

@@ -3,10 +3,12 @@ package service
 import (
 	"bytes"
 	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
 
+	"github.com/blackpaw-studio/leo/internal/harness"
 	claudeharness "github.com/blackpaw-studio/leo/internal/harness/claude"
 )
 
@@ -36,6 +38,14 @@ func TestSessionEnvArgs(t *testing.T) {
 				"LEO_PROCESS_NAME=alpha",
 				"LEO_WEB_PORT=8370",
 			},
+		},
+		{
+			name: "account env from a named environment reaches the tmux argv",
+			spec: ProcessSpec{
+				Name: "alpha",
+				Env:  map[string]string{"CLAUDE_CONFIG_DIR": "/Users/evan/.claude-b", "CODEX_HOME": "/Users/evan/.codex-b"},
+			},
+			wantContain: []string{"CLAUDE_CONFIG_DIR=/Users/evan/.claude-b", "CODEX_HOME=/Users/evan/.codex-b"},
 		},
 		{
 			name: "malicious env key is dropped",
@@ -447,5 +457,36 @@ func TestSessionEnvArgsCarryTheBridgeEnv(t *testing.T) {
 		if !strings.Contains(got, want) {
 			t.Fatalf("session env args lack %q: %s", want, got)
 		}
+	}
+}
+
+// TestPreLaunchTrustsWorkspaceInAccountConfigDir drives the claude driver the
+// way superviseProcess does (handleForSpec → PreLaunch): an agent whose env
+// names an alternate CLAUDE_CONFIG_DIR gets its workspace trusted in THAT
+// dir's .claude.json, so the TUI never stalls on the trust dialog.
+func TestPreLaunchTrustsWorkspaceInAccountConfigDir(t *testing.T) {
+	t.Setenv("CLAUDE_CONFIG_DIR", "")
+	home, acct, ws := t.TempDir(), t.TempDir(), t.TempDir()
+	spec := ProcessSpec{Name: "alpha", WorkDir: ws, Env: map[string]string{"HOME": home, "CLAUDE_CONFIG_DIR": acct}}
+	h := handleForSpec(spec, newProcIdentity("alpha", nil), t.TempDir())
+
+	pl, ok := claudeharness.Claude{}.Driver().(interface {
+		PreLaunch(harness.SessionHandle) error
+	})
+	if !ok {
+		t.Fatal("claude driver has no PreLaunch")
+	}
+	if err := pl.PreLaunch(h); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(filepath.Join(acct, ".claude.json"))
+	if err != nil {
+		t.Fatalf("no trust state in the account dir: %v", err)
+	}
+	if !strings.Contains(string(raw), "hasTrustDialogAccepted") {
+		t.Fatalf("account state = %s", raw)
+	}
+	if _, err := os.Stat(filepath.Join(home, ".claude.json")); !os.IsNotExist(err) {
+		t.Fatalf("$HOME/.claude.json must stay untouched, stat err = %v", err)
 	}
 }

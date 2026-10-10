@@ -8,6 +8,9 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/blackpaw-studio/leo/internal/harness"
+	"github.com/blackpaw-studio/leo/internal/session"
 )
 
 var prepareInteractiveMu sync.Mutex
@@ -57,13 +60,47 @@ func ToolActivityHooks(reportCmd []string) ([]string, error) {
 	return []string{"--settings", string(encoded)}, nil
 }
 
+// StateFile is claude's per-account state file (login, workspace trust,
+// user-scope MCP): $CLAUDE_CONFIG_DIR/.claude.json when the launch env sets a
+// config dir, else $HOME/.claude.json.
+func StateFile(env map[string]string) (string, error) {
+	if dir := session.ExplicitConfigDir(env); dir != "" {
+		return filepath.Join(dir, ".claude.json"), nil
+	}
+	home, err := session.HomeDir(env)
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(home, ".claude.json"), nil
+}
+
+// preLaunch trusts the session workspace before a supervised launch, but only
+// for an agent running under a non-default CLAUDE_CONFIG_DIR: a fresh account
+// dir has no trust state, so the TUI would stall on its trust dialog. Agents on
+// the default account are left exactly as they were.
+func preLaunch(h harness.SessionHandle) error {
+	dir := session.ExplicitConfigDir(h.Env)
+	if dir == "" {
+		return nil
+	}
+	// Compare against the agent's own default (its HOME), never a config dir
+	// the daemon's environment happens to carry.
+	if home, err := session.HomeDir(h.Env); err == nil && filepath.Clean(dir) == filepath.Join(home, ".claude") {
+		return nil
+	}
+	return (Claude{}).PrepareInteractive(h.Env, h.Workspace)
+}
+
 // PrepareInteractive accepts Claude's workspace trust dialog before launch.
 // Its settings file contains unrelated user configuration, so only the
 // dispatch project entry is changed and the result replaces the file atomically.
-func (Claude) PrepareInteractive(home, cwd string) error {
+func (Claude) PrepareInteractive(env map[string]string, cwd string) error {
 	prepareInteractiveMu.Lock()
 	defer prepareInteractiveMu.Unlock()
-	path := filepath.Join(home, ".claude.json")
+	path, err := StateFile(env)
+	if err != nil {
+		return fmt.Errorf("claude: resolving state file: %w", err)
+	}
 	absCwd, err := filepath.Abs(cwd)
 	if err != nil {
 		return fmt.Errorf("claude: resolving workspace: %w", err)

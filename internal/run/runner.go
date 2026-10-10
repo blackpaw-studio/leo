@@ -218,7 +218,11 @@ func Run(cfg *config.Config, taskName string, sessions *session.Store, mcp leomc
 	// runTaskAttempt — but the notify-on-fail child below stays claude-only
 	// by construction and adds that env explicitly, so this plain two-way
 	// merge is what it uses.
-	spawnEnv := mergeEnvMaps(task.Env, leoEnv)
+	taskEnv, err := cfg.TaskEnv(task)
+	if err != nil {
+		return fmt.Errorf("task %q: %w", taskName, err)
+	}
+	spawnEnv := mergeEnvMaps(taskEnv, leoEnv)
 
 	prompt, err := assemblePrompt(cfg, task)
 	if err != nil {
@@ -265,7 +269,7 @@ func Run(cfg *config.Config, taskName string, sessions *session.Store, mcp leomc
 		}
 		isChannelInitRetry = false
 
-		ar := runTaskAttempt(cfg, task, taskName, prompt, sessionID, taskWorkspace, timeout, task.Env, leoEnv, channelPrefixes, sessions, h, mcp)
+		ar := runTaskAttempt(cfg, task, taskName, prompt, sessionID, taskWorkspace, timeout, taskEnv, leoEnv, channelPrefixes, sessions, h, mcp)
 		lastLogContent = string(ar.output)
 
 		// A harness that exits 0 while its own stream reports a fatal error

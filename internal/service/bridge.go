@@ -362,8 +362,8 @@ const appendSystemPromptFlag = "--append-system-prompt"
 
 // bridgedSessionWritten reports whether claude has written the transcript of
 // session id for workspace cwd. A test seam.
-var bridgedSessionWritten = func(cwd, id string) bool {
-	path, err := session.JSONLPath(cwd, id)
+var bridgedSessionWritten = func(env map[string]string, cwd, id string) bool {
+	path, err := session.JSONLPath(env, cwd, id)
 	if err != nil {
 		return false
 	}
@@ -377,9 +377,9 @@ var bridgedSessionWritten = func(cwd, id string) bool {
 // (startup hook output, the mod's own log lines); claude refuses a
 // --session-id whose transcript exists, so the relaunch resumes it instead
 // of quick-exiting into a counted restart.
-func argsAfterBridgeFallback(args []string, cwd string) []string {
+func argsAfterBridgeFallback(args []string, env map[string]string, cwd string) []string {
 	id := sessionIDArg(args)
-	if id == "" || !bridgedSessionWritten(cwd, id) {
+	if id == "" || !bridgedSessionWritten(env, cwd, id) {
 		return args
 	}
 	return agent.ResumeArgs(args, id)

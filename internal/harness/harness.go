@@ -159,9 +159,11 @@ type TurnHooker interface {
 }
 
 // InteractivePreparer is an optional adapter capability for launch-scoped
-// interactive setup that must finish before the TUI starts.
+// interactive setup that must finish before the TUI starts. env is the
+// launch's resolved environment: adapters derive their config directories
+// (CLAUDE_CONFIG_DIR, CODEX_HOME) from it rather than from $HOME.
 type InteractivePreparer interface {
-	PrepareInteractive(home, cwd string) error
+	PrepareInteractive(env map[string]string, cwd string) error
 }
 
 // FallbackString returns primary if non-empty, else fallback. Callers use

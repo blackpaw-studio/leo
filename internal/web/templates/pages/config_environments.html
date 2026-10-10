@@ -1,0 +1,19 @@
+{{define "page_config_environments"}}
+<h1 class="page-title">Environments</h1>
+<p class="dim">Named, composable env maps — typically one per account (<code>CLAUDE_CONFIG_DIR</code>, <code>CODEX_HOME</code>). Reference them by name from defaults, templates, tasks, or <code>leo agent spawn --environment</code>; later names win. Use absolute paths: a literal <code>~</code> is not expanded. Running agents pick up changes on their next restart.</p>
+{{range .Data.Environments}}
+<div class="card">
+  <div class="card-head"><b>{{.Name}}</b></div>
+  {{template "config_form" .Form}}
+</div>
+{{else}}
+<p class="dim">No environments configured.</p>
+{{end}}
+<div class="card">
+  <div class="card-head"><b>New environment</b></div>
+  <form hx-post="/web/environment/add" hx-target="#flash-container" class="frow-inline">
+    <input type="text" name="name" placeholder="environment-name" required>
+    <button type="submit" class="btn hot">Create</button>
+  </form>
+</div>
+{{end}}

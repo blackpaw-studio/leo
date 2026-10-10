@@ -99,6 +99,19 @@ type Record struct {
 	// so harness-owned keys stay current while caller-supplied ones survive).
 	SpawnEnv map[string]string `json:"spawn_env,omitempty"`
 
+	// Environments is the per-agent override of the named-environment list
+	// (a spawn's --environment or set-environment), by NAME so config edits
+	// take effect on the next restart. Nil means the template's (or
+	// defaults') list applies.
+	Environments []string `json:"environments,omitempty"`
+
+	// EnvLayered marks a record whose Env was composed from layers
+	// (harness < named environments < template env < inherited < SpawnEnv),
+	// so restart can rebuild every layer from current config instead of
+	// replaying the stored blob. False on records that predate named
+	// environments, whose env keys leo cannot attribute to a layer.
+	EnvLayered bool `json:"env_layered,omitempty"`
+
 	// SessionsByTemplate archives the session id of every template this agent
 	// has been away from, keyed by template name. It is an archive of INACTIVE
 	// templates only — the active template's session always lives in

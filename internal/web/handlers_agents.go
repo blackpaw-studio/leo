@@ -6,9 +6,11 @@ import (
 	"fmt"
 	"net/http"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/blackpaw-studio/leo/internal/agent"
+	"github.com/blackpaw-studio/leo/internal/config"
 	"github.com/blackpaw-studio/leo/internal/redact"
 )
 
@@ -39,6 +41,9 @@ type apiResponse struct {
 	OK    bool   `json:"ok"`
 	Data  any    `json:"data,omitempty"`
 	Error string `json:"error,omitempty"`
+	// Code is a stable machine-readable error class, set only where an
+	// endpoint documents one (see classifyEnvironmentError).
+	Code string `json:"code,omitempty"`
 }
 
 func writeJSON(w http.ResponseWriter, status int, resp apiResponse) {
@@ -68,6 +73,9 @@ func (s *Server) handleAPIAgentSpawn(w http.ResponseWriter, r *http.Request) {
 		Base     string            `json:"base,omitempty"`
 		Prompt   string            `json:"prompt,omitempty"`
 		Env      map[string]string `json:"env,omitempty"`
+		// Environments overrides the template's named environments for this
+		// agent only.
+		Environments []string `json:"environments,omitempty"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSON(w, http.StatusBadRequest, apiResponse{Error: fmt.Sprintf("invalid request: %v", err)})
@@ -82,9 +90,11 @@ func (s *Server) handleAPIAgentSpawn(w http.ResponseWriter, r *http.Request) {
 		Base:     req.Base,
 		Prompt:   req.Prompt,
 		Env:      req.Env,
+
+		Environments: req.Environments,
 	})
 	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, apiResponse{Error: err.Error()})
+		writeEnvironmentError(w, err)
 		return
 	}
 
@@ -197,14 +207,15 @@ type templateInfo struct {
 	Channels  []string `json:"channels,omitempty"`
 	AddDirs   []string `json:"add_dirs,omitempty"`
 	EnvKeys   []string `json:"env_keys,omitempty"`
+	// Environments are the template's named environments (names only).
+	Environments []string `json:"environments,omitempty"`
 }
 
 // handleAPITemplateList returns all configured templates.
 // GET /api/template/list
 func (s *Server) handleAPITemplateList(w http.ResponseWriter, r *http.Request) {
-	cfg, err := s.loadConfig()
-	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, apiResponse{Error: err.Error()})
+	cfg, ok := s.loadConfigForAPI(w)
+	if !ok {
 		return
 	}
 
@@ -219,6 +230,8 @@ func (s *Server) handleAPITemplateList(w http.ResponseWriter, r *http.Request) {
 			Channels:  tmpl.Channels,
 			AddDirs:   tmpl.AddDirs,
 			EnvKeys:   redact.Keys(tmpl.Env),
+
+			Environments: tmpl.Environments,
 		})
 	}
 	// Config maps iterate in random order; sort so the listing is stable
@@ -249,6 +262,9 @@ type agentData struct {
 	Restarts  int
 	Branch    string
 	Bridge    string // agent.Record.BridgeSummary
+	// Environments is the agent's own override, comma-joined for the inline
+	// edit form; empty means the template's list applies.
+	Environments string
 }
 
 // handleWebAgentSpawn spawns an agent via the web UI (form post).
@@ -270,7 +286,11 @@ func (s *Server) handleWebAgentSpawn(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	rec, err := s.agentSvc.Spawn(r.Context(), agent.SpawnSpec{Template: templateName, Repo: repo})
+	rec, err := s.agentSvc.Spawn(r.Context(), agent.SpawnSpec{
+		Template:     templateName,
+		Repo:         repo,
+		Environments: parseEnvironmentsCSV(r.FormValue("environments")),
+	})
 	if err != nil {
 		s.renderFlash(w, "error", err.Error())
 		return
@@ -457,9 +477,8 @@ type taskInfo struct {
 // handleAPITaskList returns all tasks with their status.
 // GET /api/task/list
 func (s *Server) handleAPITaskList(w http.ResponseWriter, r *http.Request) {
-	cfg, err := s.loadConfig()
-	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, apiResponse{Error: err.Error()})
+	cfg, ok := s.loadConfigForAPI(w)
+	if !ok {
 		return
 	}
 
@@ -491,9 +510,8 @@ func (s *Server) handleAPITaskList(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleAPITaskRun(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")
 
-	cfg, err := s.loadConfig()
-	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, apiResponse{Error: err.Error()})
+	cfg, ok := s.loadConfigForAPI(w)
+	if !ok {
 		return
 	}
 	if _, ok := cfg.Tasks[name]; !ok {
@@ -517,9 +535,8 @@ func (s *Server) handleAPITaskToggle(w http.ResponseWriter, r *http.Request) {
 	defer s.lockConfigWrite()()
 	name := r.PathValue("name")
 
-	cfg, err := s.loadConfig()
-	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, apiResponse{Error: err.Error()})
+	cfg, ok := s.loadConfigForAPI(w)
+	if !ok {
 		return
 	}
 	task, ok := cfg.Tasks[name]
@@ -545,4 +562,110 @@ func (s *Server) handleAPITaskToggle(w http.ResponseWriter, r *http.Request) {
 		action = "disabled"
 	}
 	writeJSON(w, http.StatusOK, apiResponse{OK: true, Data: map[string]string{"name": name, "status": action}})
+}
+
+// parseEnvironmentsCSV splits a comma-separated environment list from a form
+// field, trimming blanks. An empty field yields nil ("no override").
+func parseEnvironmentsCSV(raw string) []string {
+	var names []string
+	for _, part := range strings.Split(raw, ",") {
+		if part = strings.TrimSpace(part); part != "" {
+			names = append(names, part)
+		}
+	}
+	return names
+}
+
+// Error codes of the environment endpoints.
+const (
+	codeUnknownEnvironment  = "unknown_environment"
+	codePersistentTask      = "persistent_task"
+	codeHarnessMismatch     = "harness_mismatch"
+	codeConfigUnavailable   = "config_unavailable"
+	codeUnknownTemplate     = "unknown_template"
+	codeInvalidEnvironments = "invalid_environments"
+	codeInvalidName         = "invalid_name"
+)
+
+// classifyEnvironmentError picks the HTTP status and stable error code for a
+// spawn / set-environment failure from its typed error. Anything else is an
+// unclassified 500 with no code.
+func classifyEnvironmentError(err error) (int, string) {
+	var (
+		unknown     *config.UnknownEnvironmentError
+		invalidEnvs *config.InvalidEnvironmentsError
+		unknownTmpl *agent.UnknownTemplateError
+		bound       *agent.PersistentTaskError
+		mismatch    *agent.HarnessMismatchError
+	)
+	switch {
+	case errors.As(err, &unknown):
+		return http.StatusBadRequest, codeUnknownEnvironment
+	case errors.As(err, &invalidEnvs):
+		return http.StatusBadRequest, codeInvalidEnvironments
+	case errors.As(err, &unknownTmpl):
+		return http.StatusBadRequest, codeUnknownTemplate
+	case errors.Is(err, agent.ErrInvalidAgentName):
+		return http.StatusBadRequest, codeInvalidName
+	case errors.As(err, &bound):
+		return http.StatusConflict, codePersistentTask
+	case errors.As(err, &mismatch):
+		return http.StatusConflict, codeHarnessMismatch
+	}
+	return http.StatusInternalServerError, ""
+}
+
+// writeEnvironmentError renders a spawn / set-environment failure.
+func writeEnvironmentError(w http.ResponseWriter, err error) {
+	status, code := classifyEnvironmentError(err)
+	writeJSON(w, status, apiResponse{Error: err.Error(), Code: code})
+}
+
+// handleAPIAgentSetEnvironments re-points an agent at a different ordered list
+// of named environments, restarting it with its conversation resumed. An empty
+// list clears the override so the template's environments apply.
+// POST /api/agent/{name}/environments  {environments: ["work"]}
+func (s *Server) handleAPIAgentSetEnvironments(w http.ResponseWriter, r *http.Request) {
+	if s.agentSvc == nil {
+		writeJSON(w, http.StatusServiceUnavailable, apiResponse{Error: "agent service not available"})
+		return
+	}
+	var req struct {
+		Environments []string `json:"environments"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, apiResponse{Error: fmt.Sprintf("invalid request: %v", err)})
+		return
+	}
+	rec, status, err := resolveAgentQuery(s.agentSvc, r.PathValue("name"))
+	if err != nil {
+		writeJSON(w, status, apiResponse{Error: err.Error()})
+		return
+	}
+	res, err := s.agentSvc.SetEnvironments(rec.Name, req.Environments)
+	if err != nil {
+		writeEnvironmentError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, apiResponse{OK: true, Data: res})
+}
+
+// handleWebAgentSetEnvironments is the agents-list form for
+// handleAPIAgentSetEnvironments: success re-renders the list in place, failure
+// flashes to the shared container (same convention as rename).
+func (s *Server) handleWebAgentSetEnvironments(w http.ResponseWriter, r *http.Request) {
+	if s.agentSvc == nil {
+		s.renderFlashToContainer(w, "error", "Agent service not available")
+		return
+	}
+	rec, _, err := resolveAgentQuery(s.agentSvc, r.PathValue("name"))
+	if err != nil {
+		s.renderFlashToContainer(w, "error", err.Error())
+		return
+	}
+	if _, err := s.agentSvc.SetEnvironments(rec.Name, parseEnvironmentsCSV(r.FormValue("environments"))); err != nil {
+		s.renderFlashToContainer(w, "error", fmt.Sprintf("Failed to set environments: %v", err))
+		return
+	}
+	s.handlePartialAgents(w, r)
 }

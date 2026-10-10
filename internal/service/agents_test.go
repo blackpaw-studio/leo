@@ -15,6 +15,7 @@ import (
 
 	"github.com/blackpaw-studio/leo/internal/agent"
 	"github.com/blackpaw-studio/leo/internal/agentstore"
+	"github.com/blackpaw-studio/leo/internal/config"
 	"github.com/blackpaw-studio/leo/internal/daemon"
 	claudeharness "github.com/blackpaw-studio/leo/internal/harness/claude"
 	"github.com/blackpaw-studio/leo/internal/leomcp"
@@ -1335,5 +1336,77 @@ func TestRestoreAgentsSettlesAdoptionWithNothingToRestore(t *testing.T) {
 	RestoreAgents(t.TempDir(), "tmux", "", spawner, leomcp.Server{})
 	if len(spawner.log) != 1 || spawner.log[0] != "reserve " {
 		t.Fatalf("calls = %v, want one empty reservation", spawner.log)
+	}
+}
+
+func seedEnvRecord(t *testing.T, home string, environments []string) {
+	t.Helper()
+	rec := agentstore.Record{
+		Name: "leoterm", Workspace: t.TempDir(), Harness: "claude",
+		ClaudeArgs: []string{"--model", "sonnet"}, SessionID: "sid", WebPort: "8370",
+		Env: map[string]string{"CLAUDE_CONFIG_DIR": "/acct/b"}, Environments: environments, EnvLayered: true,
+		SpawnedAt: time.Now(),
+	}
+	if err := agentstore.Save(home, rec); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func withLiveTmuxSession(t *testing.T, live bool) {
+	t.Helper()
+	orig := tmuxHasSession
+	tmuxHasSession = func(_, _ string) bool { return live }
+	t.Cleanup(func() { tmuxHasSession = orig })
+}
+
+// A fresh boot-time launch must not replay an env snapshot whose named
+// environment was deleted: the agent stays down, with the reason recorded.
+func TestRestoreAgentsFailsClosedOnMissingEnvironmentForFreshSpawn(t *testing.T) {
+	home := t.TempDir()
+	seedEnvRecord(t, home, []string{"acct-b"})
+	withLiveTmuxSession(t, false)
+	cfg := &config.Config{HomePath: home}
+
+	spawner := &fakeAgentSpawner{}
+	if restored := RestoreAgents(home, "tmux", "", spawner, leomcp.Server{}, WithRestoreConfig(cfg)); restored != 0 {
+		t.Fatalf("restored = %d, want 0", restored)
+	}
+	if len(spawner.calls) != 0 {
+		t.Fatalf("spawned despite a missing environment: %+v", spawner.calls)
+	}
+	got, _ := agentstore.Load(agentstore.FilePath(home))
+	rec := got["leoterm"]
+	if !rec.IsFailedRestore() || !strings.Contains(rec.StoppedReason, "acct-b") {
+		t.Fatalf("record = stopped:%v reason:%q, want a failed-restore naming acct-b", rec.Stopped, rec.StoppedReason)
+	}
+}
+
+// A surviving tmux session already runs with its env; adoption is unchanged.
+func TestRestoreAgentsStillAdoptsWhenEnvironmentIsMissing(t *testing.T) {
+	home := t.TempDir()
+	seedEnvRecord(t, home, []string{"acct-b"})
+	withLiveTmuxSession(t, true)
+
+	spawner := &fakeAgentSpawner{}
+	if restored := RestoreAgents(home, "tmux", "", spawner, leomcp.Server{}, WithRestoreConfig(&config.Config{HomePath: home})); restored != 1 {
+		t.Fatalf("restored = %d, want 1", restored)
+	}
+	if len(spawner.calls) != 1 || !spawner.calls[0].Adopt {
+		t.Fatalf("calls = %+v, want one adoption", spawner.calls)
+	}
+}
+
+func TestRestoreAgentsSpawnsFreshWhenEnvironmentsExist(t *testing.T) {
+	home := t.TempDir()
+	seedEnvRecord(t, home, []string{"acct-b"})
+	withLiveTmuxSession(t, false)
+	cfg := &config.Config{HomePath: home, Environments: map[string]map[string]string{"acct-b": {"CLAUDE_CONFIG_DIR": "/acct/b"}}}
+
+	spawner := &fakeAgentSpawner{}
+	if restored := RestoreAgents(home, "tmux", "", spawner, leomcp.Server{}, WithRestoreConfig(cfg)); restored != 1 {
+		t.Fatalf("restored = %d, want 1", restored)
+	}
+	if got := spawner.calls[0].Env["CLAUDE_CONFIG_DIR"]; got != "/acct/b" {
+		t.Fatalf("spawn env = %v", spawner.calls[0].Env)
 	}
 }

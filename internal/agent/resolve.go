@@ -165,6 +165,11 @@ func ValidateRepo(repo string) error {
 	if strings.ContainsAny(repo, " \t\r\n") {
 		return fmt.Errorf("repo %q contains whitespace", repo)
 	}
+	for _, segment := range strings.Split(repo, "/") {
+		if segment == "." || segment == ".." {
+			return fmt.Errorf("repo %q has a %q path segment", repo, segment)
+		}
+	}
 	if strings.Count(repo, "/") > 1 {
 		return fmt.Errorf("repo %q must be owner/repo or bare name, got multiple slashes", repo)
 	}
@@ -214,5 +219,6 @@ func mergeStored(r *Record, stored map[string]agentstore.Record) {
 	r.Workspace = s.Workspace
 	r.Branch = s.Branch
 	r.CanonicalPath = s.CanonicalPath
+	r.Environments = s.Environments
 	r.WakeOnMessage = s.WakeOnMessage
 }

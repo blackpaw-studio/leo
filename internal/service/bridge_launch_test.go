@@ -407,7 +407,7 @@ func TestBridgeFallbackResumesASessionTheBridgedLaunchWrote(t *testing.T) {
 			orig := bridgedSessionWritten
 			var asked []string
 			var mu sync.Mutex
-			bridgedSessionWritten = func(cwd, id string) bool {
+			bridgedSessionWritten = func(_ map[string]string, cwd, id string) bool {
 				mu.Lock()
 				asked = append(asked, cwd+"|"+id)
 				mu.Unlock()

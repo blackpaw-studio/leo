@@ -146,7 +146,7 @@ func TestResolveRestartArgsFallbackMigratesLegacyLeoMCP(t *testing.T) {
 	want := []string{"-a", "never", "-c", `mcp_servers.leo.command="/opt/my \"dev\" leo/bin/leo"`}
 	for name, rec := range cases {
 		t.Run(name, func(t *testing.T) {
-			args, env := resolveRestartArgs(cfg, rec, "tok", leomcp.Server{Bin: testLeoBin})
+			args, env, _ := resolveRestartArgs(cfg, rec, "tok", leomcp.Server{Bin: testLeoBin})
 			if !reflect.DeepEqual(args, want) {
 				t.Errorf("args = %q, want %q", args, want)
 			}
@@ -162,7 +162,7 @@ func TestResolveRestartArgsFallbackKeepsStoredLaunchOnMalformedLeoEntry(t *testi
 		Name: "x", Workspace: "/tmp/ws",
 		ClaudeArgs: []string{"--mcp-config", `{"mcpServers":{"leo":{"command":"leo"}}}`, "--mcp-config", `{"mcpServers":{"leo":null}}`},
 	}
-	args, _ := resolveRestartArgs(&config.Config{HomePath: t.TempDir()}, rec, "tok", leomcp.Server{Bin: testLeoBin})
+	args, _, _ := resolveRestartArgs(&config.Config{HomePath: t.TempDir()}, rec, "tok", leomcp.Server{Bin: testLeoBin})
 	if !reflect.DeepEqual(args, rec.ClaudeArgs) {
 		t.Errorf("args = %q, want stored %q", args, rec.ClaudeArgs)
 	}

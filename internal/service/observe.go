@@ -5,6 +5,7 @@ import (
 	"os"
 	"time"
 
+	"github.com/blackpaw-studio/leo/internal/agent"
 	"github.com/blackpaw-studio/leo/internal/agentstore"
 	"github.com/blackpaw-studio/leo/internal/bridge"
 	"github.com/blackpaw-studio/leo/internal/config"
@@ -188,21 +189,48 @@ func (s *Supervisor) spawnedAgentView(spec daemon.AgentSpawnSpec, spawnedAt time
 		a.Attention = &att
 	}
 
+	var override []string
 	if records, err := agentstore.Load(agentstore.FilePath(s.homePath)); err == nil {
 		if rec, ok := records[spec.Name]; ok {
 			a.Template = rec.Template
 			a.Repo = rec.Repo
 			a.Branch = rec.Branch
+			override = rec.Environments
 		}
 	}
 
-	if a.Template != "" && s.configPath != "" {
-		if cfg, err := config.Load(s.configPath); err == nil {
-			if tmpl, ok := cfg.Templates[a.Template]; ok {
-				a.Model = cfg.TemplateModel(tmpl)
-			}
+	var cfg *config.Config
+	if s.configPath != "" {
+		if loaded, err := config.Load(s.configPath); err == nil {
+			cfg = loaded
 		}
 	}
+	if cfg != nil && a.Template != "" {
+		if tmpl, ok := cfg.Templates[a.Template]; ok {
+			a.Model = cfg.TemplateModel(tmpl)
+		}
+	}
+	a.Environments, a.EnvironmentsSource, a.EnvironmentError = agent.EnvironmentsView(cfg, spec.Name, a.Template, override)
 
 	return a
+}
+
+// environmentsViewOf is the environments view of the agent filed under name in
+// the agentstore, against current config. A missing record or config degrades
+// to an empty default view rather than a guess.
+func (s *Supervisor) environmentsViewOf(name string) ([]string, string, *string) {
+	var template string
+	var override []string
+	if records, err := agentstore.Load(agentstore.FilePath(s.homePath)); err == nil {
+		if rec, ok := records[name]; ok {
+			template, override = rec.Template, rec.Environments
+		}
+	}
+	var cfg *config.Config
+	if s.configPath != "" {
+		if loaded, err := config.Load(s.configPath); err == nil {
+			cfg = loaded
+		}
+	}
+	return agent.EnvironmentsView(cfg, name, template, override)
 }

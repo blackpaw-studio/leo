@@ -687,16 +687,16 @@ func (s *Supervisor) RenameAgent(oldName, newName string) error {
 		Type:    observe.EventAgentStopped,
 		Payload: &observe.AgentStoppedPayload{Agent: oldName},
 	})
+	renamed := observe.Agent{
+		Name:      newName,
+		Status:    observe.StatusRunning,
+		Restarts:  restarts,
+		StartedAt: startedAt,
+	}
+	renamed.Environments, renamed.EnvironmentsSource, renamed.EnvironmentError = s.environmentsViewOf(oldName)
 	s.publish(observe.Event{
-		Type: observe.EventAgentSpawned,
-		Payload: &observe.AgentSpawnedPayload{
-			Agent: observe.Agent{
-				Name:      newName,
-				Status:    observe.StatusRunning,
-				Restarts:  restarts,
-				StartedAt: startedAt,
-			},
-		},
+		Type:    observe.EventAgentSpawned,
+		Payload: &observe.AgentSpawnedPayload{Agent: renamed},
 	})
 	return nil
 }
@@ -1006,7 +1006,13 @@ func defaultSupervisedExec(opts RunSupervisedOptions) error {
 	}
 
 	// Restore ephemeral agents from previous run
-	restored := RestoreAgents(homePath, tmuxPath, webToken, supervisor, leoMCP)
+	var restoreOpts []RestoreOption
+	if cfg, err := config.Load(configPath); err != nil {
+		fmt.Fprintf(os.Stderr, "warning: restoring agents without checking their named environments: %v\n", err)
+	} else {
+		restoreOpts = append(restoreOpts, WithRestoreConfig(cfg))
+	}
+	restored := RestoreAgents(homePath, tmuxPath, webToken, supervisor, leoMCP, restoreOpts...)
 	if restored > 0 {
 		fmt.Fprintf(os.Stdout, "restored %d ephemeral agent(s)\n", restored)
 	}
@@ -1496,7 +1502,7 @@ func superviseProcess(ctx context.Context, tmuxPath, claudePath string, spec Pro
 		if fellBack.Load() {
 			sv.endLaunchToken(homePath, id.Name(), spec.attentionToken)
 			forceLegacy = true
-			currentArgs = argsAfterBridgeFallback(currentArgs, spec.WorkDir)
+			currentArgs = argsAfterBridgeFallback(currentArgs, spec.Env, spec.WorkDir)
 			id.setArgs(currentArgs)
 			fmt.Fprintf(os.Stderr, "[%s] relaunching without the leo bridge\n", name)
 			continue

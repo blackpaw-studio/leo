@@ -64,6 +64,9 @@ type AgentService interface {
 	Resolve(query string) (agent.Record, error)
 	Rename(query, newName string) (agent.Record, error)
 	Stop(name string, opts agent.StopOptions) error
+	// SetEnvironments re-points an agent at a different ordered list of
+	// named environments and restarts it with its conversation resumed.
+	SetEnvironments(name string, names []string) (agent.SetEnvironmentsResult, error)
 	// Wakeable reports whether name has a persisted, dormant record with
 	// WakeOnMessage=true — the only dormant agents an inbound message is
 	// allowed to auto-start.
@@ -517,6 +520,7 @@ func New(configPath string, processes ProcessStateProvider, scheduler SchedulerP
 	mux.HandleFunc("GET /config/templates", s.handlePage("config_templates", "Templates", s.buildTemplatesData))
 	mux.HandleFunc("GET /config/templates/{name}", s.handleTemplateEditPage)
 	mux.HandleFunc("GET /config/delegation", s.handlePage("config_delegation", "Delegation", s.buildDelegationData))
+	mux.HandleFunc("GET /config/environments", s.handlePage("config_environments", "Environments", s.buildEnvironmentsData))
 	mux.HandleFunc("GET /config/settings", s.handlePage("config_settings", "Settings", s.buildSettingsData))
 	mux.HandleFunc("GET /service", s.handlePage("service", "Service", s.buildServiceData))
 
@@ -570,6 +574,9 @@ func New(configPath string, processes ProcessStateProvider, scheduler SchedulerP
 	mux.HandleFunc("POST /web/config/web", s.handleConfigWebSave)
 	mux.HandleFunc("POST /web/config/client", s.handleConfigClientSave)
 	mux.HandleFunc("POST /web/config/host/{name}", s.handleConfigHostSave)
+	mux.HandleFunc("POST /web/config/environment/{name}", s.handleConfigEnvironmentSave)
+	mux.HandleFunc("POST /web/environment/add", s.handleEnvironmentAdd)
+	mux.HandleFunc("DELETE /web/environment/{name}", s.handleEnvironmentDelete)
 	mux.HandleFunc("POST /web/host/add", s.handleHostAdd)
 	mux.HandleFunc("DELETE /web/host/{name}", s.handleHostDelete)
 
@@ -589,6 +596,7 @@ func New(configPath string, processes ProcessStateProvider, scheduler SchedulerP
 	mux.HandleFunc("POST /web/agent/{name}/start", s.handleWebAgentStart)
 	mux.HandleFunc("DELETE /web/agent/{name}", s.handleWebAgentDelete)
 	mux.HandleFunc("POST /web/agent/{name}/rename", s.handleWebAgentRename)
+	mux.HandleFunc("POST /web/agent/{name}/environments", s.handleWebAgentSetEnvironments)
 	mux.HandleFunc("POST /web/agent/{name}/send", s.handleWebAgentSendKeys)
 	mux.HandleFunc("POST /web/agent/{name}/interrupt", s.handleWebAgentInterrupt)
 	mux.HandleFunc("POST /web/agent/{name}/message", s.handleWebAgentMessage)
@@ -603,6 +611,7 @@ func New(configPath string, processes ProcessStateProvider, scheduler SchedulerP
 	apiMux.HandleFunc("POST /api/agent/stop", s.handleAPIAgentStop)
 	apiMux.HandleFunc("POST /api/agent/start", s.handleAPIAgentStart)
 	apiMux.HandleFunc("POST /api/agent/{name}/rename", s.handleAPIAgentRename)
+	apiMux.HandleFunc("POST /api/agent/{name}/environments", s.handleAPIAgentSetEnvironments)
 	apiMux.HandleFunc("POST /api/agent/hook", s.handleAPIAgentHook)
 	apiMux.HandleFunc("POST /api/agent/{name}/surface-file", s.handleAPIAgentSurfaceFile)
 	apiMux.HandleFunc("POST /api/consult", s.handleAPIConsult)
@@ -634,6 +643,10 @@ func New(configPath string, processes ProcessStateProvider, scheduler SchedulerP
 	// only. The agent token passes the bearer check below, so each route
 	// refuses it itself; agents drive one another through /web/agent/*.
 	s.registerControlRoutes(apiMux, "/api/v1/agents", s.requireOperatorToken)
+	apiMux.HandleFunc("GET /api/v1/environments", s.handleAPIEnvironments)
+	apiMux.HandleFunc("GET /api/v1/templates", s.handleAPITemplatesV1)
+	apiMux.HandleFunc("POST /api/v1/agents/spawn", s.requireOperatorToken(s.handleAPIAgentSpawn))
+	apiMux.HandleFunc("POST /api/v1/agents/{name}/environments", s.requireOperatorToken(s.handleAPIAgentSetEnvironments))
 	// /api/* is the agent-facing surface: both tokens work there.
 	protectedAPI := bearerAuthMiddleware([]string{s.apiToken, s.agentToken}, s.trustedProxies, apiMux)
 

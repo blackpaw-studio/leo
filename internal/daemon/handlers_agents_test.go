@@ -7,17 +7,24 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"strings"
 	"testing"
 
 	"github.com/blackpaw-studio/leo/internal/agent"
+	"github.com/blackpaw-studio/leo/internal/config"
 	"github.com/blackpaw-studio/leo/internal/harness"
 )
 
 // fakeAgentManager is a minimal AgentManager for daemon endpoint tests.
 type fakeAgentManager struct {
 	lastSwitch [2]string
+	lastSetEnv struct {
+		name  string
+		names []string
+	}
+	setEnvErr  error
 	switchErr  error
 	records    []agent.Record
 	spawnErr   error
@@ -121,6 +128,14 @@ func (f *fakeAgentManager) SwitchTemplate(name, template string) (agent.SwitchRe
 		Name: name, FromTemplate: "coding", ToTemplate: template,
 		FromHarness: "claude", ToHarness: "codex", Status: "running",
 	}, nil
+}
+
+func (f *fakeAgentManager) SetEnvironments(name string, names []string) (agent.SetEnvironmentsResult, error) {
+	f.lastSetEnv.name, f.lastSetEnv.names = name, names
+	if f.setEnvErr != nil {
+		return agent.SetEnvironmentsResult{}, f.setEnvErr
+	}
+	return agent.SetEnvironmentsResult{Name: name, To: names, Effective: names, Status: "running"}, nil
 }
 
 func (f *fakeAgentManager) RestartAll() agent.RestartResult {
@@ -1552,5 +1567,97 @@ func TestAgentSetTemplateHandlerError(t *testing.T) {
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusInternalServerError {
 		t.Fatalf("want 500, got %d", resp.StatusCode)
+	}
+}
+
+func TestAgentSpawnHandlerForwardsEnvironments(t *testing.T) {
+	mgr := &fakeAgentManager{}
+	_, client := startTestServerWithAgent(t, mgr)
+
+	body, _ := json.Marshal(AgentSpawnRequest{Template: "coding", Repo: "leo", Environments: []string{"base", "acct-b"}})
+	resp, err := client.Post("http://localhost/agents/spawn", "application/json", bytes.NewReader(body))
+	if err != nil {
+		t.Fatalf("post: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("want 200, got %d", resp.StatusCode)
+	}
+	if got := mgr.lastSpawn.Environments; len(got) != 2 || got[0] != "base" || got[1] != "acct-b" {
+		t.Errorf("environments not forwarded in order: %v", got)
+	}
+}
+
+// The set-environment route resolves the name like the other lifecycle
+// routes and forwards the ordered names from the JSON body.
+func TestAgentSetEnvironmentHandler(t *testing.T) {
+	mgr := &fakeAgentManager{records: []agent.Record{{Name: "leo-coding-owner-fetch"}}}
+	_, client := startTestServerWithAgent(t, mgr)
+
+	body, _ := json.Marshal(AgentSetEnvironmentRequest{Environments: []string{"base", "acct-b"}})
+	resp, err := client.Post("http://localhost/agents/leo-coding-owner-fetch/set-environment", "application/json", bytes.NewReader(body))
+	if err != nil {
+		t.Fatalf("post: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("want 200, got %d", resp.StatusCode)
+	}
+	if mgr.lastSetEnv.name != "leo-coding-owner-fetch" || len(mgr.lastSetEnv.names) != 2 || mgr.lastSetEnv.names[1] != "acct-b" {
+		t.Fatalf("manager called with %+v", mgr.lastSetEnv)
+	}
+	var env Response
+	if err := json.NewDecoder(resp.Body).Decode(&env); err != nil {
+		t.Fatal(err)
+	}
+	var result agent.SetEnvironmentsResult
+	if err := json.Unmarshal(env.Data, &result); err != nil || result.Status != "running" {
+		t.Fatalf("result = %+v, %v", result, err)
+	}
+}
+
+func TestAgentSetEnvironmentHandlerErrors(t *testing.T) {
+	mgr := &fakeAgentManager{records: []agent.Record{{Name: "foo"}}, setEnvErr: &config.UnknownEnvironmentError{Name: "ghost"}}
+	_, client := startTestServerWithAgent(t, mgr)
+	resp, err := client.Post("http://localhost/agents/foo/set-environment", "application/json", bytes.NewReader([]byte(`{"environments":["ghost"]}`)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("want 400 for an unknown environment, got %d", resp.StatusCode)
+	}
+
+	resp, err = client.Post("http://localhost/agents/foo/set-environment", "application/json", bytes.NewReader([]byte(`not json`)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("want 400 for a malformed body, got %d", resp.StatusCode)
+	}
+}
+
+// Caller mistakes reach daemon IPC clients (the CLI) as 4xx, never 500.
+func TestWriteAgentErrorClassifiesSpawnValidation(t *testing.T) {
+	tests := []struct {
+		name   string
+		err    error
+		status int
+	}{
+		{"bad name", fmt.Errorf("%w: bad", agent.ErrInvalidAgentName), http.StatusBadRequest},
+		{"unknown template", &agent.UnknownTemplateError{Name: "nope"}, http.StatusBadRequest},
+		{"duplicate environments", &config.InvalidEnvironmentsError{Problems: []string{"dup"}}, http.StatusBadRequest},
+		{"persistent task", &agent.PersistentTaskError{Agent: "a", Task: "t"}, http.StatusConflict},
+		{"harness mismatch", &agent.HarnessMismatchError{Agent: "a", Template: "t", Have: "claude", Want: "codex"}, http.StatusConflict},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rec := httptest.NewRecorder()
+			writeAgentError(rec, tt.err)
+			if rec.Code != tt.status {
+				t.Fatalf("status = %d, want %d: %s", rec.Code, tt.status, rec.Body.String())
+			}
+		})
 	}
 }

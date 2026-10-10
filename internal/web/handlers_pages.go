@@ -5,8 +5,10 @@ import (
 	"net/http"
 	"net/url"
 	"sort"
+	"strings"
 	"time"
 
+	"github.com/blackpaw-studio/leo/internal/config"
 	"github.com/blackpaw-studio/leo/internal/cron"
 	claudeharness "github.com/blackpaw-studio/leo/internal/harness/claude"
 	"github.com/blackpaw-studio/leo/internal/web/schema"
@@ -238,6 +240,8 @@ func (s *Server) buildSettingsData(r *http.Request) (any, error) {
 type agentsData struct {
 	Agents    []agentData
 	Templates any
+	// EnvironmentNames feeds the spawn/edit forms' datalist.
+	EnvironmentNames []string
 }
 
 // buildAgentsData loads the spawn-form templates and running ephemeral
@@ -259,11 +263,13 @@ func (s *Server) buildAgentsData(r *http.Request) (any, error) {
 				Restarts:  a.Restarts,
 				Branch:    a.Branch,
 				Bridge:    a.BridgeSummary(),
+
+				Environments: strings.Join(a.Environments, ","),
 			})
 		}
 	}
 
-	return agentsData{Agents: agents, Templates: cfg.Templates}, nil
+	return agentsData{Agents: agents, Templates: cfg.Templates, EnvironmentNames: environmentNames(cfg)}, nil
 }
 
 // taskRow is one row of the tasks list table (pages/tasks.html).
@@ -462,4 +468,14 @@ func (s *Server) handleTemplateEditPage(w http.ResponseWriter, r *http.Request) 
 	if err := s.templates.ExecuteTemplate(w, "layout.html", pd); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 	}
+}
+
+// environmentNames returns the configured environment names, sorted.
+func environmentNames(cfg *config.Config) []string {
+	names := make([]string, 0, len(cfg.Environments))
+	for name := range cfg.Environments {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
 }

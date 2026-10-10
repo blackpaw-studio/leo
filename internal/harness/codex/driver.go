@@ -18,25 +18,8 @@ import (
 	"github.com/blackpaw-studio/leo/internal/harness"
 )
 
-// codexConfigPath/codexSessionsDir are seams tests replace with temp dirs.
-var codexConfigPath = func() (string, error) {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return "", err
-	}
-	return filepath.Join(home, ".codex", "config.toml"), nil
-}
-
-var codexSessionsDir = func() (string, error) {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return "", err
-	}
-	return filepath.Join(home, ".codex", "sessions"), nil
-}
-
 // ensureWorkspaceTrusted idempotently registers the symlink-resolved
-// h.Workspace path as trusted in ~/.codex/config.toml so the TUI skips its
+// h.Workspace path as trusted in $CODEX_HOME/config.toml so the TUI skips its
 // trust dialog (which the dialog policy correctly refuses to auto-answer —
 // it contains "trust"). This is the same write codex itself performs when
 // the user answers "Yes"; inline -c overrides do NOT skip the dialog
@@ -46,11 +29,7 @@ var codexSessionsDir = func() (string, error) {
 // the raw path would mismatch codex's lookup key and the dialog would still
 // appear (verified 2026-07-12).
 func ensureWorkspaceTrusted(h harness.SessionHandle) error {
-	path, err := codexConfigPath()
-	if err != nil {
-		return fmt.Errorf("codex: resolving config path: %w", err)
-	}
-	return ensureWorkspaceTrustedAt(path, h.Workspace)
+	return EnsureWorkspaceTrusted(CodexHome(h.Env), h.Workspace)
 }
 
 // EnsureWorkspaceTrusted trusts cwd in codexHome before an interactive launch.
@@ -108,10 +87,7 @@ type rolloutMeta struct {
 // sharing a workspace can race here — newest wins and a warning is logged;
 // the residual ambiguity is accepted (see spec Risks).
 func discoverSessionID(_ context.Context, h harness.SessionHandle, since time.Time) (string, error) {
-	root, err := codexSessionsDir()
-	if err != nil {
-		return "", err
-	}
+	root := filepath.Join(CodexHome(h.Env), "sessions")
 	var bestID string
 	var bestMod time.Time
 	matches := 0

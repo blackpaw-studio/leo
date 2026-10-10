@@ -37,6 +37,18 @@ type mailDropper interface {
 	DropAgentMail(name string)
 }
 
+// restoreOptions are RestoreAgents' optional inputs.
+type restoreOptions struct{ cfg *config.Config }
+
+// RestoreOption configures RestoreAgents.
+type RestoreOption func(*restoreOptions)
+
+// WithRestoreConfig supplies the current config so RestoreAgents can refuse a
+// fresh launch whose named environments no longer exist.
+func WithRestoreConfig(cfg *config.Config) RestoreOption {
+	return func(o *restoreOptions) { o.cfg = cfg }
+}
+
 // restoreSpawn is one agent RestoreAgents is bringing back.
 type restoreSpawn struct {
 	spec       daemon.AgentSpawnSpec
@@ -73,7 +85,16 @@ type restoreSpawn struct {
 //
 // After all records are processed, `git worktree prune` runs once per unique
 // canonical path so git's administrative state matches the filesystem.
-func RestoreAgents(homePath, tmuxPath, webToken string, sv agentSpawner, mcp leomcp.Server) int {
+//
+// With WithRestoreConfig, a record that must start a FRESH process (no
+// surviving tmux session to adopt) is first checked against the current config:
+// if a named environment it was built from no longer exists, the agent stays
+// down with a failed-restore marker instead of replaying its stale env snapshot.
+func RestoreAgents(homePath, tmuxPath, webToken string, sv agentSpawner, mcp leomcp.Server, opts ...RestoreOption) int {
+	var o restoreOptions
+	for _, opt := range opts {
+		opt(&o)
+	}
 	path := agentstore.FilePath(homePath)
 	records, err := agentstore.Load(path)
 	if err != nil || len(records) == 0 {
@@ -138,6 +159,14 @@ func RestoreAgents(homePath, tmuxPath, webToken string, sv agentSpawner, mcp leo
 		// nothing to kill — SpawnAgent creates a fresh one that resumes the
 		// prior conversation via --resume.
 		adopt := tmuxPath != "" && tmuxHasSession(tmuxPath, agent.SessionName(name))
+
+		if !adopt && o.cfg != nil {
+			if err := agent.CheckEnvironments(o.cfg, rec); err != nil {
+				fmt.Fprintf(os.Stderr, "restore: agent %q not started: %v\n", name, err)
+				markFailedRestore(homePath, rec, fmt.Sprintf("environment unavailable: %v", err))
+				continue
+			}
+		}
 
 		// NoResume short-circuits the resume lookup entirely. It is set by
 		// the supervisor when the previous spawn quick-exited while resuming

@@ -138,9 +138,13 @@ func (r *TmuxInteractiveRuntime) Launch(ctx context.Context, req LaunchRequest) 
 	if err != nil {
 		return "", "", err
 	}
+	tmplEnv, err := cfg.TemplateEnv(tmpl)
+	if err != nil {
+		return "", "", fmt.Errorf("template %q: %w", req.Template, err)
+	}
 	childEnv := leomcp.DispatchChildEnv(cfg, tmpl, req.ID)
 	if claudeOpts, ok := opts.(claudeharness.Options); ok && req.Dispatched {
-		opts = resolveClaudeDispatchProfile(cfg, tmpl, "dispatch", claudeOpts, tmpl.Env, r.LeoMCP)
+		opts = resolveClaudeDispatchProfile(cfg, tmpl, "dispatch", claudeOpts, tmplEnv, r.LeoMCP)
 	} else if req.Dispatched {
 		opts = withLeoMCPBridge(opts, r.LeoMCP, tmpl, childEnv)
 	}
@@ -204,26 +208,16 @@ func (r *TmuxInteractiveRuntime) Launch(ctx context.Context, req LaunchRequest) 
 	if env == nil {
 		env = map[string]string{}
 	}
-	for k, v := range tmpl.Env {
+	for k, v := range tmplEnv {
 		env[k] = v
 	}
+	if h.Name() == "codex" {
+		// Export the resolved home so the TUI and the prepared hooks/trust
+		// files agree even when HOME is overridden.
+		env["CODEX_HOME"] = codex.CodexHome(env)
+	}
 	if p, ok := h.(harness.InteractivePreparer); ok {
-		home := cfg.HomePath
-		if h.Name() == "codex" {
-			home = codex.CodexHome(env)
-			// Export the resolved home so the TUI and the prepared
-			// hooks/trust files agree even when HOME is overridden.
-			env["CODEX_HOME"] = home
-		} else if h.Name() == "claude" {
-			home = env["HOME"]
-			if home == "" {
-				home, err = os.UserHomeDir()
-				if err != nil {
-					return "", "", fmt.Errorf("resolve Claude home: %w", err)
-				}
-			}
-		}
-		if err := p.PrepareInteractive(home, req.Cwd); err != nil {
+		if err := p.PrepareInteractive(env, req.Cwd); err != nil {
 			return "", "", err
 		}
 	}

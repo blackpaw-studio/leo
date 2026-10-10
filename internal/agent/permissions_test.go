@@ -196,7 +196,7 @@ func TestResolveRestartArgsDropsStalePermissions(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			_, env := resolveRestartArgs(cfg, tc.rec, "tok", leomcp.Server{})
+			_, env, _ := resolveRestartArgs(cfg, tc.rec, "tok", leomcp.Server{})
 			if got, ok := env[permissionsEnvVar]; ok {
 				t.Errorf("stale %s survived restart as %q; the template no longer restricts", permissionsEnvVar, got)
 			}
@@ -222,7 +222,7 @@ func TestResolveRestartArgsAppliesCurrentPermissions(t *testing.T) {
 		SpawnEnv: map[string]string{permissionsEnvVar: `{"can_message":["anyone"]}`},
 	}
 
-	_, env := resolveRestartArgs(cfg, rec, "tok", leomcp.Server{})
+	_, env, _ := resolveRestartArgs(cfg, rec, "tok", leomcp.Server{})
 	var got leotools.Permissions
 	if err := json.Unmarshal([]byte(env[permissionsEnvVar]), &got); err != nil {
 		t.Fatalf("unmarshal %q: %v", env[permissionsEnvVar], err)

@@ -21,14 +21,53 @@ func ProjectSlug(cwd string) string {
 	return slugReplacer.Replace(cwd)
 }
 
-// JSONLPath returns the absolute path to claude's session jsonl for the given
-// cwd + sessionID. Resolves "~" via os.UserHomeDir.
-func JSONLPath(cwd, sessionID string) (string, error) {
+// ConfigDir returns claude's config directory for a launch environment:
+// CLAUDE_CONFIG_DIR from env, then from the daemon's own environment (which a
+// spawned claude inherits), else <HOME>/.claude with HOME taken from env and
+// then os.UserHomeDir. A nil env is valid.
+func ConfigDir(env map[string]string) (string, error) {
+	if dir := ExplicitConfigDir(env); dir != "" {
+		return dir, nil
+	}
+	home, err := HomeDir(env)
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(home, ".claude"), nil
+}
+
+// ExplicitConfigDir returns CLAUDE_CONFIG_DIR from env, else from the
+// daemon's own environment, or "" when claude would use its default dir. A key
+// present in env wins even when empty: claude treats an empty value as unset,
+// so it is how an agent opts out of a CLAUDE_CONFIG_DIR the daemon inherited.
+func ExplicitConfigDir(env map[string]string) string {
+	if dir, ok := env["CLAUDE_CONFIG_DIR"]; ok {
+		return dir
+	}
+	return os.Getenv("CLAUDE_CONFIG_DIR")
+}
+
+// HomeDir returns the home directory a launch with env sees: env["HOME"],
+// else os.UserHomeDir.
+func HomeDir(env map[string]string) (string, error) {
+	if home := env["HOME"]; home != "" {
+		return home, nil
+	}
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return "", fmt.Errorf("resolving home directory: %w", err)
 	}
-	return filepath.Join(home, ".claude", "projects", ProjectSlug(cwd), sessionID+".jsonl"), nil
+	return home, nil
+}
+
+// JSONLPath returns the absolute path to claude's session jsonl for the given
+// cwd + sessionID under the config dir env resolves to.
+func JSONLPath(env map[string]string, cwd, sessionID string) (string, error) {
+	dir, err := ConfigDir(env)
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(dir, "projects", ProjectSlug(cwd), sessionID+".jsonl"), nil
 }
 
 // LatestSession returns the session ID of the most recently modified
@@ -42,12 +81,12 @@ func JSONLPath(cwd, sessionID string) (string, error) {
 //   - maxAge > 0 and the newest file is older than maxAge
 //
 // Other filesystem errors are surfaced.
-func LatestSession(cwd string, maxAge time.Duration) (string, time.Time, error) {
-	home, err := os.UserHomeDir()
+func LatestSession(env map[string]string, cwd string, maxAge time.Duration) (string, time.Time, error) {
+	dir, err := ConfigDir(env)
 	if err != nil {
-		return "", time.Time{}, fmt.Errorf("resolving home directory: %w", err)
+		return "", time.Time{}, err
 	}
-	projDir := filepath.Join(home, ".claude", "projects", ProjectSlug(cwd))
+	projDir := filepath.Join(dir, "projects", ProjectSlug(cwd))
 
 	entries, err := os.ReadDir(projDir)
 	if err != nil {
@@ -87,11 +126,11 @@ func LatestSession(cwd string, maxAge time.Duration) (string, time.Time, error) 
 // has not been written in at least maxAge. Returns (false, 0, nil) if the file
 // does not exist — claude will create it, so we should not drop --resume just
 // because the file is missing.
-func IsResumeStale(cwd, sessionID string, maxAge time.Duration) (bool, time.Duration, error) {
+func IsResumeStale(env map[string]string, cwd, sessionID string, maxAge time.Duration) (bool, time.Duration, error) {
 	if sessionID == "" || maxAge <= 0 {
 		return false, 0, nil
 	}
-	path, err := JSONLPath(cwd, sessionID)
+	path, err := JSONLPath(env, cwd, sessionID)
 	if err != nil {
 		return false, 0, err
 	}
