@@ -893,10 +893,14 @@ func (d *Dispatcher) Report(id string, r HookReport) error {
 	// turn carries none.
 	effort := effortFromPayload(p)
 	switch event {
+	case "pretooluse", "posttooluse", "posttoolusefailure":
+		// Activity only: no turn is opened, closed, or attributed.
+		s.record.OpenTools = applyToolEvent(s.record.OpenTools, event, str(p, "tool_use_id"), s.lastHook)
 	case "userpromptsubmit":
 		if s.record.Status == StatusSettling {
 			return nil
 		}
+		s.record.OpenTools = nil
 		if key := harnessKey(p); key != "" {
 			s.idMode = true
 			d.submitKeyedLocked(s, key, p)
@@ -952,6 +956,7 @@ func (d *Dispatcher) Report(id string, r HookReport) error {
 			d.persistLocked(s, "status")
 		}
 	case "stop", "interrupt":
+		s.record.OpenTools = nil
 		out := TurnFinished
 		if event == "interrupt" {
 			out = TurnInterrupted
@@ -964,6 +969,7 @@ func (d *Dispatcher) Report(id string, r HookReport) error {
 		}
 		d.stopUnkeyedLocked(s, event, p, out, text, effort)
 	case "sessionend":
+		s.record.OpenTools = nil
 		d.beginSettlementLocked(s, StatusClosed, finalReportGrace)
 	}
 	if len(s.permissions) > 0 {

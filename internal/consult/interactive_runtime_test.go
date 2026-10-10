@@ -170,6 +170,14 @@ func TestInteractiveLaunchArgv(t *testing.T) {
 	if got := launch[len(launch)-1]; strings.Count(got, "--settings") != 1 || !containsAll(got, "crossSessionInbound", "Stop", "UserPromptSubmit", "SessionEnd", "PermissionRequest", "/opt/leo --config /tmp/leo.yaml dispatch permission", `"timeout":1860`) {
 		t.Fatalf("Claude interactive settings were not merged: %q", got)
 	}
+	// Each tool event must reach the report command itself, not just appear
+	// somewhere in the settings.
+	for _, event := range []string{"PreToolUse", "PostToolUse", "PostToolUseFailure"} {
+		want := `"` + event + `":[{"hooks":[{"command":"/opt/leo --config /tmp/leo.yaml dispatch report","type":"command"}]}]`
+		if got := launch[len(launch)-1]; !strings.Contains(got, want) {
+			t.Fatalf("launch settings missing %s hook %s: %q", event, want, got)
+		}
+	}
 }
 
 // TestInteractiveLaunchClaudePromptGoesToBriefFileNotArgv verifies that a

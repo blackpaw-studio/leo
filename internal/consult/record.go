@@ -196,6 +196,12 @@ type Record struct {
 	// PendingWork is the background work a waiting run is paused on.
 	PendingWork  *PendingWork `json:"pending_work,omitempty"`
 	HookActivity time.Time    `json:"-"`
+	// OpenTools are the tool calls PreToolUse has announced and no
+	// PostToolUse has settled, by tool_use_id, with when each started. A
+	// foreground tool sends no hooks until it ends, so a non-empty set keeps
+	// a quiet run from reading stalled (see turnStalled). Copy-on-write:
+	// never mutate a map a Record copy may share.
+	OpenTools map[string]time.Time `json:"-"`
 	// ReleaseOnFinish is the resolved release_on_finish setting: an
 	// interactive run releases itself once its first turn finishes and the
 	// result has reached the caller. ReleasedOnFinish says that is why a

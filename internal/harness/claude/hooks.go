@@ -32,6 +32,31 @@ func (Claude) TurnHooks(reportCmd []string) ([]string, error) {
 	return []string{"--settings", string(encoded)}, nil
 }
 
+// toolActivityEvents are Claude's tool lifecycle hooks. A foreground tool
+// sends nothing between PreToolUse and PostToolUse (or PostToolUseFailure),
+// so these are the only signal that a long call is in flight.
+var toolActivityEvents = []string{"PreToolUse", "PostToolUse", "PostToolUseFailure"}
+
+// ToolActivityHooks reports each tool call's start and end to the dispatch
+// report command, so a dispatch inside one long tool call is not mistaken for
+// a stalled one. It is separate from TurnHooks because a supervised agent
+// shares TurnHooks and would otherwise post to the daemon on every tool call.
+func ToolActivityHooks(reportCmd []string) ([]string, error) {
+	if len(reportCmd) == 0 {
+		return nil, fmt.Errorf("claude: empty dispatch report command")
+	}
+	command := shellCommand(reportCmd)
+	hooks := map[string]any{}
+	for _, event := range toolActivityEvents {
+		hooks[event] = []any{map[string]any{"hooks": []any{map[string]any{"type": "command", "command": command}}}}
+	}
+	encoded, err := json.Marshal(map[string]any{"hooks": hooks})
+	if err != nil {
+		return nil, fmt.Errorf("claude: encoding tool hook settings: %w", err)
+	}
+	return []string{"--settings", string(encoded)}, nil
+}
+
 // PrepareInteractive accepts Claude's workspace trust dialog before launch.
 // Its settings file contains unrelated user configuration, so only the
 // dispatch project entry is changed and the result replaces the file atomically.

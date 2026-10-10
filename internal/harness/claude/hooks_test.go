@@ -12,6 +12,34 @@ import (
 	"time"
 )
 
+func TestToolActivityHooksReportEveryToolEventToTheReportCommand(t *testing.T) {
+	got, err := ToolActivityHooks([]string{"/opt/leo", "dispatch", "report"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	hook := `[{"hooks":[{"command":"/opt/leo dispatch report","type":"command"}]}]`
+	want := []string{"--settings", `{"hooks":{"PostToolUse":` + hook + `,"PostToolUseFailure":` + hook + `,"PreToolUse":` + hook + `}}`}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("ToolActivityHooks() =\n%#v\nwant\n%#v", got, want)
+	}
+	if _, err := ToolActivityHooks(nil); err == nil {
+		t.Fatal("empty report command accepted")
+	}
+}
+
+// Supervised agents share TurnHooks; per-tool-call reports are dispatch-only.
+func TestTurnHooksLeaveToolEventsToDispatch(t *testing.T) {
+	got, err := (Claude{}).TurnHooks([]string{"/opt/leo", "dispatch", "report"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, event := range []string{"PreToolUse", "PostToolUseFailure"} {
+		if strings.Contains(got[1], event) {
+			t.Fatalf("TurnHooks installs %s: %s", event, got[1])
+		}
+	}
+}
+
 func TestTurnHooksArgv(t *testing.T) {
 	got, err := (Claude{}).TurnHooks([]string{"/opt/leo", "dispatch", "report"})
 	if err != nil {
