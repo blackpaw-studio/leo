@@ -339,3 +339,99 @@ func TestInheritedFromSource(t *testing.T) {
 		t.Fatalf("legacy source inherits its stored env, got %v", got)
 	}
 }
+
+// An implicit persistent-task agent's template is synthesized from the task, so
+// it is not in cfg.Templates; restart must still re-resolve its environments.
+func TestRestartReResolvesEnvironmentsOfImplicitPersistentTaskAgent(t *testing.T) {
+	t.Setenv("CLAUDE_CONFIG_DIR", "")
+	home, ws, a, b := t.TempDir(), t.TempDir(), t.TempDir(), t.TempDir()
+	cfg := envTestConfig(home, ws, a, b)
+	cfg.Tasks = map[string]config.TaskConfig{"nightly": {
+		Runtime: "persistent", Workspace: ws, Model: "sonnet", Environments: []string{"acct-b"},
+	}}
+	_, tmpl, implicit, err := cfg.ResolveTaskTarget("nightly")
+	if err != nil || !implicit {
+		t.Fatalf("setup: implicit=%v err=%v", implicit, err)
+	}
+	env, err := cfg.ResolveEnv(tmpl.Environments, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec := agentstore.Record{
+		Name: "nightly", Template: "nightly", Harness: "claude", Workspace: ws, SessionID: "s1",
+		ClaudeArgs: []string{"--model", "sonnet", "--session-id", "s1"}, Env: env, EnvLayered: true,
+	}
+	if err := agentstore.Save(home, rec); err != nil {
+		t.Fatal(err)
+	}
+	sup := &capturingSupervisor{agents: map[string]ProcessState{"nightly": {Name: "nightly", Status: "running"}}}
+
+	moved := t.TempDir()
+	cfg.Environments["acct-b"] = map[string]string{"CLAUDE_CONFIG_DIR": moved}
+	if err := envManager(cfg, sup).Restart("nightly"); err != nil {
+		t.Fatal(err)
+	}
+	if got := sup.spawnCall.Env["CLAUDE_CONFIG_DIR"]; got != moved {
+		t.Fatalf("restart env CLAUDE_CONFIG_DIR = %q, want the edited %q", got, moved)
+	}
+
+	delete(cfg.Environments, "acct-b")
+	sup.stopCalls, sup.spawnCall = nil, nil
+	err = envManager(cfg, sup).Restart("nightly")
+	var unknown *config.UnknownEnvironmentError
+	if !errors.As(err, &unknown) || len(sup.stopCalls) != 0 {
+		t.Fatalf("a removed environment must fail the restart before stopping: err=%v stops=%v", err, sup.stopCalls)
+	}
+}
+
+func TestSetEnvironmentsRejectsHarnessMismatchBeforeStopping(t *testing.T) {
+	home, tws, a, b := t.TempDir(), t.TempDir(), t.TempDir(), t.TempDir()
+	cfg := envTestConfig(home, tws, a, b)
+	_, sup := savedLayeredAgent(t, cfg, nil) // the record was spawned on claude
+	tmpl := cfg.Templates["coding"]
+	tmpl.Harness = "codex"
+	cfg.Templates["coding"] = tmpl
+
+	_, err := envManager(cfg, sup).SetEnvironments("leo-x", []string{"acct-b"})
+	if err == nil || !strings.Contains(err.Error(), "harness") || !strings.Contains(err.Error(), "set-template") {
+		t.Fatalf("err = %v, want a harness mismatch pointing at set-template/restart", err)
+	}
+	if len(sup.stopCalls) != 0 || sup.spawnCall != nil {
+		t.Fatalf("a rejected switch must not bounce the agent: stops %v spawn %v", sup.stopCalls, sup.spawnCall)
+	}
+}
+
+// A save that fails after the agent was stopped must not strand it: the old
+// launch is restored and the stored record stays start-able.
+func TestSetEnvironmentsSaveFailureRelaunchesOnTheOldEnvironment(t *testing.T) {
+	t.Setenv("CLAUDE_CONFIG_DIR", "")
+	home, tws, a, b := t.TempDir(), t.TempDir(), t.TempDir(), t.TempDir()
+	cfg := envTestConfig(home, tws, a, b)
+	rec, sup := savedLayeredAgent(t, cfg, nil)
+	plantTranscript(t, a, rec.Workspace, "live-session")
+	store := agentstore.FilePath(home)
+	sup.onStop = func(string) {
+		if err := os.Chmod(store, 0o400); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Cleanup(func() { _ = os.Chmod(store, 0o600) })
+
+	_, err := envManager(cfg, sup).SetEnvironments("leo-x", []string{"acct-b"})
+	if err == nil || !strings.Contains(err.Error(), "saving") {
+		t.Fatalf("err = %v, want the save failure", err)
+	}
+	spawn := sup.spawnCall
+	if spawn == nil {
+		t.Fatal("agent was left down after the failed save")
+	}
+	if spawn.Env["CLAUDE_CONFIG_DIR"] != a {
+		t.Fatalf("relaunch env = %v, want the OLD account %q", spawn.Env, a)
+	}
+	if i := slices.Index(spawn.ClaudeArgs, "--resume"); i < 0 || spawn.ClaudeArgs[i+1] != "live-session" || containsFlag(spawn.ClaudeArgs, "--session-id") {
+		t.Fatalf("relaunch args %v must resume the live conversation", spawn.ClaudeArgs)
+	}
+	if got := loadRec(t, home, "leo-x"); got.Stopped || !slices.Equal(got.Environments, rec.Environments) {
+		t.Fatalf("stored record changed: %+v", got)
+	}
+}

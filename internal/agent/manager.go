@@ -1293,7 +1293,7 @@ func (m *Manager) Reset(name string) error {
 	// is gone has no policy to resolve against; leave its env untouched rather
 	// than silently lifting the restriction, matching restart's fallback.
 	resetEnv := rec.Env
-	if tmpl, ok := cfg.Templates[rec.Template]; ok {
+	if tmpl, ok := templateOf(cfg, rec); ok {
 		resetEnv = applyPermissions(rec.Env, tmpl)
 	}
 
@@ -1490,7 +1490,7 @@ func resolveRestartArgs(cfg *config.Config, rec agentstore.Record, webToken stri
 	if rec.Template == "" {
 		return returnFallback()
 	}
-	tmpl, ok := cfg.Templates[rec.Template]
+	tmpl, ok := templateOf(cfg, rec)
 	if !ok {
 		return returnFallback()
 	}

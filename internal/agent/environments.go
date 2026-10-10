@@ -69,6 +69,12 @@ func (m *Manager) SetEnvironments(name string, names []string) (SetEnvironmentsR
 		return SetEnvironmentsResult{}, fmt.Errorf("template %q of agent %q is not in config, so its environment cannot be re-resolved", rec.Template, name)
 	}
 
+	if cfgHarness, recHarness := normalizeHarness(cfg.TemplateHarness(tmpl)), normalizeHarness(rec.Harness); cfgHarness != recHarness {
+		return SetEnvironmentsResult{}, fmt.Errorf(
+			"harness mismatch: agent %q runs on %s but template %q is now configured for %s — switch it to another template ('leo agent set-template') or re-create it first, then change its environments",
+			name, recHarness, rec.Template, cfgHarness)
+	}
+
 	_, live := m.sup.EphemeralAgents()[name]
 	status := "running"
 	if !live {
@@ -124,7 +130,7 @@ func (m *Manager) SetEnvironments(name string, names []string) (SetEnvironmentsR
 		return SetEnvironmentsResult{}, fmt.Errorf("stopping agent to change its environments: %w", err)
 	}
 	if err := agentstore.Save(cfg.HomePath, next); err != nil {
-		return SetEnvironmentsResult{}, fmt.Errorf("saving agent record: %w", err)
+		return SetEnvironmentsResult{}, m.relaunchAfterFailedSave(cfg.HomePath, rec, resumeID, isClaude, m.sup.SpawnAgent, err)
 	}
 	if err := m.sup.SpawnAgent(SpawnRequest{
 		Name:       next.Name,
@@ -144,4 +150,33 @@ func (m *Manager) SetEnvironments(name string, names []string) (SetEnvironmentsR
 		return SetEnvironmentsResult{}, fmt.Errorf("respawning %q on its new environments: %w (the agent is stopped — 'leo agent start %s' brings it back)", name, err, name)
 	}
 	return result, nil
+}
+
+// relaunchAfterFailedSave undoes a set-environment whose record could not be
+// saved after the agent was already stopped. The stored record still describes
+// the old launch, so the agent comes back on it (resuming the conversation, as
+// the new launch would have) and stays start-able either way. Returns the error
+// SetEnvironments reports.
+func (m *Manager) relaunchAfterFailedSave(homePath string, old agentstore.Record, resumeID string, isClaude bool, spawn func(SpawnRequest) error, saveErr error) error {
+	args := old.ClaudeArgs
+	if isClaude {
+		args = ResumeArgs(args, resumeID)
+	}
+	if err := spawn(SpawnRequest{
+		Name:       old.Name,
+		ClaudeArgs: args,
+		WorkDir:    old.Workspace,
+		Env:        old.Env,
+		WebPort:    old.WebPort,
+		WebToken:   m.webToken,
+		Harness:    old.Harness,
+	}); err != nil {
+		down := old
+		down.Stopped, down.WakeOnMessage = true, false
+		if markErr := agentstore.Save(homePath, down); markErr != nil {
+			log.Printf("agent %q: could not mark stopped after a failed environment change: %v", old.Name, markErr)
+		}
+		return fmt.Errorf("saving agent record: %w; relaunching %q on its old environments also failed: %v (the agent is down — 'leo agent start %s' brings it back)", saveErr, old.Name, err, old.Name)
+	}
+	return fmt.Errorf("saving agent record: %w (the agent was relaunched on its old environments; nothing changed)", saveErr)
 }

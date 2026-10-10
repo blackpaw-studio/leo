@@ -315,3 +315,17 @@ func persistentTaskFor(cfg *config.Config, name string) (string, bool) {
 	}
 	return "", false
 }
+
+// templateOf returns the template an existing agent's wiring is rebuilt from.
+// An implicit persistent-task agent has no entry in cfg.Templates — its
+// template is synthesized from the task's own fields — so it is reconstructed
+// via ResolveTaskTarget; every other agent is looked up by its record's name.
+func templateOf(cfg *config.Config, rec agentstore.Record) (config.TemplateConfig, bool) {
+	if task, bound := persistentTaskFor(cfg, rec.Name); bound {
+		if _, tmpl, implicit, err := cfg.ResolveTaskTarget(task); err == nil && implicit {
+			return tmpl, true
+		}
+	}
+	tmpl, ok := cfg.Templates[rec.Template]
+	return tmpl, ok
+}
