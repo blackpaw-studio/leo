@@ -80,7 +80,15 @@ type Turn struct {
 	// turn is paused, not done, until that work wakes it. The run's
 	// PendingWork is the first open turn's, derived from the turns.
 	Pending *PendingWork `json:"pending_work,omitempty"`
-	armedAt time.Time
+	// WaitText is what each Stop that paused this turn on background work
+	// said, in order; the turn's result leads with it so the closing Stop's
+	// reply does not replace it.
+	WaitText []string `json:"wait_text,omitempty"`
+	// FinalText is the closing Stop's text when WaitText preceded it and Text
+	// is the two joined; the inline notification keeps it whole when the
+	// joined result overflows its cap.
+	FinalText string `json:"final_text,omitempty"`
+	armedAt   time.Time
 	// keys are the namespaced harness ids this turn answers to (see
 	// harnessKey); a wake adds a second. commandID is the bridge command a
 	// sent turn travels under, which its turn.start names. submitted is the

@@ -356,7 +356,7 @@ func (d *Dispatcher) stopKeyedLocked(s *runState, key, event string, p map[strin
 // pending only pauses it.
 func (d *Dispatcher) finishKeyedLocked(s *runState, t *Turn, out TurnOutcome, text string, work *PendingWork) {
 	if work != nil {
-		d.waitOnBackgroundLocked(s, work, t)
+		d.waitOnBackgroundLocked(s, work, text, t)
 		return
 	}
 	d.closeTurnLocked(s, t.TurnID, out, text)
@@ -458,7 +458,7 @@ func (d *Dispatcher) stopUnkeyedLocked(s *runState, event string, p map[string]a
 	if event == "stop" && hasWorkingTurnLocked(s) {
 		if w := pendingWorkFromStop(p); w != nil {
 			d.applyObservedEffortLocked(s, effort, currentTurnIndex(s.record.Turns))
-			d.waitOnBackgroundLocked(s, w, workingTurnsLocked(s)...)
+			d.waitOnBackgroundLocked(s, w, text, workingTurnsLocked(s)...)
 			return
 		}
 	}

@@ -220,7 +220,7 @@ func TestPromptIDWakeAliasesTheWaitingTurn(t *testing.T) {
 	}
 	reportAll(t, d, id, idStop(t, "s2", "w", "Build passed."))
 	rec = idleRecord(t, d, id)
-	if len(rec.Turns) != 1 || rec.Turns[0].Outcome != TurnFinished || rec.Turns[0].Text != "Build passed." || rec.Status != StatusIdle {
+	if len(rec.Turns) != 1 || rec.Turns[0].Outcome != TurnFinished || rec.Turns[0].Text != "I'll wait for the build.\n\nBuild passed." || rec.Status != StatusIdle {
 		t.Fatalf("after the wake's stop: %+v", rec)
 	}
 }
@@ -230,7 +230,7 @@ func TestPromptIDWakeStopBeforeWakeSubmitStillFinishesTheWaitingTurn(t *testing.
 	reportAll(t, d, id, idSubmit(t, "u1", "a", openingText), idStopWaiting(t, "s1", "a", "waiting"),
 		idStop(t, "s2", "w", "Build passed."), idSubmit(t, "u2", "w", taskNotification))
 	rec := idleRecord(t, d, id)
-	if len(rec.Turns) != 1 || rec.Turns[0].Outcome != TurnFinished || rec.Turns[0].Text != "Build passed." || rec.Steered || rec.Status != StatusIdle {
+	if len(rec.Turns) != 1 || rec.Turns[0].Outcome != TurnFinished || rec.Turns[0].Text != "waiting\n\nBuild passed." || rec.Steered || rec.Status != StatusIdle {
 		t.Fatalf("record=%+v", rec)
 	}
 }
@@ -454,7 +454,7 @@ func TestBridgedWaitingTurnIsContinuedByTheWakeTurn(t *testing.T) {
 	}
 	reportAll(t, d, id, bridgeWake(t, "e3", "t3", taskNotification), bridgeStop(t, "e4", "t3", "Build passed."))
 	rec := idleRecord(t, d, id)
-	if st := turnByID(rec, sent.TurnID); st.Outcome != TurnFinished || st.Text != "Build passed." || len(rec.Turns) != 2 || rec.Steered || rec.Status != StatusIdle {
+	if st := turnByID(rec, sent.TurnID); st.Outcome != TurnFinished || st.Text != "waiting\n\nBuild passed." || len(rec.Turns) != 2 || rec.Steered || rec.Status != StatusIdle {
 		t.Fatalf("record=%+v", rec)
 	}
 }

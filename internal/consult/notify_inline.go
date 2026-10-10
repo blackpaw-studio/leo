@@ -51,7 +51,7 @@ func inlineNotification(rec Record, key, header string) string {
 	if e.InputTokens != nil || e.OutputTokens != nil {
 		fmt.Fprintf(&b, " · tokens %d in / %d out", tokenCount(e.InputTokens), tokenCount(e.OutputTokens))
 	}
-	body, truncated := capUTF8(inlineBody(e), maxInlineResultBytes)
+	body, truncated := cappedInlineBody(e)
 	b.WriteString("\n" + inlineBegin + "\n" + body + "\n" + inlineEnd)
 	if truncated {
 		fmt.Fprintf(&b, "\n… truncated; full output: leo_dispatch_output %s", strings.SplitN(rec.ID, "#", 2)[0])
@@ -62,7 +62,7 @@ func inlineNotification(rec Record, key, header string) string {
 // inlineTruncated reports whether the inline notification for turn key of rec
 // is cut at maxInlineResultBytes.
 func inlineTruncated(rec Record, key string) bool {
-	_, truncated := capUTF8(inlineBody(waitEntryFor(rec, key)), maxInlineResultBytes)
+	_, truncated := cappedInlineBody(waitEntryFor(rec, key))
 	return truncated
 }
 
@@ -74,6 +74,47 @@ func waitEntryFor(rec Record, key string) Entry {
 }
 
 func inlineBody(e Entry) string {
+	return joinInlineBody(inlineParts(e, sanitizeSubagentText(e.Text)))
+}
+
+// inlineElision marks waiting text dropped to make room for the closing text.
+const inlineElision = "…[earlier output trimmed]"
+
+// cappedInlineBody is the inline body cut to maxInlineResultBytes, and
+// whether anything was left out. A result that joins earlier waiting text to
+// a closing text keeps the closing text whole: the earlier text is trimmed
+// from its tail instead, up to the cap on the closing text alone.
+func cappedInlineBody(e Entry) (string, bool) {
+	body := inlineBody(e)
+	if len(body) <= maxInlineResultBytes || e.finalText == "" {
+		return capUTF8(body, maxInlineResultBytes)
+	}
+	text, final := defangInline(sanitizeSubagentText(e.Text)), defangInline(sanitizeSubagentText(e.finalText))
+	head, ok := strings.CutSuffix(text, final)
+	if !ok || strings.TrimSpace(final) == "" {
+		return capUTF8(body, maxInlineResultBytes)
+	}
+	prefix := inlineParts(e, "")
+	prefix = prefix[:len(prefix)-1]
+	reserved := len(strings.Join(prefix, "\n")) + len(prefix) // joining "\n" before the text
+	tail := "\n\n" + inlineElision + "\n\n" + final
+	if reserved+len(tail) >= maxInlineResultBytes {
+		// No room for any waiting text: the closing text gets the whole cap.
+		tail = final
+	} else {
+		head = truncateUTF8(strings.TrimRight(head, "\n"), maxInlineResultBytes-reserved-len(tail))
+	}
+	if tail == final {
+		head = ""
+	}
+	capped, _ := capUTF8(joinInlineBody(inlineParts(e, head+tail)), maxInlineResultBytes)
+	return capped, true
+}
+
+func defangInline(s string) string { return strings.ReplaceAll(s, inlineEnd, inlineEndDefanged) }
+
+// inlineParts is the body's lines: the error or outcome, then text if any.
+func inlineParts(e Entry, text string) []string {
 	var parts []string
 	switch {
 	case e.Err != "":
@@ -81,8 +122,13 @@ func inlineBody(e Entry) string {
 	case e.Outcome != "" && e.Outcome != TurnFinished:
 		parts = append(parts, "outcome: "+string(e.Outcome))
 	}
-	if text := sanitizeSubagentText(e.Text); strings.TrimSpace(text) != "" {
-		parts = append(parts, text)
+	return append(parts, text)
+}
+
+func joinInlineBody(parts []string) string {
+	last := len(parts) - 1
+	if strings.TrimSpace(parts[last]) == "" {
+		parts = parts[:last]
 	}
 	if len(parts) == 0 {
 		return noResultText

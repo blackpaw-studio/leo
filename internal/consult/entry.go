@@ -30,6 +30,9 @@ type Entry struct {
 	// truncated marks a Text or Err cut to the wait size cap (limitWaitEntry),
 	// so the entry does not carry the complete result.
 	truncated bool
+	// finalText is the closing part of Text when earlier waiting text
+	// precedes it (Turn.FinalText); inline delivery keeps it whole.
+	finalText string
 }
 
 // MarshalJSON exposes elapsed and active time in seconds for API clients.

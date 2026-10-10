@@ -1198,6 +1198,7 @@ func (d *Dispatcher) MarkInterrupted() {
 				}
 				if rec.Turns[i].Outcome == "" {
 					rec.Turns[i].Outcome = TurnLost
+					rec.Turns[i].mergeWaitText("")
 					rec.Turns[i].EndedAt = markedAt
 					rec.Turns[i].SlotHeld = false
 				}

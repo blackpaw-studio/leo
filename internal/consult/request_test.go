@@ -11,6 +11,15 @@ func TestDispatchPreambleReleaseGuidance(t *testing.T) {
 	}
 }
 
+func TestDispatchPreambleBackgroundWorkGuidance(t *testing.T) {
+	got := requestPrompt(Request{Prompt: "work"})
+	for _, want := range []string{"stop any background shells, monitors or wakeups you started", "say so explicitly"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("background-work guidance %q missing: %s", want, got)
+		}
+	}
+}
+
 func TestDispatchPreambleAllowsNestedSubagents(t *testing.T) {
 	got := requestPrompt(Request{Prompt: "work"})
 	for _, banned := range []string{"Do not spawn", "own code review"} {
