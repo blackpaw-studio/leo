@@ -103,7 +103,7 @@ func bridgeWorkspace(t *testing.T) string {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := (claudeharness.Claude{}).PrepareInteractive(home, ws); err != nil {
+	if err := (claudeharness.Claude{}).PrepareInteractive(map[string]string{"HOME": home}, ws); err != nil {
 		t.Fatal(err)
 	}
 	return ws
@@ -386,7 +386,7 @@ func (s *bridgeE2E) awaitBridge(name, want string) {
 func (s *bridgeE2E) transcript(name string) *transcript {
 	s.t.Helper()
 	id := pollAgentstoreSessionID(s.t, s.home, name, 30*time.Second)
-	path, err := session.JSONLPath(s.ws, id)
+	path, err := session.JSONLPath(nil, s.ws, id)
 	if err != nil {
 		s.t.Fatal(err)
 	}
@@ -397,7 +397,7 @@ func (s *bridgeE2E) transcript(name string) *transcript {
 // since.
 func (s *bridgeE2E) transcriptsSince(since time.Time) []*transcript {
 	s.t.Helper()
-	probe, err := session.JSONLPath(s.ws, "probe")
+	probe, err := session.JSONLPath(nil, s.ws, "probe")
 	if err != nil {
 		s.t.Fatal(err)
 	}

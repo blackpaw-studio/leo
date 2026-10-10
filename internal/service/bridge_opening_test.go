@@ -417,7 +417,7 @@ func transcripts(t *testing.T, poll time.Duration) string {
 	t.Helper()
 	dir := t.TempDir()
 	origPath, origPoll := openingTranscriptPath, openingTranscriptPoll
-	openingTranscriptPath = func(_, conversation string) (string, error) {
+	openingTranscriptPath = func(_ map[string]string, _, conversation string) (string, error) {
 		return filepath.Join(dir, conversation+".jsonl"), nil
 	}
 	openingTranscriptPoll = poll

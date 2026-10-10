@@ -1,8 +1,6 @@
 package consult
 
 import (
-	"os"
-
 	"github.com/blackpaw-studio/leo/internal/config"
 	claudeharness "github.com/blackpaw-studio/leo/internal/harness/claude"
 	"github.com/blackpaw-studio/leo/internal/leomcp"
@@ -44,13 +42,9 @@ func resolveClaudeDispatchProfile(cfg *config.Config, tmpl config.TemplateConfig
 		}
 	}
 	if o.Plugins == "none" {
-		home := env["HOME"]
-		if home == "" {
-			home, _ = os.UserHomeDir()
-		}
-		o.EnabledPlugins = installedClaudePlugins(home)
+		o.EnabledPlugins = installedClaudePlugins(env)
 	}
 	return o
 }
 
-var installedClaudePlugins = claudeharness.InstalledPluginIDsFromHome
+var installedClaudePlugins = claudeharness.InstalledPluginIDs

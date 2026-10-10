@@ -68,6 +68,11 @@ func fAddDirs(group string, advanced bool) Field {
 		Help: "Comma-separated paths added to the workspace"}
 }
 
+func fEnvironments(group string, advanced bool) Field {
+	return Field{Key: "environments", Label: "Environments", Group: group, Advanced: advanced,
+		Help: "Named environments (see the Environments page), comma-separated; merged left to right, later wins"}
+}
+
 func fEnv(group string, advanced bool) Field {
 	return Field{Key: "env", Label: "Environment", Kind: KindEnvMap, Group: group, Advanced: advanced,
 		Help: "KEY=VALUE, one per line"}
@@ -80,6 +85,7 @@ var registry = map[Section][]Field{
 		{Key: "max_turns", Label: "Max turns", Group: "Limits"},
 		{Key: "idle_suspend_after", Label: "Idle suspend after", Kind: KindDuration, Group: "Behavior", Advanced: true,
 			Help: "Auto-suspend idle ephemeral agents, e.g. \"2h\"; empty disables"},
+		fEnvironments("Behavior", false),
 	},
 
 	SectionTask: append([]Field{
@@ -101,7 +107,7 @@ var registry = map[Section][]Field{
 		{Key: "channels", Label: "Channels", Group: "Notifications"},
 		{Key: "dev_channels", Label: "Dev channels", Group: "Notifications", Help: "Overrides channels when LEO_ENV=dev"},
 		{Key: "notify_on_fail", Label: "Notify on fail", Group: "Notifications"},
-	}, Field{Key: "workspace", Label: "Workspace", Group: "Advanced", Advanced: true}, fEnv("Advanced", true)),
+	}, Field{Key: "workspace", Label: "Workspace", Group: "Advanced", Advanced: true}, fEnvironments("Advanced", true), fEnv("Advanced", true)),
 
 	SectionTemplate: append([]Field{
 		{Key: "workspace", Label: "Workspace", Group: "General"},
@@ -111,6 +117,7 @@ var registry = map[Section][]Field{
 	}, append(fChannels("Channels"), []Field{
 		{Key: "mcp_config", Label: "MCP config", Group: "Advanced", Advanced: true, Help: "Path to an MCP server config file"},
 		fAddDirs("Advanced", true),
+		fEnvironments("Advanced", true),
 		fEnv("Advanced", true),
 		{Key: "idle_suspend_after", Label: "Idle suspend after", Kind: KindDuration, Group: "Advanced", Advanced: true,
 			Help: "Auto-suspend idle ephemeral agents, e.g. \"2h\"; empty disables"},

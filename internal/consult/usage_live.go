@@ -23,7 +23,7 @@ type liveUsageConfig struct {
 }
 
 func defaultLiveUsageConfig() liveUsageConfig {
-	return liveUsageConfig{poll: transcriptLivePoll, read: readTranscriptFrom, path: session.JSONLPath}
+	return liveUsageConfig{poll: transcriptLivePoll, read: readTranscriptFrom, path: func(cwd, sessionID string) (string, error) { return session.JSONLPath(nil, cwd, sessionID) }}
 }
 
 // liveUsage is an interactive claude run's transcript-derived token counts.

@@ -10,6 +10,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/blackpaw-studio/leo/internal/harness"
 )
 
 func TestToolActivityHooksReportEveryToolEventToTheReportCommand(t *testing.T) {
@@ -73,14 +75,14 @@ func TestClaudePrepareInteractiveTrustsCwd(t *testing.T) {
 	if err := os.WriteFile(path, []byte(original), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := (Claude{}).PrepareInteractive(home, cwd); err != nil {
+	if err := (Claude{}).PrepareInteractive(map[string]string{"HOME": home}, cwd); err != nil {
 		t.Fatalf("PrepareInteractive() = %v", err)
 	}
 	first, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := (Claude{}).PrepareInteractive(home, cwd); err != nil {
+	if err := (Claude{}).PrepareInteractive(map[string]string{"HOME": home}, cwd); err != nil {
 		t.Fatal(err)
 	}
 	second, err := os.ReadFile(path)
@@ -110,7 +112,7 @@ func TestClaudePrepareInteractiveTrustsCwd(t *testing.T) {
 	}
 
 	missingHome := t.TempDir()
-	if err := (Claude{}).PrepareInteractive(missingHome, cwd); err != nil {
+	if err := (Claude{}).PrepareInteractive(map[string]string{"HOME": missingHome}, cwd); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := os.Stat(filepath.Join(missingHome, ".claude.json")); err != nil {
@@ -135,7 +137,7 @@ func TestClaudePrepareInteractivePreservesExistingAndConcurrentProjects(t *testi
 		wg.Add(1)
 		go func(project string) {
 			defer wg.Done()
-			if err := (Claude{}).PrepareInteractive(home, project); err != nil {
+			if err := (Claude{}).PrepareInteractive(map[string]string{"HOME": home}, project); err != nil {
 				t.Errorf("PrepareInteractive(%q): %v", project, err)
 			}
 		}(project)
@@ -199,5 +201,71 @@ func TestShellCommandRoundTripsThroughSh(t *testing.T) {
 	got := strings.Split(strings.TrimSuffix(string(out), "\x00"), "\x00")
 	if !reflect.DeepEqual(got, args) {
 		t.Fatalf("round trip = %q, want %q (command %s)", got, args, shellCommand(args))
+	}
+}
+
+func TestClaudePrepareInteractiveHonorsConfigDir(t *testing.T) {
+	t.Setenv("CLAUDE_CONFIG_DIR", "")
+	home, configDir, cwd := t.TempDir(), t.TempDir(), t.TempDir()
+	env := map[string]string{"HOME": home, "CLAUDE_CONFIG_DIR": configDir}
+	if err := (Claude{}).PrepareInteractive(env, cwd); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(home, ".claude.json")); !os.IsNotExist(err) {
+		t.Fatalf("$HOME/.claude.json must stay untouched, stat err = %v", err)
+	}
+	raw, err := os.ReadFile(filepath.Join(configDir, ".claude.json"))
+	if err != nil {
+		t.Fatalf("trust not written to the config dir: %v", err)
+	}
+	key, _ := canonicalPath(cwd)
+	if !strings.Contains(string(raw), key) || !strings.Contains(string(raw), "hasTrustDialogAccepted") {
+		t.Fatalf("config dir state = %s", raw)
+	}
+}
+
+func TestStateFile(t *testing.T) {
+	t.Setenv("CLAUDE_CONFIG_DIR", "")
+	tests := []struct {
+		name string
+		env  map[string]string
+		want string
+	}{
+		{"default account", map[string]string{"HOME": "/h"}, "/h/.claude.json"},
+		{"config dir", map[string]string{"HOME": "/h", "CLAUDE_CONFIG_DIR": "/b"}, "/b/.claude.json"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got, err := StateFile(tt.env); err != nil || got != tt.want {
+				t.Fatalf("StateFile = %q, %v; want %q", got, err, tt.want)
+			}
+		})
+	}
+}
+
+func TestPreLaunchTrustsOnlyForAlternateConfigDir(t *testing.T) {
+	t.Setenv("CLAUDE_CONFIG_DIR", "")
+	home, configDir, cwd := t.TempDir(), t.TempDir(), t.TempDir()
+	pre := func(env map[string]string) {
+		t.Helper()
+		h := harness.SessionHandle{Workspace: cwd, Env: env}
+		if err := preLaunch(h); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	pre(map[string]string{"HOME": home})
+	if _, err := os.Stat(filepath.Join(home, ".claude.json")); !os.IsNotExist(err) {
+		t.Fatalf("default-account agents must not be touched, stat err = %v", err)
+	}
+
+	pre(map[string]string{"HOME": home, "CLAUDE_CONFIG_DIR": filepath.Join(home, ".claude")})
+	if _, err := os.Stat(filepath.Join(home, ".claude", ".claude.json")); !os.IsNotExist(err) {
+		t.Fatalf("CLAUDE_CONFIG_DIR equal to the default must not be touched, stat err = %v", err)
+	}
+
+	pre(map[string]string{"HOME": home, "CLAUDE_CONFIG_DIR": configDir})
+	if _, err := os.Stat(filepath.Join(configDir, ".claude.json")); err != nil {
+		t.Fatalf("alternate config dir was not trusted: %v", err)
 	}
 }

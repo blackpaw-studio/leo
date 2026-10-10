@@ -869,3 +869,47 @@ func TestInteractiveBackgroundLaunchNeverTouchesCallerSession(t *testing.T) {
 		t.Fatalf("ViewerKind=%q", got)
 	}
 }
+
+func TestInteractiveClaudeDispatchRunsUnderTemplateEnvironments(t *testing.T) {
+	t.Setenv("CLAUDE_CONFIG_DIR", "")
+	home, acctDir, cwd := t.TempDir(), t.TempDir(), t.TempDir()
+	cfg := &config.Config{
+		HomePath:     t.TempDir(),
+		Environments: map[string]map[string]string{"acct-b": {"CLAUDE_CONFIG_DIR": acctDir, "HOME": home}},
+		Templates:    map[string]config.TemplateConfig{"claude": {Harness: "claude", Model: "sonnet", Environments: []string{"acct-b"}}},
+	}
+	r := NewInteractiveRuntime("/tmp/leo.yaml", func() (*config.Config, error) { return cfg, nil }, nil, "tmux", "/opt/leo")
+	var launch []string
+	r.ExecCommandContext = func(_ context.Context, _ string, args ...string) *exec.Cmd {
+		if slices.Contains(args, "new-window") {
+			launch = append([]string(nil), args...)
+			return exec.Command("echo", "%42")
+		}
+		if slices.Contains(args, "has-session") {
+			return exec.Command("false")
+		}
+		return exec.Command("true")
+	}
+	if _, _, err := r.Launch(context.Background(), LaunchRequest{ID: "d-env", Template: "claude", Cwd: cwd, Dispatched: true}); err != nil {
+		t.Fatal(err)
+	}
+	if !containsSeq(launch, "-e", "CLAUDE_CONFIG_DIR="+acctDir) {
+		t.Fatalf("launch argv lacks the named environment: %v", launch)
+	}
+	if _, err := os.Stat(filepath.Join(acctDir, ".claude.json")); err != nil {
+		t.Fatalf("workspace trust was not written to the account's config dir: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(home, ".claude.json")); !os.IsNotExist(err) {
+		t.Fatalf("$HOME/.claude.json must stay untouched, stat err = %v", err)
+	}
+}
+
+// containsSeq reports whether args holds a then b adjacently.
+func containsSeq(args []string, a, b string) bool {
+	for i := 0; i+1 < len(args); i++ {
+		if args[i] == a && args[i+1] == b {
+			return true
+		}
+	}
+	return false
+}

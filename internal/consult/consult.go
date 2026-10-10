@@ -330,8 +330,12 @@ func (d *Dispatcher) Start(_ context.Context, cfg *config.Config, req Request) (
 	if err != nil {
 		return Started{}, invalidf("template %q harness_options: %v", req.Template, err)
 	}
+	tmplEnv, err := cfg.TemplateEnv(tmpl)
+	if err != nil {
+		return Started{}, invalidf("template %q: %v", req.Template, err)
+	}
 	if opts, ok := decoded.(claudeharness.Options); ok {
-		decoded = resolveClaudeDispatchProfile(cfg, tmpl, requestKind(req), opts, tmpl.Env, d.LeoMCP)
+		decoded = resolveClaudeDispatchProfile(cfg, tmpl, requestKind(req), opts, tmplEnv, d.LeoMCP)
 	}
 	if req.Cwd == "" || !filepath.IsAbs(req.Cwd) {
 		return Started{}, invalidf("cwd must be an existing absolute directory")
@@ -482,7 +486,7 @@ func (d *Dispatcher) Start(_ context.Context, cfg *config.Config, req Request) (
 	// Take the place in line before returning, so a later send or start cannot
 	// overtake this run while its goroutine is still being scheduled.
 	waiter, _ := d.slotsFor(state).AcquireOrEnqueue()
-	go d.runInvocation(runCtx, state, state.done, h, model, tmpl.Env, args, harnessEnv, req.Cwd, timeout, waiter)
+	go d.runInvocation(runCtx, state, state.done, h, model, tmplEnv, args, harnessEnv, req.Cwd, timeout, waiter)
 	return Started{ID: rec.ID, Harness: h.Name(), Model: model, Cwd: req.Cwd}, nil
 }
 

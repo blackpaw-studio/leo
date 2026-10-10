@@ -111,6 +111,7 @@ func (Claude) Driver() harness.SessionDriver {
 		Probe:       tmux.ClaudeProfile(),
 		PaneKeyFn:   DialogKey,
 		RecoverFn:   RecoverQuickExitArgs,
+		PreLaunchFn: preLaunch,
 		AttentionFn: attentionLaunch,
 	})
 }

@@ -14,20 +14,6 @@ import (
 	"github.com/blackpaw-studio/leo/internal/harness/tmuxtui"
 )
 
-func withCodexConfigPath(t *testing.T, path string) {
-	t.Helper()
-	orig := codexConfigPath
-	codexConfigPath = func() (string, error) { return path, nil }
-	t.Cleanup(func() { codexConfigPath = orig })
-}
-
-func withCodexSessionsDir(t *testing.T, dir string) {
-	t.Helper()
-	orig := codexSessionsDir
-	codexSessionsDir = func() (string, error) { return dir, nil }
-	t.Cleanup(func() { codexSessionsDir = orig })
-}
-
 func TestRefreshSessionArgs(t *testing.T) {
 	base := []string{"-a", "never", "--model", "m"}
 	tests := []struct {
@@ -75,10 +61,10 @@ func TestEnsureWorkspaceTrusted(t *testing.T) {
 	t.Run("missing file created with block", func(t *testing.T) {
 		dir := t.TempDir()
 		path := filepath.Join(dir, "config.toml")
-		withCodexConfigPath(t, path)
+		env := map[string]string{"CODEX_HOME": dir}
 
 		ws := filepath.Join(dir, "ws")
-		if err := ensureWorkspaceTrusted(harness.SessionHandle{Workspace: ws}); err != nil {
+		if err := ensureWorkspaceTrusted(harness.SessionHandle{Workspace: ws, Env: env}); err != nil {
 			t.Fatalf("ensureWorkspaceTrusted: %v", err)
 		}
 		info, err := os.Stat(path)
@@ -104,17 +90,17 @@ func TestEnsureWorkspaceTrusted(t *testing.T) {
 	t.Run("entry already present is idempotent", func(t *testing.T) {
 		dir := t.TempDir()
 		path := filepath.Join(dir, "config.toml")
-		withCodexConfigPath(t, path)
+		env := map[string]string{"CODEX_HOME": dir}
 		ws := filepath.Join(dir, "ws")
 
-		if err := ensureWorkspaceTrusted(harness.SessionHandle{Workspace: ws}); err != nil {
+		if err := ensureWorkspaceTrusted(harness.SessionHandle{Workspace: ws, Env: env}); err != nil {
 			t.Fatalf("first call: %v", err)
 		}
 		before, err := os.ReadFile(path)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if err := ensureWorkspaceTrusted(harness.SessionHandle{Workspace: ws}); err != nil {
+		if err := ensureWorkspaceTrusted(harness.SessionHandle{Workspace: ws, Env: env}); err != nil {
 			t.Fatalf("second call: %v", err)
 		}
 		after, err := os.ReadFile(path)
@@ -129,13 +115,13 @@ func TestEnsureWorkspaceTrusted(t *testing.T) {
 	t.Run("existing project table is updated without duplication", func(t *testing.T) {
 		dir := t.TempDir()
 		path := filepath.Join(dir, "config.toml")
-		withCodexConfigPath(t, path)
+		env := map[string]string{"CODEX_HOME": dir}
 		ws := filepath.Join(dir, "ws")
 		before := "# preserve\n[projects.\"" + ws + "\"]\ntrust_level = \"untrusted\"\n[other]\nx = 1\n"
 		if err := os.WriteFile(path, []byte(before), 0o600); err != nil {
 			t.Fatal(err)
 		}
-		if err := ensureWorkspaceTrusted(harness.SessionHandle{Workspace: ws}); err != nil {
+		if err := ensureWorkspaceTrusted(harness.SessionHandle{Workspace: ws, Env: env}); err != nil {
 			t.Fatal(err)
 		}
 		after, err := os.ReadFile(path)
@@ -158,10 +144,10 @@ func TestEnsureWorkspaceTrusted(t *testing.T) {
 		if err := os.WriteFile(path, []byte(unrelated), 0o600); err != nil {
 			t.Fatal(err)
 		}
-		withCodexConfigPath(t, path)
+		env := map[string]string{"CODEX_HOME": dir}
 		ws := filepath.Join(dir, "ws")
 
-		if err := ensureWorkspaceTrusted(harness.SessionHandle{Workspace: ws}); err != nil {
+		if err := ensureWorkspaceTrusted(harness.SessionHandle{Workspace: ws, Env: env}); err != nil {
 			t.Fatalf("ensureWorkspaceTrusted: %v", err)
 		}
 		data, err := os.ReadFile(path)
@@ -180,7 +166,7 @@ func TestEnsureWorkspaceTrusted(t *testing.T) {
 	t.Run("symlinked workspace resolved before writing", func(t *testing.T) {
 		dir := t.TempDir()
 		path := filepath.Join(dir, "config.toml")
-		withCodexConfigPath(t, path)
+		env := map[string]string{"CODEX_HOME": dir}
 
 		real := filepath.Join(dir, "real-ws")
 		if err := os.Mkdir(real, 0o750); err != nil {
@@ -195,7 +181,7 @@ func TestEnsureWorkspaceTrusted(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		if err := ensureWorkspaceTrusted(harness.SessionHandle{Workspace: link}); err != nil {
+		if err := ensureWorkspaceTrusted(harness.SessionHandle{Workspace: link, Env: env}); err != nil {
 			t.Fatalf("ensureWorkspaceTrusted: %v", err)
 		}
 		data, err := os.ReadFile(path)
@@ -238,13 +224,14 @@ func TestDiscoverSessionID(t *testing.T) {
 	base := time.Now().Add(-time.Hour)
 
 	t.Run("matching cwd after since returns id", func(t *testing.T) {
-		dir := t.TempDir()
-		withCodexSessionsDir(t, dir)
+		home := t.TempDir()
+		dir := filepath.Join(home, "sessions")
+		env := map[string]string{"CODEX_HOME": home}
 		ws := t.TempDir()
 		path := filepath.Join(dir, "2026", "07", "12", "rollout-20260712T000000-uuid1.jsonl")
 		writeRollout(t, path, "uuid1", ws, base.Add(time.Minute))
 
-		id, err := discoverSessionID(context.Background(), harness.SessionHandle{Workspace: ws}, base)
+		id, err := discoverSessionID(context.Background(), harness.SessionHandle{Workspace: ws, Env: env}, base)
 		if err != nil {
 			t.Fatalf("discoverSessionID: %v", err)
 		}
@@ -254,13 +241,14 @@ func TestDiscoverSessionID(t *testing.T) {
 	})
 
 	t.Run("matching cwd before since returns empty", func(t *testing.T) {
-		dir := t.TempDir()
-		withCodexSessionsDir(t, dir)
+		home := t.TempDir()
+		dir := filepath.Join(home, "sessions")
+		env := map[string]string{"CODEX_HOME": home}
 		ws := t.TempDir()
 		path := filepath.Join(dir, "2026", "07", "12", "rollout-20260711T000000-uuid2.jsonl")
 		writeRollout(t, path, "uuid2", ws, base.Add(-time.Minute))
 
-		id, err := discoverSessionID(context.Background(), harness.SessionHandle{Workspace: ws}, base)
+		id, err := discoverSessionID(context.Background(), harness.SessionHandle{Workspace: ws, Env: env}, base)
 		if err != nil {
 			t.Fatalf("discoverSessionID: %v", err)
 		}
@@ -270,14 +258,15 @@ func TestDiscoverSessionID(t *testing.T) {
 	})
 
 	t.Run("non-matching cwd returns empty", func(t *testing.T) {
-		dir := t.TempDir()
-		withCodexSessionsDir(t, dir)
+		home := t.TempDir()
+		dir := filepath.Join(home, "sessions")
+		env := map[string]string{"CODEX_HOME": home}
 		ws := t.TempDir()
 		other := t.TempDir()
 		path := filepath.Join(dir, "2026", "07", "12", "rollout-20260712T000000-uuid3.jsonl")
 		writeRollout(t, path, "uuid3", other, base.Add(time.Minute))
 
-		id, err := discoverSessionID(context.Background(), harness.SessionHandle{Workspace: ws}, base)
+		id, err := discoverSessionID(context.Background(), harness.SessionHandle{Workspace: ws, Env: env}, base)
 		if err != nil {
 			t.Fatalf("discoverSessionID: %v", err)
 		}
@@ -287,15 +276,16 @@ func TestDiscoverSessionID(t *testing.T) {
 	})
 
 	t.Run("two matches newest wins", func(t *testing.T) {
-		dir := t.TempDir()
-		withCodexSessionsDir(t, dir)
+		home := t.TempDir()
+		dir := filepath.Join(home, "sessions")
+		env := map[string]string{"CODEX_HOME": home}
 		ws := t.TempDir()
 		older := filepath.Join(dir, "2026", "07", "12", "rollout-20260712T000000-uuid-old.jsonl")
 		newer := filepath.Join(dir, "2026", "07", "12", "rollout-20260712T000100-uuid-new.jsonl")
 		writeRollout(t, older, "uuid-old", ws, base.Add(time.Minute))
 		writeRollout(t, newer, "uuid-new", ws, base.Add(2*time.Minute))
 
-		id, err := discoverSessionID(context.Background(), harness.SessionHandle{Workspace: ws}, base)
+		id, err := discoverSessionID(context.Background(), harness.SessionHandle{Workspace: ws, Env: env}, base)
 		if err != nil {
 			t.Fatalf("discoverSessionID: %v", err)
 		}
@@ -306,9 +296,9 @@ func TestDiscoverSessionID(t *testing.T) {
 
 	t.Run("no sessions dir returns empty without error", func(t *testing.T) {
 		dir := t.TempDir()
-		withCodexSessionsDir(t, filepath.Join(dir, "does-not-exist"))
+		env := map[string]string{"CODEX_HOME": filepath.Join(dir, "does-not-exist")}
 		ws := t.TempDir()
-		id, err := discoverSessionID(context.Background(), harness.SessionHandle{Workspace: ws}, base)
+		id, err := discoverSessionID(context.Background(), harness.SessionHandle{Workspace: ws, Env: env}, base)
 		if err != nil {
 			t.Fatalf("discoverSessionID: %v", err)
 		}
@@ -331,5 +321,29 @@ func TestCodexDriverWiring(t *testing.T) {
 	}
 	if _, ok := d.(tmuxtui.Driver); !ok {
 		t.Fatalf("Driver() is not a tmuxtui.Driver")
+	}
+}
+
+func TestDriverHonorsCodexHomeFromSessionEnv(t *testing.T) {
+	t.Setenv("CODEX_HOME", "")
+	t.Setenv("HOME", t.TempDir())
+	home, ws := t.TempDir(), t.TempDir()
+	h := harness.SessionHandle{Workspace: ws, Env: map[string]string{"CODEX_HOME": home}}
+
+	if err := ensureWorkspaceTrusted(h); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(home, "config.toml")); err != nil {
+		t.Fatalf("trust not written under CODEX_HOME: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(os.Getenv("HOME"), ".codex", "config.toml")); !os.IsNotExist(err) {
+		t.Fatalf("~/.codex must stay untouched, stat err = %v", err)
+	}
+
+	since := time.Now().Add(-time.Hour)
+	writeRollout(t, filepath.Join(home, "sessions", "2026", "10", "10", "rollout-x-acct.jsonl"), "acct", ws, since.Add(time.Minute))
+	id, err := discoverSessionID(context.Background(), h, since)
+	if err != nil || id != "acct" {
+		t.Fatalf("discoverSessionID = %q, %v; want acct", id, err)
 	}
 }

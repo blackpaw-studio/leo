@@ -1496,7 +1496,7 @@ func superviseProcess(ctx context.Context, tmuxPath, claudePath string, spec Pro
 		if fellBack.Load() {
 			sv.endLaunchToken(homePath, id.Name(), spec.attentionToken)
 			forceLegacy = true
-			currentArgs = argsAfterBridgeFallback(currentArgs, spec.WorkDir)
+			currentArgs = argsAfterBridgeFallback(currentArgs, spec.Env, spec.WorkDir)
 			id.setArgs(currentArgs)
 			fmt.Fprintf(os.Stderr, "[%s] relaunching without the leo bridge\n", name)
 			continue

@@ -67,7 +67,10 @@ type openingDelivery struct {
 	queued queuedOpening
 	// transcriptPath and transcriptPoll are openingTranscriptPath and
 	// openingTranscriptPoll as the loop started.
-	transcriptPath func(workDir, conversation string) (string, error)
+	transcriptPath func(env map[string]string, workDir, conversation string) (string, error)
+	// env is the launch environment, which decides where claude keeps its
+	// transcripts (CLAUDE_CONFIG_DIR).
+	env            map[string]string
 	transcriptPoll time.Duration
 
 	mu   sync.Mutex
@@ -108,6 +111,7 @@ func newOpeningDelivery(homePath string, spec ProcessSpec, id *procIdentity) *op
 	o := &openingDelivery{
 		briefPath:      spec.OpeningBriefPath,
 		transcriptPath: openingTranscriptPath,
+		env:            spec.Env,
 		transcriptPoll: openingTranscriptPoll,
 		have:           map[string]bool{},
 	}
@@ -211,7 +215,7 @@ func (o *openingDelivery) watchTranscript(ctx context.Context, workDir, conversa
 	if conversation == "" || o.text == "" || o.has(conversation) {
 		return func() {}
 	}
-	path, err := o.transcriptPath(workDir, conversation)
+	path, err := o.transcriptPath(o.env, workDir, conversation)
 	if err != nil {
 		return func() {}
 	}

@@ -28,6 +28,7 @@ func (c *Config) ResolveTaskTarget(taskName string) (string, TemplateConfig, boo
 			Harness:        task.Harness,
 			HarnessOptions: task.HarnessOptions,
 			Env:            task.Env,
+			Environments:   task.Environments,
 		}, true, nil
 	}
 

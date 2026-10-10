@@ -13,8 +13,8 @@ import (
 )
 
 func TestResolveClaudeDispatchProfileDefault(t *testing.T) {
-	installedClaudePlugins = func(string) []string { return []string{"b@market", "a@local"} }
-	t.Cleanup(func() { installedClaudePlugins = claudeharness.InstalledPluginIDsFromHome })
+	installedClaudePlugins = func(map[string]string) []string { return []string{"b@market", "a@local"} }
+	t.Cleanup(func() { installedClaudePlugins = claudeharness.InstalledPluginIDs })
 	got := resolveClaudeDispatchProfile(&config.Config{}, config.TemplateConfig{}, "dispatch", claudeharness.Options{}, nil, leomcp.Server{})
 	want := claudeharness.Options{MCP: "none", Plugins: "none", EnabledPlugins: []string{"b@market", "a@local"}, StrictMCPConfig: `{"mcpServers":{}}`}
 	if !reflect.DeepEqual(got, want) {
@@ -58,21 +58,18 @@ func TestResolveClaudeDispatchProfileTemplateOverridesPerKey(t *testing.T) {
 	}
 }
 
-func TestResolveClaudeDispatchProfilePluginHome(t *testing.T) {
-	var homes []string
-	installedClaudePlugins = func(home string) []string {
-		homes = append(homes, home)
+func TestResolveClaudeDispatchProfilePluginsReadFromLaunchEnv(t *testing.T) {
+	var seen []map[string]string
+	installedClaudePlugins = func(env map[string]string) []string {
+		seen = append(seen, env)
 		return nil
 	}
-	t.Cleanup(func() { installedClaudePlugins = claudeharness.InstalledPluginIDsFromHome })
+	t.Cleanup(func() { installedClaudePlugins = claudeharness.InstalledPluginIDs })
 
-	processHome := t.TempDir()
-	t.Setenv("HOME", processHome)
-	resolveClaudeDispatchProfile(&config.Config{}, config.TemplateConfig{}, "dispatch", claudeharness.Options{}, nil, leomcp.Server{})
-	launchHome := t.TempDir()
-	resolveClaudeDispatchProfile(&config.Config{}, config.TemplateConfig{}, "dispatch", claudeharness.Options{}, map[string]string{"HOME": launchHome}, leomcp.Server{})
-	if want := []string{processHome, launchHome}; !reflect.DeepEqual(homes, want) {
-		t.Fatalf("plugin homes = %q, want %q", homes, want)
+	launchEnv := map[string]string{"HOME": t.TempDir(), "CLAUDE_CONFIG_DIR": t.TempDir()}
+	resolveClaudeDispatchProfile(&config.Config{}, config.TemplateConfig{}, "dispatch", claudeharness.Options{}, launchEnv, leomcp.Server{})
+	if len(seen) != 1 || !reflect.DeepEqual(seen[0], launchEnv) {
+		t.Fatalf("plugins read with env %v, want the launch env %v", seen, launchEnv)
 	}
 }
 
@@ -81,8 +78,8 @@ func TestResolveClaudeDispatchProfilePluginHome(t *testing.T) {
 // inline JSON straight from argv: the leo server must run the injected
 // binary, escaped so a path with spaces and quotes survives.
 func TestResolveClaudeDispatchProfileStrictConfigLaunchesInjectedBin(t *testing.T) {
-	installedClaudePlugins = func(string) []string { return nil }
-	t.Cleanup(func() { installedClaudePlugins = claudeharness.InstalledPluginIDsFromHome })
+	installedClaudePlugins = func(map[string]string) []string { return nil }
+	t.Cleanup(func() { installedClaudePlugins = claudeharness.InstalledPluginIDs })
 	const bin = `/opt/my "dev" leo/bin/leo`
 	cfg := &config.Config{HomePath: t.TempDir()}
 	opts := resolveClaudeDispatchProfile(cfg, config.TemplateConfig{}, "dispatch", claudeharness.Options{}, nil, leomcp.Server{Bin: bin})

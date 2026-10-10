@@ -46,7 +46,7 @@ func ResumeIDFor(rec agentstore.Record) string {
 	if rec.Harness != "" && rec.Harness != "claude" {
 		return rec.SessionID
 	}
-	latestID, latestAt, err := session.LatestSession(rec.Workspace, 0)
+	latestID, latestAt, err := session.LatestSession(rec.Env, rec.Workspace, 0)
 	if err != nil || latestID == "" {
 		return rec.SessionID
 	}
