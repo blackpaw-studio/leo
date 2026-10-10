@@ -83,7 +83,10 @@ func isStalled(rec Record, now time.Time) bool {
 
 // turnStalled reports whether t is open with no hook activity for its
 // threshold. A turn waiting on background work is quiet by design until that
-// work wakes it, so it gets the longer waitingStalledAfter.
+// work wakes it, and so is one inside a foreground tool call (a long test
+// run sends no hooks until it ends), so both get the longer
+// waitingStalledAfter. The cap is what catches a tool whose PostToolUse never
+// came (Esc, a killed shell).
 func turnStalled(rec Record, t Turn, now time.Time) bool {
 	if t.Outcome != "" {
 		return false
@@ -93,7 +96,7 @@ func turnStalled(rec Record, t Turn, now time.Time) bool {
 		activity = t.StartedAt
 	}
 	after := stalledAfter
-	if t.Pending != nil || rec.Status == StatusWaiting {
+	if t.Pending != nil || rec.Status == StatusWaiting || len(rec.OpenTools) > 0 {
 		after = waitingStalledAfter
 	}
 	return !activity.IsZero() && now.Sub(activity) >= after

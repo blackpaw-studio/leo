@@ -2,6 +2,7 @@ package consult
 
 import (
 	"fmt"
+	"maps"
 	"os"
 	"time"
 )
@@ -23,6 +24,7 @@ func cloneRecord(record Record) Record {
 		}
 		record.Notifications = notifications
 	}
+	record.OpenTools = maps.Clone(record.OpenTools)
 	record.InputTokens = clonePtr(record.InputTokens)
 	record.OutputTokens = clonePtr(record.OutputTokens)
 	record.CostUSD = clonePtr(record.CostUSD)

@@ -11,7 +11,9 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 )
 
 type capturedReport struct {
@@ -146,5 +148,84 @@ func TestDispatchReportAttentionFailureDoesNotFailHook(t *testing.T) {
 
 	if err := runReport(t, `{"hook_event_name":"Stop"}`); err != nil {
 		t.Fatalf("report: %v, want nil (attention is best-effort)", err)
+	}
+}
+
+// dispatchReportEnv points the report command at a dispatch route on port.
+func dispatchReportEnv(t *testing.T, port string) {
+	t.Helper()
+	clearReportEnv(t)
+	cfgPath := filepath.Join(t.TempDir(), "leo.yaml")
+	if err := os.WriteFile(cfgPath, []byte("web:\n  port: "+port+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("LEO_DISPATCH_ID", "d-123")
+	t.Setenv("LEO_CONFIG", cfgPath)
+}
+
+// Tool hooks run on every tool call: a failing daemon is one quick attempt
+// and a clean exit, so Claude never surfaces a hook error for telemetry.
+func TestDispatchReportToolEventIsSingleAttemptAndNeverFails(t *testing.T) {
+	cases := [][2]string{{"PreToolUse", "unresponsive"}}
+	for _, event := range []string{"PreToolUse", "PostToolUse", "PostToolUseFailure"} {
+		cases = append(cases, [2]string{event, "error status"}, [2]string{event, "refused"})
+	}
+	for _, c := range cases {
+		event, mode := c[0], c[1]
+		{
+			t.Run(event+"/"+mode, func(t *testing.T) {
+				old := toolReportTimeout
+				// Long enough that a second attempt (after its 200ms
+				// backoff) would still fit, so a retry shows up as a hit.
+				toolReportTimeout = 500 * time.Millisecond
+				t.Cleanup(func() { toolReportTimeout = old })
+				var hits atomic.Int32
+				release := make(chan struct{})
+				srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+					hits.Add(1)
+					if mode == "unresponsive" {
+						<-release
+						return
+					}
+					w.WriteHeader(http.StatusInternalServerError)
+				}))
+				t.Cleanup(func() { close(release); srv.Close() })
+				_, port, _ := net.SplitHostPort(strings.TrimPrefix(srv.URL, "http://"))
+				if mode == "refused" {
+					srv.Close()
+				}
+				dispatchReportEnv(t, port)
+
+				start := time.Now()
+				err := runReport(t, `{"hook_event_name":"`+event+`","tool_use_id":"t1"}`)
+				if err != nil {
+					t.Fatalf("tool report failed the hook: %v", err)
+				}
+				if elapsed := time.Since(start); elapsed > 2*time.Second {
+					t.Fatalf("tool report took %v", elapsed)
+				}
+				if mode != "refused" && hits.Load() != 1 {
+					t.Fatalf("attempts = %d, want 1", hits.Load())
+				}
+			})
+		}
+	}
+}
+
+// Turn and session events keep their retries and their failure.
+func TestDispatchReportTurnEventRetriesAndFails(t *testing.T) {
+	var hits atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		hits.Add(1)
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	t.Cleanup(srv.Close)
+	_, port, _ := net.SplitHostPort(strings.TrimPrefix(srv.URL, "http://"))
+	dispatchReportEnv(t, port)
+	if err := runReport(t, `{"hook_event_name":"Stop"}`); err == nil {
+		t.Fatal("Stop report against a failing daemon succeeded")
+	}
+	if hits.Load() != reportAttempts {
+		t.Fatalf("attempts = %d, want %d", hits.Load(), reportAttempts)
 	}
 }

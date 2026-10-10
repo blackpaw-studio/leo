@@ -230,10 +230,12 @@ func (s *Server) handleAPIDispatchReport(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	id := r.PathValue("id")
-	if s.dispatchBridge != nil && s.dispatchBridge.BridgeOwnsReports(id) {
+	if s.dispatchBridge != nil && s.dispatchBridge.BridgeOwnsReports(id) && !consult.IsToolActivityReport(report.Payload) {
 		// The bridge reports the same moments as these shell hooks (see
 		// consult.TmuxInteractiveRuntime.DispatchBridgeSubscriber); applying
-		// both would double every turn. Acknowledge so the hook stops.
+		// both would double every turn. Acknowledge so the hook stops. Tool
+		// events are exempt: the bridge does not translate them, and they
+		// are activity only, so applying them doubles nothing.
 		writeJSON(w, http.StatusOK, apiResponse{OK: true, Data: map[string]bool{"accepted": true, "superseded_by_bridge": true}})
 		return
 	}

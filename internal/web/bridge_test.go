@@ -1,6 +1,7 @@
 package web
 
 import (
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -54,5 +55,54 @@ func TestSetupConsultRuntimeWiresTheBridge(t *testing.T) {
 	}
 	if s.bridgeRouter != router {
 		t.Fatal("agent bridge router not kept")
+	}
+}
+
+// The bridge does not translate tool events, and they are activity only, so
+// a bridged dispatch's tool hooks are applied through the real handler (a
+// long tool call would otherwise read stalled) while its turn events stay
+// superseded.
+func TestDispatchReportHTTPAppliesToolEventsForBridgedDispatch(t *testing.T) {
+	s, _, _ := newModeTestServer(t)
+	got := postDispatch(t, s, `{"template":"coding","prompt":"work","cwd":"/tmp","mode":"interactive"}`)
+	id := got.Data.ID
+	s.dispatchBridge = fakeDispatchBridge{id: true}
+	seq := 0
+	post := func(payload string) string {
+		t.Helper()
+		seq++
+		w := httptest.NewRecorder()
+		req := httptest.NewRequest("POST", "/api/dispatch/"+id+"/report", strings.NewReader(fmt.Sprintf(`{"event_id":"e%d","payload":`, seq)+payload+`}`))
+		req.SetPathValue("id", id)
+		s.handleAPIDispatchReport(w, req)
+		if w.Code != http.StatusOK {
+			t.Fatalf("status %d: %s", w.Code, w.Body.String())
+		}
+		return w.Body.String()
+	}
+
+	if body := post(`{"hook_event_name":"PreToolUse","tool_use_id":"t1"}`); strings.Contains(body, "superseded_by_bridge") {
+		t.Fatalf("tool event superseded by the bridge: %s", body)
+	}
+	rec, err := s.consults.Get(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, open := rec.OpenTools["t1"]; !open || rec.HookActivity.IsZero() {
+		t.Fatalf("bridged tool event not applied: open=%v activity=%v", rec.OpenTools, rec.HookActivity)
+	}
+
+	if body := post(`{"hook_event_name":"Stop"}`); !strings.Contains(body, "superseded_by_bridge") {
+		t.Fatalf("turn event not superseded: %s", body)
+	}
+	if rec, _ = s.consults.Get(id); len(rec.OpenTools) != 1 {
+		t.Fatalf("superseded Stop was applied: %v", rec.OpenTools)
+	}
+
+	if body := post(`{"hook_event_name":"PostToolUse","tool_use_id":"t1"}`); strings.Contains(body, "superseded_by_bridge") {
+		t.Fatalf("PostToolUse superseded: %s", body)
+	}
+	if rec, _ = s.consults.Get(id); len(rec.OpenTools) != 0 {
+		t.Fatalf("open tools after PostToolUse: %v", rec.OpenTools)
 	}
 }

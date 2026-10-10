@@ -185,6 +185,13 @@ func (r *TmuxInteractiveRuntime) Launch(ctx context.Context, req LaunchRequest) 
 			return "", "", err
 		}
 		hooks = append(hooks, permission...)
+		// A long foreground tool call sends no hooks of its own; its start
+		// and end keep the run from reading stalled meanwhile.
+		tools, err := claudeharness.ToolActivityHooks([]string{r.leoPath, "--config", r.configPath, "dispatch", "report"})
+		if err != nil {
+			return "", "", err
+		}
+		hooks = append(hooks, tools...)
 	}
 	args, err = claudeharness.MergeSettingsArgs(args, hooks, claudeharness.MergeOptions{BaseDir: req.Cwd, SpillPath: dispatchSpillPath(cfg.HomePath, req.ID)})
 	if err != nil {
