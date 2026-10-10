@@ -223,9 +223,10 @@ func newRegistry(client *daemonClient, processName string, perms leotools.Permis
 		Name:        "leo_spawn_agent",
 		Description: allowNote("Spawn an ephemeral Leo agent from a template, optionally against a repo. Returns the agent's name and workspace path.", "spawn these templates", perms.CanSpawn),
 		InputSchema: objectSchema(map[string]any{
-			"template": map[string]any{"type": "string", "description": "Template name as defined in leo.yaml templates section."},
-			"repo":     map[string]any{"type": "string", "description": "Optional target repo as 'owner/repo' (cloned to a worktree) or a workspace name. Omit to run the template as-is in its own workspace; the agent is named after the template."},
-			"name":     map[string]any{"type": "string", "description": "Optional explicit agent name; if omitted, generated from template+repo (or just the template name when repo is omitted)."},
+			"template":     map[string]any{"type": "string", "description": "Template name as defined in leo.yaml templates section."},
+			"repo":         map[string]any{"type": "string", "description": "Optional target repo as 'owner/repo' (cloned to a worktree) or a workspace name. Omit to run the template as-is in its own workspace; the agent is named after the template."},
+			"name":         map[string]any{"type": "string", "description": "Optional explicit agent name; if omitted, generated from template+repo (or just the template name when repo is omitted)."},
+			"environments": map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": environmentsParamDescription},
 		}, "template"),
 	}, func(args map[string]any) (string, error) {
 		template, err := stringArg(args, "template")
@@ -237,7 +238,41 @@ func newRegistry(client *daemonClient, processName string, perms leotools.Permis
 		}
 		repo, _ := args["repo"].(string)
 		name, _ := args["name"].(string)
-		data, err := client.spawnAgent(template, repo, name)
+		environments, err := stringListArg(args, "environments")
+		if err != nil {
+			return "", err
+		}
+		data, err := client.spawnAgent(template, repo, name, environments)
+		if err != nil {
+			return "", err
+		}
+		return string(data), nil
+	})
+
+	r.add(toolDef{
+		Name:        "leo_set_agent_environments",
+		Description: allowNote("Re-point a running or stopped ephemeral agent at a different ordered list of named environments (for example another account) and restart it with its conversation resumed where possible. An empty list clears the override so the template's environments apply. You may only change agents whose template you may spawn.", "change agents of these templates", perms.CanSpawn),
+		InputSchema: objectSchema(map[string]any{
+			"name":         map[string]any{"type": "string", "description": "Agent name returned by leo_list_agents."},
+			"environments": map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": environmentsParamDescription},
+		}, "name"),
+	}, func(args map[string]any) (string, error) {
+		name, err := stringArg(args, "name")
+		if err != nil {
+			return "", err
+		}
+		environments, err := stringListArg(args, "environments")
+		if err != nil {
+			return "", err
+		}
+		template, err := client.agentTemplate(name)
+		if err != nil {
+			return "", err
+		}
+		if !perms.AllowsSpawn(template) {
+			return "", denialError("change the environments of an agent from template", template, "templates", perms.CanSpawn)
+		}
+		data, err := client.setAgentEnvironments(name, environments)
 		if err != nil {
 			return "", err
 		}
@@ -906,6 +941,31 @@ func formatDispatchPlacement(started consult.Started) string {
 	default:
 		return ""
 	}
+}
+
+// environmentsParamDescription documents the environments tool parameter.
+const environmentsParamDescription = "Ordered named environments from leo.yaml (later names win on conflicts), e.g. [\"work\"] to run under another account. Omit for the template's own."
+
+// stringListArg reads an optional array-of-strings argument. A missing key is
+// nil; a non-array or a non-string element is an error.
+func stringListArg(args map[string]any, key string) ([]string, error) {
+	v, ok := args[key]
+	if !ok || v == nil {
+		return nil, nil
+	}
+	items, ok := v.([]any)
+	if !ok {
+		return nil, fmt.Errorf("argument %q must be an array of strings", key)
+	}
+	out := make([]string, 0, len(items))
+	for _, item := range items {
+		s, ok := item.(string)
+		if !ok || s == "" {
+			return nil, fmt.Errorf("argument %q must contain only non-empty strings", key)
+		}
+		out = append(out, s)
+	}
+	return out, nil
 }
 
 func stringArg(args map[string]any, key string) (string, error) {
