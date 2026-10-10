@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
 	"sort"
 	"time"
@@ -46,6 +47,9 @@ type templateListEntry struct {
 	Model     string `json:"model,omitempty"`
 	Agent     string `json:"agent,omitempty"`
 	Workspace string `json:"workspace,omitempty"`
+	// Environments is the template's default named environments (names only;
+	// always an array, as in /api/v1/templates).
+	Environments []string `json:"environments"`
 }
 
 func (s *Server) handleVersion(w http.ResponseWriter, _ *http.Request) {
@@ -117,15 +121,33 @@ func (s *Server) handleTemplates(w http.ResponseWriter, _ *http.Request) {
 	entries := make([]templateListEntry, 0, len(names))
 	for _, name := range names {
 		tmpl := cfg.Templates[name]
+		envs := tmpl.Environments
+		if envs == nil {
+			envs = []string{}
+		}
 		var agentFile string
 		if decoded, decodeErr := (claudeharness.Claude{}).DecodeOptions(tmpl.HarnessOptions); decodeErr == nil {
 			if opts, ok := decoded.(claudeharness.Options); ok {
 				agentFile = opts.AgentFile
 			}
 		}
-		entries = append(entries, templateListEntry{Name: name, Model: tmpl.Model, Agent: agentFile, Workspace: tmpl.Workspace})
+		entries = append(entries, templateListEntry{Name: name, Model: tmpl.Model, Agent: agentFile, Workspace: tmpl.Workspace, Environments: envs})
 	}
 	writeData(w, http.StatusOK, entries)
+}
+
+// handleEnvironments lists the configured named environments, names only, via
+// GET /environments: the socket twin of GET /api/v1/environments.
+func (s *Server) handleEnvironments(w http.ResponseWriter, _ *http.Request) {
+	cfg, err := config.Load(s.configPath)
+	if err != nil {
+		// The loader's error can quote the rejected file's contents, so the
+		// detail stays in the log, exactly as GET /api/v1/environments does.
+		log.Printf("daemon: loading config for GET /environments: %v", err)
+		writeJSON(w, http.StatusInternalServerError, Response{Error: web.ConfigUnavailableMessage, Code: web.CodeConfigUnavailable})
+		return
+	}
+	writeData(w, http.StatusOK, web.ListEnvironments(cfg))
 }
 
 func writeData(w http.ResponseWriter, status int, data any) {

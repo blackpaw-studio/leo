@@ -1661,3 +1661,60 @@ func TestWriteAgentErrorClassifiesSpawnValidation(t *testing.T) {
 		})
 	}
 }
+
+// The plural route is the socket twin of POST /api/v1/agents/{name}/environments:
+// same body, same manager call, and an empty list reaches the manager as empty
+// (it clears the override).
+func TestAgentSetEnvironmentsRouteMatchesAPIV1(t *testing.T) {
+	mgr := &fakeAgentManager{records: []agent.Record{{Name: "leo-coding-owner-fetch"}}}
+	_, client := startTestServerWithAgent(t, mgr)
+
+	for _, tt := range []struct {
+		body string
+		want []string
+	}{
+		{`{"environments":["base","acct-b"]}`, []string{"base", "acct-b"}},
+		{`{"environments":[]}`, []string{}},
+	} {
+		resp, err := client.Post("http://localhost/agents/leo-coding-owner-fetch/environments", "application/json", bytes.NewReader([]byte(tt.body)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		var env Response
+		err = json.NewDecoder(resp.Body).Decode(&env)
+		resp.Body.Close()
+		if err != nil || resp.StatusCode != http.StatusOK || !env.OK {
+			t.Fatalf("%s: status %d, env %+v, err %v", tt.body, resp.StatusCode, env, err)
+		}
+		if mgr.lastSetEnv.name != "leo-coding-owner-fetch" || len(mgr.lastSetEnv.names) != len(tt.want) {
+			t.Fatalf("%s: manager called with %+v", tt.body, mgr.lastSetEnv)
+		}
+	}
+}
+
+// Socket failures carry the same stable codes as /api/v1.
+func TestAgentSetEnvironmentsRouteErrorCodes(t *testing.T) {
+	tests := []struct {
+		err    error
+		status int
+		code   string
+	}{
+		{&config.UnknownEnvironmentError{Name: "ghost"}, http.StatusBadRequest, "unknown_environment"},
+		{&config.InvalidEnvironmentsError{Problems: []string{"dup"}}, http.StatusBadRequest, "invalid_environments"},
+		{&agent.PersistentTaskError{Agent: "foo", Task: "t"}, http.StatusConflict, "persistent_task"},
+	}
+	for _, tt := range tests {
+		mgr := &fakeAgentManager{records: []agent.Record{{Name: "foo"}}, setEnvErr: tt.err}
+		_, client := startTestServerWithAgent(t, mgr)
+		resp, err := client.Post("http://localhost/agents/foo/environments", "application/json", bytes.NewReader([]byte(`{"environments":["x"]}`)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		var env Response
+		_ = json.NewDecoder(resp.Body).Decode(&env)
+		resp.Body.Close()
+		if resp.StatusCode != tt.status || env.Code != tt.code {
+			t.Errorf("%T: got %d %q, want %d %q", tt.err, resp.StatusCode, env.Code, tt.status, tt.code)
+		}
+	}
+}

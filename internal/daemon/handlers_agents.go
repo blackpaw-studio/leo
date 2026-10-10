@@ -10,6 +10,7 @@ import (
 	"github.com/blackpaw-studio/leo/internal/agent"
 	"github.com/blackpaw-studio/leo/internal/config"
 	"github.com/blackpaw-studio/leo/internal/harness"
+	"github.com/blackpaw-studio/leo/internal/web"
 )
 
 // resolveAgentOrError resolves a shorthand query against the agent manager and
@@ -588,6 +589,11 @@ func (s *Server) handleAgentRename(w http.ResponseWriter, r *http.Request) {
 // errors.Is matches on the other side of the socket.
 func writeAgentError(w http.ResponseWriter, err error) {
 	var nf *agent.ErrNotFound
+	// Environment failures carry the same stable codes as /api/v1.
+	if status, code := web.ClassifyEnvironmentError(err); code != "" {
+		writeJSON(w, status, Response{OK: false, Error: err.Error(), Code: code})
+		return
+	}
 	var (
 		unknownEnv  *config.UnknownEnvironmentError
 		invalidEnvs *config.InvalidEnvironmentsError

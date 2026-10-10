@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -90,8 +91,8 @@ func TestEventsRouteStreamsBusEventAndPing(t *testing.T) {
 func TestLocalMetadataRoutesUseExactEnvelopeShapes(t *testing.T) {
 	dir := t.TempDir()
 	cfgPath := filepath.Join(dir, "leo.yaml")
-	cfg := &config.Config{Templates: map[string]config.TemplateConfig{
-		"coding": {Model: "opus", Workspace: "/work", HarnessOptions: map[string]any{"agent": "reviewer"}},
+	cfg := &config.Config{Environments: map[string]map[string]string{"work": {"A": "1"}, "base": {"B": "2"}}, Templates: map[string]config.TemplateConfig{
+		"coding": {Model: "opus", Workspace: "/work", Environments: []string{"base"}, HarnessOptions: map[string]any{"agent": "reviewer"}},
 	}}
 	if err := config.Save(cfgPath, cfg); err != nil {
 		t.Fatal(err)
@@ -106,8 +107,13 @@ func TestLocalMetadataRoutesUseExactEnvelopeShapes(t *testing.T) {
 	}
 	w = httptest.NewRecorder()
 	s.Handler().ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/templates", nil))
-	if got, want := w.Body.String(), "{\"ok\":true,\"data\":[{\"name\":\"coding\",\"model\":\"opus\",\"agent\":\"reviewer\",\"workspace\":\"/work\"}]}\n"; got != want {
+	if got, want := w.Body.String(), "{\"ok\":true,\"data\":[{\"name\":\"coding\",\"model\":\"opus\",\"agent\":\"reviewer\",\"workspace\":\"/work\",\"environments\":[\"base\"]}]}\n"; got != want {
 		t.Fatalf("/templates = %s, want %s", got, want)
+	}
+	w = httptest.NewRecorder()
+	s.Handler().ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/environments", nil))
+	if got, want := w.Body.String(), "{\"ok\":true,\"data\":[{\"name\":\"base\"},{\"name\":\"work\"}]}\n"; got != want {
+		t.Fatalf("/environments = %s, want %s", got, want)
 	}
 }
 
@@ -269,5 +275,23 @@ func TestLocalStateEmitsEmptyDispatchesArray(t *testing.T) {
 				t.Fatalf("want \"dispatches\":[] in %s", w.Body.String())
 			}
 		})
+	}
+}
+
+// A config that will not load answers like /api/v1/environments: a sanitized
+// message and the config_unavailable code, never the loader's raw error.
+func TestEnvironmentsRouteConfigUnavailableMatchesAPIV1(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "leo.yaml")
+	if err := os.WriteFile(cfgPath, []byte("environments: [not, a, map]\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	s := New(filepath.Join(dir, "leo.sock"), cfgPath, nil)
+
+	w := httptest.NewRecorder()
+	s.Handler().ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/environments", nil))
+	want := "{\"ok\":false,\"error\":\"config unavailable\",\"code\":\"config_unavailable\"}\n"
+	if w.Code != http.StatusInternalServerError || w.Body.String() != want {
+		t.Fatalf("/environments = %d %s, want 500 %s", w.Code, w.Body.String(), want)
 	}
 }
