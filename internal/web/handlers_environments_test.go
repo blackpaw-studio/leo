@@ -4,8 +4,11 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"slices"
 	"strings"
 	"testing"
+
+	"github.com/blackpaw-studio/leo/internal/agentstore"
 )
 
 func getRequest(t *testing.T, s *Server, path string) *httptest.ResponseRecorder {
@@ -90,5 +93,84 @@ func TestEnvironmentDeleteBlockedWhileReferenced(t *testing.T) {
 	}
 	if _, ok := reloadTestConfig(t, dir).Environments["work"]; ok {
 		t.Fatal("environment not deleted")
+	}
+}
+
+func seedEnvironmentRenameFixture(t *testing.T) (*Server, string) {
+	t.Helper()
+	s, dir := newTestServer(t)
+	for _, name := range []string{"work", "home"} {
+		postForm(t, s, "/web/environment/add", url.Values{"name": {name}})
+	}
+	postForm(t, s, "/web/config/defaults", url.Values{"environments": {"home,work"}})
+	return s, dir
+}
+
+func TestEnvironmentRenameRewritesConfigAndAgentRecords(t *testing.T) {
+	s, dir := seedEnvironmentRenameFixture(t)
+	if err := agentstore.Save(dir, agentstore.Record{Name: "a1", Environments: []string{"home", "work"}}); err != nil {
+		t.Fatalf("seeding agentstore: %v", err)
+	}
+	if err := agentstore.Save(dir, agentstore.Record{Name: "a2", Environments: []string{"home"}}); err != nil {
+		t.Fatalf("seeding agentstore: %v", err)
+	}
+
+	s.agentsRestartNeeded.Store(false) // seeding defaults raised it; only the rename is under test
+	w := postForm(t, s, "/web/environment/work/rename", url.Values{"new_name": {"job"}})
+	if w.Code != http.StatusOK {
+		t.Fatalf("rename: %d %s", w.Code, readBody(t, w))
+	}
+	if got := w.Header().Get("HX-Refresh"); got != "true" {
+		t.Errorf("HX-Refresh = %q, want true", got)
+	}
+
+	cfg := reloadTestConfig(t, dir)
+	if _, ok := cfg.Environments["work"]; ok {
+		t.Error("old key still present")
+	}
+	if _, ok := cfg.Environments["job"]; !ok {
+		t.Error("new key missing")
+	}
+	if got := cfg.Defaults.Environments; !slices.Equal(got, []string{"home", "job"}) {
+		t.Errorf("defaults.environments = %v", got)
+	}
+
+	records, err := agentstore.Load(agentstore.FilePath(dir))
+	if err != nil {
+		t.Fatalf("loading agentstore: %v", err)
+	}
+	if got := records["a1"].Environments; !slices.Equal(got, []string{"home", "job"}) {
+		t.Errorf("a1 environments = %v", got)
+	}
+	if got := records["a2"].Environments; !slices.Equal(got, []string{"home"}) {
+		t.Errorf("a2 environments = %v, want unchanged", got)
+	}
+	if s.agentsRestartNeeded.Load() {
+		t.Error("rename must not raise the restart banner: env contents are unchanged")
+	}
+}
+
+func TestEnvironmentRenameRejections(t *testing.T) {
+	tests := []struct {
+		name, path, newName, want string
+	}{
+		{"empty", "work", "", "New name is required"},
+		{"bad name", "work", "bad name!", entityNameError},
+		{"collision", "work", "home", "already exists"},
+		{"same name", "work", "work", "same"},
+		{"unknown old", "ghost", "fresh", "not found"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			s, dir := seedEnvironmentRenameFixture(t)
+			w := postForm(t, s, "/web/environment/"+tc.path+"/rename", url.Values{"new_name": {tc.newName}})
+			body := readBody(t, w)
+			if !strings.Contains(body, "flash-error") || !strings.Contains(body, tc.want) {
+				t.Fatalf("want error flash containing %q, got %s", tc.want, body)
+			}
+			if got := reloadTestConfig(t, dir).Environments; len(got) != 2 {
+				t.Errorf("config changed on rejected rename: %v", got)
+			}
+		})
 	}
 }

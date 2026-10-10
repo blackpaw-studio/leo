@@ -576,6 +576,7 @@ func New(configPath string, processes ProcessStateProvider, scheduler SchedulerP
 	mux.HandleFunc("POST /web/config/host/{name}", s.handleConfigHostSave)
 	mux.HandleFunc("POST /web/config/environment/{name}", s.handleConfigEnvironmentSave)
 	mux.HandleFunc("POST /web/environment/add", s.handleEnvironmentAdd)
+	mux.HandleFunc("POST /web/environment/{name}/rename", s.handleEnvironmentRename)
 	mux.HandleFunc("DELETE /web/environment/{name}", s.handleEnvironmentDelete)
 	mux.HandleFunc("POST /web/host/add", s.handleHostAdd)
 	mux.HandleFunc("DELETE /web/host/{name}", s.handleHostDelete)

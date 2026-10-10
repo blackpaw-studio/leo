@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"maps"
 	"slices"
 )
 
@@ -114,4 +115,56 @@ func renameEntries(list []string, oldName, newName string) []string {
 		}
 	}
 	return out
+}
+
+// RenameEnvironment returns a copy of cfg with the named environment re-keyed
+// from oldName to newName and every reference rewritten (defaults, templates,
+// tasks), preserving list order. cfg is not mutated: only the containers that
+// change are cloned, the rest is shared with the input.
+//
+// As with RenameTemplate, name-shape validation is the caller's job; this
+// guards the structural invariants: non-empty and distinct new name, old
+// exists, new does not collide.
+func RenameEnvironment(cfg *Config, oldName, newName string) (*Config, error) {
+	if newName == "" {
+		return nil, fmt.Errorf("new environment name must not be empty")
+	}
+	if newName == oldName {
+		return nil, fmt.Errorf("new environment name is the same as the current name")
+	}
+	env, ok := cfg.Environments[oldName]
+	if !ok {
+		return nil, fmt.Errorf("environment %q not found", oldName)
+	}
+	if _, exists := cfg.Environments[newName]; exists {
+		return nil, fmt.Errorf("environment %q already exists", newName)
+	}
+
+	next := *cfg
+	next.Environments = maps.Clone(cfg.Environments)
+	next.Environments[newName] = env
+	delete(next.Environments, oldName)
+
+	next.Defaults.Environments = replaceName(cfg.Defaults.Environments, oldName, newName)
+
+	next.Templates = maps.Clone(cfg.Templates)
+	for name, tmpl := range next.Templates {
+		tmpl.Environments = replaceName(tmpl.Environments, oldName, newName)
+		next.Templates[name] = tmpl
+	}
+	next.Tasks = maps.Clone(cfg.Tasks)
+	for name, task := range next.Tasks {
+		task.Environments = replaceName(task.Environments, oldName, newName)
+		next.Tasks[name] = task
+	}
+	return &next, nil
+}
+
+// replaceName returns a copy of list with every oldName replaced by newName.
+// A list without oldName is returned as-is (shared, never written to).
+func replaceName(list []string, oldName, newName string) []string {
+	if !slices.Contains(list, oldName) {
+		return list
+	}
+	return renameEntries(list, oldName, newName)
 }

@@ -2,10 +2,13 @@ package web
 
 import (
 	"fmt"
+	"log"
 	"net/http"
 	"net/url"
+	"slices"
 	"sort"
 
+	"github.com/blackpaw-studio/leo/internal/agentstore"
 	"github.com/blackpaw-studio/leo/internal/config"
 	"github.com/blackpaw-studio/leo/internal/web/schema"
 )
@@ -118,4 +121,83 @@ func (s *Server) handleEnvironmentDelete(w http.ResponseWriter, r *http.Request)
 
 	w.Header().Set("HX-Refresh", "true")
 	s.renderFlash(w, "success", fmt.Sprintf("Environment %q deleted", name))
+}
+
+// handleEnvironmentRename re-keys an environment and rewrites every reference
+// to it (defaults, templates, tasks via config.RenameEnvironment) plus the
+// per-agent override lists persisted in the agentstore, which resolve by name
+// on the next restart. The name never reaches an agent process (only the merged
+// values do), and those values are unchanged, so no restart is needed and the
+// agents-restart banner stays down.
+//
+// The rename form targets #flash-container (as the template rename form does),
+// so every outcome is a flash; success also refreshes the page to show the
+// renamed card.
+func (s *Server) handleEnvironmentRename(w http.ResponseWriter, r *http.Request) {
+	defer s.lockConfigWrite()()
+	name := r.PathValue("name")
+
+	newName := r.FormValue("new_name")
+	if newName == "" {
+		s.renderFlashToContainer(w, "error", "New name is required")
+		return
+	}
+	if !validEntityName(newName) {
+		s.renderFlashToContainer(w, "error", entityNameError)
+		return
+	}
+
+	cfg, err := s.loadConfig()
+	if err != nil {
+		s.renderFlashToContainer(w, "error", fmt.Sprintf("Failed to load config: %v", err))
+		return
+	}
+	if _, ok := cfg.Environments[name]; !ok {
+		s.renderFlashToContainer(w, "error", fmt.Sprintf("Environment %q not found", name))
+		return
+	}
+	renamed, err := config.RenameEnvironment(cfg, name, newName)
+	if err != nil {
+		s.renderFlashToContainer(w, "error", err.Error())
+		return
+	}
+	if errMsg := s.validateAndSave(renamed); errMsg != "" {
+		s.renderFlashToContainer(w, "error", errMsg)
+		return
+	}
+
+	renameInAgentRecords(renamed.HomePath, name, newName)
+	s.reloadConfigOrWarn()
+
+	w.Header().Set("HX-Refresh", "true")
+	s.renderFlashToContainer(w, "success", fmt.Sprintf("Environment %q renamed to %q", name, newName))
+}
+
+// renameInAgentRecords moves oldName to newName in every persisted agent
+// record's environment override list. Best-effort: a failure must not fail a
+// rename that already saved config, so it is logged and the loop continues.
+func renameInAgentRecords(homePath, oldName, newName string) {
+	records, err := agentstore.Load(agentstore.FilePath(homePath))
+	if err != nil {
+		// #nosec G706 -- names are validated identifiers (validEntityName / existing config keys); no control chars can reach the log
+		log.Printf("environment rename %q→%q: loading agentstore failed: %v", oldName, newName, err)
+		return
+	}
+	for recName, rec := range records {
+		if !slices.Contains(rec.Environments, oldName) {
+			continue
+		}
+		if err := agentstore.Update(homePath, recName, func(r agentstore.Record) agentstore.Record {
+			r.Environments = slices.Clone(r.Environments)
+			for i, e := range r.Environments {
+				if e == oldName {
+					r.Environments[i] = newName
+				}
+			}
+			return r
+		}); err != nil {
+			// #nosec G706 -- names are validated identifiers (validEntityName / existing config + agentstore keys); no control chars can reach the log
+			log.Printf("environment rename %q→%q: agentstore.Update(%q) failed: %v", oldName, newName, recName, err)
+		}
+	}
 }
