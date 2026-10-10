@@ -65,7 +65,11 @@ func (s *Server) handleAPITemplatesV1(w http.ResponseWriter, r *http.Request) {
 // load. The loader's own error can quote the rejected file's contents (a YAML
 // type error echoes the offending value), and /api/* is reachable with the
 // agent token, so the detail goes to the daemon log only.
-var errConfigUnavailable = errors.New("config unavailable")
+var errConfigUnavailable = errors.New(ConfigUnavailableMessage)
+
+// ConfigUnavailableMessage is the sanitized text of that failure, shared with
+// the daemon socket routes so both transports answer identically.
+const ConfigUnavailableMessage = "config unavailable"
 
 // loadConfigForAPI loads the config for an /api handler. On failure it logs the
 // detail, answers a sanitized 500 and reports false.
@@ -73,7 +77,7 @@ func (s *Server) loadConfigForAPI(w http.ResponseWriter) (*config.Config, bool) 
 	cfg, err := s.loadConfig()
 	if err != nil {
 		log.Printf("web: loading config for an API request: %v", err)
-		writeJSON(w, http.StatusInternalServerError, apiResponse{Error: errConfigUnavailable.Error(), Code: codeConfigUnavailable})
+		writeJSON(w, http.StatusInternalServerError, apiResponse{Error: errConfigUnavailable.Error(), Code: CodeConfigUnavailable})
 		return nil, false
 	}
 	return cfg, true

@@ -581,7 +581,7 @@ const (
 	codeUnknownEnvironment  = "unknown_environment"
 	codePersistentTask      = "persistent_task"
 	codeHarnessMismatch     = "harness_mismatch"
-	codeConfigUnavailable   = "config_unavailable"
+	CodeConfigUnavailable   = "config_unavailable"
 	codeUnknownTemplate     = "unknown_template"
 	codeInvalidEnvironments = "invalid_environments"
 	codeInvalidName         = "invalid_name"

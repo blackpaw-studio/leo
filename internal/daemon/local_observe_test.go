@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -274,5 +275,23 @@ func TestLocalStateEmitsEmptyDispatchesArray(t *testing.T) {
 				t.Fatalf("want \"dispatches\":[] in %s", w.Body.String())
 			}
 		})
+	}
+}
+
+// A config that will not load answers like /api/v1/environments: a sanitized
+// message and the config_unavailable code, never the loader's raw error.
+func TestEnvironmentsRouteConfigUnavailableMatchesAPIV1(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "leo.yaml")
+	if err := os.WriteFile(cfgPath, []byte("environments: [not, a, map]\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	s := New(filepath.Join(dir, "leo.sock"), cfgPath, nil)
+
+	w := httptest.NewRecorder()
+	s.Handler().ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/environments", nil))
+	want := "{\"ok\":false,\"error\":\"config unavailable\",\"code\":\"config_unavailable\"}\n"
+	if w.Code != http.StatusInternalServerError || w.Body.String() != want {
+		t.Fatalf("/environments = %d %s, want 500 %s", w.Code, w.Body.String(), want)
 	}
 }

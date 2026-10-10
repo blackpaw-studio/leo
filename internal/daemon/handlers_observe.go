@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
 	"sort"
 	"time"
@@ -140,7 +141,10 @@ func (s *Server) handleTemplates(w http.ResponseWriter, _ *http.Request) {
 func (s *Server) handleEnvironments(w http.ResponseWriter, _ *http.Request) {
 	cfg, err := config.Load(s.configPath)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, fmt.Sprintf("loading config: %v", err))
+		// The loader's error can quote the rejected file's contents, so the
+		// detail stays in the log, exactly as GET /api/v1/environments does.
+		log.Printf("daemon: loading config for GET /environments: %v", err)
+		writeJSON(w, http.StatusInternalServerError, Response{Error: web.ConfigUnavailableMessage, Code: web.CodeConfigUnavailable})
 		return
 	}
 	writeData(w, http.StatusOK, web.ListEnvironments(cfg))
