@@ -16,6 +16,7 @@ import (
 	"github.com/blackpaw-studio/leo/internal/agent"
 	"github.com/blackpaw-studio/leo/internal/bridge"
 	"github.com/blackpaw-studio/leo/internal/config"
+	"github.com/blackpaw-studio/leo/internal/devices"
 	"github.com/blackpaw-studio/leo/internal/consult"
 	"github.com/blackpaw-studio/leo/internal/cron"
 	"github.com/blackpaw-studio/leo/internal/harness"
@@ -468,6 +469,9 @@ func (s *Server) StartWeb(cfg *config.Config, agentSvc web.AgentService) error {
 		ParentContext:    s.parentContext,
 		LeoMCP:           s.leoMCP,
 		AttachPlacements: s.attachPlacements,
+		// Paired phones (leo pair): device tokens and POST /api/v1/pair.
+		Devices:    devices.NewStore(cfg.StatePath(), nil),
+		PublicURLs: cfg.Web.PublicURLs,
 	}, observeOpts...)
 	s.setControl(s.webServer.ControlHandler())
 	s.setWebSources(s.webServer.ObserveSources())
