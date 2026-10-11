@@ -670,6 +670,8 @@ func New(configPath string, processes ProcessStateProvider, scheduler SchedulerP
 	// iOS app (docs: leo-ios spec §2). The push route checks the device
 	// identity itself.
 	apiMux.HandleFunc("PUT /api/v1/devices/{id}/push", s.handleAPIDevicePush)
+	// GET also serves HEAD.
+	apiMux.HandleFunc("GET /api/v1/files/{id}", s.requireOperatorToken(s.handleAPIFile))
 	// /api/* is the agent-facing surface: both tokens work there, as do
 	// paired device tokens.
 	protectedAPI := bearerAuthWith([]string{s.apiToken, s.agentToken}, s.isDeviceToken, s.trustedProxies, apiMux)
