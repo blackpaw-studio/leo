@@ -149,8 +149,8 @@ func TestPairRouteIsRateLimited(t *testing.T) {
 	if rec.Code != http.StatusTooManyRequests {
 		t.Fatalf("over limit: status %d, want 429", rec.Code)
 	}
-	if rec.Header().Get("Retry-After") == "" {
-		t.Fatal("429 without Retry-After")
+	if got := rec.Header().Get("Retry-After"); got != "60" {
+		t.Fatalf("Retry-After = %q, want 60", got)
 	}
 	clock.Advance(pairWindow)
 	if rec := doRequest(s, http.MethodPost, "/api/v1/pair", "", good); rec.Code != http.StatusOK {

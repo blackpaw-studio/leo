@@ -2,6 +2,7 @@ package web
 
 import (
 	"errors"
+	"math"
 	"net"
 	"net/http"
 	"strconv"
@@ -99,7 +100,7 @@ func (s *Server) handleAPIPair(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if ok, wait := s.pairLimiter.allow(peerHost(r), s.now()); !ok {
-		w.Header().Set("Retry-After", strconv.Itoa(int(wait.Round(time.Second).Seconds())+1))
+		w.Header().Set("Retry-After", strconv.Itoa(int(math.Ceil(wait.Seconds()))))
 		writeJSON(w, http.StatusTooManyRequests, apiResponse{Error: "too many pairing attempts; try again later"})
 		return
 	}

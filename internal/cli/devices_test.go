@@ -11,6 +11,7 @@ import (
 
 	"github.com/blackpaw-studio/leo/internal/config"
 	"github.com/blackpaw-studio/leo/internal/devices"
+	"rsc.io/qr"
 )
 
 func pairTestConfig(t *testing.T, web config.WebConfig) *config.Config {
@@ -121,5 +122,41 @@ func TestDevicesListAndRevoke(t *testing.T) {
 	}
 	if err := runDevicesRevoke(&out, store, dev.ID); !errors.Is(err, devices.ErrNotFound) {
 		t.Fatalf("revoke unknown: %v", err)
+	}
+}
+
+// TestRenderQRRoundTrips decodes the half-block rendering back into modules
+// and compares it with the encoder's own bitmap, so a swapped top/bottom or
+// an off-by-one quiet zone cannot ship an unscannable code.
+func TestRenderQRRoundTrips(t *testing.T) {
+	const text = `{"daemon_id":"abc","pairing_code":"XYZ"}`
+	var out bytes.Buffer
+	if err := renderQR(&out, text); err != nil {
+		t.Fatal(err)
+	}
+	code, err := qr.Encode(text, qr.M)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const quiet = 2
+	var grid [][]bool // grid[y][x], quiet zone included
+	for _, line := range strings.Split(strings.TrimRight(out.String(), "\n"), "\n") {
+		line = strings.TrimSuffix(strings.TrimPrefix(line, "\x1b[30;47m"), "\x1b[0m")
+		var top, bottom []bool
+		for _, r := range line {
+			top = append(top, r == '█' || r == '▀')
+			bottom = append(bottom, r == '█' || r == '▄')
+		}
+		grid = append(grid, top, bottom)
+	}
+	for y := 0; y < code.Size; y++ {
+		for x := 0; x < code.Size; x++ {
+			if grid[y+quiet][x+quiet] != code.Black(x, y) {
+				t.Fatalf("module (%d,%d) = %v, want %v", x, y, grid[y+quiet][x+quiet], code.Black(x, y))
+			}
+		}
+	}
+	if len(grid[0]) != code.Size+2*quiet {
+		t.Fatalf("row width %d, want %d", len(grid[0]), code.Size+2*quiet)
 	}
 }
