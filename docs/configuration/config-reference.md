@@ -65,6 +65,7 @@ all rejected at config load and before every web-UI save. Full behavior
 | `bind` | string | No | `127.0.0.1` | Bind address. Loopback-only by default. |
 | `allowed_hosts` | list of strings | No | `[]` | Extra hostnames/IPs accepted in the `Host` and `Origin` headers, in addition to loopback. Required when `bind` is non-loopback. Entries must not include a port. |
 | `trusted_proxies` | list of strings | No | `[]` | IPs or CIDRs whose requests with a non-empty `Remote-User` header are authenticated as the operator. |
+| `public_urls` | list of strings | No | `[]` | Origins a paired phone reaches this daemon at (e.g. `https://leo.example.com` behind a Cloudflare Tunnel). `leo pair` advertises them; each one's exact `host[:port]` is accepted in `Host`/`Origin`. Absolute `http(s)` URLs with no path, query or credentials. Empty = the listener's LAN addresses. |
 
 When enabled, the daemon serves a web dashboard with agent monitoring, task management, agent dispatch, config editing, and cron preview.
 
@@ -97,6 +98,7 @@ Rotate the token by deleting `api.token` and restarting the daemon. Existing bro
 |---|---|---|---|
 | Operator | `~/.leo/state/api.token` | everything — `/login`, the browser UI, `/api/*`, `/web/*` | you, your scripts, channel plugins |
 | Agent | `~/.leo/state/agent.token` | `/api/*` and `/web/agent/{name}/{message,send,interrupt}` only | every supervised agent, via `LEO_API_TOKEN` |
+| Device | `~/.leo/state/devices/devices.json` (SHA-256 hashes only) | everywhere the operator token is as a bearer, except `/login` | a phone paired with `leo pair` |
 
 The operator token grants access to the full daemon API — including routes that restart the service, mutate config, and write prompt files. Treat it like a root credential.
 
@@ -134,6 +136,18 @@ web:
 Never trust a range that includes untrusted LAN hosts: anyone who can reach the port directly from a trusted address could forge the header.
 
 The daemon prints a startup warning when `bind` is non-loopback.
+
+### Pairing a phone
+
+`leo pair` prints a QR code and a one-line JSON payload — `{daemon_id, name, urls, pairing_code}` — for the Leo iOS app. The code works once and expires after 5 minutes. The app redeems it at `POST /api/v1/pair` (the one unauthenticated route; rate-limited to 5 attempts per minute per peer and 20 overall) for its own device token. `leo devices list` shows paired phones; `leo devices revoke <id>` invalidates a token immediately; the device's open streams (SSE, attach) are closed within about 2 seconds.
+
+Routes for the app (bearer auth; device or operator token):
+
+| Route | Behaviour |
+|---|---|
+| `PUT /api/v1/devices/{id}/push` | `{grant, key}` push registration (key: base64 AES-256). A device may write only its own. |
+| `GET`/`HEAD /api/v1/files/{surfaced_id}` | Streams a file an agent surfaced, by id only, with `Range` support. 404 once evicted. |
+| `GET /api/v1/agents/{name}/attach` | WebSocket onto `tmux attach -r`. Binary frames: terminal output. Text frames: JSON control — `ping`/`pong` (the daemon pings every 30 s) and `{"type":"resize","cols":N,"rows":M}`. Optional `?cols=&rows=`. Binary input frames close the socket with 1008. |
 
 ## `client`
 

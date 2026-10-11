@@ -21,6 +21,7 @@ import (
 	"github.com/blackpaw-studio/leo/internal/config"
 	"github.com/blackpaw-studio/leo/internal/consult"
 	"github.com/blackpaw-studio/leo/internal/cron"
+	"github.com/blackpaw-studio/leo/internal/devices"
 	"github.com/blackpaw-studio/leo/internal/harness"
 	claudeharness "github.com/blackpaw-studio/leo/internal/harness/claude"
 	"github.com/blackpaw-studio/leo/internal/history"
@@ -244,6 +245,22 @@ type Server struct {
 	bridgeFeed bridgeFeedProvider
 	dispatches dispatchProvider
 
+	// devices is the paired-device store; nil disables pairing and device
+	// tokens. pairLimiter rate-limits POST /api/v1/pair; now is its clock
+	// (a test seam, time.Now in production).
+	devices     *devices.Store
+	pairLimiter *pairLimiter
+	now         func() time.Time
+
+	// startAttach runs a read-only tmux client in a PTY for
+	// GET /api/v1/agents/{name}/attach; attachTicker is that socket's
+	// heartbeat clock. Both are test seams.
+	startAttach  func(session string, cols, rows uint16) (attachProc, error)
+	attachTicker func(time.Duration) (<-chan time.Time, func())
+	// revocationTicker paces open device streams' token re-checks (see
+	// watchDeviceRevocation). A test seam.
+	revocationTicker func(time.Duration) (<-chan time.Time, func())
+
 	// version is reported as Snapshot.LeoVersion. Wired via WithVersion;
 	// empty means the caller didn't provide one.
 	version string
@@ -429,6 +446,14 @@ type Options struct {
 	// AttachPlacements is the daemon's registry of per-attach dispatch
 	// placements; nil disables the feature.
 	AttachPlacements *consult.AttachPlacements
+	// Devices is the paired-device store (the iOS app). Its tokens are
+	// accepted wherever APIToken is as a bearer. nil disables pairing and
+	// device tokens.
+	Devices *devices.Store
+	// PublicURLs are web.public_urls: each one's exact host[:port] is
+	// accepted in Host and Origin, so a tunnel hostname works without the
+	// listener port.
+	PublicURLs []string
 }
 
 // New creates a new web UI server. agentSvc may be nil if agent spawning is
@@ -465,6 +490,12 @@ func New(configPath string, processes ProcessStateProvider, scheduler SchedulerP
 		resolveHandle:      opts.ResolveHandle,
 		sseHeartbeat:       defaultSSEHeartbeat,
 		sseWriteTimeout:    defaultSSEWriteTimeout,
+		devices:            opts.Devices,
+		pairLimiter:        newPairLimiter(),
+		now:                time.Now,
+		startAttach:        startTmuxAttach,
+		attachTicker:       realTicker,
+		revocationTicker:   realTicker,
 	}
 	for _, opt := range extra {
 		opt(s)
@@ -648,8 +679,19 @@ func New(configPath string, processes ProcessStateProvider, scheduler SchedulerP
 	apiMux.HandleFunc("GET /api/v1/templates", s.handleAPITemplatesV1)
 	apiMux.HandleFunc("POST /api/v1/agents/spawn", s.requireOperatorToken(s.handleAPIAgentSpawn))
 	apiMux.HandleFunc("POST /api/v1/agents/{name}/environments", s.requireOperatorToken(s.handleAPIAgentSetEnvironments))
-	// /api/* is the agent-facing surface: both tokens work there.
-	protectedAPI := bearerAuthMiddleware([]string{s.apiToken, s.agentToken}, s.trustedProxies, apiMux)
+	// iOS app (docs: leo-ios spec §2). The push route checks the device
+	// identity itself.
+	apiMux.HandleFunc("PUT /api/v1/devices/{id}/push", s.handleAPIDevicePush)
+	// GET also serves HEAD.
+	apiMux.HandleFunc("GET /api/v1/files/{id}", s.requireOperatorToken(s.handleAPIFile))
+	apiMux.HandleFunc("GET /api/v1/agents/{name}/attach", s.requireOperatorToken(s.handleAPIAgentAttach))
+	// /api/* is the agent-facing surface: both tokens work there, as do
+	// paired device tokens.
+	protectedAPI := bearerAuthWith([]string{s.apiToken, s.agentToken}, s.isDeviceToken, s.trustedProxies, apiMux)
+	// POST /api/v1/pair is the one unauthenticated API route: the pairing
+	// code in its body is the credential.
+	publicAPI := http.NewServeMux()
+	publicAPI.HandleFunc("POST /api/v1/pair", s.handleAPIPair)
 
 	// Path-prefix dispatcher: /api/* is routed through bearer auth to apiMux;
 	// /login, /logout, and /static/* bypass session auth (otherwise the user
@@ -658,14 +700,18 @@ func New(configPath string, processes ProcessStateProvider, scheduler SchedulerP
 	// a valid session cookie or a Bearer token. /api/* lives on its own mux so
 	// bearerAuthMiddleware can wrap it independently of the browser mux's
 	// session middleware.
-	protectedBrowser := sessionMiddleware(s.sessions, []string{s.apiToken}, s.trustedProxies, mux)
+	protectedBrowser := sessionMiddlewareWith(s.sessions, []string{s.apiToken}, s.isDeviceToken, s.trustedProxies, mux)
 	// The agent-messaging routes live on the browser mux but are called by
 	// the in-agent MCP server (leo_send_message, leo_interrupt, key sends),
 	// so they accept the agent token too. Everything else on this mux —
 	// notably the config editor, which renders env values in full — stays
 	// operator-only. See agentCallableBrowserPath.
-	agentCallable := sessionMiddleware(s.sessions, []string{s.apiToken, s.agentToken}, s.trustedProxies, mux)
+	agentCallable := sessionMiddlewareWith(s.sessions, []string{s.apiToken, s.agentToken}, s.isDeviceToken, s.trustedProxies, mux)
 	root := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/v1/pair" {
+			publicAPI.ServeHTTP(w, r)
+			return
+		}
 		// A client token is resolved first and never falls through: its
 		// bearer is outside Leo's trust boundary, so it must not reach the
 		// middleware that serves the operator and Leo's own agents.
@@ -691,7 +737,7 @@ func New(configPath string, processes ProcessStateProvider, scheduler SchedulerP
 	// Origin check. Defense in depth for the API: even with a valid token,
 	// requests from a non-localhost browser context are rejected. A body-size
 	// cap and baseline security headers sit above that.
-	handler := hostOriginMiddleware(s.port, s.allowedHosts, s.trustedProxies, root)
+	handler := hostOriginMiddleware(s.port, s.allowedHosts, s.trustedProxies, root, publicOrigins(opts.PublicURLs)...)
 	handler = bodySizeMiddleware(maxRequestBodyBytes, handler)
 	handler = securityHeadersMiddleware(handler)
 	s.httpServer = &http.Server{

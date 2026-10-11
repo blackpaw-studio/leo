@@ -300,6 +300,12 @@ func safeRedirect(p string) string {
 // in for the agent-messaging routes alone, so an agent cannot read the config
 // editor (which renders env values) with its own credentials.
 func sessionMiddleware(store *sessionStore, tokens []string, trusted []netip.Prefix, next http.Handler) http.Handler {
+	return sessionMiddlewareWith(store, tokens, nil, trusted, next)
+}
+
+// sessionMiddlewareWith is sessionMiddleware that also accepts any bearer
+// for which extra (if non-nil) reports true; see bearerAuthWith.
+func sessionMiddlewareWith(store *sessionStore, tokens []string, extra func(string) bool, trusted []netip.Prefix, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if c, err := r.Cookie(sessionCookieName); err == nil && store.validate(c.Value) {
 			next.ServeHTTP(w, r)
@@ -312,7 +318,7 @@ func sessionMiddleware(store *sessionStore, tokens []string, trusted []netip.Pre
 			next.ServeHTTP(w, r)
 			return
 		}
-		if matchesAnyToken(extractBearer(r.Header.Get("Authorization")), tokens) {
+		if acceptsBearer(extractBearer(r.Header.Get("Authorization")), tokens, extra) {
 			next.ServeHTTP(w, r)
 			return
 		}

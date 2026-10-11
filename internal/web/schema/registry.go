@@ -165,6 +165,8 @@ var registry = map[Section][]Field{
 			Warning: "Removing your own address here will block your browser"},
 		{Key: "trusted_proxies", Label: "Trusted proxies", Group: "General",
 			Help: "IPs or CIDRs permitted to authenticate with the Remote-User header"},
+		{Key: "public_urls", Label: "Public URLs", Group: "General",
+			Help: "origins `leo pair` advertises to phones, e.g. https://leo.example.com; empty = LAN addresses"},
 	},
 
 	SectionClient: {

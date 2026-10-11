@@ -442,3 +442,53 @@ func TestSuperviseForegroundServerRestartsOnExit(t *testing.T) {
 		t.Fatal("SuperviseForegroundServer did not stop after ctx cancellation")
 	}
 }
+
+// TestWindowSizeLargestOnStartAdoptAndRestart pins window-size largest on
+// every path that brings leo's server up, so a small read-only viewer (the
+// phone app's attach) never shrinks the operator's window.
+func TestWindowSizeLargestOnStartAdoptAndRestart(t *testing.T) {
+	want := Args("set-option", "-g", "window-size", "largest")
+	assertSet := func(t *testing.T, s *stubServer) {
+		t.Helper()
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		for _, argv := range s.argv {
+			if reflect.DeepEqual(argv, want) {
+				return
+			}
+		}
+		t.Fatalf("no %q in %q", want, s.argv)
+	}
+	t.Run("fresh start", func(t *testing.T) {
+		s := &stubServer{}
+		withStubServer(t, s)
+		if err := EnsureForegroundServer("tmux"); err != nil {
+			t.Fatal(err)
+		}
+		assertSet(t, s)
+	})
+	t.Run("adopt surviving server", func(t *testing.T) {
+		s := &stubServer{running: true, foreground: true}
+		withStubServer(t, s)
+		if err := EnsureForegroundServer("tmux"); err != nil {
+			t.Fatal(err)
+		}
+		assertSet(t, s)
+	})
+	t.Run("adopt on inconclusive marker", func(t *testing.T) {
+		s := &stubServer{running: true, failShowOptions: true}
+		withStubServer(t, s)
+		if err := EnsureForegroundServer("tmux"); err != nil {
+			t.Fatal(err)
+		}
+		assertSet(t, s)
+	})
+	t.Run("supervisor restart", func(t *testing.T) {
+		s := &stubServer{}
+		withStubServer(t, s)
+		if _, err := StartForegroundServer("tmux"); err != nil {
+			t.Fatal(err)
+		}
+		assertSet(t, s)
+	})
+}

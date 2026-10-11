@@ -52,6 +52,8 @@ func newRootCmd() *cobra.Command {
 		newDispatchCmd(),
 		newHostCmd(),
 		newAPIClientCmd(),
+		newPairCmd(),
+		newDevicesCmd(),
 		newAttachCmd(),
 		newCronCmd(),
 		newTaskCmd(),

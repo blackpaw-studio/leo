@@ -524,7 +524,10 @@ func runError(e history.Entry) string {
 // written directly, per the wire contract.
 // GET /api/v1/events
 func (s *Server) handleAPIEvents(w http.ResponseWriter, r *http.Request) {
-	httpapi.ServeEvents(w, r, httpapi.EventsOptions{
+	// A revoked device's stream ends promptly rather than at disconnect.
+	ctx, release := s.contextEndingOnRevoke(r)
+	defer release()
+	httpapi.ServeEvents(w, r.WithContext(ctx), httpapi.EventsOptions{
 		Source: s.events, Heartbeat: s.sseHeartbeat, WriteTimeout: s.sseWriteTimeout, Buffer: sseSubscriberBuffer,
 	})
 }

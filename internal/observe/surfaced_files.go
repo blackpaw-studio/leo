@@ -153,6 +153,24 @@ func (s *SurfacedFileStore) Get(agent string) []SurfacedFile {
 	return nil
 }
 
+// Find returns the file with id, across all agents, while it is still held
+// (not evicted by the cap, a new incarnation, or the agent's removal).
+func (s *SurfacedFileStore) Find(id string) (SurfacedFile, bool) {
+	if s == nil || id == "" {
+		return SurfacedFile{}, false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, entry := range s.agents {
+		for _, f := range entry.files {
+			if f.ID == id {
+				return f, true
+			}
+		}
+	}
+	return SurfacedFile{}, false
+}
+
 // All returns every agent's non-empty file list, oldest first.
 func (s *SurfacedFileStore) All() map[string][]SurfacedFile {
 	if s == nil {

@@ -104,6 +104,24 @@ func markForeground(tmuxPath string) error {
 	return nil
 }
 
+// serverOptions are global options leo pins on its tmux server. window-size
+// largest sizes each window to its largest attached client, so a small
+// read-only viewer (the phone app's attach) never shrinks the operator's
+// window.
+var serverOptions = [][2]string{{"window-size", "largest"}}
+
+// applyServerOptions sets serverOptions on the running server. Best-effort:
+// a failure is logged, never fatal — a mis-sized viewer is not worth
+// refusing to start or adopt a working server.
+func applyServerOptions(tmuxPath string) {
+	for _, opt := range serverOptions {
+		out, err := serverExecCommand(tmuxPath, Args("set-option", "-g", opt[0], opt[1])...).CombinedOutput()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "warning: tmux: set %s %s: %v: %s\n", opt[0], opt[1], err, strings.TrimSpace(string(out)))
+		}
+	}
+}
+
 // KillServer terminates the tmux server on leo's socket, along with every
 // session it hosts. Used once to recycle a legacy auto-daemonized server
 // before EnsureForegroundServer starts a fresh foreground one in its place.
@@ -146,6 +164,8 @@ func StartForegroundServer(tmuxPath string) (*os.Process, error) {
 		_, _ = cmd.Process.Wait()
 		return nil, err
 	}
+
+	applyServerOptions(tmuxPath)
 
 	// Record which leo process created this server, so a later adoption can
 	// report whether the process macOS attributed Local Network
@@ -229,6 +249,7 @@ func EnsureForegroundServer(tmuxPath string, menu ...ViewerMenuBinding) error {
 		marked, ok := markerState(tmuxPath)
 		if marked {
 			fmt.Fprintln(os.Stdout, "tmux: adopting existing foreground server")
+			applyServerOptions(tmuxPath)
 			installViewerMenuBestEffort(tmuxPath, menu)
 			return nil
 		}
@@ -240,6 +261,7 @@ func EnsureForegroundServer(tmuxPath string, menu ...ViewerMenuBinding) error {
 			// otherwise fall through to a fresh start below.
 			if ServerRunning(tmuxPath) {
 				fmt.Fprintln(os.Stdout, "tmux: adopting existing tmux server (marker probe inconclusive)")
+				applyServerOptions(tmuxPath)
 				installViewerMenuBestEffort(tmuxPath, menu)
 				return nil
 			}

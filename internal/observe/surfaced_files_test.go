@@ -244,3 +244,32 @@ func TestSurfacedFileConcurrentUse(t *testing.T) {
 		}
 	}
 }
+
+func TestSurfacedFileFindByID(t *testing.T) {
+	s := NewSurfacedFileStore(nil, fixedSurfaceClock(surfaceT0))
+	a, _ := s.Add("alpha", surfaceT0, SurfaceInput{Path: "a", AbsPath: "/w/a"})
+	b, _ := s.Add("beta", surfaceT0, SurfaceInput{Path: "b", AbsPath: "/w/b"})
+
+	if got, ok := s.Find(b.ID); !ok || got != b {
+		t.Fatalf("Find(beta) = %+v, %v; want %+v", got, ok, b)
+	}
+	if _, ok := s.Find("missing"); ok {
+		t.Fatal("Find(missing) reported found")
+	}
+	// Evicted by the per-agent cap.
+	for i := 0; i < MaxSurfacedFiles; i++ {
+		_, _ = s.Add("alpha", surfaceT0, SurfaceInput{Path: "x", AbsPath: "/w/x"})
+	}
+	if _, ok := s.Find(a.ID); ok {
+		t.Fatal("Find found a file evicted by the cap")
+	}
+	// Dropped by a new incarnation.
+	s.Reset("beta", surfaceT1)
+	if _, ok := s.Find(b.ID); ok {
+		t.Fatal("Find found a file from a replaced incarnation")
+	}
+	var nilStore *SurfacedFileStore
+	if _, ok := nilStore.Find(a.ID); ok {
+		t.Fatal("nil store found a file")
+	}
+}
