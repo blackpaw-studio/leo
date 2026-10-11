@@ -263,3 +263,22 @@ func readFile(t *testing.T, path string) string {
 	}
 	return string(b)
 }
+
+// Codes are persisted (hashed) rather than held in memory, so a daemon
+// restart neither forgets an outstanding code nor revives a consumed one.
+func TestPairingCodeSurvivesRestartButNotReplay(t *testing.T) {
+	cli, clock, dir := newTestStore(t)
+	used := mustCode(t, cli)
+	pending := mustCode(t, cli)
+	if _, _, err := NewStore(dir, clock.Now).Pair(used, "a"); err != nil {
+		t.Fatal(err)
+	}
+
+	restarted := NewStore(dir, clock.Now)
+	if _, _, err := restarted.Pair(used, "replay"); !errors.Is(err, ErrInvalidCode) {
+		t.Fatalf("replay after restart err = %v, want ErrInvalidCode", err)
+	}
+	if _, _, err := restarted.Pair(pending, "b"); err != nil {
+		t.Fatalf("outstanding code after restart: %v", err)
+	}
+}

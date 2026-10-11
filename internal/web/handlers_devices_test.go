@@ -252,3 +252,96 @@ func TestPublicURLHostIsAcceptedWithoutListenerPort(t *testing.T) {
 		}
 	}
 }
+
+// ssoRequest builds a request as a ForwardAuth proxy would forward it: from
+// peer, with Remote-User set, and an optional bearer.
+func ssoRequest(method, path, peer, bearer, body string) *http.Request {
+	req := httptest.NewRequest(method, path, strings.NewReader(body))
+	req.Host = testHost
+	req.RemoteAddr = peer + ":4000"
+	req.Header.Set("Remote-User", "evan")
+	if bearer != "" {
+		req.Header.Set("Authorization", "Bearer "+bearer)
+	}
+	return req
+}
+
+func serve(s *Server, req *http.Request) int {
+	rec := httptest.NewRecorder()
+	s.Handler().ServeHTTP(rec, req)
+	return rec.Code
+}
+
+// SSO (PR #169) and device tokens are separate credentials: an SSO identity
+// is operator-equivalent on the routes it already reached, but never stands
+// in for a device on the device-only route, and gains nothing at /pair.
+func TestSSOAndDeviceTokensDoNotCrossOver(t *testing.T) {
+	const proxy, outsider = "192.0.2.9", "192.0.2.50"
+	s, store, _ := newDeviceTestServer(t, func(o *Options) { o.TrustedProxies = []string{proxy} })
+	phone := pairDevice(t, s, store, "phone")
+	key := base64.StdEncoding.EncodeToString(make([]byte, 32))
+	push := `{"grant":"g","key":"` + key + `"}`
+	pushPath := "/api/v1/devices/" + phone.DeviceID + "/push"
+
+	if got := serve(s, ssoRequest(http.MethodPut, pushPath, proxy, "", push)); got != http.StatusForbidden {
+		t.Errorf("SSO identity writing a device's push registration: %d, want 403", got)
+	}
+	if got := serve(s, ssoRequest(http.MethodPost, "/api/v1/pair", proxy, "", `{"pairing_code":"WRONG","device_name":"x"}`)); got != http.StatusUnauthorized {
+		t.Errorf("SSO identity at /pair with a bad code: %d, want 401", got)
+	}
+	// A forged Remote-User from an untrusted peer authenticates nothing.
+	if got := serve(s, ssoRequest(http.MethodGet, "/api/v1/state", outsider, "", "")); got != http.StatusUnauthorized {
+		t.Errorf("forged Remote-User from untrusted peer: %d, want 401", got)
+	}
+	if got := serve(s, ssoRequest(http.MethodPut, pushPath, outsider, "", push)); got != http.StatusUnauthorized {
+		t.Errorf("forged Remote-User on push: %d, want 401", got)
+	}
+	// Behind the proxy, a device still authenticates with its own token and
+	// may write only its own registration.
+	if got := serve(s, ssoRequest(http.MethodPut, pushPath, proxy, phone.Token, push)); got != http.StatusOK {
+		t.Errorf("device token through the proxy: %d, want 200", got)
+	}
+	// A device token is not an SSO identity: it does not unlock the
+	// Remote-User-only path (no header -> still bearer-checked).
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/state", nil)
+	req.Host, req.RemoteAddr = testHost, proxy+":1"
+	req.Header.Set("Authorization", "Bearer not-a-device")
+	if got := serve(s, req); got != http.StatusUnauthorized {
+		t.Errorf("bad bearer from trusted proxy without Remote-User: %d, want 401", got)
+	}
+}
+
+// public_urls admits exactly the configured host[:port] and scheme://origin;
+// it adds nothing to allowed_hosts, including for trusted proxy peers.
+func TestPublicURLsDoNotWidenAllowedHosts(t *testing.T) {
+	const proxy = "192.0.2.9"
+	s, _, _ := newDeviceTestServer(t, func(o *Options) {
+		o.PublicURLs = []string{"https://leo.example.com"}
+		o.TrustedProxies = []string{proxy}
+	})
+	cases := []struct {
+		name, peer, host, origin string
+		want                     int
+	}{
+		{"exact public host", "192.0.2.50", "leo.example.com", "", http.StatusOK},
+		{"public host on the listener port", "192.0.2.50", "leo.example.com:8370", "", http.StatusForbidden},
+		{"public host on an explicit 443", "192.0.2.50", "leo.example.com:443", "", http.StatusForbidden},
+		{"public origin, wrong scheme", "192.0.2.50", "leo.example.com", "http://leo.example.com", http.StatusForbidden},
+		{"subdomain of public host", "192.0.2.50", "evil.leo.example.com", "", http.StatusForbidden},
+		{"trusted proxy, public host with port", proxy, "leo.example.com:9443", "", http.StatusForbidden},
+		{"public host, cross-origin page", "192.0.2.50", "leo.example.com", "https://evil.example", http.StatusForbidden},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodGet, "/api/v1/state", nil)
+			req.Host, req.RemoteAddr = tc.host, tc.peer+":1"
+			req.Header.Set("Authorization", "Bearer "+testAPIToken)
+			if tc.origin != "" {
+				req.Header.Set("Origin", tc.origin)
+			}
+			if got := serve(s, req); got != tc.want {
+				t.Fatalf("status %d, want %d", got, tc.want)
+			}
+		})
+	}
+}

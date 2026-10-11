@@ -119,8 +119,13 @@ func TestFileRouteNotFoundWhenUnknownOrEvicted(t *testing.T) {
 
 func TestFileRouteNeverTakesAPath(t *testing.T) {
 	s, store := newFilesTestServer(t)
-	surface(t, store, "/etc/hosts")
-	for _, p := range []string{"/api/v1/files/%2Fetc%2Fhosts", "/api/v1/files/..%2F..%2Fetc%2Fhosts", "/api/v1/files/?path=/etc/hosts"} {
+	secret := filepath.Join(t.TempDir(), "secret.txt")
+	if err := os.WriteFile(secret, []byte("secret"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	surface(t, store, secret)
+	escaped := strings.ReplaceAll(secret, "/", "%2F")
+	for _, p := range []string{"/api/v1/files/" + escaped, "/api/v1/files/..%2F.." + escaped, "/api/v1/files/?path=" + secret} {
 		req := httptest.NewRequest(http.MethodGet, p, nil)
 		req.Host = testHost
 		req.Header.Set("Authorization", "Bearer "+testAPIToken)
