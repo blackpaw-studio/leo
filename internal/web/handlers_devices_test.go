@@ -345,3 +345,33 @@ func TestPublicURLsDoNotWidenAllowedHosts(t *testing.T) {
 		})
 	}
 }
+
+// Once the global budget is spent, new peers must not be added to the table:
+// rotating source addresses (IPv6) would otherwise grow it without bound.
+func TestPairLimiterTableStaysBounded(t *testing.T) {
+	l := newPairLimiter()
+	now := time.Date(2026, 10, 10, 12, 0, 0, 0, time.UTC)
+	for i := 0; i < pairGlobalLimit; i++ {
+		if ok, _ := l.allow("198.51.100."+strconv.Itoa(i), now); !ok {
+			t.Fatalf("attempt %d refused", i)
+		}
+	}
+	for i := 0; i < 5000; i++ {
+		if ok, _ := l.allow("2001:db8::"+strconv.FormatInt(int64(i), 16), now); ok {
+			t.Fatal("allowed past the global limit")
+		}
+	}
+	if n := len(l.peers); n > pairGlobalLimit {
+		t.Fatalf("table holds %d peers after the global limit, want <= %d", n, pairGlobalLimit)
+	}
+	// Across many windows the table never exceeds its cap.
+	for w := 0; w < 200; w++ {
+		now = now.Add(pairWindow)
+		for i := 0; i < pairGlobalLimit+50; i++ {
+			l.allow("2001:db8:1::"+strconv.Itoa(w)+":"+strconv.Itoa(i), now)
+		}
+		if n := len(l.peers); n > pairPeerTableMax {
+			t.Fatalf("window %d: table holds %d peers, cap %d", w, n, pairPeerTableMax)
+		}
+	}
+}

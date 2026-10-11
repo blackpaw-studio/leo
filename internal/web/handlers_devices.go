@@ -20,8 +20,8 @@ const (
 	pairWindow       = time.Minute
 	pairPerPeerLimit = 5
 	pairGlobalLimit  = 20
-	// pairPeerTableMax bounds the per-peer table; past it, expired windows
-	// are swept before a new peer is added.
+	// pairPeerTableMax bounds the per-peer table; when it is full, expired
+	// windows are swept, and a still-full table refuses new peers.
 	pairPeerTableMax = 1024
 	maxPairBody      = 4 << 10
 	maxPushBody      = 8 << 10
@@ -33,15 +33,15 @@ type fixedWindow struct {
 	count int
 }
 
-func (w *fixedWindow) take(now time.Time, limit int) (bool, time.Duration) {
+// roll starts a fresh window once the current one has elapsed.
+func (w *fixedWindow) roll(now time.Time) {
 	if now.Sub(w.start) >= pairWindow {
 		*w = fixedWindow{start: now}
 	}
-	if w.count >= limit {
-		return false, w.start.Add(pairWindow).Sub(now)
-	}
-	w.count++
-	return true, 0
+}
+
+func (w *fixedWindow) retryAfter(now time.Time) time.Duration {
+	return w.start.Add(pairWindow).Sub(now)
 }
 
 // pairLimiter rate-limits POST /api/v1/pair per peer address and globally.
@@ -58,26 +58,40 @@ func newPairLimiter() *pairLimiter {
 
 // allow records an attempt from peer at now, reporting whether it may
 // proceed and, if not, how long until it may retry.
+//
+// The global budget is checked before a peer is added to the table, and a
+// full table refuses new peers, so rotating source addresses (IPv6) can
+// neither grow the table without bound nor make the sweep quadratic. A peer
+// over its own limit does not spend the global budget.
 func (l *pairLimiter) allow(peer string, now time.Time) (bool, time.Duration) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
+	l.global.roll(now)
+	if l.global.count >= pairGlobalLimit {
+		return false, l.global.retryAfter(now)
+	}
 	w := l.peers[peer]
 	if w == nil {
-		l.sweep(now)
+		if len(l.peers) >= pairPeerTableMax {
+			l.sweep(now)
+		}
+		if len(l.peers) >= pairPeerTableMax {
+			return false, pairWindow
+		}
 		w = &fixedWindow{start: now}
 		l.peers[peer] = w
 	}
-	// Check the peer first so one noisy peer burns only its own budget.
-	if ok, wait := w.take(now, pairPerPeerLimit); !ok {
-		return false, wait
+	w.roll(now)
+	if w.count >= pairPerPeerLimit {
+		return false, w.retryAfter(now)
 	}
-	return l.global.take(now, pairGlobalLimit)
+	w.count++
+	l.global.count++
+	return true, 0
 }
 
+// sweep drops peers whose window has elapsed.
 func (l *pairLimiter) sweep(now time.Time) {
-	if len(l.peers) < pairPeerTableMax {
-		return
-	}
 	for k, w := range l.peers {
 		if now.Sub(w.start) >= pairWindow {
 			delete(l.peers, k)
