@@ -192,17 +192,17 @@ func TestSetPushReplacesRegistration(t *testing.T) {
 		t.Fatal(err)
 	}
 	key := base64.StdEncoding.EncodeToString(make([]byte, 32))
-	if err := s.SetPush(dev.ID, PushRegistration{Grant: "g1", Key: key}); err != nil {
+	if err := s.SetPush(dev.ID, PushRegistration{Grant: "g1", Key: key, RelayURL: testRelayURL}); err != nil {
 		t.Fatalf("SetPush: %v", err)
 	}
-	if err := s.SetPush(dev.ID, PushRegistration{Grant: "g2", Key: key}); err != nil {
+	if err := s.SetPush(dev.ID, PushRegistration{Grant: "g2", Key: key, RelayURL: testRelayURL}); err != nil {
 		t.Fatalf("SetPush replace: %v", err)
 	}
 	list, _ := s.List()
 	if list[0].Push == nil || list[0].Push.Grant != "g2" {
 		t.Fatalf("push = %+v, want grant g2", list[0].Push)
 	}
-	if err := s.SetPush("nope", PushRegistration{Grant: "g", Key: key}); !errors.Is(err, ErrNotFound) {
+	if err := s.SetPush("nope", PushRegistration{Grant: "g", Key: key, RelayURL: testRelayURL}); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("SetPush unknown err = %v, want ErrNotFound", err)
 	}
 }
@@ -214,11 +214,19 @@ func TestValidatePush(t *testing.T) {
 		reg  PushRegistration
 		ok   bool
 	}{
-		{"valid", PushRegistration{Grant: "grant", Key: good}, true},
-		{"empty grant", PushRegistration{Key: good}, false},
-		{"huge grant", PushRegistration{Grant: strings.Repeat("g", maxGrantLen+1), Key: good}, false},
-		{"short key", PushRegistration{Grant: "g", Key: base64.StdEncoding.EncodeToString(make([]byte, 16))}, false},
-		{"not base64", PushRegistration{Grant: "g", Key: "!!!"}, false},
+		{"valid", PushRegistration{Grant: "grant", Key: good, RelayURL: testRelayURL}, true},
+		{"valid with path", PushRegistration{Grant: "grant", Key: good, RelayURL: "https://relay.example/v1"}, true},
+		{"empty grant", PushRegistration{Key: good, RelayURL: testRelayURL}, false},
+		{"huge grant", PushRegistration{Grant: strings.Repeat("g", maxGrantLen+1), Key: good, RelayURL: testRelayURL}, false},
+		{"short key", PushRegistration{Grant: "g", Key: base64.StdEncoding.EncodeToString(make([]byte, 16)), RelayURL: testRelayURL}, false},
+		{"long key", PushRegistration{Grant: "g", Key: base64.StdEncoding.EncodeToString(make([]byte, 33)), RelayURL: testRelayURL}, false},
+		{"not base64", PushRegistration{Grant: "g", Key: "!!!", RelayURL: testRelayURL}, false},
+		{"missing relay url", PushRegistration{Grant: "g", Key: good}, false},
+		{"http relay url", PushRegistration{Grant: "g", Key: good, RelayURL: "http://relay.example"}, false},
+		{"relay url without host", PushRegistration{Grant: "g", Key: good, RelayURL: "https://"}, false},
+		{"relay url with credentials", PushRegistration{Grant: "g", Key: good, RelayURL: "https://u:p@relay.example"}, false},
+		{"relay url not a url", PushRegistration{Grant: "g", Key: good, RelayURL: "relay.example"}, false},
+		{"relay url too long", PushRegistration{Grant: "g", Key: good, RelayURL: "https://relay.example/" + strings.Repeat("a", maxRelayURLLen)}, false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -280,5 +288,98 @@ func TestPairingCodeSurvivesRestartButNotReplay(t *testing.T) {
 	}
 	if _, _, err := restarted.Pair(pending, "b"); err != nil {
 		t.Fatalf("outstanding code after restart: %v", err)
+	}
+}
+
+const testRelayURL = "https://relay.example"
+
+func pairedWithPush(t *testing.T, s *Store, grant string) Device {
+	t.Helper()
+	dev, _, err := s.Pair(mustCode(t, s), "phone")
+	if err != nil {
+		t.Fatal(err)
+	}
+	key := base64.StdEncoding.EncodeToString(make([]byte, 32))
+	if err := s.SetPush(dev.ID, PushRegistration{Grant: grant, Key: key, RelayURL: testRelayURL}); err != nil {
+		t.Fatal(err)
+	}
+	return dev
+}
+
+func TestPushRegistrationIsStoredWithItsDeviceOwnerOnly(t *testing.T) {
+	s, _, dir := newTestStore(t)
+	pairedWithPush(t, s, "g1")
+
+	list, _ := s.List()
+	if list[0].Push == nil || list[0].Push.RelayURL != testRelayURL {
+		t.Fatalf("push = %+v, want relay %s", list[0].Push, testRelayURL)
+	}
+	info, err := os.Stat(filepath.Join(dir, dirName, devicesFile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if perm := info.Mode().Perm(); perm != 0o600 {
+		t.Fatalf("devices.json perm = %o, want 600 (it holds push keys)", perm)
+	}
+}
+
+func TestClearPushRemovesOnlyThatDevicesRegistration(t *testing.T) {
+	s, _, _ := newTestStore(t)
+	a := pairedWithPush(t, s, "ga")
+	pairedWithPush(t, s, "gb")
+
+	if err := s.ClearPush(a.ID); err != nil {
+		t.Fatalf("ClearPush: %v", err)
+	}
+	if err := s.ClearPush(a.ID); err != nil {
+		t.Fatalf("ClearPush is idempotent, got %v", err)
+	}
+	list, _ := s.List()
+	if list[0].Push != nil || list[1].Push == nil {
+		t.Fatalf("after clearing a: a.push=%v b.push=%v", list[0].Push, list[1].Push)
+	}
+	if err := s.ClearPush("nope"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("ClearPush unknown err = %v, want ErrNotFound", err)
+	}
+}
+
+func TestClearPushIfGrantKeepsAFresherRegistration(t *testing.T) {
+	s, _, _ := newTestStore(t)
+	dev := pairedWithPush(t, s, "old")
+	key := base64.StdEncoding.EncodeToString(make([]byte, 32))
+	if err := s.SetPush(dev.ID, PushRegistration{Grant: "new", Key: key, RelayURL: testRelayURL}); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := s.ClearPushIfGrant(dev.ID, "old"); err != nil {
+		t.Fatal(err)
+	}
+	list, _ := s.List()
+	if list[0].Push == nil || list[0].Push.Grant != "new" {
+		t.Fatalf("a 410 for the old grant removed the new registration: %+v", list[0].Push)
+	}
+	if err := s.ClearPushIfGrant(dev.ID, "new"); err != nil {
+		t.Fatal(err)
+	}
+	if list, _ = s.List(); list[0].Push != nil {
+		t.Fatalf("matching grant not removed: %+v", list[0].Push)
+	}
+	if err := s.ClearPushIfGrant("gone", "x"); err != nil {
+		t.Fatalf("unknown device is a no-op, got %v", err)
+	}
+}
+
+func TestRevokeRemovesThePushRegistration(t *testing.T) {
+	s, _, dir := newTestStore(t)
+	dev := pairedWithPush(t, s, "secret-grant")
+
+	if err := s.Revoke(dev.ID); err != nil {
+		t.Fatal(err)
+	}
+	if list, _ := s.List(); len(list) != 0 {
+		t.Fatalf("devices after revoke = %+v", list)
+	}
+	if raw := readFile(t, filepath.Join(dir, dirName, devicesFile)); strings.Contains(raw, "secret-grant") {
+		t.Fatal("revoked device's push grant is still on disk")
 	}
 }

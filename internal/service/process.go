@@ -1068,12 +1068,19 @@ func wireObservability(ctx context.Context, sv *Supervisor, tmuxPath string) obs
 	// publishes agent-to-agent messages through it; the supervisor keeps
 	// publishing through runLog, which no message event ever reaches.
 	messageLog := observe.NewMessageLog(runLog, 0)
-	sv.SetPublisher(runLog)
+	// pub is runLog, plus push notifications to paired phones when the
+	// daemon has a home: the supervisor and the attention store publish
+	// through it, so it sees every attention transition and agent stop.
+	var pub observe.Publisher = runLog
+	if sv.homePath != "" {
+		pub = wirePush(ctx, runLog, filepath.Join(sv.homePath, "state"))
+	}
+	sv.SetPublisher(pub)
 
-	// attention publishes through runLog like every other agent event. The
+	// attention publishes through pub like every other agent event. The
 	// tracker copies it onto sweep events; the store reads the tracker's
 	// reading back for its own events, hence the post-construction setter.
-	attention := observe.NewAttentionStore(runLog)
+	attention := observe.NewAttentionStore(pub)
 	sv.SetAttention(attention)
 
 	// sv.SessionNames is the narrow accessor onto the live agent-name ->
