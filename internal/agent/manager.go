@@ -1603,9 +1603,11 @@ func resolveTemplateWiring(cfg *config.Config, rec agentstore.Record, tmpl confi
 		// reach the agent, making restart a silent no-op for env-delivered
 		// fixes and leaving reset — which discards the conversation — as the
 		// only way in.
-		// Named environments come from current config, so they are current by
-		// definition and shadow the stale stored keys too.
-		owned := mergeEnv(newHarnessEnv, named)
+		// Named environments and the template's literal env come from current
+		// config (expanded), so they are current by definition and shadow the
+		// stale stored keys too — a stored raw "~/x" must not outlive the
+		// expansion. Only unattributed keys survive from the stored env.
+		owned := mergeEnv(mergeEnv(newHarnessEnv, named), literal)
 		newEnv = applyPermissions(mergeEnv(owned, pruneEnv(rec.Env, owned)), tmpl)
 	}
 

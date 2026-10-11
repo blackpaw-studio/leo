@@ -73,3 +73,30 @@ func TestResolveRestartArgsExpandsAndReportsUnset(t *testing.T) {
 		t.Fatalf("err = %v, want unset $ROOT (restart must not run on a wrong dir)", err)
 	}
 }
+
+func TestLegacyRecordRestartUsesExpandedTemplateEnv(t *testing.T) {
+	t.Setenv("CLAUDE_CONFIG_DIR", "")
+	home, tws := t.TempDir(), t.TempDir()
+	cfg := envTestConfig(home, tws, "/a", "/b")
+	cfg.Templates["coding"] = config.TemplateConfig{Workspace: tws, Model: "sonnet", Env: map[string]string{"TOOLS": "~/tools", "REF": "$ROOT/x"}}
+	rec := agentstore.Record{
+		Name: "leo-old", Template: "coding", Harness: "claude", Workspace: t.TempDir(),
+		ClaudeArgs: []string{"--model", "sonnet", "--session-id", "s"},
+		// Stored by an older leo: raw template values plus a hand-set key.
+		Env: map[string]string{"TOOLS": "~/tools", "REF": "$ROOT/x", "HAND_SET": "1"},
+	}
+	_ = agentstore.Save(home, rec)
+	sup := &capturingSupervisor{agents: map[string]ProcessState{"leo-old": {Name: "leo-old", Status: "running"}}}
+	m := envManager(cfg, sup)
+	m.env = config.Expander{
+		Lookup: func(k string) (string, bool) { return "/r", k == "ROOT" },
+		Home:   func() (string, error) { return "/home/evan", nil },
+	}
+	if err := m.Restart("leo-old"); err != nil {
+		t.Fatal(err)
+	}
+	got := sup.spawnCall.Env
+	if got["TOOLS"] != "/home/evan/tools" || got["REF"] != "/r/x" || got["HAND_SET"] != "1" {
+		t.Fatalf("legacy restart env = %v", got)
+	}
+}
