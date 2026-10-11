@@ -325,25 +325,20 @@ func TestTemplateShow_ResolvedAppliesDefaults(t *testing.T) {
 }
 
 func TestTemplateShow_ResolvedRemoteControlMatchesSpawner(t *testing.T) {
-	// Regression test: resolveTemplate must match internal/agent/args.go,
-	// which defaults remote_control to true for templates when unset —
-	// independent of cfg.Defaults.RemoteControl. Previously the resolver
-	// fell back to cfg.Defaults.RemoteControl and reported `false` while
-	// the actual spawn sent `--remote-control`.
+	// resolveTemplate must report what internal/agent/args.go spawns:
+	// template harness_options, then defaults.harness_options, then true.
 	home := t.TempDir()
 	cfgPath := filepath.Join(home, "leo.yaml")
 	cfg := &config.Config{
 		HomePath: home,
 		Defaults: config.DefaultsConfig{
-			Model:    "sonnet",
-			MaxTurns: 25,
-			// remote_control here is irrelevant for templates even if set —
-			// the defaults layer never cascades it (see resolveTemplate).
-			HarnessOptions: map[string]any{"permission_mode": "acceptEdits"},
+			Model:          "sonnet",
+			MaxTurns:       25,
+			HarnessOptions: map[string]any{"remote_control": false},
 		},
 		Templates: map[string]config.TemplateConfig{
-			"unset":    {}, // tmpl.HarnessOptions["remote_control"] unset → should resolve true
-			"optedout": {HarnessOptions: map[string]any{"remote_control": false}},
+			"inherits":   {}, // unset → inherits defaults false
+			"overridden": {HarnessOptions: map[string]any{"remote_control": true}},
 		},
 	}
 	if err := config.Save(cfgPath, cfg); err != nil {
@@ -353,30 +348,22 @@ func TestTemplateShow_ResolvedRemoteControlMatchesSpawner(t *testing.T) {
 	cfgFile = cfgPath
 	t.Cleanup(func() { cfgFile = oldCfgFile })
 
-	unset := captureStdout(t, func() {
-		cmd := newTemplateShowCmd()
-		if err := cmd.Flags().Set("resolved", "true"); err != nil {
-			t.Fatalf("set resolved: %v", err)
-		}
-		if err := cmd.RunE(cmd, []string{"unset"}); err != nil {
-			t.Fatalf("RunE: %v", err)
-		}
-	})
-	if !strings.Contains(unset, "Remote control:        true") {
-		t.Errorf("unset template should resolve remote_control=true; got:\n%s", unset)
+	show := func(name string) string {
+		return captureStdout(t, func() {
+			cmd := newTemplateShowCmd()
+			if err := cmd.Flags().Set("resolved", "true"); err != nil {
+				t.Fatalf("set resolved: %v", err)
+			}
+			if err := cmd.RunE(cmd, []string{name}); err != nil {
+				t.Fatalf("RunE: %v", err)
+			}
+		})
 	}
-
-	optedout := captureStdout(t, func() {
-		cmd := newTemplateShowCmd()
-		if err := cmd.Flags().Set("resolved", "true"); err != nil {
-			t.Fatalf("set resolved: %v", err)
-		}
-		if err := cmd.RunE(cmd, []string{"optedout"}); err != nil {
-			t.Fatalf("RunE: %v", err)
-		}
-	})
-	if !strings.Contains(optedout, "Remote control:        false") {
-		t.Errorf("opted-out template should resolve remote_control=false; got:\n%s", optedout)
+	if out := show("inherits"); !strings.Contains(out, "Remote control:        false") {
+		t.Errorf("template should inherit defaults remote_control=false; got:\n%s", out)
+	}
+	if out := show("overridden"); !strings.Contains(out, "Remote control:        true") {
+		t.Errorf("template remote_control=true should override defaults false; got:\n%s", out)
 	}
 }
 

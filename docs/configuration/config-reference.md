@@ -271,7 +271,7 @@ templates:
 | `dev_channels` | list | No | -- | Unpublished channel plugin IDs loaded via `--dangerously-load-development-channels`. |
 | `model` | string | No | `defaults.model` | Model, validated by the resolved harness. |
 | `harness` | string | No | `defaults.harness` | Adapter override for this template. All three harnesses support ephemeral agents. See [Harnesses](harnesses.md). |
-| `harness_options` | map | No | merged with `defaults.harness_options` (same harness only), **except `remote_control`** | Adapter-specific options — for `claude`: `permission_mode`, `bypass_permissions`, `remote_control`, `agent`, `allowed_tools`, `disallowed_tools`, `append_system_prompt`. `remote_control` is template-own-only (no inheritance from `defaults.harness_options.remote_control`) and defaults to `true`. See [Harnesses](harnesses.md). |
+| `harness_options` | map | No | merged with `defaults.harness_options` (same harness only) | Adapter-specific options — for `claude`: `permission_mode`, `bypass_permissions`, `remote_control`, `agent`, `allowed_tools`, `disallowed_tools`, `append_system_prompt`. `remote_control` cascades like the rest (template, then `defaults.harness_options`) and defaults to `true` when neither sets it. See [Harnesses](harnesses.md). |
 | `max_turns` | int | No | `defaults.max_turns` | Max turns. |
 | `mcp_config` | string | No | -- | Path to MCP config file. |
 | `add_dirs` | list | No | -- | Additional directories. |

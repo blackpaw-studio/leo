@@ -130,7 +130,7 @@ templates:
     workspace: ~/agents
     harness_options:
       permission_mode: auto
-      remote_control: true    # template-own-only; see below
+      remote_control: true    # overrides defaults; unset inherits, else true
 
 tasks:
   daily-briefing:
@@ -155,11 +155,11 @@ tasks:
   `templates.foo` entry that sets `harness: claude`). This applies the same
   way whether a template backs ephemeral agents or a persistent task's
   target — the merge rule is per-scope, not per-primitive.
-- **Template `remote_control` is template-own-only.** Unlike every other
-  claude option, `templates.*.harness_options.remote_control` does *not*
-  inherit from `defaults.harness_options.remote_control` — the defaults
-  layer is ignored for this one key on templates. It defaults to `true` when
-  unset (ephemeral agents are remote-controllable out of the box).
+- **Template `remote_control` defaults to `true`.** It cascades like every other
+  claude option (template, then `defaults.harness_options`), and when neither
+  sets it, ephemeral agents launch with `--remote-control`
+  (remote-controllable out of the box). Set it to `false` in either layer to
+  turn it off.
 
 ## Claude option reference
 

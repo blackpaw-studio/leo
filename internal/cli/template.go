@@ -369,10 +369,8 @@ type effectiveTemplate struct {
 // append_system_prompt, agent, bypass_permissions) are sourced by decoding
 // the MERGED harness_options map (cfg.TemplateHarnessOptions), which
 // reproduces the old per-field fallback-to-defaults cascade — see
-// internal/config/harness.go's scopeHarnessOptions. remote_control keeps the
-// pre-migration quirk exactly as internal/agent/args.go's BuildTemplateArgs
-// does it: the defaults layer never applies to it, only the template's own
-// options can turn it off (default true).
+// internal/config/harness.go's scopeHarnessOptions. remote_control resolves
+// through cfg.TemplateRemoteControl, the same rule the spawner uses.
 func resolveTemplate(cfg *config.Config, tmpl config.TemplateConfig) (effectiveTemplate, error) {
 	decoded, err := claudeharness.Claude{}.DecodeOptions(cfg.TemplateHarnessOptions(tmpl))
 	if err != nil {
@@ -408,10 +406,7 @@ func resolveTemplate(cfg *config.Config, tmpl config.TemplateConfig) (effectiveT
 	if eff.MaxTurns == 0 {
 		eff.MaxTurns = config.DefaultMaxTurns
 	}
-	eff.RemoteControl = true
-	if v, ok := tmpl.HarnessOptions["remote_control"].(bool); ok {
-		eff.RemoteControl = v
-	}
+	eff.RemoteControl = cfg.TemplateRemoteControl(tmpl)
 	return eff, nil
 }
 

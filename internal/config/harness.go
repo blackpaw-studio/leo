@@ -81,3 +81,15 @@ func (c *Config) TaskHarnessOptions(t TaskConfig) map[string]any {
 func (c *Config) TemplateHarnessOptions(t TemplateConfig) map[string]any {
 	return c.scopeHarnessOptions(c.TemplateHarness(t), t.HarnessOptions)
 }
+
+// TemplateRemoteControl resolves whether an agent spawned from t is launched
+// with remote control: the template's own harness_options, then
+// defaults.harness_options, then true (ephemeral agents are
+// remote-controllable out of the box). The single source for the spawner and
+// `leo template show --resolved`.
+func (c *Config) TemplateRemoteControl(t TemplateConfig) bool {
+	if v, ok := c.TemplateHarnessOptions(t)["remote_control"].(bool); ok {
+		return v
+	}
+	return true
+}
