@@ -98,17 +98,22 @@ func (s *Server) handleAPIAgentAttach(w http.ResponseWriter, r *http.Request) {
 	}
 	defer proc.Close() //nolint:errcheck
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	// The reader gets its own context, canceled only after the close
+	// handshake: canceling a blocked conn.Read tears the connection down,
+	// which would race the close frame and leave the client with a bare EOF.
+	readCtx, cancelRead := context.WithCancel(context.Background())
+	defer cancelRead()
+	writeCtx, cancelWrite := context.WithCancel(context.Background())
+	defer cancelWrite()
 	end := make(chan attachEnd, 3)
-	go pumpAttachOutput(ctx, conn, proc, end)
-	go readAttachControl(ctx, conn, proc, end)
+	go pumpAttachOutput(writeCtx, conn, proc, end)
+	go readAttachControl(readCtx, conn, proc, end)
 	ticks, stop := s.attachTicker(attachHeartbeat)
 	defer stop()
-	go sendAttachHeartbeats(ctx, conn, ticks, end)
+	go sendAttachHeartbeats(writeCtx, conn, ticks, end)
 
 	reason := <-end
-	cancel()
+	cancelWrite()
 	if reason.now {
 		return
 	}
