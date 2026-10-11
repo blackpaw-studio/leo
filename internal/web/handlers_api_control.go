@@ -53,15 +53,15 @@ func (s *Server) ControlHandler() http.Handler {
 // operator bearer token or an SSO identity from a trusted proxy — as
 // opposed to an agent token, which also passes /api/* bearer auth.
 func (s *Server) isOperator(r *http.Request) bool {
-	return matchesAnyToken(extractBearer(r.Header.Get("Authorization")), []string{s.apiToken}) || proxyAuthenticated(r, s.trustedProxies)
+	return s.isOperatorBearer(extractBearer(r.Header.Get("Authorization"))) || proxyAuthenticated(r, s.trustedProxies)
 }
 
 // requireOperatorToken refuses, with 403, any caller without the operator
-// bearer token. Unlike isOperator it does not accept a trusted proxy's SSO
+// bearer token (or a paired device's, which is operator-equivalent). Unlike isOperator it does not accept a trusted proxy's SSO
 // identity: the control routes drive agents, so they take the token alone.
 func (s *Server) requireOperatorToken(h http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if !matchesAnyToken(extractBearer(r.Header.Get("Authorization")), []string{s.apiToken}) {
+		if !s.isOperatorBearer(extractBearer(r.Header.Get("Authorization"))) {
 			writeJSON(w, http.StatusForbidden, apiResponse{Error: "operator token required"})
 			return
 		}

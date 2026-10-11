@@ -38,7 +38,17 @@ var loopbackHosts = map[string]struct{}{
 //
 // extraHosts lists additional hostnames/IPs (beyond loopback) that are
 // permitted — used when the web UI is bound to a LAN interface.
-func hostOriginMiddleware(port int, extraHosts []string, trusted []netip.Prefix, next http.Handler) http.Handler {
+//
+// public lists exact origins (web.public_urls) whose Host and Origin are
+// accepted verbatim, without the listener-port requirement: a tunnel or
+// reverse proxy serves them on its own port.
+func hostOriginMiddleware(port int, extraHosts []string, trusted []netip.Prefix, next http.Handler, public ...publicOrigin) http.Handler {
+	publicHosts := make(map[string]struct{}, len(public))
+	publicOriginSet := make(map[string]struct{}, len(public))
+	for _, p := range public {
+		publicHosts[p.host] = struct{}{}
+		publicOriginSet[p.origin] = struct{}{}
+	}
 	allowed := make(map[string]struct{}, len(loopbackHosts)+len(extraHosts))
 	for k := range loopbackHosts {
 		allowed[k] = struct{}{}
@@ -49,11 +59,17 @@ func hostOriginMiddleware(port int, extraHosts []string, trusted []netip.Prefix,
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		peer, parsed := peerAddr(r)
 		requirePort := !parsed || !isTrustedPeer(peer, trusted)
-		if err := checkHost(r.Host, port, allowed, requirePort); err != nil {
-			http.Error(w, "forbidden host", http.StatusForbidden)
-			return
+		if _, ok := publicHosts[strings.ToLower(r.Host)]; !ok {
+			if err := checkHost(r.Host, port, allowed, requirePort); err != nil {
+				http.Error(w, "forbidden host", http.StatusForbidden)
+				return
+			}
 		}
 		if origin := r.Header.Get("Origin"); origin != "" {
+			if _, ok := publicOriginSet[strings.ToLower(origin)]; ok {
+				next.ServeHTTP(w, r)
+				return
+			}
 			if err := checkOrigin(origin, port, allowed, requirePort); err != nil {
 				http.Error(w, "forbidden origin", http.StatusForbidden)
 				return
@@ -61,6 +77,29 @@ func hostOriginMiddleware(port int, extraHosts []string, trusted []netip.Prefix,
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+// publicOrigin is one web.public_urls entry reduced to the exact Host header
+// ("host" or "host:port", lowercased) and Origin ("scheme://host[:port]")
+// it is reached by.
+type publicOrigin struct {
+	host   string
+	origin string
+}
+
+// publicOrigins parses web.public_urls, skipping entries that do not parse
+// (config validation rejects them before they get here).
+func publicOrigins(urls []string) []publicOrigin {
+	out := make([]publicOrigin, 0, len(urls))
+	for _, raw := range urls {
+		u, err := url.Parse(raw)
+		if err != nil || u.Host == "" || (u.Scheme != "http" && u.Scheme != "https") {
+			continue
+		}
+		host := strings.ToLower(u.Host)
+		out = append(out, publicOrigin{host: host, origin: strings.ToLower(u.Scheme) + "://" + host})
+	}
+	return out
 }
 
 // checkHost parses an HTTP Host header ("host:port" or bracketed "[ipv6]:port")
@@ -185,6 +224,13 @@ func matchesAnyToken(got string, accepted []string) bool {
 // Multiple tokens exist because agents get their own, less privileged one —
 // see EnsureAgentToken.
 func bearerAuthMiddleware(tokens []string, trusted []netip.Prefix, next http.Handler) http.Handler {
+	return bearerAuthWith(tokens, nil, trusted, next)
+}
+
+// bearerAuthWith is bearerAuthMiddleware that also accepts any bearer for
+// which extra (if non-nil) reports true — paired device tokens, which live in
+// a store rather than a fixed list.
+func bearerAuthWith(tokens []string, extra func(string) bool, trusted []netip.Prefix, next http.Handler) http.Handler {
 	configured := false
 	for _, tok := range tokens {
 		if tok != "" {
@@ -209,13 +255,24 @@ func bearerAuthMiddleware(tokens []string, trusted []netip.Prefix, next http.Han
 			http.Error(w, "missing bearer token", http.StatusUnauthorized)
 			return
 		}
-		if !matchesAnyToken(got, tokens) {
+		if !acceptsBearer(got, tokens, extra) {
 			w.Header().Set("WWW-Authenticate", `Bearer realm="leo"`)
 			http.Error(w, "invalid bearer token", http.StatusUnauthorized)
 			return
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+// acceptsBearer reports whether got matches one of tokens or, when extra is
+// non-nil, satisfies it. Both checks always run so timing does not reveal
+// which kind of credential matched.
+func acceptsBearer(got string, tokens []string, extra func(string) bool) bool {
+	ok := matchesAnyToken(got, tokens)
+	if extra != nil && got != "" && extra(got) {
+		ok = true
+	}
+	return ok
 }
 
 // extractBearer returns the token from an "Authorization: Bearer xxx" header,
