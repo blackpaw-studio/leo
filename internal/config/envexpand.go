@@ -43,6 +43,28 @@ func (e *UnsetVariableError) Error() string {
 	return fmt.Sprintf("%s: variable $%s is not set", where, e.Var)
 }
 
+// MalformedReferenceError reports a "${" reference that is unterminated or
+// has an invalid name. It carries the byte offset of the "$" and a fixed
+// reason, never the value's text: values may hold credentials, and these
+// errors reach logs and `leo validate` output.
+type MalformedReferenceError struct {
+	Scope, Key string
+	Offset     int
+	Reason     string
+}
+
+func (e *MalformedReferenceError) Error() string {
+	where := e.Key
+	if e.Scope != "" {
+		where = e.Scope + "." + e.Key
+	}
+	msg := fmt.Sprintf("%s at byte %d", e.Reason, e.Offset)
+	if where != "" {
+		return where + ": " + msg
+	}
+	return msg
+}
+
 func (x Expander) lookup(name string) (string, bool) {
 	if x.Lookup != nil {
 		return x.Lookup(name)
@@ -81,6 +103,7 @@ func (x Expander) Expand(s string) (string, error) {
 		}
 		name, width, err := parseVarRef(rest[i:])
 		if err != nil {
+			err.Offset += len(s) - len(rest) + i
 			return "", err
 		}
 		switch {
@@ -105,7 +128,7 @@ func (x Expander) Expand(s string) (string, error) {
 // parseVarRef parses the reference at the start of s (s[0] == '$'). It
 // returns the variable name and the bytes consumed; width 0 means a literal
 // "$", and name "$" with width 2 means the "$$" escape.
-func parseVarRef(s string) (name string, width int, err error) {
+func parseVarRef(s string) (name string, width int, err *MalformedReferenceError) {
 	if len(s) < 2 {
 		return "", 0, nil
 	}
@@ -115,11 +138,11 @@ func parseVarRef(s string) (name string, width int, err error) {
 	case s[1] == '{':
 		end := strings.IndexByte(s, '}')
 		if end < 0 {
-			return "", 0, fmt.Errorf("unterminated ${ in %q", s)
+			return "", 0, &MalformedReferenceError{Reason: "unterminated ${ reference"}
 		}
 		name = s[2:end]
 		if !isVarName(name) {
-			return "", 0, fmt.Errorf("invalid variable name %q in %q", name, s[:end+1])
+			return "", 0, &MalformedReferenceError{Reason: "invalid variable name in ${...} reference"}
 		}
 		return name, end + 1, nil
 	case isNameStart(s[1]):
@@ -165,8 +188,11 @@ func (x Expander) expandMap(scope string, env map[string]string) (map[string]str
 }
 
 func scoped(err error, scope, key string) error {
-	if unset, ok := err.(*UnsetVariableError); ok {
-		return &UnsetVariableError{Scope: scope, Key: key, Var: unset.Var}
+	switch e := err.(type) {
+	case *UnsetVariableError:
+		return &UnsetVariableError{Scope: scope, Key: key, Var: e.Var}
+	case *MalformedReferenceError:
+		return &MalformedReferenceError{Scope: scope, Key: key, Offset: e.Offset, Reason: e.Reason}
 	}
 	return fmt.Errorf("%s.%s: %w", scope, key, err)
 }

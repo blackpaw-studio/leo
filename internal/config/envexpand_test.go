@@ -220,3 +220,40 @@ func TestLoadSaveKeepsVariableReferencesLiteral(t *testing.T) {
 		}
 	}
 }
+
+func TestExpansionErrorsNeverEchoValueContents(t *testing.T) {
+	const secret = "hunter2-secret"
+	x := fakeExpander(nil)
+	cases := map[string]string{
+		"unterminated": "prefix${" + secret + "-tail",
+		"bad name":     "pw-${" + secret + " x}",
+		"unset":        "pw-" + secret + "-$NOPE",
+	}
+	for name, value := range cases {
+		t.Run(name, func(t *testing.T) {
+			c := &Config{Environments: map[string]map[string]string{"b": {"TOKEN": value}}, Templates: map[string]TemplateConfig{"t": {Env: map[string]string{"T": value}}}}
+			_, err := c.ResolveEnv([]string{"b"}, nil, nil, x)
+			if err == nil {
+				t.Fatal("want error")
+			}
+			msgs := append([]string{err.Error()}, c.EnvironmentWarnings(x)...)
+			for _, m := range msgs {
+				if strings.Contains(m, secret) {
+					t.Errorf("message leaks value contents: %q", m)
+				}
+			}
+			if name != "unset" && !strings.Contains(err.Error(), "environments.b.TOKEN") {
+				t.Errorf("error lacks scope/key: %q", err)
+			}
+		})
+	}
+	_, err := x.Expand("ab${oops")
+	var bad *MalformedReferenceError
+	if !errors.As(err, &bad) || bad.Offset != 2 {
+		t.Fatalf("want *MalformedReferenceError at byte 2, got %v", err)
+	}
+	_, err = fakeExpander(nil).Expand("$NOPE")
+	if err == nil || !strings.Contains(err.Error(), "$NOPE") {
+		t.Fatalf("unset error must name the variable: %v", err)
+	}
+}
