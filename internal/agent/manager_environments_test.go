@@ -101,7 +101,7 @@ func savedLayeredAgent(t *testing.T, cfg *config.Config, override []string) (age
 	t.Helper()
 	ws := t.TempDir()
 	tmpl := cfg.Templates["coding"]
-	env, err := cfg.ResolveEnv(cfg.EnvironmentNames(override, tmpl.Environments), tmpl.Env, nil)
+	env, err := cfg.ResolveEnv(cfg.EnvironmentNames(override, tmpl.Environments), tmpl.Env, nil, config.Expander{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -355,7 +355,7 @@ func TestRestartReResolvesEnvironmentsOfImplicitPersistentTaskAgent(t *testing.T
 	if err != nil || !implicit {
 		t.Fatalf("setup: implicit=%v err=%v", implicit, err)
 	}
-	env, err := cfg.ResolveEnv(tmpl.Environments, nil, nil)
+	env, err := cfg.ResolveEnv(tmpl.Environments, nil, nil, config.Expander{})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -113,7 +113,10 @@ func TestTaskDryRunEnv(t *testing.T) {
 	for _, tc := range cases {
 		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
-			got := taskDryRunEnv(&config.Config{}, tc.task)
+			got, err := taskDryRunEnv(&config.Config{}, tc.task, config.Expander{})
+			if err != nil {
+				t.Fatal(err)
+			}
 			if len(got) != len(tc.want) {
 				t.Fatalf("len mismatch: got %v want %v", got, tc.want)
 			}
@@ -128,9 +131,26 @@ func TestTaskDryRunEnv(t *testing.T) {
 
 func TestTaskDryRunEnvShowsNamedEnvironments(t *testing.T) {
 	cfg := &config.Config{Environments: map[string]map[string]string{"acct-b": {"CLAUDE_CONFIG_DIR": "/b", "SHARED": "env"}}}
-	got := taskDryRunEnv(cfg, config.TaskConfig{Environments: []string{"acct-b"}, Env: map[string]string{"SHARED": "literal"}})
+	got, err := taskDryRunEnv(cfg, config.TaskConfig{Environments: []string{"acct-b"}, Env: map[string]string{"SHARED": "literal"}}, config.Expander{})
+	if err != nil {
+		t.Fatal(err)
+	}
 	want := []envPair{{key: "CLAUDE_CONFIG_DIR", display: "/b"}, {key: "SHARED", display: "literal"}}
 	if len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
 		t.Fatalf("got %+v, want %+v", got, want)
+	}
+}
+
+func TestTaskDryRunEnvShowsExpandedValuesAndFailsOnUnset(t *testing.T) {
+	cfg := &config.Config{Environments: map[string]map[string]string{"b": {"CLAUDE_CONFIG_DIR": "${ROOT}/.claude-b"}}}
+	lookup := func(k string) (string, bool) { return "/r", k == "ROOT" }
+	x := config.Expander{Lookup: lookup}
+	got, err := taskDryRunEnv(cfg, config.TaskConfig{Environments: []string{"b"}}, x)
+	if err != nil || len(got) != 1 || got[0].display != "/r/.claude-b" {
+		t.Fatalf("got %+v, %v", got, err)
+	}
+	unset := config.Expander{Lookup: func(string) (string, bool) { return "", false }}
+	if _, err := taskDryRunEnv(cfg, config.TaskConfig{Environments: []string{"b"}}, unset); err == nil {
+		t.Fatal("want error for unset variable, as a real run would fail")
 	}
 }

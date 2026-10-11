@@ -52,6 +52,9 @@ func invalidf(format string, args ...any) error {
 }
 
 type Dispatcher struct {
+	// Env expands variables in environment values; the zero value reads the
+	// daemon's own process environment.
+	Env   config.Expander
 	slots *slotLimiter
 	// exempt is the unlimited limiter runs started under a live dispatch use
 	// in place of slots, so every slot code path works unchanged for them.
@@ -330,7 +333,7 @@ func (d *Dispatcher) Start(_ context.Context, cfg *config.Config, req Request) (
 	if err != nil {
 		return Started{}, invalidf("template %q harness_options: %v", req.Template, err)
 	}
-	tmplEnv, err := cfg.TemplateEnv(tmpl)
+	tmplEnv, err := cfg.TemplateEnv(tmpl, d.Env)
 	if err != nil {
 		return Started{}, invalidf("template %q: %v", req.Template, err)
 	}

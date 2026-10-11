@@ -62,7 +62,7 @@ func (m *Manager) StaleAgents() []StaleAgent {
 		if !ok {
 			continue
 		}
-		newArgs, newEnv, err := resolveRestartArgs(cfg, rec, m.webToken, m.leoMCP)
+		newArgs, newEnv, err := resolveRestartArgs(cfg, rec, m.webToken, m.leoMCP, m.env)
 		if err != nil {
 			// A restart would refuse: surface why instead of reporting no drift.
 			out = append(out, StaleAgent{Name: name, EnvironmentError: err.Error()})

@@ -88,7 +88,7 @@ func TestResolveEnvPrecedence(t *testing.T) {
 	c := envCfg()
 	literal := map[string]string{"SHARED": "literal", "LIT": "1"}
 	spawn := map[string]string{"SHARED": "spawn"}
-	got, err := c.ResolveEnv([]string{"base", "acct-b"}, literal, spawn)
+	got, err := c.ResolveEnv([]string{"base", "acct-b"}, literal, spawn, Expander{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -102,7 +102,7 @@ func TestResolveEnvPrecedence(t *testing.T) {
 }
 
 func TestResolveEnvNoLayersIsNil(t *testing.T) {
-	got, err := (&Config{}).ResolveEnv(nil, nil, nil)
+	got, err := (&Config{}).ResolveEnv(nil, nil, nil, Expander{})
 	if err != nil || got != nil {
 		t.Fatalf("got %v, %v; want nil, nil", got, err)
 	}
@@ -148,22 +148,5 @@ func TestValidateEnvironments(t *testing.T) {
 	}
 	if err := base().Validate(); err != nil {
 		t.Fatalf("valid config rejected: %v", err)
-	}
-}
-
-func TestEnvironmentWarningsFlagLiteralTilde(t *testing.T) {
-	c := minimalValidConfig()
-	c.Environments = map[string]map[string]string{
-		"acct-b": {"CLAUDE_CONFIG_DIR": "~/.claude-b", "CODEX_HOME": "~/.codex-b", "FOO": "~/ok"},
-		"fine":   {"CLAUDE_CONFIG_DIR": "/Users/evan/.claude-b"},
-	}
-	got := c.EnvironmentWarnings()
-	if len(got) != 2 {
-		t.Fatalf("want 2 warnings, got %v", got)
-	}
-	for _, w := range got {
-		if !strings.Contains(w, "acct-b") || !strings.Contains(w, "~") {
-			t.Fatalf("unexpected warning %q", w)
-		}
 	}
 }

@@ -142,8 +142,16 @@ func Preview(cfg *config.Config, taskName string, sessions *session.Store, mcp l
 	return prompt, args, nil
 }
 
-// Run executes a scheduled task.
+// Run executes a scheduled task, expanding environment variables from the
+// calling process (see RunWith).
 func Run(cfg *config.Config, taskName string, sessions *session.Store, mcp leomcp.Server) error {
+	return RunWith(cfg, taskName, sessions, mcp, config.Expander{})
+}
+
+// RunWith executes a scheduled task. x expands "$VAR" and "~" in the task's
+// environment values; a variable x does not have fails the run before the
+// harness starts.
+func RunWith(cfg *config.Config, taskName string, sessions *session.Store, mcp leomcp.Server, x config.Expander) error {
 	task, err := resolveTask(cfg, taskName)
 	if err != nil {
 		return err
@@ -218,7 +226,7 @@ func Run(cfg *config.Config, taskName string, sessions *session.Store, mcp leomc
 	// runTaskAttempt — but the notify-on-fail child below stays claude-only
 	// by construction and adds that env explicitly, so this plain two-way
 	// merge is what it uses.
-	taskEnv, err := cfg.TaskEnv(task)
+	taskEnv, err := cfg.TaskEnv(task, x)
 	if err != nil {
 		return fmt.Errorf("task %q: %w", taskName, err)
 	}

@@ -91,7 +91,7 @@ func collectValidateFindings(ctx context.Context) ([]Finding, *config.Config) {
 	for _, message := range cfg.DelegationWarnings() {
 		add(SeverityWarn, "delegation", message)
 	}
-	for _, message := range cfg.EnvironmentWarnings() {
+	for _, message := range cfg.EnvironmentWarnings(config.Expander{}) {
 		add(SeverityWarn, "environments", message)
 	}
 

@@ -136,7 +136,7 @@ func (m *Manager) SwitchTemplate(name, template string) (SwitchResult, error) {
 	// Resolve the new wiring BEFORE stopping anything: a template that cannot
 	// produce launch args must fail the switch with the agent still running,
 	// not leave it dead on a template it never reached.
-	args, env, err := resolveTemplateWiring(cfg, next, tmpl, m.webToken, m.leoMCP, rebuildEnvFromTemplate)
+	args, env, err := resolveTemplateWiring(cfg, next, tmpl, m.webToken, m.leoMCP, rebuildEnvFromTemplate, m.env)
 	if errors.Is(err, errWiringNotBuilt) {
 		return SwitchResult{}, fmt.Errorf("building %s wiring for template %q failed (agent left on %q; see the daemon log)", next.Harness, template, rec.Template)
 	}
