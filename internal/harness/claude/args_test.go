@@ -76,7 +76,7 @@ func TestAgentArgs(t *testing.T) {
 				"--dangerously-load-development-channels", "plugin:dev@local",
 				"--add-dir", "/ws",
 				"--add-dir", "/extra1",
-				"--remote-control",
+				"--remote-control", "my-agent",
 				"--name", "my-agent",
 				"--settings", `{"crossSessionInbound":"accept"}`,
 				"--permission-mode", "acceptEdits",

@@ -39,7 +39,12 @@ func agentArgs(spec harness.LaunchSpec, o Options) []string {
 		args = append(args, "--add-dir", dir)
 	}
 	if o.RemoteControl {
+		// Naming the Remote Control session after the agent makes it
+		// findable by name in the Claude app.
 		args = append(args, "--remote-control")
+		if spec.Name != "" {
+			args = append(args, spec.Name)
+		}
 	}
 	args = append(args, "--name", spec.Name)
 	args = append(args, strictMCPArgs(o)...)

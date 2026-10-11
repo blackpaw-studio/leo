@@ -94,7 +94,7 @@ func TestBuildTemplateArgsCharacterization(t *testing.T) {
 			want: []string{
 				"--model", "opus",
 				"--add-dir", "/tmp/ws",
-				"--remote-control",
+				"--remote-control", "myagent",
 				"--name", "myagent",
 				"--settings", `{"crossSessionInbound":"accept"}`,
 				"--append-system-prompt", leoSkillNudgeText,
@@ -155,7 +155,7 @@ func TestBuildTemplateArgsCharacterization(t *testing.T) {
 				"--model", "opus",
 				"--add-dir", "/tmp/ws",
 				"--add-dir", "/ok/dir",
-				"--remote-control",
+				"--remote-control", "myagent",
 				"--name", "myagent",
 				"--settings", `{"crossSessionInbound":"accept"}`,
 				"--append-system-prompt", leoSkillNudgeText,
@@ -176,7 +176,7 @@ func TestBuildTemplateArgsCharacterization(t *testing.T) {
 			want: []string{
 				"--model", "opus",
 				"--add-dir", "/tmp/ws",
-				"--remote-control",
+				"--remote-control", "myagent",
 				"--name", "myagent",
 				"--settings", `{"crossSessionInbound":"accept"}`,
 				"--agent", "shared-agent",
@@ -242,7 +242,7 @@ func TestBuildTemplateArgsCharacterization(t *testing.T) {
 			want: []string{
 				"--model", "opus",
 				"--add-dir", "/tmp/ws",
-				"--remote-control",
+				"--remote-control", "myagent",
 				"--name", "myagent",
 				"--settings", `{"crossSessionInbound":"accept"}`,
 				"--append-system-prompt", leoSkillNudgeText,
