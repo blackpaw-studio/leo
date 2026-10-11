@@ -86,7 +86,9 @@ func newAttachHarness(t *testing.T) *attachHarness {
 	return h
 }
 
-func (h *attachHarness) dial(t *testing.T, path, token string) (*websocket.Conn, *http.Response, error) {
+// dial opens the attach socket, returning the handshake status on failure.
+// The connection is closed at test cleanup.
+func (h *attachHarness) dial(t *testing.T, path, token string) (*websocket.Conn, int, error) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -94,7 +96,18 @@ func (h *attachHarness) dial(t *testing.T, path, token string) (*websocket.Conn,
 	if token != "" {
 		header.Set("Authorization", "Bearer "+token)
 	}
-	return websocket.Dial(ctx, "ws"+strings.TrimPrefix(h.ts.URL, "http")+path, &websocket.DialOptions{HTTPHeader: header})
+	c, resp, err := websocket.Dial(ctx, "ws"+strings.TrimPrefix(h.ts.URL, "http")+path, &websocket.DialOptions{HTTPHeader: header})
+	status := 0
+	if resp != nil {
+		status = resp.StatusCode
+		if resp.Body != nil {
+			_ = resp.Body.Close()
+		}
+	}
+	if c != nil {
+		t.Cleanup(func() { _ = c.CloseNow() })
+	}
+	return c, status, err
 }
 
 func readFrame(t *testing.T, c *websocket.Conn) (websocket.MessageType, []byte) {
@@ -132,7 +145,6 @@ func TestAttachStreamsOutputAsBinaryFrames(t *testing.T) {
 	if err != nil {
 		t.Fatalf("dial: %v", err)
 	}
-	defer c.CloseNow()
 
 	go func() { _, _ = h.proc.out.Write([]byte("\x1b[1mhello\x1b[0m")) }()
 	typ, data := readFrame(t, c)
@@ -152,7 +164,6 @@ func TestAttachControlPingPongAndResize(t *testing.T) {
 	if err != nil {
 		t.Fatalf("dial: %v", err)
 	}
-	defer c.CloseNow()
 
 	writeText(t, c, `{"type":"ping"}`)
 	typ, data := readFrame(t, c)
@@ -177,7 +188,6 @@ func TestAttachSendsHeartbeatPing(t *testing.T) {
 	if err != nil {
 		t.Fatalf("dial: %v", err)
 	}
-	defer c.CloseNow()
 
 	h.ticks <- time.Now()
 	typ, data := readFrame(t, c)
@@ -192,7 +202,6 @@ func TestAttachRejectsInputFrames(t *testing.T) {
 	if err != nil {
 		t.Fatalf("dial: %v", err)
 	}
-	defer c.CloseNow()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -212,7 +221,7 @@ func TestAttachCleansUpOnClientDisconnect(t *testing.T) {
 	if err != nil {
 		t.Fatalf("dial: %v", err)
 	}
-	c.CloseNow()
+	_ = c.CloseNow()
 	waitClosed(t, h.proc)
 }
 
@@ -222,7 +231,6 @@ func TestAttachClosesWhenSessionEnds(t *testing.T) {
 	if err != nil {
 		t.Fatalf("dial: %v", err)
 	}
-	defer c.CloseNow()
 	_ = h.proc.out.Close() // tmux client exited
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -245,12 +253,12 @@ func TestAttachRefusals(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			_, resp, err := h.dial(t, tc.path, tc.token)
+			_, status, err := h.dial(t, tc.path, tc.token)
 			if err == nil {
 				t.Fatal("dial succeeded")
 			}
-			if resp == nil || resp.StatusCode != tc.want {
-				t.Fatalf("resp = %v, want %d", resp, tc.want)
+			if status != tc.want {
+				t.Fatalf("status = %d, want %d", status, tc.want)
 			}
 		})
 	}

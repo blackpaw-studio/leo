@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"os"
 	"os/exec"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -31,9 +32,9 @@ const (
 	attachReadLimit = 4 << 10
 	attachBufSize   = 32 << 10
 
-	defaultAttachCols = 80
-	defaultAttachRows = 24
-	maxAttachDim      = 1000
+	defaultAttachCols uint16 = 80
+	defaultAttachRows uint16 = 24
+	maxAttachDim             = 1000
 )
 
 // attachProc is a running read-only tmux client: its terminal output, a
@@ -197,13 +198,13 @@ func writeAttachFrame(ctx context.Context, conn *websocket.Conn, typ websocket.M
 
 // attachSize reads the optional initial terminal size from ?cols=&rows=.
 func attachSize(q url.Values) (cols, rows uint16, err error) {
-	dim := func(key string, def int) (uint16, error) {
+	dim := func(key string, def uint16) (uint16, error) {
 		raw := q.Get(key)
 		if raw == "" {
-			return uint16(def), nil
+			return def, nil
 		}
-		n, err := strconv.Atoi(raw)
-		if err != nil || !validAttachDim(n) {
+		n, err := strconv.ParseUint(raw, 10, 16)
+		if err != nil || n < 1 || n > maxAttachDim {
 			return 0, errors.New(key + " must be an integer in 1-" + strconv.Itoa(maxAttachDim))
 		}
 		return uint16(n), nil
@@ -229,14 +230,11 @@ func defaultAttachTicker(d time.Duration) (<-chan time.Time, func()) {
 // $TMUX, which would make tmux refuse to nest.
 func attachCommand(tmuxPath, session string) *exec.Cmd {
 	cmd := exec.Command(tmuxPath, tmux.Args("-u", "attach-session", "-r", "-t", tmux.Target(session))...)
-	env := make([]string, 0, len(os.Environ())+1)
-	for _, kv := range os.Environ() {
-		if strings.HasPrefix(kv, "TMUX=") || strings.HasPrefix(kv, "TMUX_PANE=") || strings.HasPrefix(kv, "TERM=") {
-			continue
-		}
-		env = append(env, kv)
-	}
-	cmd.Env = append(env, "TERM=xterm-256color")
+	env := slices.DeleteFunc(os.Environ(), func(kv string) bool {
+		return strings.HasPrefix(kv, "TMUX=") || strings.HasPrefix(kv, "TMUX_PANE=") || strings.HasPrefix(kv, "TERM=")
+	})
+	env = append(env, "TERM=xterm-256color")
+	cmd.Env = env
 	return cmd
 }
 

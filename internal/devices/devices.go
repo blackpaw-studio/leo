@@ -323,12 +323,14 @@ func (s *Store) unexpired(codes []pendingCode) []pendingCode {
 
 func (s *Store) loadDevices() (devicesDoc, error) {
 	var doc devicesDoc
-	return doc, readJSON(filepath.Join(s.dir, devicesFile), &doc)
+	err := readJSON(filepath.Join(s.dir, devicesFile), &doc)
+	return doc, err
 }
 
 func (s *Store) loadPairing() (pairingDoc, error) {
 	var doc pairingDoc
-	return doc, readJSON(filepath.Join(s.dir, pairingFile), &doc)
+	err := readJSON(filepath.Join(s.dir, pairingFile), &doc)
+	return doc, err
 }
 
 // withLock runs fn holding an exclusive flock on the store's lock file.
@@ -341,10 +343,12 @@ func (s *Store) withLock(fn func() error) error {
 		return fmt.Errorf("devices: opening lock: %w", err)
 	}
 	defer f.Close()
-	if err := unix.Flock(int(f.Fd()), unix.LOCK_EX); err != nil {
+	// #nosec G115 -- fd values are small positive ints; uintptr→int fits on all supported platforms
+	fd := int(f.Fd())
+	if err := unix.Flock(fd, unix.LOCK_EX); err != nil {
 		return fmt.Errorf("devices: locking: %w", err)
 	}
-	defer unix.Flock(int(f.Fd()), unix.LOCK_UN) //nolint:errcheck
+	defer unix.Flock(fd, unix.LOCK_UN) //nolint:errcheck
 	return fn()
 }
 
