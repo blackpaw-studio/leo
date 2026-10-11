@@ -257,6 +257,9 @@ type Server struct {
 	// heartbeat clock. Both are test seams.
 	startAttach  func(session string, cols, rows uint16) (attachProc, error)
 	attachTicker func(time.Duration) (<-chan time.Time, func())
+	// revocationTicker paces open device streams' token re-checks (see
+	// watchDeviceRevocation). A test seam.
+	revocationTicker func(time.Duration) (<-chan time.Time, func())
 
 	// version is reported as Snapshot.LeoVersion. Wired via WithVersion;
 	// empty means the caller didn't provide one.
@@ -491,7 +494,8 @@ func New(configPath string, processes ProcessStateProvider, scheduler SchedulerP
 		pairLimiter:        newPairLimiter(),
 		now:                time.Now,
 		startAttach:        startTmuxAttach,
-		attachTicker:       defaultAttachTicker,
+		attachTicker:       realTicker,
+		revocationTicker:   realTicker,
 	}
 	for _, opt := range extra {
 		opt(s)

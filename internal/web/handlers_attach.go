@@ -105,7 +105,17 @@ func (s *Server) handleAPIAgentAttach(w http.ResponseWriter, r *http.Request) {
 	defer cancelRead()
 	writeCtx, cancelWrite := context.WithCancel(context.Background())
 	defer cancelWrite()
-	end := make(chan attachEnd, 3)
+	end := make(chan attachEnd, 4)
+	// A revoked device loses its view promptly (the lost-phone case).
+	revoked, stopWatch := s.watchDeviceRevocation(r)
+	defer stopWatch()
+	go func() {
+		select {
+		case <-revoked:
+			end <- attachEnd{code: websocket.StatusPolicyViolation, reason: "device revoked"}
+		case <-writeCtx.Done():
+		}
+	}()
 	go pumpAttachOutput(writeCtx, conn, proc, end)
 	go readAttachControl(readCtx, conn, proc, end)
 	ticks, stop := s.attachTicker(attachHeartbeat)
@@ -223,8 +233,9 @@ func attachSize(q url.Values) (cols, rows uint16, err error) {
 
 func validAttachDim(n int) bool { return n >= 1 && n <= maxAttachDim }
 
-// defaultAttachTicker is the production heartbeat clock.
-func defaultAttachTicker(d time.Duration) (<-chan time.Time, func()) {
+// realTicker is the production clock for the attach heartbeat and the
+// revocation watcher.
+func realTicker(d time.Duration) (<-chan time.Time, func()) {
 	t := time.NewTicker(d)
 	return t.C, t.Stop
 }
