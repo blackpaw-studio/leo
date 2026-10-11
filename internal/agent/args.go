@@ -81,13 +81,7 @@ func resolveTemplateLaunch(cfg *config.Config, tmpl config.TemplateConfig, agent
 
 	switch opts := decoded.(type) {
 	case claudeharness.Options:
-		// Agents default remote_control to true, and only the template's own
-		// options can turn it off — the defaults layer never applied to
-		// templates pre-migration and still doesn't (see plan: preserved quirks).
-		opts.RemoteControl = true
-		if v, ok := tmpl.HarnessOptions["remote_control"].(bool); ok {
-			opts.RemoteControl = v
-		}
+		opts.RemoteControl = cfg.TemplateRemoteControl(tmpl)
 		opts.MCPConfigPath = mcpConfig
 		opts.LeoMCPArgs = mcp.AppendArg(nil, cfg)
 		opts.LeoMCPToolTimeout = leomcp.ToolTimeout

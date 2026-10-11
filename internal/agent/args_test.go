@@ -186,7 +186,7 @@ func TestBuildTemplateArgsCharacterization(t *testing.T) {
 			},
 		},
 		{
-			name: "template's own remote_control:false suppresses flag even when defaults.harness_options.remote_control:true",
+			name: "template remote_control:false overrides defaults remote_control:true",
 			cfg: &config.Config{
 				HomePath: "/tmp/leo-home",
 				Defaults: config.DefaultsConfig{
@@ -200,6 +200,49 @@ func TestBuildTemplateArgsCharacterization(t *testing.T) {
 			want: []string{
 				"--model", "opus",
 				"--add-dir", "/tmp/ws",
+				"--name", "myagent",
+				"--settings", `{"crossSessionInbound":"accept"}`,
+				"--append-system-prompt", leoSkillNudgeText,
+				"--mcp-config", leoMCPConfigPath,
+				"--max-turns", "15",
+			},
+		},
+		{
+			name: "defaults remote_control:false suppresses flag when template leaves it unset",
+			cfg: &config.Config{
+				HomePath: "/tmp/leo-home",
+				Defaults: config.DefaultsConfig{
+					Model:          "opus",
+					HarnessOptions: map[string]any{"remote_control": false},
+				},
+			},
+			tmpl: config.TemplateConfig{},
+			want: []string{
+				"--model", "opus",
+				"--add-dir", "/tmp/ws",
+				"--name", "myagent",
+				"--settings", `{"crossSessionInbound":"accept"}`,
+				"--append-system-prompt", leoSkillNudgeText,
+				"--mcp-config", leoMCPConfigPath,
+				"--max-turns", "15",
+			},
+		},
+		{
+			name: "template remote_control:true overrides defaults remote_control:false",
+			cfg: &config.Config{
+				HomePath: "/tmp/leo-home",
+				Defaults: config.DefaultsConfig{
+					Model:          "opus",
+					HarnessOptions: map[string]any{"remote_control": false},
+				},
+			},
+			tmpl: config.TemplateConfig{
+				HarnessOptions: map[string]any{"remote_control": true},
+			},
+			want: []string{
+				"--model", "opus",
+				"--add-dir", "/tmp/ws",
+				"--remote-control",
 				"--name", "myagent",
 				"--settings", `{"crossSessionInbound":"accept"}`,
 				"--append-system-prompt", leoSkillNudgeText,
