@@ -120,7 +120,7 @@ func (m *Manager) SetEnvironments(name string, names []string) (SetEnvironmentsR
 
 	next := rec
 	next.Environments = names
-	args, env, err := resolveTemplateWiring(cfg, next, tmpl, m.webToken, m.leoMCP, rebuildEnvFromTemplate)
+	args, env, err := resolveTemplateWiring(cfg, next, tmpl, m.webToken, m.leoMCP, rebuildEnvFromTemplate, m.env)
 	if errors.Is(err, errWiringNotBuilt) {
 		return SetEnvironmentsResult{}, fmt.Errorf("building %s wiring for agent %q failed (agent left as it was; see the daemon log)", normalizeHarness(rec.Harness), name)
 	}

@@ -904,6 +904,45 @@ func TestInteractiveClaudeDispatchRunsUnderTemplateEnvironments(t *testing.T) {
 	}
 }
 
+func TestInteractiveDispatchExpandsEnvironmentVariables(t *testing.T) {
+	t.Setenv("CLAUDE_CONFIG_DIR", "")
+	root, cwd := t.TempDir(), t.TempDir()
+	cfg := &config.Config{
+		HomePath:     t.TempDir(),
+		Environments: map[string]map[string]string{"acct-b": {"CLAUDE_CONFIG_DIR": "${ACCT_ROOT}/.claude-b"}},
+		Templates:    map[string]config.TemplateConfig{"claude": {Harness: "claude", Model: "sonnet", Environments: []string{"acct-b"}}},
+	}
+	r := NewInteractiveRuntime("/tmp/leo.yaml", func() (*config.Config, error) { return cfg, nil }, nil, "tmux", "/opt/leo")
+	var launch []string
+	r.ExecCommandContext = func(_ context.Context, _ string, args ...string) *exec.Cmd {
+		if slices.Contains(args, "new-window") {
+			launch = append([]string(nil), args...)
+			return exec.Command("echo", "%42")
+		}
+		if slices.Contains(args, "has-session") {
+			return exec.Command("false")
+		}
+		return exec.Command("true")
+	}
+
+	r.Env = config.Expander{Lookup: func(string) (string, bool) { return "", false }}
+	_, _, err := r.Launch(context.Background(), LaunchRequest{ID: "d-unset", Template: "claude", Cwd: cwd, Dispatched: true})
+	if err == nil || !strings.Contains(err.Error(), "$ACCT_ROOT") {
+		t.Fatalf("err = %v, want unset $ACCT_ROOT", err)
+	}
+	if launch != nil {
+		t.Fatalf("pane launched despite unset variable: %v", launch)
+	}
+
+	r.Env = config.Expander{Lookup: func(k string) (string, bool) { return root, k == "ACCT_ROOT" }}
+	if _, _, err := r.Launch(context.Background(), LaunchRequest{ID: "d-set", Template: "claude", Cwd: cwd, Dispatched: true}); err != nil {
+		t.Fatal(err)
+	}
+	if !containsSeq(launch, "-e", "CLAUDE_CONFIG_DIR="+root+"/.claude-b") {
+		t.Fatalf("launch argv lacks the expanded environment: %v", launch)
+	}
+}
+
 // containsSeq reports whether args holds a then b adjacently.
 func containsSeq(args []string, a, b string) bool {
 	for i := 0; i+1 < len(args); i++ {

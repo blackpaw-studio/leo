@@ -3,13 +3,9 @@ package config
 import (
 	"fmt"
 	"maps"
-	"sort"
+	"slices"
 	"strings"
 )
-
-// pathEnvKeys are the env keys whose values are filesystem paths that leo and
-// the harnesses read verbatim — a leading "~" is never expanded.
-var pathEnvKeys = []string{"CLAUDE_CONFIG_DIR", "CODEX_HOME"}
 
 // UnknownEnvironmentError reports a reference to an environment name that is
 // not defined under the top-level `environments:` map.
@@ -36,7 +32,9 @@ func (c *Config) EnvironmentNames(override, scope []string) []string {
 
 // MergeEnvironments merges the named environments left to right; when two
 // names set the same key the later one wins. An undefined name returns an
-// *UnknownEnvironmentError. The result is a new map, nil when names is empty.
+// *UnknownEnvironmentError. Values are raw (unexpanded): use it to check
+// names, and ResolveNamed to build a launch environment. The result is a new
+// map, nil when names is empty.
 func (c *Config) MergeEnvironments(names []string) (map[string]string, error) {
 	if len(names) == 0 {
 		return nil, nil
@@ -52,21 +50,59 @@ func (c *Config) MergeEnvironments(names []string) (map[string]string, error) {
 	return merged, nil
 }
 
+// ResolveNamed merges the named environments like MergeEnvironments, with
+// every value expanded by x. Each environment is expanded before merging, so
+// an unset variable in a key a later environment overrides still fails. An
+// *UnsetVariableError names the environment, key and variable.
+func (c *Config) ResolveNamed(names []string, x Expander) (map[string]string, error) {
+	if len(names) == 0 {
+		return nil, nil
+	}
+	merged := map[string]string{}
+	for _, name := range names {
+		env, ok := c.Environments[name]
+		if !ok {
+			return nil, &UnknownEnvironmentError{Name: name}
+		}
+		expanded, err := x.expandMap("environments."+name, env)
+		if err != nil {
+			return nil, err
+		}
+		maps.Copy(merged, expanded)
+	}
+	return merged, nil
+}
+
+// ExpandLiteral expands the values of a literal `env:` map (a template's or
+// task's) with x. The result is a new map; nil in, nil out.
+func ExpandLiteral(literal map[string]string, x Expander) (map[string]string, error) {
+	if literal == nil {
+		return nil, nil
+	}
+	return x.expandMap("env", literal)
+}
+
 // ResolveEnv layers the final environment, lowest to highest precedence:
 // merged named environments, the literal `env:` map of a template or task,
-// then per-spawn `--env K=V` pairs. Inputs are not mutated. Returns nil when
-// every layer is empty.
-func (c *Config) ResolveEnv(names []string, literal, spawn map[string]string) (map[string]string, error) {
-	named, err := c.MergeEnvironments(names)
+// then per-spawn `--env K=V` pairs. The named and literal layers are expanded
+// by x (see Expander); spawn pairs are passed through as given, since the
+// caller's shell has already had its say. Inputs are not mutated. Returns nil
+// when every layer is empty.
+func (c *Config) ResolveEnv(names []string, literal, spawn map[string]string, x Expander) (map[string]string, error) {
+	named, err := c.ResolveNamed(names, x)
 	if err != nil {
 		return nil, err
 	}
-	if len(named) == 0 && len(literal) == 0 && len(spawn) == 0 {
+	lit, err := ExpandLiteral(literal, x)
+	if err != nil {
+		return nil, err
+	}
+	if len(named) == 0 && len(lit) == 0 && len(spawn) == 0 {
 		return nil, nil
 	}
 	out := map[string]string{}
 	maps.Copy(out, named)
-	maps.Copy(out, literal)
+	maps.Copy(out, lit)
 	maps.Copy(out, spawn)
 	return out, nil
 }
@@ -115,8 +151,8 @@ func (c *Config) validateEnvironmentList(path string, names []string) []string {
 
 // TaskEnv is the environment a task's process runs with: the task's (or
 // defaults') named environments beneath its literal `env:` map.
-func (c *Config) TaskEnv(t TaskConfig) (map[string]string, error) {
-	return c.ResolveEnv(c.EnvironmentNames(nil, t.Environments), t.Env, nil)
+func (c *Config) TaskEnv(t TaskConfig, x Expander) (map[string]string, error) {
+	return c.ResolveEnv(c.EnvironmentNames(nil, t.Environments), t.Env, nil, x)
 }
 
 // ValidateEnvironmentNames checks an ordered list of environment names a
@@ -136,22 +172,28 @@ type InvalidEnvironmentsError struct{ Problems []string }
 
 func (e *InvalidEnvironmentsError) Error() string { return strings.Join(e.Problems, "; ") }
 
-// EnvironmentWarnings flags path-valued keys (CLAUDE_CONFIG_DIR, CODEX_HOME)
-// that start with a literal "~": environment values are never expanded, so
-// the harness would look for a directory literally named "~".
-func (c *Config) EnvironmentWarnings() []string {
+// EnvironmentWarnings flags every environment value (named environments and
+// the literal `env:` of templates and tasks) that references a variable x does
+// not have, one warning per key. It is a warning, not an error: `leo validate`
+// sees only its own shell, and the daemon that launches agents may have a
+// different environment. A launch with the variable unset still fails.
+func (c *Config) EnvironmentWarnings(x Expander) []string {
 	var warnings []string
-	names := make([]string, 0, len(c.Environments))
-	for name := range c.Environments {
-		names = append(names, name)
-	}
-	sort.Strings(names)
-	for _, name := range names {
-		for _, key := range pathEnvKeys {
-			if v := c.Environments[name][key]; strings.HasPrefix(v, "~") {
-				warnings = append(warnings, fmt.Sprintf("environments.%s.%s = %q starts with \"~\", which is not expanded — use an absolute path", name, key, v))
+	check := func(scope string, env map[string]string) {
+		for _, k := range slices.Sorted(maps.Keys(env)) {
+			if _, err := x.Expand(env[k]); err != nil {
+				warnings = append(warnings, scoped(err, scope, k).Error()+" in this process (the launching daemon's environment may differ)")
 			}
 		}
+	}
+	for _, name := range slices.Sorted(maps.Keys(c.Environments)) {
+		check("environments."+name, c.Environments[name])
+	}
+	for _, name := range slices.Sorted(maps.Keys(c.Templates)) {
+		check("templates."+name+".env", c.Templates[name].Env)
+	}
+	for _, name := range slices.Sorted(maps.Keys(c.Tasks)) {
+		check("tasks."+name+".env", c.Tasks[name].Env)
 	}
 	return warnings
 }
@@ -159,6 +201,6 @@ func (c *Config) EnvironmentWarnings() []string {
 // TemplateEnv is the environment an agent, dispatch or consult of tmpl runs
 // with when nothing is chosen at spawn time: the template's (or defaults')
 // named environments beneath its literal `env:` map.
-func (c *Config) TemplateEnv(tmpl TemplateConfig) (map[string]string, error) {
-	return c.ResolveEnv(c.EnvironmentNames(nil, tmpl.Environments), tmpl.Env, nil)
+func (c *Config) TemplateEnv(tmpl TemplateConfig, x Expander) (map[string]string, error) {
+	return c.ResolveEnv(c.EnvironmentNames(nil, tmpl.Environments), tmpl.Env, nil, x)
 }

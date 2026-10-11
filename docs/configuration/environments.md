@@ -28,8 +28,24 @@ tasks:
 - **Composition.** `environments` is an ordered list, merged left to right. When two names set the same key, the later one wins.
 - **Cascade.** The most specific level that sets `environments` replaces the list from less specific levels: spawn / `set-environment` > task or template > `defaults`. Lists never append. At config level an empty list (`environments: []`) counts as set and clears the inherited list; at the spawn and `set-environment` surfaces an empty list means "no override".
 - **Precedence of the final env, lowest to highest:** harness env, merged named environments, the literal `env:` map on the template or task, env inherited from a source agent (a spawn derived from an existing agent), then `--env K=V` at spawn.
-- **Values are literal.** There is no `~` or `$VAR` expansion, as with `env:`. `leo validate` warns about a literal `~` in `CLAUDE_CONFIG_DIR` / `CODEX_HOME`.
+- **Variable expansion.** Values in `environments:` and in the literal `env:` of a template or task expand `$VAR`, `${VAR}` and a leading `~` / `~/` when an agent, dispatch or task launches; write `$$` for a literal `$`. Variables come from the launching process: the daemon for agents, dispatches and scheduled tasks, your shell for `leo run`. A variable that is not set fails the launch with the environment, key and variable named, rather than expanding to an empty string. `--env K=V` pairs at spawn are not expanded (your shell already did). See [Variable expansion](#variable-expansion).
 - **Validation.** `leo validate` and every config save reject an unknown environment name, a duplicate name in one list, an invalid env key or environment name, and `environments:` on a persistent task that names a `template:` (set it on the template instead).
+
+## Variable expansion
+
+```yaml
+environments:
+  acct-b:
+    CLAUDE_CONFIG_DIR: ${HOME}/.claude-b   # or $HOME/.claude-b, or ~/.claude-b
+    CODEX_HOME: ~/.codex-b
+    API_TOKEN: $ACCT_B_TOKEN                # must be set where the launch happens
+    LITERAL_DOLLAR: price$$5                # → price$5
+```
+
+- Expansion happens when an environment is resolved for a launch, never when config loads. `leo.yaml` (and a save from the web UI) keeps `${HOME}` exactly as written.
+- A `~` expands only at the start of a value and only as `~` or `~/…`; `~user` is left alone. A `$` that is not followed by a name or `{` stays literal.
+- An unset variable fails the launch, naming the scope, key and variable (for example `environments.acct-b.CLAUDE_CONFIG_DIR: variable $ACCT_ROOT is not set`), so `$ROOT/x` can never silently become `/x`. `leo agent restart` of an agent whose environment no longer resolves fails before stopping it. `leo run --dry-run` fails the same way.
+- `leo validate` warns (it does not error) about variables unset in its own process, since the daemon that launches agents may have a different environment. The daemon's environment is what a managed agent sees; set variables for it where the daemon starts (for example the launchd plist or systemd unit).
 
 ## Using them
 
@@ -72,6 +88,6 @@ Leo does not manage logins. Prepare a second config dir yourself:
 ## Limitations
 
 - Implicit persistent-task agents (a persistent task with no `template:`) keep their stored env across restarts; they do not re-resolve environments.
-- `~` and `$VAR` are not expanded.
+- `--env K=V` pairs given at spawn are not expanded.
 - Resume across Claude config dirs needs a shared `projects` directory.
 - Environments are not selectable per dispatch or per delegation profile.

@@ -57,7 +57,10 @@ func newRunCmd() *cobra.Command {
 					}
 
 					// Show the env vars that would be set on the child claude process.
-					envPairs := taskDryRunEnv(cfg, task)
+					envPairs, err := taskDryRunEnv(cfg, task, config.Expander{})
+					if err != nil {
+						return fmt.Errorf("task %q: %w", taskName, err)
+					}
 					if len(envPairs) > 0 {
 						fmt.Println()
 						info.Println("Environment:")
@@ -75,7 +78,7 @@ func newRunCmd() *cobra.Command {
 			// daemon.ObservePublisher's doc comment for the non-fatal contract:
 			// a daemon that isn't running must never break or slow this run.
 			run.SetPublisher(daemon.NewObservePublisher(cfg.HomePath))
-			return run.Run(cfg, taskName, sessions, leomcp.ResolveServer(os.Executable, os.Stderr))
+			return run.RunWith(cfg, taskName, sessions, leomcp.ResolveServer(os.Executable, os.Stderr), config.Expander{})
 		},
 	}
 
@@ -94,15 +97,13 @@ type envPair struct {
 // taskDryRunEnv returns the env vars that would be exported to the child
 // claude process for a dry-run, redacting sensitive values. Sorted by key for
 // deterministic output.
-func taskDryRunEnv(cfg *config.Config, task config.TaskConfig) []envPair {
+func taskDryRunEnv(cfg *config.Config, task config.TaskConfig, x config.Expander) ([]envPair, error) {
 	// Mirror run.Run's merge order: task.Env is the base layer and leo's own
 	// vars win on collision, so a task that sets LEO_CHANNELS in its env
 	// shows the value it will actually get — one entry, not two.
-	env, err := cfg.TaskEnv(task)
+	env, err := cfg.TaskEnv(task, x)
 	if err != nil {
-		// Validate rejects unknown names, so this is a config that never
-		// loaded; show what the literal env alone would export.
-		env = task.Env
+		return nil, err
 	}
 	env = maps.Clone(env)
 	if env == nil {
@@ -115,14 +116,14 @@ func taskDryRunEnv(cfg *config.Config, task config.TaskConfig) []envPair {
 		env["LEO_DEV_CHANNELS"] = strings.Join(task.DevChannels, ",")
 	}
 	if len(env) == 0 {
-		return nil
+		return nil, nil
 	}
 
 	pairs := make([]envPair, 0, len(env))
 	for _, k := range redact.Keys(env) {
 		pairs = append(pairs, envPair{key: k, display: redact.Value(k, env[k])})
 	}
-	return pairs
+	return pairs, nil
 }
 
 func completeTaskNames(cmd *cobra.Command, args []string, toComplete string) ([]string, cobra.ShellCompDirective) {

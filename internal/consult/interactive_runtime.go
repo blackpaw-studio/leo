@@ -78,6 +78,9 @@ func (e *ErrNotReady) Error() string {
 // TmuxInteractiveRuntime is the deliberately small bridge between the
 // dispatch state machine and a harness TUI in Leo's tmux server.
 type TmuxInteractiveRuntime struct {
+	// Env expands variables in environment values; the zero value reads the
+	// daemon's own process environment.
+	Env                  config.Expander
 	configPath           string
 	config               func() (*config.Config, error)
 	resolveCallerSession func(string) (string, bool)
@@ -138,7 +141,7 @@ func (r *TmuxInteractiveRuntime) Launch(ctx context.Context, req LaunchRequest) 
 	if err != nil {
 		return "", "", err
 	}
-	tmplEnv, err := cfg.TemplateEnv(tmpl)
+	tmplEnv, err := cfg.TemplateEnv(tmpl, r.Env)
 	if err != nil {
 		return "", "", fmt.Errorf("template %q: %w", req.Template, err)
 	}

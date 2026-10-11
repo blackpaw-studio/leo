@@ -23,7 +23,9 @@ func TestEveryTestPackageIsolatesHome(t *testing.T) {
 		if err != nil {
 			return err
 		}
-		if d.IsDir() && (d.Name() == ".git" || d.Name() == "node_modules") {
+		// Dot-dirs (.git, .claude/worktrees of agent checkouts) are not part of
+		// this module, and the go tool ignores them too.
+		if d.IsDir() && path != root && (strings.HasPrefix(d.Name(), ".") || d.Name() == "node_modules") {
 			return filepath.SkipDir
 		}
 		if d.IsDir() || !strings.HasSuffix(path, "_test.go") {

@@ -2180,3 +2180,54 @@ func TestRunTaskNamedEnvironmentsLayerBelowLiteralEnv(t *testing.T) {
 		}
 	}
 }
+
+// TestRunWithExpandsTaskEnvAndFailsOnUnsetVariable verifies variables in a
+// task's env are expanded at launch, and that an unset one aborts the run
+// before the harness starts.
+func TestRunWithExpandsTaskEnvAndFailsOnUnsetVariable(t *testing.T) {
+	orig := execCommand
+	defer func() { execCommand = orig }()
+
+	dir := t.TempDir()
+	ws := filepath.Join(dir, "workspace")
+	os.MkdirAll(ws, 0755)
+	os.WriteFile(filepath.Join(ws, "task.md"), []byte("test prompt"), 0644)
+	cfg := &config.Config{
+		HomePath: dir,
+		Defaults: config.DefaultsConfig{Model: "sonnet", MaxTurns: 15},
+		Environments: map[string]map[string]string{
+			"b": {"CLAUDE_CONFIG_DIR": "${ACCT_ROOT}/.claude-b"},
+		},
+		Tasks: map[string]config.TaskConfig{
+			"mytask": {PromptFile: "task.md", Schedule: "0 * * * *", Enabled: true, Environments: []string{"b"}},
+		},
+	}
+	os.MkdirAll(cfg.StatePath(), 0750)
+	launched := false
+	execCommand = func(name string, args ...string) *exec.Cmd {
+		launched = true
+		return exec.Command("sh", "-c", "env")
+	}
+
+	unset := config.Expander{Lookup: func(string) (string, bool) { return "", false }}
+	err := RunWith(cfg, "mytask", nil, leomcp.Server{}, unset)
+	if err == nil || !strings.Contains(err.Error(), "$ACCT_ROOT") || !strings.Contains(err.Error(), "CLAUDE_CONFIG_DIR") {
+		t.Fatalf("err = %v, want unset $ACCT_ROOT naming CLAUDE_CONFIG_DIR", err)
+	}
+	if launched {
+		t.Fatal("harness launched despite unset variable")
+	}
+
+	set := config.Expander{Lookup: func(k string) (string, bool) { return "/acct", k == "ACCT_ROOT" }}
+	if err := RunWith(cfg, "mytask", nil, leomcp.Server{}, set); err != nil {
+		t.Fatal(err)
+	}
+	logFiles, _ := filepath.Glob(filepath.Join(dir, "state", "logs", "mytask-*.log"))
+	if len(logFiles) == 0 {
+		t.Fatal("no log files found")
+	}
+	data, _ := os.ReadFile(logFiles[0])
+	if !strings.Contains(string(data), "CLAUDE_CONFIG_DIR=/acct/.claude-b") {
+		t.Errorf("log missing expanded env:\n%s", data)
+	}
+}
