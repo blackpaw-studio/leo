@@ -139,7 +139,7 @@ The daemon prints a startup warning when `bind` is non-loopback.
 
 ### Pairing a phone
 
-`leo pair` prints a QR code and a one-line JSON payload — `{daemon_id, name, urls, pairing_code}` — for the Leo iOS app. The code works once and expires after 5 minutes. The app redeems it at `POST /api/v1/pair` (the one unauthenticated route; rate-limited to 5 attempts per minute per peer and 20 overall) for its own device token. `leo devices list` shows paired phones; `leo devices revoke <id>` invalidates a token immediately, though an already-open stream (SSE, attach) stays open until it disconnects.
+`leo pair` prints a QR code and a one-line JSON payload — `{daemon_id, name, urls, pairing_code}` — for the Leo iOS app. The code works once and expires after 5 minutes. The app redeems it at `POST /api/v1/pair` (the one unauthenticated route; rate-limited to 5 attempts per minute per peer and 20 overall) for its own device token. `leo devices list` shows paired phones; `leo devices revoke <id>` invalidates a token immediately; the device's open streams (SSE, attach) are closed within about 2 seconds.
 
 Routes for the app (bearer auth; device or operator token):
 
