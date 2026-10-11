@@ -2,9 +2,11 @@ package config
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
 	"net/netip"
+	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -173,6 +175,11 @@ type WebConfig struct {
 	// TrustedProxies entries are IPs or CIDRs; requests whose peer address
 	// matches may authenticate via the Remote-User header.
 	TrustedProxies []string `yaml:"trusted_proxies,omitempty"`
+	// PublicURLs are the origins a paired device (the iOS app) should reach
+	// this daemon at, e.g. a Cloudflare Tunnel hostname. `leo pair`
+	// advertises them, falling back to the listener's LAN addresses, and the
+	// web listener accepts their exact host:port in Host/Origin.
+	PublicURLs []string `yaml:"public_urls,omitempty"`
 }
 
 // WebPort returns the effective web UI port (default 8370).
@@ -193,6 +200,19 @@ func (c *Config) WebBind() string {
 		return c.Web.Bind
 	}
 	return "127.0.0.1"
+}
+
+// ValidatePublicURL checks a web.public_urls entry: an absolute http(s)
+// origin with no path (beyond "/"), query, fragment or credentials.
+func ValidatePublicURL(raw string) error {
+	u, err := url.Parse(raw)
+	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" || u.Hostname() == "" {
+		return errors.New("must be an absolute http(s) URL")
+	}
+	if (u.Path != "" && u.Path != "/") || u.RawQuery != "" || u.ForceQuery || u.Fragment != "" || u.User != nil {
+		return errors.New("must not have a path, query, fragment or credentials")
+	}
+	return nil
 }
 
 // IsLoopbackBind reports whether addr is a loopback IP address (127.0.0.0/8
@@ -578,6 +598,11 @@ func (c *Config) Validate() error {
 			}
 		} else if prefix.Bits() == 0 {
 			errs = append(errs, fmt.Sprintf("web.trusted_proxies[%d] %q must not match every address", i, proxy))
+		}
+	}
+	for i, raw := range c.Web.PublicURLs {
+		if err := ValidatePublicURL(raw); err != nil {
+			errs = append(errs, fmt.Sprintf("web.public_urls[%d] %q %v", i, raw, err))
 		}
 	}
 	if c.Web.Enabled && c.Web.Bind != "" && bindValid && !IsLoopbackBind(c.Web.Bind) && len(c.Web.AllowedHosts) == 0 {

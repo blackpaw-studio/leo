@@ -1203,6 +1203,36 @@ func TestValidate_WebTrustedProxies(t *testing.T) {
 	}
 }
 
+func TestValidate_WebPublicURLs(t *testing.T) {
+	cases := []struct {
+		name    string
+		urls    []string
+		wantErr string
+	}{
+		{"https host", []string{"https://leo.example.com"}, ""},
+		{"http lan with port", []string{"http://192.168.1.5:8370"}, ""},
+		{"ipv6", []string{"http://[fd00::5]:8370"}, ""},
+		{"trailing slash", []string{"https://leo.example.com/"}, ""},
+		{"empty", []string{""}, "web.public_urls[0] \"\" must be an absolute http(s) URL"},
+		{"relative", []string{"leo.example.com"}, "web.public_urls[0] \"leo.example.com\" must be an absolute http(s) URL"},
+		{"bad scheme", []string{"ftp://leo.example.com"}, "must be an absolute http(s) URL"},
+		{"path", []string{"https://leo.example.com/leo"}, "must not have a path, query, fragment or credentials"},
+		{"query", []string{"https://leo.example.com?x=1"}, "must not have a path, query, fragment or credentials"},
+		{"userinfo", []string{"https://u:p@leo.example.com"}, "must not have a path, query, fragment or credentials"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := (&Config{Web: WebConfig{PublicURLs: tc.urls}}).Validate()
+			if tc.wantErr == "" && err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if tc.wantErr != "" && (err == nil || !strings.Contains(err.Error(), tc.wantErr)) {
+				t.Fatalf("want error containing %q, got %v", tc.wantErr, err)
+			}
+		})
+	}
+}
+
 func TestValidate_WebBind_InvalidNoDoubleError(t *testing.T) {
 	// An invalid web.bind must produce only the bind error, not also the
 	// "web.allowed_hosts must be set" error.
