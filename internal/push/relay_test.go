@@ -223,17 +223,68 @@ func TestEachSendUsesAFreshNonce(t *testing.T) {
 	}
 }
 
-func TestOversizedTitleStillFitsTheRelayLimit(t *testing.T) {
+func TestWorktreeAgentNameLongerThan64RoundTripsExactly(t *testing.T) {
+	h := newHarness(t)
+	long := alert
+	long.Agent = "agent-implementer-blackpaw-studio-leo-ios-push-send-fix-the-agent-name-truncation"
+	if len(long.Agent) <= 64 {
+		t.Fatalf("fixture agent is only %d bytes", len(long.Agent))
+	}
+
+	h.sender.Send(context.Background(), long)
+
+	bodies := h.relay.Bodies()
+	if len(bodies) != 1 {
+		t.Fatalf("relay got %d pushes, want 1", len(bodies))
+	}
+	got, err := decrypt(t, h.key, bodies[0].Ciphertext)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got["agent"] != long.Agent {
+		t.Errorf("agent = %q, want %q", got["agent"], long.Agent)
+	}
+}
+
+func TestOversizedTitleIsTrimmedToFitTheRelayLimit(t *testing.T) {
 	h := newHarness(t)
 	huge := alert
 	huge.Title = strings.Repeat("é", 5000)
-	huge.Agent = strings.Repeat("a", 5000)
+	huge.Agent = strings.Repeat("a", 300)
 
 	h.sender.Send(context.Background(), huge)
 
 	bodies := h.relay.Bodies()
-	if len(bodies) != 1 || len(bodies[0].Ciphertext) > 2048 {
-		t.Fatalf("bodies=%d, ciphertext len=%d; must send one push under 2048", len(bodies), len(bodies[0].Ciphertext))
+	if len(bodies) != 1 {
+		t.Fatalf("relay got %d pushes, want 1", len(bodies))
+	}
+	if n := len(bodies[0].Ciphertext); n > 2048 {
+		t.Errorf("ciphertext is %d bytes, the relay caps it at 2048", n)
+	}
+	got, err := decrypt(t, h.key, bodies[0].Ciphertext)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got["agent"] != huge.Agent {
+		t.Errorf("agent was altered while trimming the title")
+	}
+	if title, _ := got["title"].(string); title == "" || !strings.HasPrefix(huge.Title, title) {
+		t.Errorf("title = %q, want a non-empty prefix of the original", title)
+	}
+}
+
+func TestAgentNameTooLongForAnyTitleSkipsThePushWithoutLoggingIt(t *testing.T) {
+	h := newHarness(t)
+	huge := alert
+	huge.Agent = "SECRETNAME" + strings.Repeat("a", 5000)
+
+	h.sender.Send(context.Background(), huge)
+
+	if n := len(h.relay.Bodies()); n != 0 {
+		t.Errorf("sent %d pushes for an alert that cannot fit", n)
+	}
+	if out := h.logs.String(); out == "" || strings.Contains(out, "SECRETNAME") {
+		t.Errorf("want a skip log without the agent name, got %q", out)
 	}
 }
 

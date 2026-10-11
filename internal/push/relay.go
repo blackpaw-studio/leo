@@ -20,11 +20,11 @@ const (
 	// attemptTimeout bounds each POST to the relay.
 	attemptTimeout = 10 * time.Second
 	// retryBackoff is the pause before the single retry.
-	retryBackoff = time.Second
-	// The relay caps ciphertext at 2 KiB of base64; these caps keep the
-	// worst case (4-byte runes) well under it.
-	maxAgentRunes = 64
+	retryBackoff  = time.Second
 	maxTitleRunes = 160
+	// The relay caps ciphertext at 2 KiB of base64. base64(nonce 12 ‖ plaintext
+	// ‖ tag 16) ≤ 2048 bytes means plaintext ≤ 1536-28 = 1508 bytes.
+	maxPlaintextBytes = 1508
 	// maxResponseDrain bounds how much of a relay response is read so the
 	// connection can be reused.
 	maxResponseDrain = 4 << 10
@@ -144,6 +144,10 @@ func (s *RelaySender) Send(ctx context.Context, a Alert) {
 		return
 	}
 	plain, err := s.plaintext(a)
+	if errors.Is(err, errPayloadTooLarge) {
+		s.logger.Printf("push: debug: skipping alert, payload exceeds the relay size limit")
+		return
+	}
 	if err != nil {
 		s.logger.Printf("push: encoding alert: %v", err)
 		return
@@ -160,16 +164,41 @@ func (s *RelaySender) Send(ctx context.Context, a Alert) {
 	wg.Wait()
 }
 
+// errPayloadTooLarge means the alert cannot fit the relay's ciphertext cap
+// even with an empty title.
+var errPayloadTooLarge = errors.New("push: payload exceeds relay limit")
+
+// plaintext encodes a. The agent name is sent exactly, since a tap targets
+// it; only the title is trimmed to fit maxPlaintextBytes.
 func (s *RelaySender) plaintext(a Alert) ([]byte, error) {
+	title := []rune(clip(a.Title, maxTitleRunes))
+	for {
+		out, err := s.encode(a, string(title))
+		if err != nil {
+			return nil, err
+		}
+		if len(out) <= maxPlaintextBytes {
+			return out, nil
+		}
+		if len(title) == 0 {
+			return nil, errPayloadTooLarge
+		}
+		// Every rune encodes to at least one byte, so dropping as many
+		// runes as there are excess bytes is always enough.
+		title = title[:max(0, len(title)-(len(out)-maxPlaintextBytes))]
+	}
+}
+
+func (s *RelaySender) encode(a Alert, title string) ([]byte, error) {
 	var buf bytes.Buffer
 	enc := json.NewEncoder(&buf)
 	enc.SetEscapeHTML(false)
 	err := enc.Encode(payload{
 		V:        payloadVersion,
 		DaemonID: s.daemonID,
-		Agent:    clip(a.Agent, maxAgentRunes),
+		Agent:    a.Agent,
 		Kind:     a.Kind,
-		Title:    clip(a.Title, maxTitleRunes),
+		Title:    title,
 		TS:       a.At.Unix(),
 	})
 	return bytes.TrimRight(buf.Bytes(), "\n"), err
