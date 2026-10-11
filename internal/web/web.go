@@ -252,6 +252,12 @@ type Server struct {
 	pairLimiter *pairLimiter
 	now         func() time.Time
 
+	// startAttach runs a read-only tmux client in a PTY for
+	// GET /api/v1/agents/{name}/attach; attachTicker is that socket's
+	// heartbeat clock. Both are test seams.
+	startAttach  func(session string, cols, rows uint16) (attachProc, error)
+	attachTicker func(time.Duration) (<-chan time.Time, func())
+
 	// version is reported as Snapshot.LeoVersion. Wired via WithVersion;
 	// empty means the caller didn't provide one.
 	version string
@@ -484,6 +490,8 @@ func New(configPath string, processes ProcessStateProvider, scheduler SchedulerP
 		devices:            opts.Devices,
 		pairLimiter:        newPairLimiter(),
 		now:                time.Now,
+		startAttach:        startTmuxAttach,
+		attachTicker:       defaultAttachTicker,
 	}
 	for _, opt := range extra {
 		opt(s)
@@ -672,6 +680,7 @@ func New(configPath string, processes ProcessStateProvider, scheduler SchedulerP
 	apiMux.HandleFunc("PUT /api/v1/devices/{id}/push", s.handleAPIDevicePush)
 	// GET also serves HEAD.
 	apiMux.HandleFunc("GET /api/v1/files/{id}", s.requireOperatorToken(s.handleAPIFile))
+	apiMux.HandleFunc("GET /api/v1/agents/{name}/attach", s.requireOperatorToken(s.handleAPIAgentAttach))
 	// /api/* is the agent-facing surface: both tokens work there, as do
 	// paired device tokens.
 	protectedAPI := bearerAuthWith([]string{s.apiToken, s.agentToken}, s.isDeviceToken, s.trustedProxies, apiMux)
