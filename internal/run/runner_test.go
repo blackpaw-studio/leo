@@ -18,6 +18,7 @@ import (
 	"github.com/blackpaw-studio/leo/internal/leomcp"
 	"github.com/blackpaw-studio/leo/internal/observe"
 	"github.com/blackpaw-studio/leo/internal/session"
+	"github.com/blackpaw-studio/leo/internal/testenv"
 )
 
 // TestMain stubs lookPathFn so unit tests never depend on a host-installed
@@ -29,7 +30,7 @@ func TestMain(m *testing.M) {
 	lookPathFn = func(string) (string, error) {
 		return "/test/bin/fake", nil
 	}
-	os.Exit(m.Run())
+	os.Exit(testenv.Main(m))
 }
 
 func TestAssemblePrompt(t *testing.T) {
