@@ -44,8 +44,8 @@ tasks:
 - **Precedence of the final environment, lowest to highest:** merged named
   environments, then the literal `env:` map on the template or task, then
   `--env K=V` given at spawn.
-- **Values are literal.** As with `env:` today, there is no `~` or `$VAR`
-  expansion.
+- **Values are expanded at launch.** (Originally literal; superseded by
+  [environment variable expansion](2026-10-10-environment-variable-expansion.md).)
 - **Validation:** `Config.Validate()` rejects an unknown environment name, an
   invalid env key, and a duplicate name in a single list.
 
