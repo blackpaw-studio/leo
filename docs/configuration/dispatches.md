@@ -237,6 +237,7 @@ leo dispatch list
 leo dispatch watch d-12ab34
 leo dispatch attach d-12ab34
 leo dispatch attach d-12ab34 --host prod
+leo dispatch attach d-12ab34 --rw
 leo dispatch show d-12ab34
 leo dispatch output d-12ab34 --tail 120
 leo dispatch send d-12ab34 "Please also cover malformed input"
@@ -250,10 +251,15 @@ Ctrl-C only detaches. `show` prints a record as JSON. `list` and `watch`
 support `--host`; `run`, `show`, `output`, `send`, and `cancel` currently require the
 local daemon.
 
-`attach` shows an interactive dispatch's live TUI, read-only. It links the
+`attach` shows an interactive dispatch's live TUI, read-only unless `--rw`. It links the
 dispatch's own tmux window into a throwaway `_watch-<id>-<rand>` session and
 attaches a read-only (`tmux attach -r`) client to that, so nothing typed
-reaches the dispatch and no pane is moved. The throwaway session removes
+reaches the dispatch and no pane is moved. `--rw` drops the `-r`, so keystrokes
+and the mouse reach the subagent: whatever is typed there is steering input and
+marks the run `steered`. Several clients (read-write or not) can attach at once,
+and multiple writers can type at the same time, so their input interleaves.
+`--rw` is a per-invocation opt-in with no config gate, and it is forwarded to
+the remote leo under `--host`. The throwaway session removes
 itself when you detach or when the dispatch's window closes (exit status 0
 either way); the dispatch keeps running. Inside tmux, `attach` opens the same
 view in a popup. It prints a one-line reason and exits 1 for an unknown,

@@ -53,21 +53,24 @@ func randomWatchSuffix() string {
 
 func newDispatchAttachCmd() *cobra.Command {
 	var host string
+	var readWrite bool
 	cmd := &cobra.Command{
 		Use:   "attach <id>",
-		Short: "Attach read-only to an interactive dispatch's TUI",
-		Long: `Show an interactive dispatch's TUI, read-only, in this terminal.
+		Short: "Attach to an interactive dispatch's TUI (read-only unless --rw)",
+		Long: `Show an interactive dispatch's TUI, read-only by default, in this terminal.
 
 The dispatch's tmux window is linked into a throwaway session and attached
 with a read-only client, so nothing typed can reach the dispatch and no pane
-is moved. Detaching (or the dispatch ending) removes the throwaway session;
+is moved. With --rw the client is read-write: keystrokes and the mouse reach
+the subagent, which marks the run steered. Several clients can type at once. Detaching (or the dispatch ending) removes the throwaway session;
 the dispatch is untouched. Only a dispatch that has its own tmux window can
 be attached: headless dispatches, ended ones, and panes split into their
 caller's window are refused with exit status 1.
 
 With --host, runs the remote leo over ssh -tt.`,
 		Example: `  leo dispatch attach d-12ab34
-  leo dispatch attach d-12ab34 --host prod`,
+  leo dispatch attach d-12ab34 --host prod
+  leo dispatch attach d-12ab34 --rw`,
 		Args:          cobra.ExactArgs(1),
 		SilenceUsage:  true,
 		SilenceErrors: true,
@@ -81,11 +84,12 @@ With --host, runs the remote leo over ssh -tt.`,
 				return err
 			}
 			if !res.Localhost {
-				return runRemoteDispatchAttach(res, id)
+				return runRemoteDispatchAttach(res, id, readWrite)
 			}
-			return runDispatchAttachLocal(cmd.Context(), cfg, res, id)
+			return runDispatchAttachLocal(cmd.Context(), cfg, res, id, readWrite)
 		},
 	}
+	cmd.Flags().BoolVar(&readWrite, "rw", false, "attach read-write: input typed there reaches the subagent and marks the run steered; multiple writers can type at once")
 	addHostFlag(cmd, &host)
 	return cmd
 }
@@ -95,12 +99,16 @@ With --host, runs the remote leo over ssh -tt.`,
 // for the remote login shell, so the id travels as a single quoted token. The
 // remote leo has already printed its one-line reason when it fails, so only
 // its exit status is kept.
-func runRemoteDispatchAttach(res config.HostResolution, id string) error {
+func runRemoteDispatchAttach(res config.HostResolution, id string, readWrite bool) error {
 	termOverride := ensureRemoteTerminfoFn(res)
 	sshArgs := append([]string{"-tt", res.Host.SSH}, res.Host.SSHArgs...)
 	sshArgs = append(sshArgs, sshControlOpts(res)...)
 	prefixLen := len(sshArgs)
-	sshArgs = append(sshArgs, res.Host.RemoteLeoPath(), "dispatch", "attach", shellQuoteArg(id))
+	sshArgs = append(sshArgs, res.Host.RemoteLeoPath(), "dispatch", "attach")
+	if readWrite {
+		sshArgs = append(sshArgs, "--rw")
+	}
+	sshArgs = append(sshArgs, shellQuoteArg(id))
 	sshArgs = applyRemoteTermFallback(sshArgs, prefixLen, termOverride)
 	c := agentExecCommand("ssh", sshArgs...)
 	c.Stdin = os.Stdin
@@ -115,10 +123,10 @@ func runRemoteDispatchAttach(res config.HostResolution, id string) error {
 }
 
 // runDispatchAttachLocal links dispatch id's window into a throwaway session
-// and attaches to that read-only. The dispatch's pane is never moved: the
+// and attaches to that, read-only unless readWrite. The dispatch's pane is never moved: the
 // window is linked (it then lives in both sessions) and the placeholder window
 // that new-session created is killed.
-func runDispatchAttachLocal(ctx context.Context, cfg *config.Config, res config.HostResolution, id string) error {
+func runDispatchAttachLocal(ctx context.Context, cfg *config.Config, res config.HostResolution, id string, readWrite bool) error {
 	if !dispatchIDPattern.MatchString(id) {
 		return fmt.Errorf("invalid dispatch id %q", id)
 	}
@@ -185,7 +193,7 @@ func runDispatchAttachLocal(ctx context.Context, cfg *config.Config, res config.
 	// a tmux that fails to start (no TTY) never arms destroy-unattached, and
 	// a popup returns after the client left. Killing an already-destroyed
 	// session fails harmlessly.
-	err = attachTmuxSession(res, name, attachOptions{readOnly: true, asChild: true})
+	err = attachTmuxSession(res, name, attachOptions{readOnly: !readWrite, asChild: true})
 	kill(sessionID)
 	return err
 }
