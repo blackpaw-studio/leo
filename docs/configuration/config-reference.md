@@ -139,13 +139,16 @@ The daemon prints a startup warning when `bind` is non-loopback.
 
 ### Pairing a phone
 
-`leo pair` prints a QR code and a one-line JSON payload — `{daemon_id, name, urls, pairing_code}` — for the Leo iOS app. The code works once and expires after 5 minutes. The app redeems it at `POST /api/v1/pair` (the one unauthenticated route; rate-limited to 5 attempts per minute per peer and 20 overall) for its own device token. `leo devices list` shows paired phones; `leo devices revoke <id>` invalidates a token immediately; the device's open streams (SSE, attach) are closed within about 2 seconds.
+`leo pair` prints a QR code and a one-line JSON payload — `{daemon_id, name, urls, pairing_code}` — for the Leo iOS app. The code works once and expires after 5 minutes. The app redeems it at `POST /api/v1/pair` (the one unauthenticated route; rate-limited to 5 attempts per minute per peer and 20 overall) for its own device token. `leo devices list` shows paired phones; `leo devices revoke <id>` invalidates a token immediately; the device's open streams (SSE, attach) are closed within about 2 seconds, and its push registration goes with it.
+
+**Push.** When an agent's attention moves *into* `needs_input`, `finished` or `errored`, the daemon encrypts a small alert (AES-256-GCM, aad `leo-push-v1`, under the key the phone registered) and POSTs it to `{relay_url}/push` for every registered device, asynchronously with a bounded queue, a 10 s timeout and one retry on a 5xx or network error. A `410` from the relay deletes that registration. The agent name never reaches the relay or Apple unencrypted (the collapse id is a hash). Repeats of the same state do not re-notify.
 
 Routes for the app (bearer auth; device or operator token):
 
 | Route | Behaviour |
 |---|---|
-| `PUT /api/v1/devices/{id}/push` | `{grant, key}` push registration (key: base64 AES-256). A device may write only its own. |
+| `PUT /api/v1/devices/{id}/push` | `{grant, key, relay_url}` push registration (key: base64 of 32 bytes, AES-256; `relay_url` must be `https://`). A device may write only its own; the operator `api.token` may write any. |
+| `DELETE /api/v1/devices/{id}/push` | Unregisters push for that device (same auth; idempotent). |
 | `GET`/`HEAD /api/v1/files/{surfaced_id}` | Streams a file an agent surfaced, by id only, with `Range` support. 404 once evicted. |
 | `GET /api/v1/agents/{name}/attach` | WebSocket onto `tmux attach -r`. Binary frames: terminal output. Text frames: JSON control — `ping`/`pong` (the daemon pings every 30 s) and `{"type":"resize","cols":N,"rows":M}`. Optional `?cols=&rows=`. Binary input frames close the socket with 1008. |
 

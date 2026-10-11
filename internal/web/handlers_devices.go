@@ -138,34 +138,69 @@ func (s *Server) handleAPIPair(w http.ResponseWriter, r *http.Request) {
 }
 
 type pushRequest struct {
-	Grant string `json:"grant"`
-	Key   string `json:"key"`
+	Grant    string `json:"grant"`
+	Key      string `json:"key"`
+	RelayURL string `json:"relay_url"`
+}
+
+// canManagePush reports whether r's credentials may touch device id's push
+// registration: the device itself, or the operator's api.token. The agent
+// token and SSO identities may not; neither may another device.
+func (s *Server) canManagePush(r *http.Request, id string) bool {
+	tok := extractBearer(r.Header.Get("Authorization"))
+	dev, isDevice := s.authenticateDevice(r)
+	// Evaluate both so timing does not reveal which credential matched.
+	isOperator := matchesAnyToken(tok, []string{s.apiToken})
+	return isOperator || (isDevice && dev.ID == id)
 }
 
 // handleAPIDevicePush stores a device's push registration, replacing any
-// previous one. Only the device itself may write it: the operator and agent
-// tokens are refused, as is any other device's.
-// PUT /api/v1/devices/{id}/push {grant, key}
+// previous one.
+// PUT /api/v1/devices/{id}/push {grant, key, relay_url}
 func (s *Server) handleAPIDevicePush(w http.ResponseWriter, r *http.Request) {
-	dev, ok := s.authenticateDevice(r)
-	if !ok || dev.ID != r.PathValue("id") {
-		writeJSON(w, http.StatusForbidden, apiResponse{Error: "a device may only register its own push credentials"})
+	if s.devices == nil {
+		writeJSON(w, http.StatusServiceUnavailable, apiResponse{Error: "device pairing is not available on this daemon"})
+		return
+	}
+	id := r.PathValue("id")
+	if !s.canManagePush(r, id) {
+		writeJSON(w, http.StatusForbidden, apiResponse{Error: "a device may only manage its own push registration"})
 		return
 	}
 	var req pushRequest
 	if !decodeControlBody(w, r, maxPushBody, false, &req) {
 		return
 	}
-	reg := devices.PushRegistration{Grant: req.Grant, Key: req.Key}
+	reg := devices.PushRegistration{Grant: req.Grant, Key: req.Key, RelayURL: req.RelayURL}
 	if err := devices.ValidatePush(reg); err != nil {
 		writeJSON(w, http.StatusBadRequest, apiResponse{Error: err.Error()})
 		return
 	}
-	switch err := s.devices.SetPush(dev.ID, reg); {
+	s.writePushResult(w, s.devices.SetPush(id, reg), "storing push registration failed")
+}
+
+// handleAPIDevicePushDelete unregisters a device's push registration.
+// Removing one that is not there succeeds.
+// DELETE /api/v1/devices/{id}/push
+func (s *Server) handleAPIDevicePushDelete(w http.ResponseWriter, r *http.Request) {
+	if s.devices == nil {
+		writeJSON(w, http.StatusServiceUnavailable, apiResponse{Error: "device pairing is not available on this daemon"})
+		return
+	}
+	id := r.PathValue("id")
+	if !s.canManagePush(r, id) {
+		writeJSON(w, http.StatusForbidden, apiResponse{Error: "a device may only manage its own push registration"})
+		return
+	}
+	s.writePushResult(w, s.devices.ClearPush(id), "removing push registration failed")
+}
+
+func (s *Server) writePushResult(w http.ResponseWriter, err error, failure string) {
+	switch {
 	case errors.Is(err, devices.ErrNotFound):
 		writeJSON(w, http.StatusNotFound, apiResponse{Error: err.Error()})
 	case err != nil:
-		writeJSON(w, http.StatusInternalServerError, apiResponse{Error: "storing push registration failed"})
+		writeJSON(w, http.StatusInternalServerError, apiResponse{Error: failure})
 	default:
 		writeJSON(w, http.StatusOK, apiResponse{OK: true})
 	}

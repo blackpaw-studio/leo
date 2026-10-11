@@ -679,9 +679,10 @@ func New(configPath string, processes ProcessStateProvider, scheduler SchedulerP
 	apiMux.HandleFunc("GET /api/v1/templates", s.handleAPITemplatesV1)
 	apiMux.HandleFunc("POST /api/v1/agents/spawn", s.requireOperatorToken(s.handleAPIAgentSpawn))
 	apiMux.HandleFunc("POST /api/v1/agents/{name}/environments", s.requireOperatorToken(s.handleAPIAgentSetEnvironments))
-	// iOS app (docs: leo-ios spec §2). The push route checks the device
-	// identity itself.
+	// iOS app (docs: leo-ios spec §2). The push routes check the caller's
+	// identity themselves: the device owning {id}, or the operator token.
 	apiMux.HandleFunc("PUT /api/v1/devices/{id}/push", s.handleAPIDevicePush)
+	apiMux.HandleFunc("DELETE /api/v1/devices/{id}/push", s.handleAPIDevicePushDelete)
 	// GET also serves HEAD.
 	apiMux.HandleFunc("GET /api/v1/files/{id}", s.requireOperatorToken(s.handleAPIFile))
 	apiMux.HandleFunc("GET /api/v1/agents/{name}/attach", s.requireOperatorToken(s.handleAPIAgentAttach))

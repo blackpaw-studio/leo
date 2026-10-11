@@ -197,28 +197,144 @@ func TestRevokedDeviceTokenIsRejected(t *testing.T) {
 	}
 }
 
-func TestDevicePushRegistrationIsOwnDeviceOnly(t *testing.T) {
-	s, store, _ := newDeviceTestServer(t)
-	phone := pairDevice(t, s, store, "phone")
-	tablet := pairDevice(t, s, store, "tablet")
-	key := base64.StdEncoding.EncodeToString(make([]byte, 32))
-	body := `{"grant":"g1","key":"` + key + `"}`
-	path := "/api/v1/devices/" + phone.DeviceID + "/push"
+const testRelayURL = "https://relay.example"
 
-	if rec := doRequest(s, http.MethodPut, path, phone.Token, body); rec.Code != http.StatusOK {
-		t.Fatalf("own registration: status %d body=%s", rec.Code, rec.Body)
+func pushBody(key, relay string) string {
+	return `{"grant":"g1","key":"` + key + `","relay_url":"` + relay + `"}`
+}
+
+func storedPush(t *testing.T, store *devices.Store, id string) *devices.PushRegistration {
+	t.Helper()
+	list, err := store.List()
+	if err != nil {
+		t.Fatal(err)
 	}
-	for name, tok := range map[string]string{"other device": tablet.Token, "operator": testAPIToken, "agent": "agent-token"} {
-		if rec := doRequest(s, http.MethodPut, path, tok, `{"grant":"evil","key":"`+key+`"}`); rec.Code != http.StatusForbidden {
-			t.Fatalf("%s writing phone's registration: status %d, want 403", name, rec.Code)
+	for _, d := range list {
+		if d.ID == id {
+			return d.Push
 		}
 	}
-	if rec := doRequest(s, http.MethodPut, path, phone.Token, `{"grant":"g","key":"short"}`); rec.Code != http.StatusBadRequest {
-		t.Fatalf("bad key: status %d, want 400", rec.Code)
+	t.Fatalf("device %s not found", id)
+	return nil
+}
+
+func TestDevicePushRouteAuthMatrix(t *testing.T) {
+	validKey := base64.StdEncoding.EncodeToString(make([]byte, 32))
+	cases := []struct {
+		name   string
+		bearer func(phone, tablet pairResult) string
+		// target is which device's path is addressed.
+		target     func(phone, tablet pairResult) string
+		wantStatus int
+	}{
+		{"device writes its own", func(p, _ pairResult) string { return p.Token }, func(p, _ pairResult) string { return p.DeviceID }, http.StatusOK},
+		{"device writes another device's", func(_, t pairResult) string { return t.Token }, func(p, _ pairResult) string { return p.DeviceID }, http.StatusForbidden},
+		{"operator api.token writes any", func(_, _ pairResult) string { return testAPIToken }, func(p, _ pairResult) string { return p.DeviceID }, http.StatusOK},
+		{"agent token refused", func(_, _ pairResult) string { return "agent-token" }, func(p, _ pairResult) string { return p.DeviceID }, http.StatusForbidden},
+		{"no credentials", func(_, _ pairResult) string { return "" }, func(p, _ pairResult) string { return p.DeviceID }, http.StatusUnauthorized},
+		{"garbage token", func(_, _ pairResult) string { return "nope" }, func(p, _ pairResult) string { return p.DeviceID }, http.StatusUnauthorized},
+		{"operator, unknown device", func(_, _ pairResult) string { return testAPIToken }, func(_, _ pairResult) string { return "deadbeef" }, http.StatusNotFound},
+		{"device, unknown id", func(p, _ pairResult) string { return p.Token }, func(_, _ pairResult) string { return "deadbeef" }, http.StatusForbidden},
 	}
-	list, _ := store.List()
-	if list[0].Push == nil || list[0].Push.Grant != "g1" {
-		t.Fatalf("stored push = %+v, want grant g1", list[0].Push)
+	for _, method := range []string{http.MethodPut, http.MethodDelete} {
+		for _, tc := range cases {
+			t.Run(method+"/"+tc.name, func(t *testing.T) {
+				s, store, _ := newDeviceTestServer(t)
+				phone := pairDevice(t, s, store, "phone")
+				tablet := pairDevice(t, s, store, "tablet")
+				body := ""
+				if method == http.MethodPut {
+					body = pushBody(validKey, testRelayURL)
+				}
+				path := "/api/v1/devices/" + tc.target(phone, tablet) + "/push"
+
+				rec := doRequest(s, method, path, tc.bearer(phone, tablet), body)
+
+				if rec.Code != tc.wantStatus {
+					t.Fatalf("status %d, want %d (body=%s)", rec.Code, tc.wantStatus, rec.Body)
+				}
+				if tc.wantStatus != http.StatusOK && storedPush(t, store, phone.DeviceID) != nil {
+					t.Fatal("a refused request changed the registration")
+				}
+			})
+		}
+	}
+}
+
+func TestPutStoresRegistrationAndDeleteRemovesIt(t *testing.T) {
+	s, store, _ := newDeviceTestServer(t)
+	phone := pairDevice(t, s, store, "phone")
+	key := base64.StdEncoding.EncodeToString(make([]byte, 32))
+	path := "/api/v1/devices/" + phone.DeviceID + "/push"
+
+	if rec := doRequest(s, http.MethodPut, path, phone.Token, pushBody(key, testRelayURL)); rec.Code != http.StatusOK {
+		t.Fatalf("PUT status %d body=%s", rec.Code, rec.Body)
+	}
+	got := storedPush(t, store, phone.DeviceID)
+	if got == nil || got.Grant != "g1" || got.Key != key || got.RelayURL != testRelayURL {
+		t.Fatalf("stored push = %+v", got)
+	}
+
+	if rec := doRequest(s, http.MethodDelete, path, phone.Token, ""); rec.Code != http.StatusOK {
+		t.Fatalf("DELETE status %d body=%s", rec.Code, rec.Body)
+	}
+	if got := storedPush(t, store, phone.DeviceID); got != nil {
+		t.Fatalf("registration survived DELETE: %+v", got)
+	}
+	// Unregistering twice is harmless.
+	if rec := doRequest(s, http.MethodDelete, path, phone.Token, ""); rec.Code != http.StatusOK {
+		t.Fatalf("second DELETE status %d, want 200", rec.Code)
+	}
+}
+
+func TestPutValidationErrors(t *testing.T) {
+	s, store, _ := newDeviceTestServer(t)
+	phone := pairDevice(t, s, store, "phone")
+	good := base64.StdEncoding.EncodeToString(make([]byte, 32))
+	cases := map[string]struct {
+		body string
+		want int
+	}{
+		"http relay":        {pushBody(good, "http://relay.example"), http.StatusBadRequest},
+		"missing relay":     {`{"grant":"g","key":"` + good + `"}`, http.StatusBadRequest},
+		"relay with creds":  {pushBody(good, "https://u:p@relay.example"), http.StatusBadRequest},
+		"short key":         {pushBody(base64.StdEncoding.EncodeToString(make([]byte, 16)), testRelayURL), http.StatusBadRequest},
+		"key not base64":    {pushBody("!!!", testRelayURL), http.StatusBadRequest},
+		"empty grant":       {`{"grant":"","key":"` + good + `","relay_url":"` + testRelayURL + `"}`, http.StatusBadRequest},
+		"not json":          {`nope`, http.StatusBadRequest},
+		"oversized payload": {`{"grant":"` + strings.Repeat("g", maxPushBody) + `"}`, http.StatusRequestEntityTooLarge},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			rec := doRequest(s, http.MethodPut, "/api/v1/devices/"+phone.DeviceID+"/push", phone.Token, tc.body)
+			if rec.Code != tc.want {
+				t.Fatalf("status %d, want %d (body=%s)", rec.Code, tc.want, rec.Body)
+			}
+			if storedPush(t, store, phone.DeviceID) != nil {
+				t.Fatal("an invalid registration was stored")
+			}
+		})
+	}
+}
+
+func TestRevokedDevicesRegistrationIsGone(t *testing.T) {
+	s, store, _ := newDeviceTestServer(t)
+	phone := pairDevice(t, s, store, "phone")
+	key := base64.StdEncoding.EncodeToString(make([]byte, 32))
+	path := "/api/v1/devices/" + phone.DeviceID + "/push"
+	if rec := doRequest(s, http.MethodPut, path, phone.Token, pushBody(key, testRelayURL)); rec.Code != http.StatusOK {
+		t.Fatalf("PUT status %d", rec.Code)
+	}
+
+	if err := store.Revoke(phone.DeviceID); err != nil {
+		t.Fatal(err)
+	}
+
+	if list, _ := store.List(); len(list) != 0 {
+		t.Fatalf("revoked device still listed with its registration: %+v", list)
+	}
+	if rec := doRequest(s, http.MethodPut, path, phone.Token, pushBody(key, testRelayURL)); rec.Code != http.StatusUnauthorized {
+		t.Fatalf("revoked token re-registering: status %d, want 401", rec.Code)
 	}
 }
 
@@ -280,7 +396,7 @@ func TestSSOAndDeviceTokensDoNotCrossOver(t *testing.T) {
 	s, store, _ := newDeviceTestServer(t, func(o *Options) { o.TrustedProxies = []string{proxy} })
 	phone := pairDevice(t, s, store, "phone")
 	key := base64.StdEncoding.EncodeToString(make([]byte, 32))
-	push := `{"grant":"g","key":"` + key + `"}`
+	push := pushBody(key, testRelayURL)
 	pushPath := "/api/v1/devices/" + phone.DeviceID + "/push"
 
 	if got := serve(s, ssoRequest(http.MethodPut, pushPath, proxy, "", push)); got != http.StatusForbidden {

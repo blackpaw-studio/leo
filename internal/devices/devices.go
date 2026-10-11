@@ -25,6 +25,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"slices"
@@ -59,6 +60,8 @@ const (
 	maxNameRunes = 64
 	maxGrantLen  = 2048
 	pushKeyBytes = 32
+	// maxRelayURLLen bounds the stored relay URL.
+	maxRelayURLLen = 512
 )
 
 var (
@@ -84,11 +87,13 @@ type Device struct {
 }
 
 // PushRegistration is what the app hands the daemon for push delivery: the
-// relay grant and the device's AES-256 key (base64). Sending is not wired
-// yet; the daemon only stores it.
+// relay grant, the device's AES-256 key (base64), and the https relay the
+// grant was issued by. It is stored with its device in devices.json (0600),
+// so revoking the device removes it.
 type PushRegistration struct {
 	Grant     string    `json:"grant"`
 	Key       string    `json:"key"`
+	RelayURL  string    `json:"relay_url"`
 	UpdatedAt time.Time `json:"updated_at"`
 }
 
@@ -264,8 +269,41 @@ func (s *Store) SetPush(id string, reg PushRegistration) error {
 	})
 }
 
-// ValidatePush checks a registration's shape: a non-empty bounded grant and
-// a base64 256-bit key.
+// ClearPush removes device id's push registration. A device with none is a
+// no-op; an unknown device is ErrNotFound.
+func (s *Store) ClearPush(id string) error {
+	return s.clearPushWhere(id, func(PushRegistration) bool { return true })
+}
+
+// ClearPushIfGrant removes device id's registration only while it still
+// carries grant, so a relay's 410 for a superseded grant cannot delete the
+// fresh one the app has since registered. An unknown device is a no-op.
+func (s *Store) ClearPushIfGrant(id, grant string) error {
+	err := s.clearPushWhere(id, func(reg PushRegistration) bool { return reg.Grant == grant })
+	if errors.Is(err, ErrNotFound) {
+		return nil
+	}
+	return err
+}
+
+// clearPushWhere clears device id's registration when shouldClear says so.
+func (s *Store) clearPushWhere(id string, shouldClear func(PushRegistration) bool) error {
+	return s.updateDevices(func(devices []Device) ([]Device, error) {
+		idx := slices.IndexFunc(devices, func(d Device) bool { return d.ID == id })
+		if idx < 0 {
+			return nil, ErrNotFound
+		}
+		if devices[idx].Push == nil || !shouldClear(*devices[idx].Push) {
+			return devices, nil
+		}
+		out := slices.Clone(devices)
+		out[idx].Push = nil
+		return out, nil
+	})
+}
+
+// ValidatePush checks a registration's shape: a non-empty bounded grant, a
+// base64 256-bit key and an https relay URL.
 func ValidatePush(reg PushRegistration) error {
 	if reg.Grant == "" || len(reg.Grant) > maxGrantLen {
 		return fmt.Errorf("grant must be 1-%d bytes", maxGrantLen)
@@ -273,6 +311,20 @@ func ValidatePush(reg PushRegistration) error {
 	key, err := base64.StdEncoding.DecodeString(reg.Key)
 	if err != nil || len(key) != pushKeyBytes {
 		return fmt.Errorf("key must be %d bytes, base64-encoded", pushKeyBytes)
+	}
+	return validateRelayURL(reg.RelayURL)
+}
+
+// validateRelayURL requires an absolute https URL with a host and no
+// credentials: the grant and ciphertext are POSTed to it.
+func validateRelayURL(raw string) error {
+	const msg = "relay_url must be an https URL"
+	if raw == "" || len(raw) > maxRelayURLLen {
+		return errors.New(msg)
+	}
+	u, err := url.Parse(raw)
+	if err != nil || u.Scheme != "https" || u.Hostname() == "" || u.User != nil {
+		return errors.New(msg)
 	}
 	return nil
 }
