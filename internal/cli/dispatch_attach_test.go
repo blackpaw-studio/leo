@@ -74,7 +74,12 @@ func (f *attachFixture) fakeTmux(_ context.Context, name string, args ...string)
 
 func (f *attachFixture) run(t *testing.T, id string) error {
 	t.Helper()
-	return runDispatchAttachLocal(context.Background(), &config.Config{}, config.HostResolution{Localhost: true}, id)
+	return runDispatchAttachLocal(context.Background(), &config.Config{}, config.HostResolution{Localhost: true}, id, false)
+}
+
+func (f *attachFixture) runRW(t *testing.T, id string) error {
+	t.Helper()
+	return runDispatchAttachLocal(context.Background(), &config.Config{}, config.HostResolution{Localhost: true}, id, true)
 }
 
 func TestDispatchAttachLinksWindowIntoReadOnlyWatchSession(t *testing.T) {
@@ -97,6 +102,34 @@ func TestDispatchAttachLinksWindowIntoReadOnlyWatchSession(t *testing.T) {
 	wantExec := [][]string{{"/usr/bin/tmux", "-L", "leo", "attach", "-r", "-t", "=" + watchSession}}
 	if !reflect.DeepEqual(f.execs, wantExec) {
 		t.Fatalf("exec:\n got %q\nwant %q", f.execs, wantExec)
+	}
+}
+
+func TestDispatchAttachRWOmitsReadOnlyFlag(t *testing.T) {
+	f := newAttachFixture(t)
+	if err := f.runRW(t, "d-abc123"); err != nil {
+		t.Fatal(err)
+	}
+	wantExec := [][]string{{"/usr/bin/tmux", "-L", "leo", "attach", "-t", "=" + watchSession}}
+	if !reflect.DeepEqual(f.execs, wantExec) {
+		t.Fatalf("exec:\n got %q\nwant %q", f.execs, wantExec)
+	}
+	if last := f.tmux[len(f.tmux)-1]; !reflect.DeepEqual(last, []string{"/tmux", "-L", "leo", "kill-session", "-t", "$9"}) {
+		t.Fatalf("a read-write attach must still clean up: last tmux call %q", last)
+	}
+}
+
+func TestDispatchAttachRWInsideTmuxPopupOmitsReadOnlyFlag(t *testing.T) {
+	f := newAttachFixture(t)
+	tmuxEnv = func() string { return "/tmp/tmux-501/default,1,0" }
+	stub := withStubExec(t)
+	withStubStdio(t)
+	if err := f.runRW(t, "d-abc123"); err != nil {
+		t.Fatal(err)
+	}
+	inner := stub.calls[0][len(stub.calls[0])-1]
+	if want := "'/usr/bin/tmux' -L leo attach -t '=" + watchSession + "'"; inner != want {
+		t.Fatalf("popup command %q, want %q", inner, want)
 	}
 }
 
@@ -263,6 +296,23 @@ func TestDispatchAttachRemoteRunsRemoteLeoOverTTY(t *testing.T) {
 	}
 }
 
+func TestDispatchAttachRemoteForwardsRW(t *testing.T) {
+	path := newAgentCLITestConfig(t)
+	stub := withStubExec(t)
+	withStubStdio(t)
+	root := newRootCmd()
+	root.SetArgs([]string{"--config", path, "dispatch", "attach", "--host", "prod", "--rw", "d-abc123"})
+	if err := root.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"ssh", "-tt", "user@prod.example.com", "-p", "2222"}
+	want = append(want, ctlOpts(homeFromConfigPath(path))...)
+	want = append(want, config.DefaultRemoteLeoPath, "dispatch", "attach", "--rw", "'d-abc123'")
+	if len(stub.calls) != 1 || !reflect.DeepEqual(stub.calls[0], want) {
+		t.Fatalf("ssh calls:\n got %q\nwant %q", stub.calls, [][]string{want})
+	}
+}
+
 func TestDispatchAttachRemoteRejectsUnsafeIDsBeforeSSH(t *testing.T) {
 	path := newAgentCLITestConfig(t)
 	stub := withStubExec(t)
@@ -294,11 +344,29 @@ func TestDispatchAttachRemoteFailureKeepsExitStatusWithoutDoubleReporting(t *tes
 
 func TestDispatchAttachCommandShape(t *testing.T) {
 	cmd := newDispatchAttachCmd()
+	if rw := cmd.Flags().Lookup("rw"); rw == nil || rw.DefValue != "false" {
+		t.Fatal("want a --rw flag defaulting to false (read-only)")
+	}
 	if cmd.Flags().Lookup("host") == nil || !cmd.SilenceUsage || !cmd.SilenceErrors {
 		t.Fatal("want a --host flag and silenced usage/errors")
 	}
 	if cmd.Args(cmd, nil) == nil || cmd.Args(cmd, []string{"a", "b"}) == nil || cmd.Args(cmd, []string{"a"}) != nil {
 		t.Fatal("want exactly one <id> argument")
+	}
+}
+
+func TestAttachTmuxSessionReadWriteOmitsFlag(t *testing.T) {
+	stubTmuxLookPath(t, "/usr/bin/tmux", nil)
+	stubOutsideTmux(t)
+	var got []string
+	old := agentSyscallExec
+	agentSyscallExec = func(_ string, argv []string, _ []string) error { got = argv; return nil }
+	t.Cleanup(func() { agentSyscallExec = old })
+	if err := attachTmuxSession(config.HostResolution{Localhost: true}, "leo-x", attachOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"tmux", "-L", "leo", "attach", "-t", "=leo-x"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("argv=%q want %q", got, want)
 	}
 }
 
