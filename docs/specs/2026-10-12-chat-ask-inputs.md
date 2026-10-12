@@ -1,4 +1,4 @@
-# Chat asks with files and typed inputs; retire leo_surface_file
+# Typed chat ask inputs; retire leo_surface_file
 
 Status: draft · 2026-10-12
 
@@ -9,7 +9,7 @@ An agent can show Evan a file with a caption, and optionally ask a question abou
 ## Decisions
 
 - **Show a file** = `leo_chat_post {text, files}` (exists today). The caption is `text`. No new tool.
-- **Ask about a file** = `leo_chat_ask` gains `text` and `files`, plus a typed `input`.
+- **Ask about a file** = two messages: `leo_chat_post {text, files}`, then `leo_chat_ask`. Asks carry no files or caption; per-agent threads keep the pair adjacent. `leo_chat_ask` only gains a typed `input`.
 - **One input per ask.** Multi-field forms are out of scope; the agent asks again.
 - **`leo_surface_file` is removed** with its route, state, and event. Solo-user project: no alias, no compat shim.
 
@@ -18,8 +18,6 @@ An agent can show Evan a file with a caption, and optionally ask a question abou
 ```jsonc
 {
   "question": "Ship this layout?",          // required, as today
-  "text": "Screenshot of the new roster",   // optional caption/body
-  "files": ["/abs/or/workspace/rel/path"],  // optional; same rules/caps as leo_chat_post
   "input": {
     "type": "buttons" | "radio" | "checkboxes" | "text",
     "options": [ "yes" | {"value","label"} ], // required for buttons/radio/checkboxes (1–12), forbidden for text
@@ -53,10 +51,10 @@ The tool returns `{values, labels, text, timed_out, message_id, pending?}`. The 
 
 ## Daemon changes
 
-- `internal/chat`: Ask stores the `input` spec on the message plus copied files (reuse `copyFiles`); answer becomes the struct above in store, `Transition`, waiter, and the `AskResult`. A schema change to chat.db → this work lands the chat.db migration mechanism called for after v0.49.0 (a versioned `user_version` migration step), not an ad-hoc ALTER.
+- `internal/chat`: Ask stores the `input` spec on the message; answer becomes the struct above in store, `Transition`, waiter, and the `AskResult`. A schema change to chat.db → this work lands the chat.db migration mechanism called for after v0.49.0 (a versioned `user_version` migration step), not an ad-hoc ALTER.
 - `internal/web/handlers_chat.go`: answer endpoint accepts `{values, text}`; the Message JSON exposes `input` and the answer object.
 - `internal/mcp/chat.go`: new schema + arg parsing.
-- Push: the ask notification body uses `question`; the attachment count is shown as it is for posts. No new push kind.
+- Push: unchanged (post and ask each push as today). Coalescing a post+ask pair is a possible leoterm-ios follow-up.
 - Permission prompts are untouched (allow/deny stays its own path).
 
 ## Removal of leo_surface_file
@@ -67,8 +65,8 @@ Outside this repo (not part of the PR; tracked as follow-ups): global CLAUDE.md 
 
 ## Testing
 
-TDD in `internal/chat` for validation per input type and the answer round-trip (ask → answer → waiter result), plus resume via `message_id`. Handler tests for the answer endpoint's 400 cases. A migration test opens a v0.49.0-shaped chat.db and upgrades it. Live check: an isolated test daemon, agent calls `leo_chat_ask` with a file and checkboxes, answered via curl.
+TDD in `internal/chat` for validation per input type and the answer round-trip (ask → answer → waiter result), plus resume via `message_id`. Handler tests for the answer endpoint's 400 cases. A migration test opens a v0.49.0-shaped chat.db and upgrades it. Live check: an isolated test daemon, agent posts a file then calls `leo_chat_ask` with checkboxes, answered via curl.
 
 ## Out of scope
 
-Multi-field forms, file line pointers (`line` from surface_file), editable answers after submit, web UI rendering of asks beyond what exists.
+Files or caption on an ask, multi-field forms, file line pointers (`line` from surface_file), editable answers after submit, web UI rendering of asks beyond what exists.
