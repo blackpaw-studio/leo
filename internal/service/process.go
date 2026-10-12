@@ -1073,7 +1073,12 @@ func wireObservability(ctx context.Context, sv *Supervisor, tmuxPath string) obs
 	// through it, so it sees every attention transition and agent stop.
 	var pub observe.Publisher = runLog
 	if sv.homePath != "" {
-		pub = wirePush(ctx, runLog, filepath.Join(sv.homePath, "state"))
+		var allow func(agent, state string) bool
+		if sv.configPath != "" {
+			configPath := sv.configPath
+			allow = newPushPolicy(func() (*config.Config, error) { return config.Load(configPath) }, sv.homePath)
+		}
+		pub = wirePush(ctx, runLog, filepath.Join(sv.homePath, "state"), allow)
 	}
 	sv.SetPublisher(pub)
 
