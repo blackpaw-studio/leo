@@ -46,6 +46,9 @@ type ChatOptions struct {
 	// Publisher receives chat.* events; it must reach both the event bus
 	// and the push notifier.
 	Publisher observe.Publisher
+	// TaskRun returns the persistent task and run in flight in an agent
+	// (daemon.Server.TaskRun); nil runs none.
+	TaskRun func(agent string) (task, runID string, ok bool)
 }
 
 // setupChat builds the chat service with this server as its deliverer.
@@ -68,6 +71,7 @@ func (s *Server) setupChat(opts ChatOptions) {
 		Agents:  s.chatAgents,
 		Config:  s.loadConfig,
 		Queued:  func(agent, ref string) (bool, error) { return s.bridgeRouter.Holds(agent, ref) },
+		TaskRun: opts.TaskRun,
 	})
 }
 
@@ -487,7 +491,7 @@ func (s *Server) handleAgentChatAsk(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, apiResponse{Error: fmt.Sprintf("timeout_s must be between 0 and %d", int(chat.MaxAskTimeout.Seconds()))})
 		return
 	}
-	res, err := s.chat.Ask(r.Context(), chat.AskRequest{Caller: r.PathValue("name"), Task: req.Task, Question: req.Question, Options: req.Options, Timeout: time.Duration(req.TimeoutS * float64(time.Second))})
+	res, err := s.chat.Ask(r.Context(), chat.AskRequest{Caller: r.PathValue("name"), Task: req.Task, RunID: req.RunID, Question: req.Question, Options: req.Options, Timeout: time.Duration(req.TimeoutS * float64(time.Second))})
 	if err != nil {
 		writeChatError(w, err)
 		return

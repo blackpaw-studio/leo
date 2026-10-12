@@ -85,7 +85,9 @@ subagents are refused, as for `leo_surface_file`.
 | `leo_chat_history` | `limit` (max 200), `before`, `task` | a page (below) |
 
 A headless task run has `LEO_TASK` and `LEO_RUN_ID` set, so its posts become
-`task` cards in the owner's thread. Leo's MCP tool ceiling is 62 minutes so a
+`task` cards in the owner's thread. A `runtime: persistent` task runs in an
+agent that serves every turn, so the daemon files that agent's posts and asks
+under the task run whose turn is in flight. Leo's MCP tool ceiling is 62 minutes so a
 one-hour ask is never cut off; on Claude that ceiling (`MCP_TOOL_TIMEOUT`)
 applies to every MCP server in the agent.
 

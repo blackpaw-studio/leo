@@ -449,3 +449,32 @@ func TestSessionRouterInjectorTimeoutKillsHungTurn(t *testing.T) {
 		t.Fatalf("hung-turn invocation never completed after the injector's ctx deadline elapsed")
 	}
 }
+
+// The router reports the run in flight on a session: its task and run id.
+func TestSessionRouterReportsTheRunInFlight(t *testing.T) {
+	r := newSessionRouter()
+	t.Cleanup(r.Stop)
+	inside := make(chan struct{})
+	release := make(chan struct{})
+	r.SetInjector(func(context.Context, string, string) (*harness.Result, error) {
+		close(inside)
+		<-release
+		return &harness.Result{}, nil
+	})
+	r.SetAborter(func(string) error { return nil })
+	if _, ok := r.InFlight("worker"); ok {
+		t.Fatal("nothing is in flight yet")
+	}
+	inv, _ := r.Enqueue(EnqueueParams{Session: "worker", Task: "nightly", RunID: "run-1", Prompt: "p", QueueMax: 1, Timeout: time.Minute})
+	r.StartPump("worker")
+	<-inside
+	got, ok := r.InFlight("worker")
+	if !ok || got.ID != inv.ID || got.Task != "nightly" || got.RunID != "run-1" {
+		t.Fatalf("in flight = %+v, %v", got, ok)
+	}
+	close(release)
+	<-inv.Result
+	if _, ok := r.InFlight("worker"); ok {
+		t.Fatal("a completed invocation is not in flight")
+	}
+}

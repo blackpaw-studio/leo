@@ -58,6 +58,9 @@ type Options struct {
 	// Agents lists every known agent, running or stopped.
 	Agents func() []AgentRef
 	Config func() (*config.Config, error)
+	// TaskRun returns the persistent task and run whose turn is running in
+	// agent, if any. Nil runs none.
+	TaskRun func(agent string) (task, runID string, ok bool)
 	// Queued reports whether agent's durable outbox still holds the
 	// delivery queued under ref, which its next launch then delivers. Nil
 	// holds nothing.

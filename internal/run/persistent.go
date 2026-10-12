@@ -140,6 +140,7 @@ func runPersistent(cfg *config.Config, taskName string) error {
 		Session:      target.queueKey,
 		TmuxSession:  target.tmux,
 		Task:         taskName,
+		RunID:        runID,
 		Prompt:       wrapped,
 		Channels:     task.Channels,
 		QueueMax:     task.QueueMax,

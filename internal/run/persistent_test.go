@@ -517,3 +517,41 @@ func TestNewInvocationID16IsHex32(t *testing.T) {
 		}
 	}
 }
+
+// While a persistent task's turn runs, the daemon knows its task and run
+// id, so the agent's chat tools can file their output as that run's card.
+func TestRunPersistentCarriesItsRunToTheDaemon(t *testing.T) {
+	home := shortTempDir(t)
+	ws := filepath.Join(home, "ws")
+	promptFile := writePromptFile(t, ws)
+	srv := newTestDaemon(t, home, fakeEnsurer(func(context.Context, daemon.EnsureSpec) error { return nil }))
+	type run struct {
+		task, id string
+		ok       bool
+	}
+	seen := make(chan run, 1)
+	srv.SetInjector(func(context.Context, string, string) (*harness.Result, error) {
+		task, id, ok := srv.TaskRun("worker")
+		seen <- run{task, id, ok}
+		return &harness.Result{SessionID: "sid-123", Text: "done"}, nil
+	})
+	pub := &recordingPublisher{}
+	SetPublisher(pub)
+	t.Cleanup(func() { SetPublisher(nil) })
+	cfg := &config.Config{
+		HomePath:  home,
+		Tasks:     map[string]config.TaskConfig{"nightly": {Runtime: "persistent", Workspace: ws, PromptFile: promptFile, Template: "worker"}},
+		Templates: map[string]config.TemplateConfig{"worker": {Workspace: ws}},
+	}
+	if err := runPersistent(cfg, "nightly"); err != nil {
+		t.Fatalf("runPersistent: %v", err)
+	}
+	got := <-seen
+	started := pub.events[0].Payload.(*observe.TaskRunPayload)
+	if !got.ok || got.task != "nightly" || got.id == "" || got.id != started.Run.ID {
+		t.Fatalf("in-flight run = %+v, want nightly/%s", got, started.Run.ID)
+	}
+	if _, _, ok := srv.TaskRun("worker"); ok {
+		t.Fatal("a finished run is no longer in flight")
+	}
+}

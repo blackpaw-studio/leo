@@ -32,6 +32,20 @@ type PostRequest struct {
 	Files  []string
 }
 
+// withRun fills in the task run a caller's chat output belongs to when the
+// caller names none: an agent running a persistent task's turn has no
+// LEO_TASK of its own (it serves every turn), so the run is the one the
+// daemon has in flight in it.
+func (s *Service) withRun(caller, task, runID string) (string, string) {
+	if task != "" || s.opts.TaskRun == nil || strings.HasPrefix(caller, taskCallerPrefix) {
+		return task, runID
+	}
+	if t, r, ok := s.opts.TaskRun(caller); ok {
+		return t, r
+	}
+	return task, runID
+}
+
 // thread resolves the thread a caller posts to: its own for an agent, the
 // task owner's for a run. note is a system note to post first (the owner
 // was missing).
@@ -74,6 +88,7 @@ func (s *Service) Post(_ context.Context, req PostRequest) (Message, error) {
 	case len(req.Files) > MaxPostFiles:
 		return Message{}, fmt.Errorf("%w: at most %d files", ErrInvalid, MaxPostFiles)
 	}
+	req.Task, req.RunID = s.withRun(req.Caller, req.Task, req.RunID)
 	agent, note, err := s.thread(req.Caller, req.Task)
 	if err != nil {
 		return Message{}, err
@@ -138,6 +153,7 @@ func (s *Service) removeFiles(as []Attachment) {
 type AskRequest struct {
 	Caller   string
 	Task     string
+	RunID    string
 	Question string
 	Options  []Option
 	Timeout  time.Duration
@@ -182,6 +198,7 @@ func (s *Service) Ask(ctx context.Context, req AskRequest) (AskResult, error) {
 	if err != nil {
 		return AskResult{}, err
 	}
+	req.Task, req.RunID = s.withRun(req.Caller, req.Task, req.RunID)
 	agent, note, err := s.thread(req.Caller, req.Task)
 	if err != nil {
 		return AskResult{}, err
@@ -198,7 +215,7 @@ func (s *Service) Ask(ctx context.Context, req AskRequest) (AskResult, error) {
 	}
 	m := Message{Agent: agent, Direction: DirectionOut, Kind: KindAsk, Text: strings.TrimSpace(req.Question), State: StateOpen, Options: options}
 	if req.Task != "" {
-		m.Task = req.Task
+		m.Task, m.RunID = req.Task, req.RunID
 	}
 	answer, settled := s.await(ctx, m, timeout)
 	if !settled {
@@ -263,7 +280,8 @@ type HistoryRequest struct {
 
 // History returns a page of the caller's own thread.
 func (s *Service) History(_ context.Context, req HistoryRequest) (PageResult, error) {
-	agent, _, err := s.thread(req.Caller, req.RunTask)
+	task, _ := s.withRun(req.Caller, req.RunTask, "")
+	agent, _, err := s.thread(req.Caller, task)
 	if err != nil {
 		return PageResult{}, err
 	}

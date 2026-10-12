@@ -128,15 +128,17 @@ func (g *gatedIDs) New() string {
 }
 
 type harnessFixture struct {
-	svc        *Service
-	store      *Store
-	deliver    *fakeDeliverer
-	pub        *recordingPublisher
-	clock      *testClock
-	timers     *manualTimers
-	ids        *gatedIDs
+	svc     *Service
+	store   *Store
+	deliver *fakeDeliverer
+	pub     *recordingPublisher
+	clock   *testClock
+	timers  *manualTimers
+	ids     *gatedIDs
 	// held is what the agents' durable outboxes hold, as agent/ref.
-	held       map[string]bool
+	held map[string]bool
+	// runs is each agent's persistent-task run in flight, as task/run id.
+	runs       map[string][2]string
 	cfg        *config.Config
 	root       string
 	transcript func(ctx context.Context, path string) (string, error)
@@ -152,6 +154,7 @@ func newFixture(t *testing.T) *harnessFixture {
 		timers:  newManualTimers(),
 		ids:     &gatedIDs{},
 		held:    map[string]bool{},
+		runs:    map[string][2]string{},
 		cfg:     &config.Config{HomePath: "/home/leo", Tasks: map[string]config.TaskConfig{}},
 		root:    t.TempDir(),
 	}
@@ -173,6 +176,10 @@ func newFixture(t *testing.T) *harnessFixture {
 		},
 		Config: func() (*config.Config, error) { return f.cfg, nil },
 		Queued: func(agent, ref string) (bool, error) { return f.held[agent+"/"+ref], nil },
+		TaskRun: func(agent string) (string, string, bool) {
+			r, ok := f.runs[agent]
+			return r[0], r[1], ok
+		},
 	})
 	t.Cleanup(f.svc.Close)
 	return f
@@ -388,6 +395,34 @@ func TestPostFromTaskGoesToOwnerAsTaskCard(t *testing.T) {
 	}
 	if m.Agent != "web" || m.Kind != KindTask || m.Task != "build" || m.RunID != "r9" || m.Direction != DirectionOut {
 		t.Fatalf("card = %+v", m)
+	}
+}
+
+// A persistent task runs in its agent, whose MCP server knows no task: the
+// daemon files the agent's chat output under the run in flight.
+func TestChatToolsDuringAPersistentRunCarryItsTaskAndRun(t *testing.T) {
+	f := newFixture(t)
+	f.cfg.Tasks["digest"] = config.TaskConfig{Runtime: "persistent", Template: "assistant"}
+	f.runs["assistant"] = [2]string{"digest", "run-7"}
+	m, err := f.svc.Post(context.Background(), PostRequest{Caller: "assistant", Text: "today's digest"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m.Agent != "assistant" || m.Kind != KindTask || m.Task != "digest" || m.RunID != "run-7" {
+		t.Fatalf("card = %+v", m)
+	}
+	go func() {
+		<-f.timers.got
+		open, _ := f.store.OpenMessages("assistant", KindAsk, StateOpen)
+		_, _ = f.svc.Answer("assistant", open[0].ID, "y")
+	}()
+	res, err := f.svc.Ask(context.Background(), AskRequest{Caller: "assistant", Question: "Publish?", Options: []Option{{Value: "y"}}})
+	if err != nil || res.Value != "y" {
+		t.Fatalf("ask = %+v, %v", res, err)
+	}
+	asks, _, _ := f.store.Messages("assistant", Page{Task: "digest"})
+	if len(asks) != 2 || asks[0].Kind != KindAsk || asks[0].RunID != "run-7" {
+		t.Fatalf("task thread = %+v", asks)
 	}
 }
 
