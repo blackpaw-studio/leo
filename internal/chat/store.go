@@ -30,52 +30,6 @@ var ErrNotFound = errors.New("not found")
 // or already sent.
 var ErrUnusable = errors.New("unusable upload")
 
-// schemaVersion is stored in PRAGMA user_version.
-const schemaVersion = 1
-
-const schema = `
-CREATE TABLE IF NOT EXISTS messages (
-	id         TEXT PRIMARY KEY,
-	agent      TEXT NOT NULL,
-	direction  TEXT NOT NULL,
-	kind       TEXT NOT NULL,
-	text       TEXT NOT NULL DEFAULT '',
-	transcript TEXT NOT NULL DEFAULT '',
-	reply_to   TEXT NOT NULL DEFAULT '',
-	task       TEXT NOT NULL DEFAULT '',
-	run_id     TEXT NOT NULL DEFAULT '',
-	state      TEXT NOT NULL DEFAULT '',
-	answer     TEXT NOT NULL DEFAULT '',
-	options    TEXT NOT NULL DEFAULT '',
-	meta       TEXT NOT NULL DEFAULT '',
-	delivery_ref TEXT NOT NULL DEFAULT '',
-	ts         INTEGER NOT NULL
-);
-CREATE INDEX IF NOT EXISTS messages_agent_id ON messages(agent, id);
-CREATE INDEX IF NOT EXISTS messages_agent_task_id ON messages(agent, task, id);
-CREATE TABLE IF NOT EXISTS attachments (
-	id         TEXT PRIMARY KEY,
-	message_id TEXT NOT NULL DEFAULT '',
-	agent      TEXT NOT NULL,
-	filename   TEXT NOT NULL,
-	mime       TEXT NOT NULL,
-	bytes      INTEGER NOT NULL,
-	path       TEXT NOT NULL DEFAULT '',
-	created    INTEGER NOT NULL
-);
-CREATE INDEX IF NOT EXISTS attachments_message ON attachments(message_id);
-CREATE TABLE IF NOT EXISTS reads (
-	agent     TEXT PRIMARY KEY,
-	last_read TEXT NOT NULL
-);
-CREATE TABLE IF NOT EXISTS captures (
-	message_id   TEXT PRIMARY KEY,
-	agent        TEXT NOT NULL,
-	prompt       TEXT NOT NULL,
-	delivered_at INTEGER NOT NULL
-);
-`
-
 // Store is the chat database. It is safe for concurrent use.
 type Store struct {
 	db *sql.DB
@@ -98,13 +52,9 @@ func OpenStore(path string) (*Store, error) {
 	// One connection serializes writers, so SQLITE_BUSY never surfaces;
 	// the chat load is a handful of rows per minute.
 	db.SetMaxOpenConns(1)
-	if _, err := db.Exec(schema); err != nil {
+	if err := migrate(db, migrations); err != nil {
 		_ = db.Close()
-		return nil, fmt.Errorf("creating chat schema: %w", err)
-	}
-	if _, err := db.Exec(fmt.Sprintf("PRAGMA user_version = %d", schemaVersion)); err != nil {
-		_ = db.Close()
-		return nil, fmt.Errorf("stamping chat schema: %w", err)
+		return nil, err
 	}
 	return &Store{db: db}, nil
 }
@@ -145,7 +95,7 @@ func (s *Store) InsertMessage(m Message) error { return s.InsertMessageWith(m, n
 // earlier uploads link (each agent's own or unassigned, and unused) in one
 // transaction: on any failure nothing is stored.
 func (s *Store) InsertMessageWith(m Message, add []Attachment, link []string) error {
-	options, meta, err := encodeExtras(m)
+	input, meta, answer, err := encodeExtras(m)
 	if err != nil {
 		return err
 	}
@@ -155,7 +105,7 @@ func (s *Store) InsertMessageWith(m Message, add []Attachment, link []string) er
 	}
 	defer func() { _ = tx.Rollback() }()
 	_, err = tx.Exec(`INSERT INTO messages (`+messageColumns+`) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		m.ID, m.Agent, m.Direction, m.Kind, m.Text, m.Transcript, m.ReplyTo, m.Task, m.RunID, m.State, m.Answer, options, meta, m.DeliveryRef, m.TS.UnixMilli())
+		m.ID, m.Agent, m.Direction, m.Kind, m.Text, m.Transcript, m.ReplyTo, m.Task, m.RunID, m.State, answer, input, meta, m.DeliveryRef, m.TS.UnixMilli())
 	if err != nil {
 		return fmt.Errorf("inserting chat message: %w", err)
 	}
@@ -174,38 +124,62 @@ func (s *Store) InsertMessageWith(m Message, add []Attachment, link []string) er
 	return nil
 }
 
-func encodeExtras(m Message) (string, string, error) {
-	var options, meta string
-	if len(m.Options) > 0 {
-		b, err := json.Marshal(m.Options)
+// encodeExtras renders a message's input, meta and answer columns.
+func encodeExtras(m Message) (input, meta, answer string, err error) {
+	if m.Input != nil {
+		b, err := json.Marshal(m.Input)
 		if err != nil {
-			return "", "", fmt.Errorf("encoding options: %w", err)
+			return "", "", "", fmt.Errorf("encoding input: %w", err)
 		}
-		options = string(b)
+		input = string(b)
+	}
+	if m.Answer != nil {
+		if answer, err = encodeAnswer(*m.Answer); err != nil {
+			return "", "", "", err
+		}
 	}
 	if m.Permission != nil {
 		b, err := json.Marshal(storedMeta{Tool: m.Permission.Tool, Summary: m.Permission.Summary, Input: m.Permission.input})
 		if err != nil {
-			return "", "", fmt.Errorf("encoding permission: %w", err)
+			return "", "", "", fmt.Errorf("encoding permission: %w", err)
 		}
 		meta = string(b)
 	}
-	return options, meta, nil
+	return input, meta, answer, nil
 }
 
-const messageColumns = `id, agent, direction, kind, text, transcript, reply_to, task, run_id, state, answer, options, meta, delivery_ref, ts`
+// encodeAnswer renders an answer for the answer column; "" for none.
+func encodeAnswer(a Answer) (string, error) {
+	if a.IsZero() {
+		return "", nil
+	}
+	b, err := json.Marshal(a)
+	if err != nil {
+		return "", fmt.Errorf("encoding answer: %w", err)
+	}
+	return string(b), nil
+}
+
+const messageColumns = `id, agent, direction, kind, text, transcript, reply_to, task, run_id, state, answer, input, meta, delivery_ref, ts`
 
 func scanMessage(row interface{ Scan(...any) error }) (Message, error) {
 	var m Message
-	var options, meta string
+	var input, answer, meta string
 	var ts int64
-	if err := row.Scan(&m.ID, &m.Agent, &m.Direction, &m.Kind, &m.Text, &m.Transcript, &m.ReplyTo, &m.Task, &m.RunID, &m.State, &m.Answer, &options, &meta, &m.DeliveryRef, &ts); err != nil {
+	if err := row.Scan(&m.ID, &m.Agent, &m.Direction, &m.Kind, &m.Text, &m.Transcript, &m.ReplyTo, &m.Task, &m.RunID, &m.State, &answer, &input, &meta, &m.DeliveryRef, &ts); err != nil {
 		return Message{}, err
 	}
 	m.TS = time.UnixMilli(ts).UTC()
-	if options != "" {
-		if err := json.Unmarshal([]byte(options), &m.Options); err != nil {
-			return Message{}, fmt.Errorf("decoding options of %s: %w", m.ID, err)
+	if input != "" {
+		m.Input = new(Input)
+		if err := json.Unmarshal([]byte(input), m.Input); err != nil {
+			return Message{}, fmt.Errorf("decoding input of %s: %w", m.ID, err)
+		}
+	}
+	if answer != "" {
+		m.Answer = new(Answer)
+		if err := json.Unmarshal([]byte(answer), m.Answer); err != nil {
+			return Message{}, fmt.Errorf("decoding answer of %s: %w", m.ID, err)
 		}
 	}
 	if meta != "" {
@@ -374,13 +348,17 @@ func (s *Store) MarkRead(agent, id string) error {
 }
 
 // Transition moves message id from one of from to state, recording answer
-// when non-empty. It reports false, without error, when the message was not
+// when it is not zero. It reports false, without error, when the message was not
 // in one of from — someone else settled it first.
-func (s *Store) Transition(id string, from []string, state, answer string) (bool, error) {
+func (s *Store) Transition(id string, from []string, state string, answer Answer) (bool, error) {
 	if len(from) == 0 {
 		return false, errors.New("transition needs at least one from-state")
 	}
-	args := []any{state, answer, answer, id}
+	encoded, err := encodeAnswer(answer)
+	if err != nil {
+		return false, err
+	}
+	args := []any{state, encoded, encoded, id}
 	for _, f := range from {
 		args = append(args, f)
 	}

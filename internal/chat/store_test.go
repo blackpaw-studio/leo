@@ -161,11 +161,11 @@ func TestStoreTransitionIsCompareAndSet(t *testing.T) {
 	m.State = StateOpen
 	mustInsert(t, st, m)
 
-	ok, err := st.Transition(m.ID, []string{StateOpen}, StateAnswered, "yes")
+	ok, err := st.Transition(m.ID, []string{StateOpen}, StateAnswered, Answer{Values: []string{"yes"}})
 	if err != nil || !ok {
 		t.Fatalf("first transition = %v, %v", ok, err)
 	}
-	ok, err = st.Transition(m.ID, []string{StateOpen}, StateExpired, "")
+	ok, err = st.Transition(m.ID, []string{StateOpen}, StateExpired, Answer{})
 	if err != nil || ok {
 		t.Fatalf("second transition must lose: %v, %v", ok, err)
 	}
@@ -173,7 +173,7 @@ func TestStoreTransitionIsCompareAndSet(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.State != StateAnswered || got.Answer != "yes" {
+	if got.State != StateAnswered || got.Answer == nil || got.Answer.Values[0] != "yes" {
 		t.Fatalf("state = %s/%s", got.State, got.Answer)
 	}
 }

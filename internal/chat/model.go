@@ -38,8 +38,8 @@ const (
 	StateExpired   = "expired"
 )
 
-// AnswerTerminal is the answer recorded when a permission prompt was
-// settled in the agent's own terminal rather than from chat.
+// AnswerTerminal is the value of the answer recorded when a permission
+// prompt was settled in the agent's own terminal rather than from chat.
 const AnswerTerminal = "terminal"
 
 // Option is one choice of an ask message.
@@ -69,8 +69,8 @@ type Message struct {
 	Task        string       `json:"task,omitempty"`
 	RunID       string       `json:"run_id,omitempty"`
 	State       string       `json:"state"`
-	Answer      string       `json:"answer,omitempty"`
-	Options     []Option     `json:"options,omitempty"`
+	Answer      *Answer      `json:"answer,omitempty"`
+	Input       *Input       `json:"input,omitempty"`
 	Permission  *Permission  `json:"permission,omitempty"`
 	Attachments []Attachment `json:"attachments"`
 	TS          time.Time    `json:"ts"`

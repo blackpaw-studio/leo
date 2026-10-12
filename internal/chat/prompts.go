@@ -21,10 +21,10 @@ type waiters struct {
 }
 
 // waiter is one open message's: done closes once it is settled, with value
-// (the answer; "" when it ended without one).
+// (the answer; zero when it ended without one).
 type waiter struct {
 	done  chan struct{}
-	value string
+	value Answer
 }
 
 func newWaiters() *waiters { return &waiters{m: map[string]*waiter{}} }
@@ -52,7 +52,7 @@ func (w *waiters) remove(id string) {
 
 // settle settles id's waiter with value, if it has one not yet settled.
 // Never blocks.
-func (w *waiters) settle(id, value string) {
+func (w *waiters) settle(id string, value Answer) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	wt, ok := w.m[id]
@@ -71,24 +71,24 @@ func (w *waiters) settle(id, value string) {
 // answer it is left in when the waiter's context ends first.
 type awaitEnd struct {
 	state  string
-	answer string
+	answer Answer
 }
 
 // awaitWith stores open message m, announces it, and blocks until it is
 // answered (settled, with the answer), times out (expired) or ctx ends (as
 // gone says).
-func (s *Service) awaitWith(ctx context.Context, m Message, timeout time.Duration, gone awaitEnd) (string, bool) {
+func (s *Service) awaitWith(ctx context.Context, m Message, timeout time.Duration, gone awaitEnd) (Answer, bool) {
 	m, wt, err := s.insertOpen(m)
 	if err != nil {
 		s.opts.Logf("chat: storing %s prompt for %s: %v", m.Kind, m.Agent, err)
-		return "", false
+		return Answer{}, false
 	}
 	defer s.waiters.remove(m.ID)
 	timer := s.opts.After(timeout)
 	var end awaitEnd
 	select {
 	case <-wt.done:
-		return wt.value, wt.value != ""
+		return wt.value, !wt.value.IsZero()
 	case <-timer:
 		end = awaitEnd{state: StateExpired}
 	case <-s.ctx.Done():
@@ -100,17 +100,17 @@ func (s *Service) awaitWith(ctx context.Context, m Message, timeout time.Duratio
 	ok, err := s.opts.Store.Transition(m.ID, []string{StateOpen}, end.state, end.answer)
 	if err != nil {
 		s.opts.Logf("chat: closing %s: %v", m.ID, err)
-		return "", false
+		return Answer{}, false
 	}
 	if ok {
 		s.publishUpdated(m.ID, ChangeState)
-		return "", false
+		return Answer{}, false
 	}
 	// An answer won the race: honour it.
-	if cur, err := s.opts.Store.Message(m.ID); err == nil && cur.State == StateAnswered && cur.Answer != AnswerTerminal {
-		return cur.Answer, true
+	if cur, err := s.opts.Store.Message(m.ID); err == nil && cur.State == StateAnswered && cur.Answer != nil && !cur.Answer.isTerminal() {
+		return *cur.Answer, true
 	}
-	return "", false
+	return Answer{}, false
 }
 
 // insertOpen stores open message m with a waiter for its answer, put in
@@ -137,9 +137,9 @@ type permissionRequest struct {
 	ToolInput json.RawMessage `json:"tool_input"`
 }
 
-// permissionOptions are a permission message's answers, listed so clients
+// permissionInput is a permission message's answer control, so clients
 // render it like an ask.
-var permissionOptions = []Option{{Value: "allow", Label: "Allow"}, {Value: "deny", Label: "Deny"}}
+var permissionInput = Input{Type: InputButtons, Options: []Option{{Value: "allow", Label: "Allow"}, {Value: "deny", Label: "Deny"}}}
 
 // RequestPermission posts a Claude permission prompt to agent's thread and
 // waits up to timeout for allow or deny from chat. It returns "" (no
@@ -159,14 +159,14 @@ func (s *Service) RequestPermission(ctx context.Context, agent string, payload j
 	m := Message{
 		Agent: agent, Direction: DirectionOut, Kind: KindPermission,
 		Text: req.ToolName + ": " + summary, State: StateOpen,
-		Options:    permissionOptions,
+		Input:      &permissionInput,
 		Permission: &Permission{Tool: req.ToolName, Summary: summary, input: req.ToolInput},
 	}
-	answer, settled := s.awaitWith(ctx, m, timeout, awaitEnd{state: StateAnswered, answer: AnswerTerminal})
-	if !settled || (answer != "allow" && answer != "deny") {
+	answer, settled := s.awaitWith(ctx, m, timeout, awaitEnd{state: StateAnswered, answer: terminalAnswer})
+	if !settled || len(answer.Values) != 1 || (answer.Values[0] != "allow" && answer.Values[0] != "deny") {
 		return ""
 	}
-	return answer
+	return answer.Values[0]
 }
 
 // summarizeToolInput renders the field of a tool input a person decides
@@ -287,11 +287,11 @@ func (s *Service) settlePermissionInTerminal(agent string, ev HookEvent) {
 		if m.Permission == nil || m.Permission.Tool != ev.ToolName || !sameJSON(m.Permission.input, ev.ToolInput) {
 			continue
 		}
-		ok, err := s.opts.Store.Transition(m.ID, []string{StateOpen}, StateAnswered, AnswerTerminal)
+		ok, err := s.opts.Store.Transition(m.ID, []string{StateOpen}, StateAnswered, terminalAnswer)
 		if err != nil || !ok {
 			continue
 		}
-		s.waiters.settle(m.ID, "")
+		s.waiters.settle(m.ID, Answer{})
 		s.publishUpdated(m.ID, ChangeAnswer)
 		return
 	}
