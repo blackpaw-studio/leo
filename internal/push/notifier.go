@@ -2,13 +2,21 @@ package push
 
 import (
 	"context"
+	"strings"
 	"sync"
 	"time"
 
+	"github.com/blackpaw-studio/leo/internal/chat"
+	"github.com/blackpaw-studio/leo/internal/config"
 	"github.com/blackpaw-studio/leo/internal/observe"
 )
 
 const defaultQueueSize = 64
+
+// DefaultPermissionWait is how long the daemon lets a permission alert
+// wait for its Leo Chat message (see WithPermissionWait): both come from
+// hooks Claude runs moments apart.
+const DefaultPermissionWait = 3 * time.Second
 
 // Notifier is an observe.Publisher decorator: it forwards every event to
 // next, and on each agent's attention transition into a needs-you state
@@ -30,6 +38,28 @@ type Notifier struct {
 	// transition it precedes consumes it. The bridge feed publishes the
 	// turn_completed event before advancing attention to finished.
 	previews map[string]string
+	// openPermissions holds each agent's open Leo Chat permission message,
+	// whose id rides that agent's permission attention alert.
+	openPermissions map[string]string
+
+	// permissionWait is how long a permission alert that finds no open
+	// permission message waits for one (0: it never waits). The attention
+	// event and the chat message come from different hooks, in either
+	// order.
+	permissionWait time.Duration
+	// afterFunc runs f after d, returning its stop (time.AfterFunc).
+	afterFunc func(d time.Duration, f func()) (stop func() bool)
+	// held holds each agent's permission alert while it waits; holds
+	// numbers them.
+	held  map[string]heldAlert
+	holds uint64
+}
+
+// heldAlert is a permission alert waiting for its chat message.
+type heldAlert struct {
+	alert Alert
+	stop  func() bool
+	n     uint64
 }
 
 // NotifierOption configures a Notifier.
@@ -57,6 +87,14 @@ func WithPolicy(allow func(agent, state string) bool) NotifierOption {
 	return func(nt *Notifier) { nt.allow = allow }
 }
 
+// WithPermissionWait lets a permission alert wait up to d for the Leo Chat
+// permission message it is about, whose id it then carries: the agent's
+// attention event can arrive before the PermissionRequest hook posts it.
+// Past d it is sent without one.
+func WithPermissionWait(d time.Duration) NotifierOption {
+	return func(nt *Notifier) { nt.permissionWait = d }
+}
+
 // NewNotifier wraps next (nil forwards nowhere) and delivers through sender
 // once Start has run.
 func NewNotifier(next observe.Publisher, sender Sender, opts ...NotifierOption) *Notifier {
@@ -67,7 +105,12 @@ func NewNotifier(next observe.Publisher, sender Sender, opts ...NotifierOption) 
 		queue:  make(chan Alert, defaultQueueSize),
 		last:   make(map[string]observe.AttentionState),
 
-		previews: make(map[string]string),
+		previews:        make(map[string]string),
+		openPermissions: make(map[string]string),
+		held:            make(map[string]heldAlert),
+		afterFunc: func(d time.Duration, f func()) func() bool {
+			return time.AfterFunc(d, f).Stop
+		},
 	}
 	for _, opt := range opts {
 		opt(n)
@@ -108,7 +151,102 @@ func (n *Notifier) Publish(ev observe.Event) {
 		n.mu.Lock()
 		delete(n.last, p.Agent)
 		delete(n.previews, p.Agent)
+		delete(n.openPermissions, p.Agent)
+		if h, ok := n.held[p.Agent]; ok {
+			h.stop()
+			delete(n.held, p.Agent)
+		}
 		n.mu.Unlock()
+	case *chat.MessagePayload:
+		n.trackPermission(p.Message)
+		n.chatMessage(p.Message)
+	case *chat.UpdatedPayload:
+		n.trackPermission(p.Message)
+	}
+}
+
+// trackPermission keeps openPermissions current with a permission
+// message's state.
+func (n *Notifier) trackPermission(m chat.Message) {
+	if m.Kind != chat.KindPermission {
+		return
+	}
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	switch {
+	case m.State == chat.StateOpen:
+		n.openPermissions[m.Agent] = m.ID
+		// Whoever removes a held alert sends it: here, or its timer.
+		if h, ok := n.held[m.Agent]; ok {
+			h.stop()
+			delete(n.held, m.Agent)
+			h.alert.MessageID, h.alert.MessageKind = m.ID, chat.KindPermission
+			n.enqueue(h.alert)
+		}
+	case n.openPermissions[m.Agent] == m.ID:
+		delete(n.openPermissions, m.Agent)
+	}
+}
+
+// holdLocked keeps agent's permission alert a until its chat message opens or
+// permissionWait passes, whichever is first. Caller holds n.mu.
+func (n *Notifier) holdLocked(agent string, a Alert) {
+	if h, ok := n.held[agent]; ok {
+		// An earlier prompt's alert still waiting goes now, without an id.
+		h.stop()
+		n.enqueue(h.alert)
+	}
+	n.holds++
+	seq := n.holds
+	stop := n.afterFunc(n.permissionWait, func() {
+		n.mu.Lock()
+		h, ok := n.held[agent]
+		mine := ok && h.n == seq
+		if mine {
+			delete(n.held, agent)
+		}
+		n.mu.Unlock()
+		if mine {
+			n.enqueue(a)
+		}
+	})
+	n.held[agent] = heldAlert{alert: a, stop: stop, n: seq}
+}
+
+// chatMessage queues a chat push for an agent's outbound message. Permission
+// prompts push through attention (with their message id) and system notes
+// not at all, so each event has one push source.
+func (n *Notifier) chatMessage(m chat.Message) {
+	if m.Direction != chat.DirectionOut || m.Kind == chat.KindPermission || m.Kind == chat.KindSystem {
+		return
+	}
+	if n.allow != nil && !n.allow(m.Agent, config.PushStateChat) {
+		return
+	}
+	a := Alert{Agent: m.Agent, Kind: config.PushStateChat, Title: m.Agent, Body: chatBody(m), At: n.now(), MessageID: m.ID, MessageKind: m.Kind}
+	for _, o := range m.Options {
+		a.Options = append(a.Options, Option(o))
+	}
+	n.enqueue(a)
+}
+
+// chatBody is a chat message's text, or its file names when it has none.
+func chatBody(m chat.Message) string {
+	if m.Text != "" {
+		return m.Text
+	}
+	names := make([]string, 0, len(m.Attachments))
+	for _, a := range m.Attachments {
+		names = append(names, a.Filename)
+	}
+	return strings.Join(names, ", ")
+}
+
+// enqueue queues a without ever blocking the publisher.
+func (n *Notifier) enqueue(a Alert) {
+	select {
+	case n.queue <- a:
+	default: // queue full: shed the alert rather than block the publisher
 	}
 }
 
@@ -133,6 +271,9 @@ func (n *Notifier) observe(agent string, att observe.AgentAttention) {
 	} else {
 		delete(n.previews, agent)
 	}
+	// A classic agent's permission_prompt hook reports no reason; any other
+	// reason (a question) is not the permission prompt.
+	isPermission := att.State == observe.AttentionNeedsInput && (att.Reason == nil || att.Reason.Kind == observe.AttentionReasonPermission)
 	n.mu.Unlock()
 	title, ok := needsYouTitle(att)
 	if !ok {
@@ -141,10 +282,24 @@ func (n *Notifier) observe(agent string, att observe.AgentAttention) {
 	if n.allow != nil && !n.allow(agent, string(att.State)) {
 		return
 	}
-	select {
-	case n.queue <- Alert{Agent: agent, Kind: string(att.State), Title: title, Body: alertBody(att, preview), At: n.now()}:
-	default: // queue full: shed the alert rather than block the publisher
+	a := Alert{Agent: agent, Kind: string(att.State), Title: title, Body: alertBody(att, preview), At: n.now()}
+	if !isPermission {
+		n.enqueue(a)
+		return
 	}
+	// The open message is read under the same lock trackPermission records
+	// it under, so the message opening now either is seen here or finds the
+	// alert held.
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	if id := n.openPermissions[agent]; id != "" || n.permissionWait <= 0 {
+		if id != "" {
+			a.MessageID, a.MessageKind = id, chat.KindPermission
+		}
+		n.enqueue(a)
+		return
+	}
+	n.holdLocked(agent, a)
 }
 
 // needsYouTitle is the human summary for a needs-you state; ok=false for

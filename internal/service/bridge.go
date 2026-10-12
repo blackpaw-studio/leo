@@ -140,6 +140,7 @@ func (s *Supervisor) BridgeRouter() *bridge.Router {
 	s.mail.mu.Lock()
 	if s.mail.store != nil {
 		router.Queue = s.QueueDeliver
+		router.Held = s.MailHolds
 	}
 	s.mail.mu.Unlock()
 	return router

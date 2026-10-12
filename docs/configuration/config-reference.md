@@ -19,6 +19,7 @@ Settings inherited by all tasks and templates unless overridden.
 | `harness_options` | map | No | Adapter-specific options, strictly validated by the resolved harness. For `claude`: `permission_mode`, `bypass_permissions`, `remote_control`, `agent`, `allowed_tools`, `disallowed_tools`, `append_system_prompt`. For `codex`: `permission_mode`. For `opencode`: `permission`. See [Harnesses](harnesses.md) for the full reference and merge rules. |
 | `environments` | list | No | Ordered [named environments](environments.md) applied to everything that does not set its own list. |
 | `idle_suspend_after` | string | No | Idle interval (Go duration, e.g. `24h`) after which an ephemeral agent is auto-stopped (dormant, auto-wakes on the next message). Empty/unset disables it. See [Idle-suspend](#idle-suspend). |
+| `push.chat` | bool | No | Whether an agent's [Leo Chat](chat.md) messages push to paired phones. Unset means on; a template's `push.chat` overrides it. |
 | `push.needs_input`, `push.finished`, `push.errored` | bool | No | Whether an attention transition into that state [pushes to paired phones](#pairing-a-phone). Each state is its own switch; unset means on, so nothing changes until you turn one off. A template's own `push` block overrides these per state. Edits apply to the next transition with no restart. |
 | `dispatch.viewer` | map | No | Dispatch viewer settings: `placement` (`pane`, `window` or `background`, default `pane`), `max_panes` (1–6, default 3), and `main_pane_height` (20–90 percent, default 60). |
 | `dispatch.max_concurrent` | int | No | Cap on dispatch turns running at once (default `6`, `0` = unlimited, negative is rejected). New dispatches and interactive follow-ups beyond the cap queue in one FIFO line instead of being rejected. See [Dispatches → Records and limits](dispatches.md#records-and-limits). |
@@ -153,6 +154,15 @@ Routes for the app (bearer auth; device or operator token):
 | `GET`/`HEAD /api/v1/files/{surfaced_id}` | Streams a file an agent surfaced, by id only, with `Range` support. 404 once evicted. |
 | `GET /api/v1/agents/{name}/attach` | WebSocket onto `tmux attach -r`. Binary frames: terminal output. Text frames: JSON control — `ping`/`pong` (the daemon pings every 30 s) and `{"type":"resize","cols":N,"rows":M}`. Optional `?cols=&rows=`. Binary input frames close the socket with 1008. |
 
+## `chat`
+
+[Leo Chat](chat.md) settings.
+
+| Field | Type | Required | Default | Description |
+|-------|------|----------|---------|-------------|
+| `whisper_model` | string | No | -- | whisper.cpp ggml model for voice notes (`~` expands). Unset: voice notes are delivered untranscribed. |
+| `permission_timeout` | duration | No | `120s` | How long a Claude permission prompt waits for an answer in chat, at most `1h`. |
+
 ## `client`
 
 Remote-host definitions used by the `leo agent` CLI when `leo` is invoked as a client of a different machine. Empty on server configs.
@@ -263,6 +273,7 @@ tasks:
 | `runtime` | enum | No | `oneshot` | `oneshot` spawns a fresh `claude -p` per firing; `persistent` injects the prompt into a supervised agent instead. See [Persistent Tasks](persistent-tasks.md). |
 | `template` | string | No | -- | Only meaningful with `runtime: persistent`. Names a `templates:` entry — the task's target is that template's agent. Omit for an implicit target: an agent named after the task, synthesized from the task's own `workspace`/`model`/`channels`/`dev_channels`. See [Persistent Tasks](persistent-tasks.md). |
 | `queue_max` | int | No | `5` | Only meaningful with `runtime: persistent`. Max queued firings per target agent; overflow is rejected with "queue full". `0` also means "use the default". |
+| `owner` | string | No | see [Leo Chat](chat.md#config) | Agent whose Leo Chat thread gets this task's cards (`leo_chat_post` from a run). Validated as an agent name only; resolved when a card posts. Unset: a persistent task's own agent, else the agent whose workspace matches, else `assistant`. |
 
 ### Silent Mode
 
@@ -297,6 +308,7 @@ templates:
 | `environments` | list | No | `defaults.environments` | Ordered [named environments](environments.md); replaces (does not extend) the inherited list. |
 | `idle_suspend_after` | string | No | `defaults.idle_suspend_after` | Idle interval (Go duration) before agents from this template are auto-stopped (dormant, auto-wakes on the next message). Empty inherits the default. |
 | `isolation` | string | No | -- | `worktree` runs every dispatch and consult of this template from a throwaway managed Git worktree at the caller's committed HEAD — the same as passing `isolation: "worktree"` to `leo_dispatch`, which takes precedence when given. The subagent's prompt names the worktree and warns that uncommitted changes in the caller's tree are not visible. Lets a reviewer run tests with a writable sandbox (e.g. codex `permission_mode: workspace-write`) without touching the real tree. See [Dispatches](dispatches.md). |
+| `push.chat` | bool | No | `defaults.push.chat` | Per-template override of whether this template's agents push their [Leo Chat](chat.md) messages. |
 | `push.needs_input`, `push.finished`, `push.errored` | bool | No | `defaults.push.*` | Per-state override of whether agents from this template [push to paired phones](#pairing-a-phone). Resolution per state: this template, then `defaults.push`, then on. Agents with no template (implicit persistent-task agents) use `defaults.push`. |
 | `permissions` | map | No | -- | Narrows the leo MCP tool surface for agents spawned from this template (`deny_tools`) and which agents/templates they may message, spawn, or consult (`can_message`, `can_spawn`, `can_consult`). See [Permissions](permissions.md). |
 

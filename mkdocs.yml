@@ -90,6 +90,7 @@ nav:
       - Delegation Profiles: configuration/delegation.md
       - Permissions: configuration/permissions.md
       - API Clients: configuration/api-clients.md
+      - Leo Chat: configuration/chat.md
   - CLI Reference:
       - cli/index.md
       - leo setup: cli/setup.md

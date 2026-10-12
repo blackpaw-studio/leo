@@ -122,6 +122,7 @@ type EnqueueRequest struct {
 	Session      string // logical session name; the router's FIFO key
 	TmuxSession  string // concrete tmux session to inject into
 	Task         string
+	RunID        string // the run this firing records; see EnqueueParams.RunID
 	Prompt       string
 	Channels     []string
 	QueueMax     int
@@ -168,6 +169,7 @@ func enqueueTask(ctx context.Context, cli *http.Client, baseURL string, req Enqu
 		"session":         req.Session,
 		"tmux_session":    req.TmuxSession,
 		"task":            req.Task,
+		"run_id":          req.RunID,
 		"prompt":          req.Prompt,
 		"channels":        req.Channels,
 		"queue_max":       req.QueueMax,

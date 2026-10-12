@@ -24,8 +24,8 @@ type agentHookPayload struct {
 // agentHookRequest is what `leo dispatch report` POSTs for a supervised
 // agent: the launch's attention token plus the raw hook payload.
 type agentHookRequest struct {
-	Token   string           `json:"token"`
-	Payload agentHookPayload `json:"payload"`
+	Token   string          `json:"token"`
+	Payload json.RawMessage `json:"payload"`
 }
 
 // hookTransition is one hook event's attention meaning. from, when set,
@@ -71,21 +71,27 @@ func (s *Server) handleAPIAgentHook(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req agentHookRequest
-	if err := json.Unmarshal(raw, &req); err != nil {
+	var payload agentHookPayload
+	if err := json.Unmarshal(raw, &req); err != nil || (len(req.Payload) > 0 && json.Unmarshal(req.Payload, &payload) != nil) {
 		writeJSON(w, http.StatusBadRequest, apiResponse{Error: "invalid hook payload"})
 		return
 	}
-	tr, ok := attentionForHook(req.Payload)
-	if ok {
-		// The session check needs the name; SetByToken re-resolves the
-		// token atomically, so a stop or rename in between still wins.
-		if name, known := s.attention.AgentForToken(req.Token); known && s.isAgentHookSession(name, req.Payload.SessionID) {
-			if req.Payload.HookEventName == "Stop" {
-				s.attention.SetByTokenFinished(req.Token, req.Payload.LastAssistantMessage)
-			} else {
-				s.attention.SetByToken(req.Token, tr.state, tr.from...)
-			}
+	name, known := "", false
+	if s.attention != nil {
+		name, known = s.attention.AgentForToken(req.Token)
+	}
+	ours := known && s.isAgentHookSession(name, payload.SessionID)
+	if tr, ok := attentionForHook(payload); ok && ours {
+		// SetByToken re-resolves the token atomically, so a stop or
+		// rename since the name was read still wins.
+		if payload.HookEventName == "Stop" {
+			s.attention.SetByTokenFinished(req.Token, payload.LastAssistantMessage)
+		} else {
+			s.attention.SetByToken(req.Token, tr.state, tr.from...)
 		}
+	}
+	if ours {
+		s.chatHook(name, req.Payload)
 	}
 	writeJSON(w, http.StatusOK, apiResponse{OK: true})
 }

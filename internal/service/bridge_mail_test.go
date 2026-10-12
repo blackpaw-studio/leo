@@ -387,3 +387,24 @@ func TestCheckNoAgentMailGuardsAStaleName(t *testing.T) {
 		t.Fatalf("a free name: %v", err)
 	}
 }
+
+// A restarted daemon asks the router whether a deliver still waits in its
+// agent's outbox, before any agent is restored.
+func TestTheRouterReportsWhatTheOutboxHolds(t *testing.T) {
+	home := t.TempDir()
+	sv := NewSupervisor(context.Background())
+	hub := bridge.New(bridge.Options{})
+	t.Cleanup(hub.Close)
+	sv.SetBridge(hub, nil, 0)
+	sv.SetOutbox(mailStore(home))
+	seedMail(t, home, "alpha", outbox.Entry{ID: "chat-1", Text: "hi", AsUser: true, QueuedAt: time.Now()})
+	router := sv.BridgeRouter()
+	for id, want := range map[string]bool{"chat-1": true, "chat-2": false} {
+		if held, err := router.Holds("alpha", id); err != nil || held != want {
+			t.Errorf("Holds(alpha, %s) = %v, %v; want %v", id, held, err, want)
+		}
+	}
+	if held, _ := (&bridge.Router{}).Holds("alpha", "chat-1"); held {
+		t.Error("a router without an outbox holds nothing")
+	}
+}

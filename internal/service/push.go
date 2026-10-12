@@ -28,7 +28,7 @@ func wirePush(ctx context.Context, next observe.Publisher, stateDir string, allo
 	logger := log.New(os.Stderr, "", log.LstdFlags)
 	opts = append([]push.RelayOption{push.WithLogger(logger)}, opts...)
 	sender := push.NewRelaySender(push.NewStoreRegistry(devices.NewStore(stateDir, nil)), daemonID, opts...)
-	var notifierOpts []push.NotifierOption
+	notifierOpts := []push.NotifierOption{push.WithPermissionWait(push.DefaultPermissionWait)}
 	if allow != nil {
 		notifierOpts = append(notifierOpts, push.WithPolicy(allow))
 	}

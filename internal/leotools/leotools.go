@@ -58,6 +58,9 @@ var Names = []string{
 	"leo_cancel",
 	"leo_release",
 	"leo_surface_file",
+	"leo_chat_post",
+	"leo_chat_ask",
+	"leo_chat_history",
 }
 
 // MaxSurfaceReasonRunes caps leo_surface_file's reason, in Unicode code

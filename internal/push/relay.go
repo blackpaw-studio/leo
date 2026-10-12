@@ -43,6 +43,18 @@ type Alert struct {
 	// agent summary). It may span lines; empty sends the title alone.
 	Body string
 	At   time.Time
+	// MessageID and MessageKind name the Leo Chat message an alert is
+	// about (a chat push, or a permission prompt's attention push), so a
+	// notification action can answer it. Options are an ask's choices.
+	MessageID   string
+	MessageKind string
+	Options     []Option
+}
+
+// Option is one answer a chat alert offers.
+type Option struct {
+	Value string `json:"value"`
+	Label string `json:"label"`
 }
 
 // Sender delivers an Alert to every registered device. Implementations must
@@ -60,6 +72,10 @@ type payload struct {
 	Title    string `json:"title"`
 	Body     string `json:"body,omitempty"`
 	TS       int64  `json:"ts"`
+	// Leo Chat additions; absent on plain attention alerts.
+	MessageID   string   `json:"message_id,omitempty"`
+	MessageKind string   `json:"message_kind,omitempty"`
+	Options     []Option `json:"options,omitempty"`
 }
 
 type relayRequest struct {
@@ -175,8 +191,19 @@ func (s *RelaySender) Send(ctx context.Context, a Alert) {
 var errPayloadTooLarge = errors.New("push: payload exceeds relay limit")
 
 // plaintext encodes a. The agent name is sent exactly, since a tap targets
-// it; to fit maxPlaintextBytes the body is trimmed first, then the title.
+// it; to fit maxPlaintextBytes the body is trimmed first, then the title,
+// and options that still cannot fit are dropped (the app opens the thread
+// to answer instead).
 func (s *RelaySender) plaintext(a Alert) ([]byte, error) {
+	out, err := s.fitPlaintext(a)
+	if errors.Is(err, errPayloadTooLarge) && len(a.Options) > 0 {
+		a.Options = nil
+		return s.fitPlaintext(a)
+	}
+	return out, err
+}
+
+func (s *RelaySender) fitPlaintext(a Alert) ([]byte, error) {
 	title := []rune(clip(a.Title, maxTitleRunes))
 	body := []rune(sanitizeBody(a.Body, maxBodyRunes))
 	fits := func(title, body []rune) (bool, error) {
@@ -235,6 +262,10 @@ func (s *RelaySender) encode(a Alert, title, body string) ([]byte, error) {
 		Title:    title,
 		Body:     body,
 		TS:       a.At.Unix(),
+
+		MessageID:   a.MessageID,
+		MessageKind: a.MessageKind,
+		Options:     a.Options,
 	})
 	return bytes.TrimRight(buf.Bytes(), "\n"), err
 }

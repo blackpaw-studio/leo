@@ -14,6 +14,7 @@ type EnqueueParams struct {
 	Session     string // logical session name; the FIFO key
 	TmuxSession string // concrete tmux session to inject/abort against
 	Task        string
+	RunID       string   // the task run this firing records (observe run id)
 	Prompt      string   // already includes marker + delivery footer (caller's job)
 	Channels    []string // for record-keeping only; delivery happens in-session
 	QueueMax    int
@@ -36,6 +37,7 @@ type PendingInvocation struct {
 	ID       string
 	Session  string
 	Task     string
+	RunID    string
 	Prompt   string
 	Channels []string
 	Timeout  time.Duration
@@ -162,6 +164,7 @@ func (r *sessionRouter) EnqueueWithID(id string, p EnqueueParams) (*PendingInvoc
 		ID:       id,
 		Session:  p.Session,
 		Task:     p.Task,
+		RunID:    p.RunID,
 		Prompt:   p.Prompt,
 		Channels: p.Channels,
 		Timeout:  p.Timeout,
@@ -188,6 +191,18 @@ func (r *sessionRouter) Lookup(id string) (*PendingInvocation, bool) {
 	defer r.mu.Unlock()
 	inv, ok := r.byID[id]
 	return inv, ok
+}
+
+// InFlight returns the invocation executing on session, if any: from its
+// injection until its turn reports or times out.
+func (r *sessionRouter) InFlight(session string) (*PendingInvocation, bool) {
+	q := r.queueFor(session)
+	if q == nil {
+		return nil, false
+	}
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	return q.inFlight, q.inFlight != nil
 }
 
 // queueFor returns the named session queue (or nil if none ever enqueued).

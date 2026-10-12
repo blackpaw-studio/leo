@@ -63,6 +63,7 @@ func TestAttentionHooksAddsNotificationGroupToTurnHooks(t *testing.T) {
 	}
 	want := []string{"--settings", `{"crossSessionInbound":"accept","hooks":{` +
 		`"Notification":[{"hooks":[{"command":"/opt/leo dispatch report","type":"command"}],"matcher":"permission_prompt|elicitation_dialog"}],` +
+		`"PermissionRequest":[{"hooks":[{"command":"/opt/leo dispatch permission","timeout":3660,"type":"command"}]}],` +
 		`"PostToolUse":[{"hooks":[{"command":"/opt/leo dispatch report","type":"command"}]}],` +
 		`"SessionEnd":[{"hooks":[{"command":"/opt/leo dispatch report","type":"command"}]}],` +
 		`"Stop":[{"hooks":[{"command":"/opt/leo dispatch report","type":"command"}]}],` +
@@ -84,6 +85,7 @@ func TestAttentionLaunchMergesSingleSettingsExactly(t *testing.T) {
 	hook := `[{"hooks":[{"command":"/opt/leo dispatch report","type":"command"}]}]`
 	want := []string{"--model", "sonnet", "--name", "leo-a", "--settings", `{"crossSessionInbound":"accept","hooks":{` +
 		`"Notification":[{"hooks":[{"command":"/opt/leo dispatch report","type":"command"}],"matcher":"permission_prompt|elicitation_dialog"}],` +
+		`"PermissionRequest":[{"hooks":[{"command":"/opt/leo dispatch permission","timeout":3660,"type":"command"}]}],` +
 		`"PostToolUse":` + hook + `,"SessionEnd":` + hook + `,"Stop":` + hook + `,"UserPromptSubmit":` + hook + `},"theme":"dark"}`}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("argv =\n%#v\nwant\n%#v", got, want)

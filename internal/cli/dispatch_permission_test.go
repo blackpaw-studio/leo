@@ -9,8 +9,11 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
+
+	"github.com/blackpaw-studio/leo/internal/config"
 )
 
 // permissionDaemon answers the permission long poll with reply and records
@@ -128,5 +131,58 @@ func TestDispatchPermissionMalformedReplyPrintsNothing(t *testing.T) {
 				t.Fatalf("stdout = %q for reply %s, want nothing", out, reply)
 			}
 		})
+	}
+}
+
+func agentPermissionDaemon(t *testing.T, reply string) (port string, got *capturedReport) {
+	t.Helper()
+	configPath, got := permissionDaemon(t, reply)
+	cfg, err := config.Load(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return strconv.Itoa(cfg.WebPort()), got
+}
+
+func TestAgentPermissionAsksLeoChat(t *testing.T) {
+	clearReportEnv(t)
+	port, got := agentPermissionDaemon(t, `{"ok":true,"data":{"behavior":"allow"}}`)
+	t.Setenv("LEO_ATTENTION_TOKEN", "launch-tok")
+	t.Setenv("LEO_WEB_PORT", port)
+	t.Setenv("LEO_API_TOKEN", "agent-token")
+
+	out := runPermission(t, permissionHookInput)
+
+	if got.path != "/api/agent/permission" || got.auth != "Bearer agent-token" {
+		t.Fatalf("request = %+v", *got)
+	}
+	var sent struct {
+		Token   string          `json:"token"`
+		Payload json.RawMessage `json:"payload"`
+	}
+	if err := json.Unmarshal(got.body, &sent); err != nil || sent.Token != "launch-tok" || string(sent.Payload) != permissionHookInput {
+		t.Fatalf("body = %s", got.body)
+	}
+	if !strings.Contains(out, `"behavior":"allow"`) || !strings.Contains(out, `"hookEventName":"PermissionRequest"`) {
+		t.Fatalf("stdout = %q", out)
+	}
+}
+
+func TestAgentPermissionWithoutAnswerLeavesTheTerminalPrompt(t *testing.T) {
+	clearReportEnv(t)
+	port, _ := agentPermissionDaemon(t, `{"ok":true,"data":{}}`)
+	t.Setenv("LEO_ATTENTION_TOKEN", "launch-tok")
+	t.Setenv("LEO_WEB_PORT", port)
+	if out := runPermission(t, permissionHookInput); out != "" {
+		t.Fatalf("stdout = %q, want none", out)
+	}
+}
+
+func TestPermissionHookOutsideLeoDoesNothing(t *testing.T) {
+	clearReportEnv(t)
+	port, got := agentPermissionDaemon(t, `{"ok":true,"data":{"behavior":"allow"}}`)
+	t.Setenv("LEO_WEB_PORT", port)
+	if out := runPermission(t, permissionHookInput); out != "" || got.path != "" {
+		t.Fatalf("stdout %q, request %+v; want neither", out, *got)
 	}
 }

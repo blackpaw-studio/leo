@@ -15,6 +15,7 @@ import (
 
 	"github.com/blackpaw-studio/leo/internal/agent"
 	"github.com/blackpaw-studio/leo/internal/bridge"
+	"github.com/blackpaw-studio/leo/internal/chat"
 	"github.com/blackpaw-studio/leo/internal/config"
 	"github.com/blackpaw-studio/leo/internal/consult"
 	"github.com/blackpaw-studio/leo/internal/cron"
@@ -130,6 +131,12 @@ type Server struct {
 	// control serves the agent control routes; set by StartWeb (see
 	// setControl).
 	control atomic.Pointer[controlHolder]
+	// chatHandler serves the socket's /api/v1/chat routes; set by StartWeb
+	// when chat is on (see SetChat).
+	chatHandler        atomic.Pointer[controlHolder]
+	chatStore          *chat.Store
+	chatAttachmentsDir string
+	chatPublisher      observe.Publisher
 	// webSources are the web server's bridge feed and dispatch counts,
 	// merged into the local /state rows; set by StartWeb.
 	webSources atomic.Pointer[web.AgentSources]
@@ -285,6 +292,7 @@ func New(sockPath, configPath string, processes ProcessStateProvider, opts ...Op
 	// Claude mod bridge: the mod's `leo bridge` process holds the command
 	// stream open and posts acks/events back. The 0600 socket is the auth,
 	// as for every route on this mux.
+	mux.HandleFunc(chatSocketPrefix, s.handleChat)
 	mux.HandleFunc("GET /api/bridge/{agent}/stream", s.handleBridgeStream)
 	mux.HandleFunc("POST /api/bridge/{agent}/report", s.handleBridgeReport)
 
@@ -472,8 +480,13 @@ func (s *Server) StartWeb(cfg *config.Config, agentSvc web.AgentService) error {
 		// Paired phones (leo pair): device tokens and POST /api/v1/pair.
 		Devices:    devices.NewStore(cfg.StatePath(), nil),
 		PublicURLs: cfg.Web.PublicURLs,
+		Chat:       web.ChatOptions{Store: s.chatStore, AttachmentsDir: s.chatAttachmentsDir, Publisher: s.chatPublisher, TaskRun: s.TaskRun},
 	}, observeOpts...)
 	s.setControl(s.webServer.ControlHandler())
+	if s.chatStore != nil {
+		s.webServer.StartChat(s.parentContext)
+		s.setChat(s.webServer.ChatHandler())
+	}
 	s.setWebSources(s.webServer.ObserveSources())
 	bind := cfg.WebBind()
 	addr := fmt.Sprintf("%s:%d", bind, port)
@@ -602,6 +615,7 @@ type taskEnqueueReq struct {
 	Session        string   `json:"session"`
 	TmuxSession    string   `json:"tmux_session,omitempty"`
 	Task           string   `json:"task"`
+	RunID          string   `json:"run_id,omitempty"`
 	Prompt         string   `json:"prompt"`
 	Channels       []string `json:"channels"`
 	QueueMax       int      `json:"queue_max"`
@@ -641,6 +655,7 @@ func (s *Server) handleTaskEnqueue(w http.ResponseWriter, r *http.Request) {
 		Session:     req.Session,
 		TmuxSession: tmuxSession,
 		Task:        req.Task,
+		RunID:       req.RunID,
 		Prompt:      req.Prompt,
 		Channels:    req.Channels,
 		QueueMax:    req.QueueMax,
@@ -653,6 +668,16 @@ func (s *Server) handleTaskEnqueue(w http.ResponseWriter, r *http.Request) {
 	}
 	s.router.StartPump(req.Session)
 	writeJSON(w, http.StatusOK, taskEnqueueResp{Accepted: true, InvocationID: inv.ID})
+}
+
+// TaskRun returns the persistent task and run whose turn is running in
+// agent, if any: what its chat tools file their output under.
+func (s *Server) TaskRun(agent string) (task, runID string, ok bool) {
+	inv, ok := s.router.InFlight(agent)
+	if !ok {
+		return "", "", false
+	}
+	return inv.Task, inv.RunID, true
 }
 
 func (s *Server) handleTaskAwait(w http.ResponseWriter, r *http.Request) {

@@ -103,6 +103,8 @@ type Config struct {
 	// `environments:`; see environments.go for the merge and cascade rules.
 	Environments map[string]map[string]string `yaml:"environments,omitempty"`
 	Delegation   *DelegationConfig            `yaml:"delegation,omitempty"`
+	// Chat configures Leo Chat (see chat.go).
+	Chat ChatConfig `yaml:"chat,omitempty"`
 	// Providers was removed with the harness abstraction. The field survives
 	// only so Validate() can emit a precise removal error (yaml.v3 silently
 	// ignores unknown keys).
@@ -352,6 +354,11 @@ type TaskConfig struct {
 	QueueMax       int               `yaml:"queue_max,omitempty"` // 0 → use default (5)
 	Harness        string            `yaml:"harness,omitempty"`
 	HarnessOptions map[string]any    `yaml:"harness_options,omitempty"`
+	// Owner is the agent whose Leo Chat thread receives this task's output
+	// (leo_chat_post from a run). Validated as a name only; resolved when a
+	// message is posted. Empty defaults: a persistent task's own agent,
+	// else the agent whose workspace is the task's, else assistant.
+	Owner string `yaml:"owner,omitempty"`
 }
 
 // TemplateConfig defines a reusable blueprint for spawning ephemeral agents.
@@ -528,6 +535,7 @@ func (c *Config) Validate() error {
 	if _, err := parseApprovalTimeout(c.Defaults.Dispatch.ApprovalTimeout); err != nil {
 		errs = append(errs, fmt.Sprintf("defaults.dispatch.approval_timeout %q: %v", c.Defaults.Dispatch.ApprovalTimeout, err))
 	}
+	errs = append(errs, c.validateChat()...)
 
 	// resolveHarness returns the adapter for a scope, emitting at most one
 	// error per bad name: defaults errors at defaults.harness; a scope only

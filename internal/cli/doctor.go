@@ -112,6 +112,7 @@ func runDoctor(probeHost string, trigger bool) error {
 	} else {
 		reportServiceHealth(cfg.HomePath)
 		reportBridge(context.Background(), cfg.HomePath, bridgeDoctorDepsFn())
+		reportChatVoice(cfg.ChatWhisperModel(), defaultChatLookPath)
 	}
 
 	status := checkLocalNetworkFn(probeHost, trigger)

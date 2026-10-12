@@ -294,6 +294,8 @@ Event types:
 | `task_run_failed` | `TaskRun` (with `error`) |
 | `agent_message` | `from` (omitted if not an agent), `to` |
 | `file_surfaced` | a `SurfacedFile` (including `"type":"file_surfaced"`); its `at` is the surfacing time, not the publish time |
+| `chat.message` | `agent`, `message` (a [Leo Chat](../configuration/chat.md) `Message`) |
+| `chat.updated` | `agent`, `message`, `change` (`transcript`, `state` or `answer`) |
 
 A resume is represented as `agent_state_changed` with the new `status`; consumers key
 off `status`, not a distinct event name. `agent_stopped`'s `wake_on_message` carries the

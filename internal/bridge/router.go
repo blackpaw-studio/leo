@@ -13,6 +13,9 @@ type Router struct {
 	// over to the agent's next launch should t end first. Without it a
 	// deliver is queued in the hub alone (see Deliver).
 	Queue func(agent string, t Target, cmd Command, from string) (*Ticket, error)
+	// Held, if set, reports whether agent's durable outbox still holds the
+	// deliver queued under id (see Holds).
+	Held func(agent, id string) (bool, error)
 }
 
 // Deliver queues cmd, a deliver from agent from, for agent's generation t
@@ -28,6 +31,16 @@ func (r *Router) Deliver(agent string, t Target, cmd Command, from string) (*Tic
 // one whose generation ends (ErrForgotten) or whose daemon closes the hub
 // (ErrClosed) first is not lost but waits for the agent's next launch.
 func (r *Router) IsDurable() bool { return r != nil && r.Queue != nil }
+
+// Holds reports whether agent's durable outbox still holds the deliver
+// queued under id: its mod has not acked it, and the agent's next launch
+// delivers it. Without an outbox nothing is held.
+func (r *Router) Holds(agent, id string) (bool, error) {
+	if r == nil || r.Held == nil {
+		return false, nil
+	}
+	return r.Held(agent, id)
+}
 
 // Key returns agent's bridge key whether or not its bridge is connected.
 func (r *Router) Key(agent string) (string, bool) {

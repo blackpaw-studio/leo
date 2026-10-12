@@ -835,13 +835,24 @@ func TestBuildArgsInjectsMessagingAwareness(t *testing.T) {
 // case; the other three still get LEO_PROCESS_NAME (and LEO_WEB_PORT when
 // cfg is non-nil), just without a live token.
 func TestLeoMCPEnv(t *testing.T) {
+	t.Run("task run identity for leo chat", func(t *testing.T) {
+		cfg := &config.Config{HomePath: t.TempDir()}
+		env := leoMCPEnv(cfg, "mytask", "run-42")
+		if env["LEO_TASK"] != "mytask" || env["LEO_RUN_ID"] != "run-42" {
+			t.Errorf("LEO_TASK/LEO_RUN_ID = %q/%q, want mytask/run-42", env["LEO_TASK"], env["LEO_RUN_ID"])
+		}
+		if _, ok := leoMCPEnv(cfg, "mytask", "")["LEO_RUN_ID"]; ok {
+			t.Error("LEO_RUN_ID must be absent when there is no run (prompt preview)")
+		}
+	})
+
 	t.Run("web disabled", func(t *testing.T) {
 		dir := t.TempDir()
 		cfg := &config.Config{HomePath: dir, Web: config.WebConfig{Enabled: false}}
 		os.MkdirAll(cfg.StatePath(), 0750)
 		os.WriteFile(filepath.Join(cfg.StatePath(), "agent.token"), []byte("tok123"), 0600)
 
-		env := leoMCPEnv(cfg, "mytask")
+		env := leoMCPEnv(cfg, "mytask", "")
 		if env["LEO_PROCESS_NAME"] != "task:mytask" {
 			t.Errorf("LEO_PROCESS_NAME = %q, want task:mytask", env["LEO_PROCESS_NAME"])
 		}
@@ -854,7 +865,7 @@ func TestLeoMCPEnv(t *testing.T) {
 		dir := t.TempDir()
 		cfg := &config.Config{HomePath: dir, Web: config.WebConfig{Enabled: true}}
 
-		env := leoMCPEnv(cfg, "mytask")
+		env := leoMCPEnv(cfg, "mytask", "")
 		if _, ok := env["LEO_API_TOKEN"]; ok {
 			t.Errorf("expected no LEO_API_TOKEN when token file missing, got env=%v", env)
 		}
@@ -866,7 +877,7 @@ func TestLeoMCPEnv(t *testing.T) {
 		os.MkdirAll(cfg.StatePath(), 0750)
 		os.WriteFile(filepath.Join(cfg.StatePath(), "agent.token"), []byte("   \n"), 0600)
 
-		env := leoMCPEnv(cfg, "mytask")
+		env := leoMCPEnv(cfg, "mytask", "")
 		if _, ok := env["LEO_API_TOKEN"]; ok {
 			t.Errorf("expected no LEO_API_TOKEN when token file is blank, got env=%v", env)
 		}
@@ -878,7 +889,7 @@ func TestLeoMCPEnv(t *testing.T) {
 		os.MkdirAll(cfg.StatePath(), 0750)
 		os.WriteFile(filepath.Join(cfg.StatePath(), "agent.token"), []byte("tok123\n"), 0600)
 
-		env := leoMCPEnv(cfg, "mytask")
+		env := leoMCPEnv(cfg, "mytask", "")
 		if env["LEO_PROCESS_NAME"] != "task:mytask" {
 			t.Errorf("LEO_PROCESS_NAME = %q, want %q", env["LEO_PROCESS_NAME"], "task:mytask")
 		}
@@ -900,7 +911,7 @@ func TestBuildArgsWiresLeoMCPWithoutToken(t *testing.T) {
 	cfg := &config.Config{HomePath: dir, Web: config.WebConfig{Enabled: true}}
 	// No api.token file written.
 
-	leoEnv := leoMCPEnv(cfg, "mytask")
+	leoEnv := leoMCPEnv(cfg, "mytask", "")
 	args, _ := buildArgs(cfg, config.TaskConfig{}, "mytask", "do the thing", "", leoEnv, leomcp.Server{})
 	found := false
 	for i, a := range args {
@@ -921,7 +932,7 @@ func TestBuildArgsIncludesLeoMCPWithToken(t *testing.T) {
 	os.MkdirAll(cfg.StatePath(), 0750)
 	os.WriteFile(filepath.Join(cfg.StatePath(), "agent.token"), []byte("tok123"), 0600)
 
-	leoEnv := leoMCPEnv(cfg, "mytask")
+	leoEnv := leoMCPEnv(cfg, "mytask", "")
 	args, _ := buildArgs(cfg, config.TaskConfig{}, "mytask", "do the thing", "", leoEnv, leomcp.Server{})
 	found := false
 	for i, a := range args {
@@ -2124,7 +2135,7 @@ func TestLeoMCPEnvUsesAgentToken(t *testing.T) {
 		t.Fatalf("writing agent.token: %v", err)
 	}
 
-	env := leoMCPEnv(cfg, "mytask")
+	env := leoMCPEnv(cfg, "mytask", "")
 
 	if env["LEO_API_TOKEN"] == operatorToken {
 		t.Error("task env carries the operator token; it must carry the agent token")

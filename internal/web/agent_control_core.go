@@ -135,6 +135,13 @@ func (s *Server) typeSlashCommand(sessionName, verb, instructions string) error 
 // to in the background (202); a bridged agent takes it through its mod;
 // everything else tries the peer inbox, then pastes into tmux.
 func (s *Server) messageAgent(ctx context.Context, name, from, text string) controlOutcome {
+	return s.messageAgentAs(ctx, name, from, text, "")
+}
+
+// messageAgentAs is messageAgent with the bridge command id a bridged
+// delivery goes under ("" for a fresh one): a caller-derived id lets the
+// caller find the message in the agent's outbox later.
+func (s *Server) messageAgentAs(ctx context.Context, name, from, text, cmdID string) controlOutcome {
 	// Resolve the target's harness FIRST, before any tmux-touching logic.
 	// Claude targets (harnessName == "" from an unresolved/claude target)
 	// fall straight through to the fast-path / dormant-wake-then-deliver
@@ -176,7 +183,7 @@ func (s *Server) messageAgent(ctx context.Context, name, from, text string) cont
 	}
 
 	if target, ok := s.bridgeRoute(name, "message"); ok {
-		return s.deliverAgentMessageOverBridge(target, name, from, text)
+		return s.deliverAgentMessageOverBridge(target, name, from, text, cmdID)
 	}
 	return s.deliverAgentMessageLegacy(ctx, name, from, text)
 }

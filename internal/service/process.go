@@ -21,6 +21,7 @@ import (
 
 	"github.com/blackpaw-studio/leo/internal/agent"
 	"github.com/blackpaw-studio/leo/internal/agentstore"
+	"github.com/blackpaw-studio/leo/internal/chat"
 	"github.com/blackpaw-studio/leo/internal/config"
 	"github.com/blackpaw-studio/leo/internal/daemon"
 	"github.com/blackpaw-studio/leo/internal/env"
@@ -928,6 +929,12 @@ func defaultSupervisedExec(opts RunSupervisedOptions) error {
 	supervisor.configPath = configPath
 
 	obs := wireObservability(ctx, supervisor, tmuxPath)
+	// Leo Chat's store; nil (chat off, logged) when it cannot open. Closed
+	// after srv.Shutdown, whose defer is registered later.
+	obs.Chat, obs.ChatAttachments = openChat(homePath)
+	if obs.Chat != nil {
+		defer func() { _ = obs.Chat.Close() }()
+	}
 
 	// Start daemon IPC server with process state provider
 	sockPath := filepath.Join(homePath, "state", "leo.sock")
@@ -1101,7 +1108,23 @@ func wireObservability(ctx context.Context, sv *Supervisor, tmuxPath string) obs
 	surfaced := observe.NewSurfacedFileStore(runLog, nil)
 	sv.SetSurfacedFiles(surfaced)
 
-	return observability{Bus: bus, RunLog: runLog, MessageLog: messageLog, Tracker: tracker, Attention: attention, SurfacedFiles: surfaced}
+	return observability{Bus: bus, RunLog: runLog, MessageLog: messageLog, Tracker: tracker, Attention: attention, SurfacedFiles: surfaced, Publisher: pub}
+}
+
+// openChat opens Leo Chat's store at <home>/state/chat.db and names its
+// attachment directory. A store that cannot open leaves chat off rather
+// than the daemon down.
+func openChat(homePath string) (*chat.Store, string) {
+	if homePath == "" {
+		return nil, ""
+	}
+	state := filepath.Join(homePath, "state")
+	store, err := chat.OpenStore(filepath.Join(state, "chat.db"))
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "warning: Leo Chat disabled: %v\n", err)
+		return nil, ""
+	}
+	return store, filepath.Join(state, "chat", "attachments")
 }
 
 // wireDaemon hands the observability pieces to the daemon server. Must run
@@ -1110,6 +1133,9 @@ func (o observability) wireDaemon(srv *daemon.Server, version string) {
 	srv.SetObservability(o.Bus, o.RunLog, o.MessageLog, o.Tracker, version)
 	srv.SetAttention(o.Attention)
 	srv.SetSurfacedFiles(o.SurfacedFiles)
+	if o.Chat != nil {
+		srv.SetChat(o.Chat, o.ChatAttachments, o.Publisher)
+	}
 }
 
 // wireManager hands the observability pieces to the agent manager. RunLog is
@@ -1134,6 +1160,13 @@ type observability struct {
 	// SurfacedFiles is shared by the supervisor (incarnation resets), the
 	// agent manager (delete/rename), and the daemon's state + web surfaces.
 	SurfacedFiles *observe.SurfacedFileStore
+	// Publisher is the full publish chain (push-wrapped when the daemon has
+	// a home), which Leo Chat events go through so chat messages push.
+	Publisher observe.Publisher
+	// Chat is Leo Chat's store (nil: chat off) and ChatAttachments its
+	// attachment directory; set by openChat.
+	Chat            *chat.Store
+	ChatAttachments string
 }
 
 // driverFor resolves a spec's session driver. Empty harness means claude

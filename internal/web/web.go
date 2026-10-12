@@ -18,6 +18,7 @@ import (
 
 	"github.com/blackpaw-studio/leo/internal/agent"
 	"github.com/blackpaw-studio/leo/internal/bridge"
+	"github.com/blackpaw-studio/leo/internal/chat"
 	"github.com/blackpaw-studio/leo/internal/config"
 	"github.com/blackpaw-studio/leo/internal/consult"
 	"github.com/blackpaw-studio/leo/internal/cron"
@@ -215,6 +216,8 @@ type Server struct {
 	// wired via WithSurfacedFiles. It backs POST /api/agent/{name}/surface-file
 	// and the snapshot's surfaced_files. nil disables both.
 	surfacedFiles *observe.SurfacedFileStore
+	// chat is Leo Chat; nil when the daemon has no chat store.
+	chat *chat.Service
 
 	// events is the read seam onto the (not-yet-existing) event bus, wired via
 	// WithEventSource. nil is a supported default: GET /api/v1/events still
@@ -454,6 +457,8 @@ type Options struct {
 	// accepted in Host and Origin, so a tunnel hostname works without the
 	// listener port.
 	PublicURLs []string
+	// Chat wires Leo Chat; the zero value leaves it off.
+	Chat ChatOptions
 }
 
 // New creates a new web UI server. agentSvc may be nil if agent spawning is
@@ -520,6 +525,7 @@ func New(configPath string, processes ProcessStateProvider, scheduler SchedulerP
 	s.injectPrompt = func(ctx context.Context, session, body string) error {
 		return tmux.InjectPrompt(ctx, findTmuxPath(), session, body)
 	}
+	s.setupChat(opts.Chat)
 
 	s.sessions = newSessionStore(sessionTTL)
 	s.parseTemplates()
@@ -646,6 +652,10 @@ func New(configPath string, processes ProcessStateProvider, scheduler SchedulerP
 	apiMux.HandleFunc("POST /api/agent/{name}/environments", s.handleAPIAgentSetEnvironments)
 	apiMux.HandleFunc("POST /api/agent/hook", s.handleAPIAgentHook)
 	apiMux.HandleFunc("POST /api/agent/{name}/surface-file", s.handleAPIAgentSurfaceFile)
+	apiMux.HandleFunc("POST /api/agent/permission", s.handleAPIPermission)
+	apiMux.HandleFunc("POST /api/agent/{name}/chat/post", s.handleAgentChatPost)
+	apiMux.HandleFunc("POST /api/agent/{name}/chat/ask", s.handleAgentChatAsk)
+	apiMux.HandleFunc("POST /api/agent/{name}/chat/history", s.handleAgentChatHistory)
 	apiMux.HandleFunc("POST /api/consult", s.handleAPIConsult)
 	apiMux.HandleFunc("GET /api/delegation", s.handleAPIDelegation)
 	apiMux.HandleFunc("GET /api/delegation/resolve", s.handleAPIDelegationResolve)
@@ -654,7 +664,7 @@ func New(configPath string, processes ProcessStateProvider, scheduler SchedulerP
 	apiMux.HandleFunc("POST /api/dispatch", s.handleAPIDispatch)
 	apiMux.HandleFunc("POST /api/dispatch/{id}/send", s.handleAPIDispatchSend)
 	apiMux.HandleFunc("POST /api/dispatch/{id}/report", s.handleAPIDispatchReport)
-	apiMux.HandleFunc("POST /api/dispatch/{id}/permission", s.handleAPIDispatchPermission)
+	apiMux.HandleFunc("POST /api/dispatch/{id}/permission", s.handleAPIPermission)
 	apiMux.HandleFunc("GET /api/dispatch/{id}", s.handleAPIDispatchGet)
 	apiMux.HandleFunc("POST /api/dispatch/{id}/cancel", s.handleAPIDispatchCancel)
 	apiMux.HandleFunc("POST /api/dispatch/{id}/release", s.handleAPIDispatchRelease)
@@ -686,6 +696,10 @@ func New(configPath string, processes ProcessStateProvider, scheduler SchedulerP
 	// GET also serves HEAD.
 	apiMux.HandleFunc("GET /api/v1/files/{id}", s.requireOperatorToken(s.handleAPIFile))
 	apiMux.HandleFunc("GET /api/v1/agents/{name}/attach", s.requireOperatorToken(s.handleAPIAgentAttach))
+	// Leo Chat (docs/configuration/chat.md): the apps' routes, operator or
+	// paired-device token only — the agent token reaches its own thread
+	// through the /api/agent/{name}/chat tool routes instead.
+	s.registerChatRoutes(apiMux, chatAPIPrefix, s.requireOperatorToken)
 	// /api/* is the agent-facing surface: both tokens work there, as do
 	// paired device tokens.
 	protectedAPI := bearerAuthWith([]string{s.apiToken, s.agentToken}, s.isDeviceToken, s.trustedProxies, apiMux)
@@ -739,7 +753,7 @@ func New(configPath string, processes ProcessStateProvider, scheduler SchedulerP
 	// requests from a non-localhost browser context are rejected. A body-size
 	// cap and baseline security headers sit above that.
 	handler := hostOriginMiddleware(s.port, s.allowedHosts, s.trustedProxies, root, publicOrigins(opts.PublicURLs)...)
-	handler = bodySizeMiddleware(maxRequestBodyBytes, handler)
+	handler = bodySizeMiddleware(maxRequestBodyBytes, handler, bodyLimit{path: chatUploadPath, max: maxChatUploadBody})
 	handler = securityHeadersMiddleware(handler)
 	s.httpServer = &http.Server{
 		Handler:      handler,
@@ -770,9 +784,16 @@ func (s *Server) ListenAndServe(addr string) error {
 // Shutdown gracefully stops the web server and its background consult loop.
 // The loop must not outlive the server: a daemon whose parent context is
 // never canceled would otherwise keep sweeping and redrawing rosters forever.
+//
+// Leo Chat closes first — no new calls, its held asks, permission prompts
+// and deliveries cancelled and drained — so none outlives the chat store,
+// which the daemon closes after this returns.
 func (s *Server) Shutdown() error {
 	if s.stopConsultLoop != nil {
 		s.stopConsultLoop()
+	}
+	if s.chat != nil {
+		s.chat.Close()
 	}
 	if s.httpServer == nil {
 		return nil

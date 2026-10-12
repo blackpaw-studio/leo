@@ -1,0 +1,928 @@
+package chat
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"os"
+	"path/filepath"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/blackpaw-studio/leo/internal/config"
+	"github.com/blackpaw-studio/leo/internal/observe"
+)
+
+type fakeDeliverer struct {
+	mu        sync.Mutex
+	prompts   []string
+	refs      []string
+	harness   string
+	err       error
+	stopped   map[string]bool
+	onDeliver func()
+}
+
+func (f *fakeDeliverer) Deliver(_ context.Context, agent, prompt, ref string, starting func()) (string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.refs = append(f.refs, ref)
+	if f.stopped[agent] {
+		starting()
+	}
+	if f.onDeliver != nil {
+		f.onDeliver()
+	}
+	if f.err != nil {
+		return "", f.err
+	}
+	f.prompts = append(f.prompts, prompt)
+	h := f.harness
+	if h == "" {
+		h = "claude"
+	}
+	return h, nil
+}
+
+func (f *fakeDeliverer) delivered() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]string(nil), f.prompts...)
+}
+
+type recordingPublisher struct {
+	mu     sync.Mutex
+	events []observe.Event
+}
+
+func (p *recordingPublisher) Publish(ev observe.Event) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.events = append(p.events, ev)
+}
+
+func (p *recordingPublisher) types() []observe.EventType {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	out := make([]observe.EventType, len(p.events))
+	for i, e := range p.events {
+		out[i] = e.Type
+	}
+	return out
+}
+
+// manualTimers hands out timer channels the test fires by hand.
+type manualTimers struct {
+	mu  sync.Mutex
+	chs []chan time.Time
+	got chan time.Duration
+}
+
+func newManualTimers() *manualTimers { return &manualTimers{got: make(chan time.Duration, 16)} }
+
+func (m *manualTimers) after(d time.Duration) <-chan time.Time {
+	ch := make(chan time.Time, 1)
+	m.mu.Lock()
+	m.chs = append(m.chs, ch)
+	m.mu.Unlock()
+	m.got <- d
+	return ch
+}
+
+func (m *manualTimers) fireLast() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.chs[len(m.chs)-1] <- time.Time{}
+}
+
+// gatedIDs mints ULIDs; once armed, the next New mints its id, then blocks
+// (after telling blocked) until release is closed — a caller that is slow
+// between taking an id and using it.
+type gatedIDs struct {
+	src     *ULIDSource
+	mu      sync.Mutex
+	blocked chan struct{}
+	release chan struct{}
+}
+
+func (g *gatedIDs) arm() (blocked, release chan struct{}) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.blocked, g.release = make(chan struct{}), make(chan struct{})
+	return g.blocked, g.release
+}
+
+func (g *gatedIDs) New() string {
+	g.mu.Lock()
+	blocked, release := g.blocked, g.release
+	g.blocked, g.release = nil, nil
+	g.mu.Unlock()
+	id := g.src.New()
+	if blocked != nil {
+		close(blocked)
+		<-release
+	}
+	return id
+}
+
+type harnessFixture struct {
+	svc     *Service
+	store   *Store
+	deliver *fakeDeliverer
+	pub     *recordingPublisher
+	clock   *testClock
+	timers  *manualTimers
+	ids     *gatedIDs
+	// held is what the agents' durable outboxes hold, as agent/ref.
+	held map[string]bool
+	// runs is each agent's persistent-task run in flight, as task/run id.
+	runs       map[string][2]string
+	cfg        *config.Config
+	root       string
+	transcript func(ctx context.Context, path string) (string, error)
+}
+
+func newFixture(t *testing.T) *harnessFixture {
+	t.Helper()
+	f := &harnessFixture{
+		store:   openTestStore(t),
+		deliver: &fakeDeliverer{stopped: map[string]bool{}},
+		pub:     &recordingPublisher{},
+		clock:   newTestClock(),
+		timers:  newManualTimers(),
+		ids:     &gatedIDs{},
+		held:    map[string]bool{},
+		runs:    map[string][2]string{},
+		cfg:     &config.Config{HomePath: "/home/leo", Tasks: map[string]config.TaskConfig{}},
+		root:    t.TempDir(),
+	}
+	f.transcript = func(context.Context, string) (string, error) { return "", errors.New("no whisper") }
+	f.ids.src = NewULIDSource(f.clock.Now, nil)
+	f.svc = NewService(Options{
+		Store:   f.store,
+		Files:   Files{Root: f.root},
+		Deliver: f.deliver,
+		Transcribe: func(ctx context.Context, path string) (string, error) {
+			return f.transcript(ctx, path)
+		},
+		Publish: f.pub,
+		Now:     f.clock.Now,
+		IDs:     f.ids,
+		After:   f.timers.after,
+		Agents: func() []AgentRef {
+			return []AgentRef{{Name: "assistant", Workspace: "/home/leo/workspace"}, {Name: "web", Workspace: "/src/web"}}
+		},
+		Config: func() (*config.Config, error) { return f.cfg, nil },
+		Queued: func(agent, ref string) (bool, error) { return f.held[agent+"/"+ref], nil },
+		TaskRun: func(agent string) (string, string, bool) {
+			r, ok := f.runs[agent]
+			return r[0], r[1], ok
+		},
+	})
+	t.Cleanup(f.svc.Close)
+	return f
+}
+
+func (f *harnessFixture) thread(t *testing.T, agent string) []Message {
+	t.Helper()
+	ms, _, err := f.store.Messages(agent, Page{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return ms
+}
+
+func TestSendDeliversFramedPromptAndRecordsCapture(t *testing.T) {
+	f := newFixture(t)
+	m, err := f.svc.Send(context.Background(), "assistant", SendRequest{Text: "hello"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m.State != StatePending || m.Direction != DirectionIn || m.Kind != KindText {
+		t.Fatalf("returned message = %+v", m)
+	}
+	f.svc.Flush()
+	if got := f.deliver.delivered(); len(got) != 1 || got[0] != "[Leo Chat] hello" {
+		t.Fatalf("delivered %q", got)
+	}
+	stored, _ := f.store.Message(m.ID)
+	if stored.State != StateDelivered {
+		t.Fatalf("state = %s", stored.State)
+	}
+	caps, _ := f.store.Captures("assistant")
+	if len(caps) != 1 || caps[0].Prompt != "[Leo Chat] hello" || caps[0].MessageID != m.ID {
+		t.Fatalf("captures = %+v", caps)
+	}
+	types := f.pub.types()
+	if len(types) < 2 || types[0] != EventMessage || types[len(types)-1] != EventUpdated {
+		t.Fatalf("events = %v", types)
+	}
+}
+
+func TestSendRejectsUnknownAgentAndEmptyMessage(t *testing.T) {
+	f := newFixture(t)
+	if _, err := f.svc.Send(context.Background(), "ghost", SendRequest{Text: "hi"}); !errors.Is(err, ErrUnknownAgent) {
+		t.Fatalf("unknown agent err = %v", err)
+	}
+	if _, err := f.svc.Send(context.Background(), "assistant", SendRequest{Text: "  "}); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("empty message err = %v", err)
+	}
+}
+
+func TestSendToStoppedAgentPostsStartingNote(t *testing.T) {
+	f := newFixture(t)
+	f.deliver.stopped["web"] = true
+	if _, err := f.svc.Send(context.Background(), "web", SendRequest{Text: "wake up"}); err != nil {
+		t.Fatal(err)
+	}
+	f.svc.Flush()
+	thread := f.thread(t, "web")
+	if len(thread) != 2 || thread[0].Kind != KindSystem || !strings.Contains(thread[0].Text, "Starting") {
+		t.Fatalf("thread = %+v", thread)
+	}
+}
+
+func TestSendDeliveryFailureMarksFailed(t *testing.T) {
+	f := newFixture(t)
+	f.deliver.err = errors.New("tmux gone")
+	m, _ := f.svc.Send(context.Background(), "assistant", SendRequest{Text: "hi"})
+	f.svc.Flush()
+	stored, _ := f.store.Message(m.ID)
+	if stored.State != StateFailed {
+		t.Fatalf("state = %s", stored.State)
+	}
+	if caps, _ := f.store.Captures("assistant"); len(caps) != 0 {
+		t.Fatalf("a failed delivery leaves no capture: %+v", caps)
+	}
+}
+
+func TestSendNonClaudeAgentKeepsNoCapture(t *testing.T) {
+	f := newFixture(t)
+	f.deliver.harness = "codex"
+	_, _ = f.svc.Send(context.Background(), "assistant", SendRequest{Text: "hi"})
+	f.svc.Flush()
+	if caps, _ := f.store.Captures("assistant"); len(caps) != 0 {
+		t.Fatalf("codex agents use the tools, not auto-capture: %+v", caps)
+	}
+}
+
+func upload(t *testing.T, f *harnessFixture, agent, name, mime, body string) Attachment {
+	t.Helper()
+	a, err := f.svc.Upload(agent, name, mime, strings.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return a
+}
+
+func TestSendVoiceTranscribesThenDelivers(t *testing.T) {
+	f := newFixture(t)
+	f.transcript = func(_ context.Context, path string) (string, error) {
+		if !strings.HasSuffix(path, "note.m4a") {
+			t.Errorf("transcribing %q", path)
+		}
+		return "call Sam at five", nil
+	}
+	a := upload(t, f, "assistant", "note.m4a", "audio/mp4", "AAC")
+	m, err := f.svc.Send(context.Background(), "assistant", SendRequest{AttachmentIDs: []string{a.ID}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m.Kind != KindVoice {
+		t.Fatalf("kind = %s", m.Kind)
+	}
+	f.svc.Flush()
+	stored, _ := f.store.Message(m.ID)
+	if stored.Transcript != "call Sam at five" {
+		t.Fatalf("transcript = %q", stored.Transcript)
+	}
+	got := f.deliver.delivered()
+	if len(got) != 1 || !strings.HasPrefix(got[0], "[Leo Chat] call Sam at five\nAttachments: "+f.root) {
+		t.Fatalf("delivered %q", got)
+	}
+}
+
+func TestSendVoiceTranscriptionFailureStillDelivers(t *testing.T) {
+	f := newFixture(t)
+	a := upload(t, f, "assistant", "note.m4a", "audio/mp4", "AAC")
+	_, _ = f.svc.Send(context.Background(), "assistant", SendRequest{AttachmentIDs: []string{a.ID}})
+	f.svc.Flush()
+	got := f.deliver.delivered()
+	if len(got) != 1 || !strings.Contains(got[0], "transcription failed") {
+		t.Fatalf("delivered %q", got)
+	}
+}
+
+func TestSendTakesAnUploadWithoutAnAgent(t *testing.T) {
+	f := newFixture(t)
+	a := upload(t, f, "", "x.txt", "text/plain", "x")
+	m, err := f.svc.Send(context.Background(), "web", SendRequest{AttachmentIDs: []string{a.ID}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m.Kind != KindFile || len(m.Attachments) != 1 {
+		t.Fatalf("message = %+v", m)
+	}
+	if _, err := f.svc.Send(context.Background(), "assistant", SendRequest{AttachmentIDs: []string{a.ID}}); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("reusing a claimed upload: err = %v", err)
+	}
+}
+
+func TestEventsNameTheirAgent(t *testing.T) {
+	f := newFixture(t)
+	_, _ = f.svc.Send(context.Background(), "web", SendRequest{Text: "hi"})
+	f.svc.Flush()
+	f.pub.mu.Lock()
+	defer f.pub.mu.Unlock()
+	if len(f.pub.events) == 0 {
+		t.Fatal("no events")
+	}
+	for _, ev := range f.pub.events {
+		b, _ := json.Marshal(ev.Payload)
+		if !strings.Contains(string(b), `"agent":"web","message":{`) {
+			t.Fatalf("%s payload lacks a top-level agent: %s", ev.Type, b)
+		}
+	}
+}
+
+func TestSendRefusesAnotherAgentsUpload(t *testing.T) {
+	f := newFixture(t)
+	a := upload(t, f, "web", "x.txt", "text/plain", "x")
+	if _, err := f.svc.Send(context.Background(), "assistant", SendRequest{Text: "see", AttachmentIDs: []string{a.ID}}); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("err = %v", err)
+	}
+}
+
+func TestSendReplyToTaskCardQuotesIt(t *testing.T) {
+	f := newFixture(t)
+	f.cfg.Tasks["daily"] = config.TaskConfig{Owner: "assistant"}
+	card, err := f.svc.Post(context.Background(), PostRequest{Caller: "task:daily", Task: "daily", RunID: "r1", Text: "1. rates\n2. jobs"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.svc.Send(context.Background(), "assistant", SendRequest{Text: "more on 2", ReplyTo: card.ID}); err != nil {
+		t.Fatal(err)
+	}
+	f.svc.Flush()
+	got := f.deliver.delivered()
+	if len(got) != 1 || !strings.Contains(got[0], "\nIn reply to task daily run r1 (") || !strings.Contains(got[0], "1. rates 2. jobs") && !strings.Contains(got[0], "1. rates\n2. jobs") {
+		t.Fatalf("delivered %q", got)
+	}
+}
+
+func TestSendDeliversInOrderPerAgent(t *testing.T) {
+	f := newFixture(t)
+	for _, text := range []string{"one", "two", "three"} {
+		if _, err := f.svc.Send(context.Background(), "assistant", SendRequest{Text: text}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	f.svc.Flush()
+	got := f.deliver.delivered()
+	if strings.Join(got, "|") != "[Leo Chat] one|[Leo Chat] two|[Leo Chat] three" {
+		t.Fatalf("order = %q", got)
+	}
+}
+
+func TestPostFromTaskGoesToOwnerAsTaskCard(t *testing.T) {
+	f := newFixture(t)
+	f.cfg.Tasks["build"] = config.TaskConfig{Workspace: "/src/web"}
+	m, err := f.svc.Post(context.Background(), PostRequest{Caller: "task:build", Task: "build", RunID: "r9", Text: "green"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m.Agent != "web" || m.Kind != KindTask || m.Task != "build" || m.RunID != "r9" || m.Direction != DirectionOut {
+		t.Fatalf("card = %+v", m)
+	}
+}
+
+// A persistent task runs in its agent, whose MCP server knows no task: the
+// daemon files the agent's chat output under the run in flight.
+func TestChatToolsDuringAPersistentRunCarryItsTaskAndRun(t *testing.T) {
+	f := newFixture(t)
+	f.cfg.Tasks["digest"] = config.TaskConfig{Runtime: "persistent", Template: "assistant"}
+	f.runs["assistant"] = [2]string{"digest", "run-7"}
+	m, err := f.svc.Post(context.Background(), PostRequest{Caller: "assistant", Text: "today's digest"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m.Agent != "assistant" || m.Kind != KindTask || m.Task != "digest" || m.RunID != "run-7" {
+		t.Fatalf("card = %+v", m)
+	}
+	go func() {
+		<-f.timers.got
+		open, _ := f.store.OpenMessages("assistant", KindAsk, StateOpen)
+		_, _ = f.svc.Answer("assistant", open[0].ID, "y")
+	}()
+	res, err := f.svc.Ask(context.Background(), AskRequest{Caller: "assistant", Question: "Publish?", Options: []Option{{Value: "y"}}})
+	if err != nil || res.Value != "y" {
+		t.Fatalf("ask = %+v, %v", res, err)
+	}
+	asks, _, _ := f.store.Messages("assistant", Page{Task: "digest"})
+	if len(asks) != 2 || asks[0].Kind != KindAsk || asks[0].RunID != "run-7" {
+		t.Fatalf("task thread = %+v", asks)
+	}
+}
+
+func TestPostFromTaskWithMissingOwnerNotesIt(t *testing.T) {
+	f := newFixture(t)
+	f.cfg.Tasks["build"] = config.TaskConfig{Owner: "gone"}
+	m, err := f.svc.Post(context.Background(), PostRequest{Caller: "task:build", Task: "build", RunID: "r1", Text: "done"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	thread := f.thread(t, "assistant")
+	if m.Agent != "assistant" || len(thread) != 2 || thread[1].Kind != KindSystem || !strings.Contains(thread[1].Text, "gone") {
+		t.Fatalf("thread = %+v", thread)
+	}
+}
+
+func TestPostCopiesFiles(t *testing.T) {
+	f := newFixture(t)
+	_, _ = f.svc.Send(context.Background(), "assistant", SendRequest{Text: "make a chart"})
+	f.svc.Flush()
+	src := filepath.Join(t.TempDir(), "chart.png")
+	if err := os.WriteFile(src, []byte("PNG"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	m, err := f.svc.Post(context.Background(), PostRequest{Caller: "assistant", Text: "here", Files: []string{src}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(m.Attachments) != 1 || m.Attachments[0].Filename != "chart.png" || m.Attachments[0].MIME != "image/png" {
+		t.Fatalf("attachments = %+v", m.Attachments)
+	}
+}
+
+// A post's id is taken when it is stored, not before its files are copied:
+// a message stored meanwhile must not end up above it, behind a read
+// watermark or a paging cursor a client already took.
+func TestPostIsOrderedByWhenItIsStored(t *testing.T) {
+	f := newFixture(t)
+	src := filepath.Join(t.TempDir(), "big.bin")
+	if err := os.WriteFile(src, []byte("data"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	blocked, release := f.ids.arm()
+	type result struct {
+		m   Message
+		err error
+	}
+	done := make(chan result, 1)
+	go func() {
+		m, err := f.svc.Post(context.Background(), PostRequest{Caller: "assistant", Text: "with file", Files: []string{src}})
+		done <- result{m, err}
+	}()
+	<-blocked
+	other, err := f.svc.Post(context.Background(), PostRequest{Caller: "assistant", Text: "meanwhile"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.svc.MarkRead("assistant", other.ID); err != nil {
+		t.Fatal(err)
+	}
+	close(release)
+	r := <-done
+	if r.err != nil {
+		t.Fatal(r.err)
+	}
+	if r.m.ID <= other.ID {
+		t.Fatalf("post stored last has id %s, below %s stored before it", r.m.ID, other.ID)
+	}
+	threads, err := f.svc.Threads()
+	if err != nil || len(threads) != 1 || threads[0].Unread != 1 {
+		t.Fatalf("threads = %+v, %v; the later post must count as unread", threads, err)
+	}
+}
+
+func TestPostRefusesDispatchAndBadCaller(t *testing.T) {
+	f := newFixture(t)
+	if _, err := f.svc.Post(context.Background(), PostRequest{Caller: "dispatch:d-1", Text: "x"}); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("err = %v", err)
+	}
+	if _, err := f.svc.Post(context.Background(), PostRequest{Caller: "assistant"}); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("empty post err = %v", err)
+	}
+}
+
+func TestAskReturnsTheChosenOption(t *testing.T) {
+	f := newFixture(t)
+	type result struct {
+		r   AskResult
+		err error
+	}
+	done := make(chan result, 1)
+	go func() {
+		r, err := f.svc.Ask(context.Background(), AskRequest{Caller: "assistant", Question: "Ship it?", Options: []Option{{Value: "y", Label: "Yes"}, {Value: "n", Label: "No"}}, Timeout: 5 * time.Minute})
+		done <- result{r, err}
+	}()
+	if d := <-f.timers.got; d != 5*time.Minute {
+		t.Fatalf("ask timer = %s", d)
+	}
+	open := f.thread(t, "assistant")[0]
+	if open.Kind != KindAsk || open.State != StateOpen {
+		t.Fatalf("ask message = %+v", open)
+	}
+	if _, err := f.svc.Answer("assistant", open.ID, "maybe"); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("a value outside the options must be refused: %v", err)
+	}
+	if _, err := f.svc.Answer("assistant", open.ID, "y"); err != nil {
+		t.Fatal(err)
+	}
+	got := <-done
+	if got.err != nil || got.r.Value != "y" || got.r.Label != "Yes" || got.r.TimedOut {
+		t.Fatalf("ask result = %+v", got)
+	}
+	if _, err := f.svc.Answer("assistant", open.ID, "n"); !errors.Is(err, ErrConflict) {
+		t.Fatalf("second answer err = %v", err)
+	}
+}
+
+func TestAskTimesOutAndExpires(t *testing.T) {
+	f := newFixture(t)
+	done := make(chan AskResult, 1)
+	go func() {
+		r, _ := f.svc.Ask(context.Background(), AskRequest{Caller: "assistant", Question: "?", Options: []Option{{Value: "a", Label: "a"}}})
+		done <- r
+	}()
+	if d := <-f.timers.got; d != DefaultAskTimeout {
+		t.Fatalf("default timeout = %s", d)
+	}
+	f.timers.fireLast()
+	if r := <-done; !r.TimedOut {
+		t.Fatalf("result = %+v", r)
+	}
+	if m := f.thread(t, "assistant")[0]; m.State != StateExpired {
+		t.Fatalf("state = %s", m.State)
+	}
+}
+
+func TestAskValidation(t *testing.T) {
+	f := newFixture(t)
+	many := make([]Option, MaxAskOptions+1)
+	for i := range many {
+		many[i] = Option{Value: string(rune('a' + i)), Label: "x"}
+	}
+	for name, req := range map[string]AskRequest{
+		"no options":   {Caller: "assistant", Question: "?"},
+		"too many":     {Caller: "assistant", Question: "?", Options: many},
+		"no question":  {Caller: "assistant", Options: []Option{{Value: "a"}}},
+		"long timeout": {Caller: "assistant", Question: "?", Options: []Option{{Value: "a"}}, Timeout: 2 * time.Hour},
+		"dup values":   {Caller: "assistant", Question: "?", Options: []Option{{Value: "a"}, {Value: "a"}}},
+	} {
+		if _, err := f.svc.Ask(context.Background(), req); !errors.Is(err, ErrInvalid) {
+			t.Errorf("%s: err = %v", name, err)
+		}
+	}
+}
+
+func permissionPayload(tool, command string) json.RawMessage {
+	b, _ := json.Marshal(map[string]any{"hook_event_name": "PermissionRequest", "tool_name": tool, "tool_input": map[string]any{"command": command}})
+	return b
+}
+
+func TestPermissionAnsweredFromChat(t *testing.T) {
+	f := newFixture(t)
+	done := make(chan string, 1)
+	go func() {
+		done <- f.svc.RequestPermission(context.Background(), "assistant", permissionPayload("Bash", "rm -rf build"), 2*time.Minute)
+	}()
+	<-f.timers.got
+	m := f.thread(t, "assistant")[0]
+	if m.Kind != KindPermission || m.Permission == nil || m.Permission.Tool != "Bash" || m.Permission.Summary != "rm -rf build" {
+		t.Fatalf("permission message = %+v", m)
+	}
+	if len(m.Options) != 2 || m.Options[0].Value != "allow" || m.Options[1].Value != "deny" {
+		t.Fatalf("permission options = %+v, want allow and deny", m.Options)
+	}
+	if _, err := f.svc.Answer("assistant", m.ID, "allow"); err != nil {
+		t.Fatal(err)
+	}
+	if got := <-done; got != "allow" {
+		t.Fatalf("decision = %q", got)
+	}
+}
+
+func TestPermissionTimeoutLeavesTerminalPrompt(t *testing.T) {
+	f := newFixture(t)
+	done := make(chan string, 1)
+	go func() {
+		done <- f.svc.RequestPermission(context.Background(), "assistant", permissionPayload("Bash", "ls"), 2*time.Minute)
+	}()
+	<-f.timers.got
+	f.timers.fireLast()
+	if got := <-done; got != "" {
+		t.Fatalf("timeout decision = %q, want none", got)
+	}
+	if m := f.thread(t, "assistant")[0]; m.State != StateExpired {
+		t.Fatalf("state = %s", m.State)
+	}
+}
+
+func TestPermissionAnsweredInTerminalViaPostToolUse(t *testing.T) {
+	f := newFixture(t)
+	done := make(chan string, 1)
+	go func() {
+		done <- f.svc.RequestPermission(context.Background(), "assistant", permissionPayload("Bash", "make"), 2*time.Minute)
+	}()
+	<-f.timers.got
+	// A different tool finishing must not settle it.
+	f.svc.OnHook("assistant", HookEvent{Event: "PostToolUse", ToolName: "Read", ToolInput: json.RawMessage(`{"file_path":"/x"}`)})
+	if m := f.thread(t, "assistant")[0]; m.State != StateOpen {
+		t.Fatalf("unrelated PostToolUse settled the prompt: %s", m.State)
+	}
+	f.svc.OnHook("assistant", HookEvent{Event: "PostToolUse", ToolName: "Bash", ToolInput: json.RawMessage(`{ "command": "make" }`)})
+	if got := <-done; got != "" {
+		t.Fatalf("terminal-answered decision = %q, want none", got)
+	}
+	m := f.thread(t, "assistant")[0]
+	if m.State != StateAnswered || m.Answer != AnswerTerminal {
+		t.Fatalf("message = %s/%s", m.State, m.Answer)
+	}
+}
+
+func TestPermissionHookGoneMarksAnsweredInTerminal(t *testing.T) {
+	f := newFixture(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan string, 1)
+	go func() { done <- f.svc.RequestPermission(ctx, "assistant", permissionPayload("Bash", "x"), time.Minute) }()
+	<-f.timers.got
+	cancel()
+	<-done
+	m := f.thread(t, "assistant")[0]
+	if m.State != StateAnswered || m.Answer != AnswerTerminal {
+		t.Fatalf("message = %s/%s", m.State, m.Answer)
+	}
+}
+
+func TestStopHookPostsCapturedReplyOnce(t *testing.T) {
+	f := newFixture(t)
+	in, _ := f.svc.Send(context.Background(), "assistant", SendRequest{Text: "status?"})
+	f.svc.Flush()
+	path := transcript{}.user("[Leo Chat] status?").assistant("All green.").write(t)
+	f.svc.OnHook("assistant", HookEvent{Event: "Stop", TranscriptPath: path, LastAssistantMessage: "All green."})
+	f.svc.OnHook("assistant", HookEvent{Event: "Stop", TranscriptPath: path, LastAssistantMessage: "All green."})
+	thread := f.thread(t, "assistant")
+	if len(thread) != 2 || thread[0].Direction != DirectionOut || thread[0].Text != "All green." || thread[0].ReplyTo != in.ID {
+		t.Fatalf("thread = %+v", thread)
+	}
+	if caps, _ := f.store.Captures("assistant"); len(caps) != 0 {
+		t.Fatalf("capture not cleared: %+v", caps)
+	}
+}
+
+func TestStopHookAfterToolPostPostsNothing(t *testing.T) {
+	f := newFixture(t)
+	_, _ = f.svc.Send(context.Background(), "assistant", SendRequest{Text: "status?"})
+	f.svc.Flush()
+	if _, err := f.svc.Post(context.Background(), PostRequest{Caller: "assistant", Text: "posted myself"}); err != nil {
+		t.Fatal(err)
+	}
+	path := transcript{}.user("[Leo Chat] status?").chatPost().toolResult().assistant("Posted it.").write(t)
+	f.svc.OnHook("assistant", HookEvent{Event: "Stop", TranscriptPath: path, LastAssistantMessage: "Posted it."})
+	thread := f.thread(t, "assistant")
+	if len(thread) != 2 || thread[0].Text != "posted myself" {
+		t.Fatalf("thread = %+v", texts(thread))
+	}
+}
+
+// Two chat prompts run in one turn, which answers with leo_chat_post: the
+// turn's final text must not be posted as well.
+func TestStopHookAfterToolPostInATwoPromptTurnPostsNothing(t *testing.T) {
+	f := newFixture(t)
+	_, _ = f.svc.Send(context.Background(), "assistant", SendRequest{Text: "first"})
+	_, _ = f.svc.Send(context.Background(), "assistant", SendRequest{Text: "second"})
+	f.svc.Flush()
+	if _, err := f.svc.Post(context.Background(), PostRequest{Caller: "assistant", Text: "posted myself"}); err != nil {
+		t.Fatal(err)
+	}
+	path := transcript{}.user("[Leo Chat] first").chatPost().toolResult().user("[Leo Chat] second").assistant("Posted it.").write(t)
+	f.svc.OnHook("assistant", HookEvent{Event: "Stop", TranscriptPath: path, LastAssistantMessage: "Posted it."})
+	thread := f.thread(t, "assistant")
+	if len(thread) != 3 || thread[0].Text != "posted myself" {
+		t.Fatalf("thread = %q", texts(thread))
+	}
+}
+
+func TestStartupExpiresOpenPrompts(t *testing.T) {
+	f := newFixture(t)
+	m := Message{ID: NewULIDSource(f.clock.Now, nil).New(), Agent: "assistant", Direction: DirectionOut, Kind: KindAsk, State: StateOpen, TS: f.clock.Now()}
+	if err := f.store.InsertMessage(m); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.svc.Recover(); err != nil {
+		t.Fatal(err)
+	}
+	got, _ := f.store.Message(m.ID)
+	if got.State != StateExpired {
+		t.Fatalf("state = %s", got.State)
+	}
+}
+
+func TestStartupFailsMessagesTheLastDaemonNeverDelivered(t *testing.T) {
+	f := newFixture(t)
+	m := Message{ID: NewULIDSource(f.clock.Now, nil).New(), Agent: "assistant", Direction: DirectionIn, Kind: KindText, Text: "hi", State: StatePending, TS: f.clock.Now()}
+	if err := f.store.InsertMessage(m); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.svc.Recover(); err != nil {
+		t.Fatal(err)
+	}
+	got, _ := f.store.Message(m.ID)
+	notes, _ := f.store.OpenMessages("assistant", KindSystem, "")
+	if got.State != StateFailed || len(notes) != 1 || !strings.Contains(notes[0].Text, "restarted") {
+		t.Fatalf("message %s, notes %+v", got.State, notes)
+	}
+}
+
+// The delivery ref (the bridge command id) is stored on the message before
+// the deliverer gets it, so a restart mid-delivery can find it.
+func TestDeliveryStoresItsRefFirst(t *testing.T) {
+	f := newFixture(t)
+	var stored string
+	f.deliver.onDeliver = func() {
+		ms, _, _ := f.store.Messages("assistant", Page{})
+		stored = ms[0].DeliveryRef
+	}
+	m, err := f.svc.Send(context.Background(), "assistant", SendRequest{Text: "hi"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.svc.Flush()
+	if want := "chat-" + m.ID; stored != want || len(f.deliver.refs) != 1 || f.deliver.refs[0] != want {
+		t.Fatalf("stored ref %q, delivered refs %q, want %q", stored, f.deliver.refs, want)
+	}
+}
+
+// A message the last daemon left pending whose deliver its agent's outbox
+// still holds is delivered by the outbox after restore: it is not failed,
+// so the user is not told to send it again.
+func TestStartupKeepsMessagesTheOutboxStillHolds(t *testing.T) {
+	f := newFixture(t)
+	ids := NewULIDSource(f.clock.Now, nil)
+	queued := Message{ID: ids.New(), Agent: "assistant", Direction: DirectionIn, Kind: KindText, Text: "queued", State: StatePending, DeliveryRef: "chat-a", TS: f.clock.Now()}
+	lost := Message{ID: ids.New(), Agent: "assistant", Direction: DirectionIn, Kind: KindText, Text: "lost", State: StatePending, DeliveryRef: "chat-b", TS: f.clock.Now()}
+	for _, m := range []Message{queued, lost} {
+		if err := f.store.InsertMessage(m); err != nil {
+			t.Fatal(err)
+		}
+	}
+	f.held["assistant/chat-a"] = true
+	if err := f.svc.Recover(); err != nil {
+		t.Fatal(err)
+	}
+	gotQueued, _ := f.store.Message(queued.ID)
+	gotLost, _ := f.store.Message(lost.ID)
+	notes, _ := f.store.OpenMessages("assistant", KindSystem, "")
+	if gotQueued.State != StateDelivered || gotLost.State != StateFailed || len(notes) != 1 {
+		t.Fatalf("queued %s, lost %s, notes %+v", gotQueued.State, gotLost.State, notes)
+	}
+}
+
+func TestPruneDeletesOldAttachmentFiles(t *testing.T) {
+	f := newFixture(t)
+	a := upload(t, f, "assistant", "old.txt", "text/plain", "x")
+	f.clock.Advance(AttachmentRetention + time.Hour)
+	if err := f.svc.Prune(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(f.root, "assistant", a.ID)); !os.IsNotExist(err) {
+		t.Fatalf("file not pruned: %v", err)
+	}
+	got, _ := f.store.Attachment(a.ID)
+	if got.Available {
+		t.Fatal("pruned attachment still available")
+	}
+}
+
+// blockingDeliverer holds each delivery until its context ends.
+type blockingDeliverer struct{ started chan struct{} }
+
+func (b blockingDeliverer) Deliver(ctx context.Context, _, _, _ string, _ func()) (string, error) {
+	close(b.started)
+	<-ctx.Done()
+	return "", ctx.Err()
+}
+
+// Close stops admission, then cancels and drains the waits and deliveries
+// in flight, so none outlives the store the daemon closes next.
+func TestCloseCancelsAndDrainsWaitersAndDeliveries(t *testing.T) {
+	f := newFixture(t)
+	started := make(chan struct{})
+	f.svc.opts.Deliver = blockingDeliverer{started: started}
+	in, err := f.svc.Send(context.Background(), "assistant", SendRequest{Text: "slow"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	<-started
+	asked := make(chan AskResult, 1)
+	go func() {
+		r, _ := f.svc.Ask(context.Background(), AskRequest{Caller: "assistant", Question: "?", Options: []Option{{Value: "a"}}})
+		asked <- r
+	}()
+	<-f.timers.got
+	f.svc.Close()
+	select {
+	case r := <-asked:
+		if !r.TimedOut {
+			t.Fatalf("ask after close = %+v", r)
+		}
+	default:
+		t.Fatal("Close returned while an ask still waited")
+	}
+	got, _ := f.store.Message(in.ID)
+	notes, _ := f.store.OpenMessages("assistant", KindSystem, "")
+	if got.State != StatePending || len(notes) != 0 {
+		t.Fatalf("a delivery cut short by shutdown stays pending for recovery: %s, notes %+v", got.State, notes)
+	}
+	if _, err := f.svc.Send(context.Background(), "assistant", SendRequest{Text: "late"}); !errors.Is(err, ErrClosed) {
+		t.Fatalf("send after close = %v", err)
+	}
+	if _, err := f.svc.Post(context.Background(), PostRequest{Caller: "assistant", Text: "late"}); !errors.Is(err, ErrClosed) {
+		t.Fatalf("post after close = %v", err)
+	}
+}
+
+// An ask's deadline is its own, not one call's: a call that waits out its
+// window returns pending with the message id, and a later call resumes it.
+func TestAskOutlastsOneCallAndResumes(t *testing.T) {
+	f := newFixture(t)
+	req := AskRequest{Caller: "assistant", Question: "Ship it?", Options: []Option{{Value: "y", Label: "Yes"}}, Timeout: time.Hour, Wait: 30 * time.Minute}
+	done := make(chan AskResult, 1)
+	go func() {
+		r, _ := f.svc.Ask(context.Background(), req)
+		done <- r
+	}()
+	if d := <-f.timers.got; d != time.Hour {
+		t.Fatalf("deadline = %s", d)
+	}
+	if d := <-f.timers.got; d != 30*time.Minute {
+		t.Fatalf("call window = %s", d)
+	}
+	f.timers.fireLast()
+	first := <-done
+	open := f.thread(t, "assistant")[0]
+	if !first.Pending || first.TimedOut || first.MessageID != open.ID || open.State != StateOpen {
+		t.Fatalf("first call = %+v, message %s", first, open.State)
+	}
+	if _, err := f.svc.Answer("assistant", open.ID, "y"); err != nil {
+		t.Fatal(err)
+	}
+	r, err := f.svc.Ask(context.Background(), AskRequest{Caller: "assistant", MessageID: open.ID, Wait: 30 * time.Minute})
+	if err != nil || r.Value != "y" || r.Label != "Yes" || r.Pending {
+		t.Fatalf("resumed = %+v, %v", r, err)
+	}
+}
+
+// A caller that goes away (its harness gave up on the tool call) leaves the
+// ask open until its own deadline; resuming after that reports the timeout.
+func TestAskDeadlineDoesNotEndWithTheCall(t *testing.T) {
+	f := newFixture(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan AskResult, 1)
+	go func() {
+		r, _ := f.svc.Ask(ctx, AskRequest{Caller: "assistant", Question: "?", Options: []Option{{Value: "a"}}, Timeout: time.Hour})
+		done <- r
+	}()
+	<-f.timers.got
+	cancel()
+	if r := <-done; !r.Pending {
+		t.Fatalf("abandoned call = %+v", r)
+	}
+	open := f.thread(t, "assistant")[0]
+	if open.State != StateOpen {
+		t.Fatalf("the ask must outlive its call: %s", open.State)
+	}
+	f.timers.fireLast()
+	resumed := make(chan AskResult, 1)
+	go func() {
+		r, _ := f.svc.Ask(context.Background(), AskRequest{Caller: "assistant", MessageID: open.ID})
+		resumed <- r
+	}()
+	if r := <-resumed; !r.TimedOut {
+		t.Fatalf("resumed after the deadline = %+v", r)
+	}
+	if m, _ := f.store.Message(open.ID); m.State != StateExpired {
+		t.Fatalf("state = %s", m.State)
+	}
+}
+
+func TestAskResumeChecksTheMessage(t *testing.T) {
+	f := newFixture(t)
+	note, err := f.svc.Post(context.Background(), PostRequest{Caller: "assistant", Text: "not an ask"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, req := range map[string]AskRequest{
+		"not an ask":       {Caller: "assistant", MessageID: note.ID},
+		"another's ask":    {Caller: "web", MessageID: note.ID},
+		"malformed id":     {Caller: "assistant", MessageID: "nope"},
+		"question as well": {Caller: "assistant", MessageID: note.ID, Question: "?", Options: []Option{{Value: "a"}}},
+	} {
+		if _, err := f.svc.Ask(context.Background(), req); !errors.Is(err, ErrInvalid) {
+			t.Errorf("%s: err = %v", name, err)
+		}
+	}
+}

@@ -2,6 +2,7 @@ package push
 
 import (
 	"context"
+	"reflect"
 	"sync"
 	"testing"
 	"time"
@@ -86,7 +87,7 @@ func TestTransitionIntoNeedsYouStatesSendsAnAlert(t *testing.T) {
 
 			got := sender.next(t)
 			want := Alert{Agent: "builder", Kind: string(tc.state), Title: tc.wantTitle, At: fixedNow}
-			if got != want {
+			if !reflect.DeepEqual(got, want) {
 				t.Fatalf("alert = %+v, want %+v", got, want)
 			}
 		})
