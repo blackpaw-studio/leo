@@ -21,7 +21,7 @@ var (
 	ErrUnknownAgent = errors.New("unknown agent")
 	ErrConflict     = errors.New("message already settled")
 	// ErrClosed: the daemon is shutting chat down.
-	ErrClosed = errors.New("Leo Chat is shutting down")
+	ErrClosed = errors.New("chat is shutting down")
 )
 
 // Limits.
