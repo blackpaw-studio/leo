@@ -100,6 +100,17 @@ func (s *Service) Recover() error {
 	for _, id := range ids {
 		s.publishUpdated(id, ChangeState)
 	}
+	// Delivery queues live in memory, so a message still pending was never
+	// delivered (or not knowably so). Failing it visibly beats replaying
+	// it twice.
+	failed, err := s.opts.Store.FailPending()
+	if err != nil {
+		return err
+	}
+	for _, m := range failed {
+		s.publishUpdated(m.ID, ChangeState)
+		s.postSystem(m.Agent, "Not delivered: the daemon restarted first. Send it again.")
+	}
 	return nil
 }
 

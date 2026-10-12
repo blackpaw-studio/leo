@@ -592,6 +592,22 @@ func TestStartupExpiresOpenPrompts(t *testing.T) {
 	}
 }
 
+func TestStartupFailsMessagesTheLastDaemonNeverDelivered(t *testing.T) {
+	f := newFixture(t)
+	m := Message{ID: NewULIDSource(f.clock.Now, nil).New(), Agent: "assistant", Direction: DirectionIn, Kind: KindText, Text: "hi", State: StatePending, TS: f.clock.Now()}
+	if err := f.store.InsertMessage(m); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.svc.Recover(); err != nil {
+		t.Fatal(err)
+	}
+	got, _ := f.store.Message(m.ID)
+	notes, _ := f.store.OpenMessages("assistant", KindSystem, "")
+	if got.State != StateFailed || len(notes) != 1 || !strings.Contains(notes[0].Text, "restarted") {
+		t.Fatalf("message %s, notes %+v", got.State, notes)
+	}
+}
+
 func TestPruneDeletesOldAttachmentFiles(t *testing.T) {
 	f := newFixture(t)
 	a := upload(t, f, "assistant", "old.txt", "text/plain", "x")

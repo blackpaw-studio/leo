@@ -383,28 +383,58 @@ func (s *Store) OpenMessages(agent, kind, state string) ([]Message, error) {
 // ExpireOpen moves every open message to expired: their waiters died with
 // the previous daemon. It returns the ids it moved.
 func (s *Store) ExpireOpen() ([]string, error) {
-	rows, err := s.db.Query(`SELECT id FROM messages WHERE state = ?`, StateOpen)
+	moved, err := s.moveAll(StateOpen, StateExpired)
 	if err != nil {
-		return nil, fmt.Errorf("reading open messages: %w", err)
+		return nil, fmt.Errorf("expiring open messages: %w", err)
 	}
-	var ids []string
+	ids := make([]string, len(moved))
+	for i, m := range moved {
+		ids[i] = m.ID
+	}
+	return ids, nil
+}
+
+// FailPending marks every pending message failed and returns them (id and
+// agent): at startup these are deliveries the previous daemon never
+// finished.
+func (s *Store) FailPending() ([]Message, error) {
+	moved, err := s.moveAll(StatePending, StateFailed)
+	if err != nil {
+		return nil, fmt.Errorf("failing undelivered messages: %w", err)
+	}
+	return moved, nil
+}
+
+// moveAll moves every message in state from to state to, returning their
+// ids and agents.
+func (s *Store) moveAll(from, to string) ([]Message, error) {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = tx.Rollback() }()
+	rows, err := tx.Query(`SELECT id, agent FROM messages WHERE state = ? ORDER BY id`, from)
+	if err != nil {
+		return nil, err
+	}
+	var moved []Message
 	for rows.Next() {
-		var id string
-		if err := rows.Scan(&id); err != nil {
+		var m Message
+		if err := rows.Scan(&m.ID, &m.Agent); err != nil {
 			_ = rows.Close()
 			return nil, err
 		}
-		ids = append(ids, id)
+		moved = append(moved, m)
 	}
 	err = rows.Err()
 	_ = rows.Close()
 	if err != nil {
 		return nil, err
 	}
-	if _, err := s.db.Exec(`UPDATE messages SET state = ? WHERE state = ?`, StateExpired, StateOpen); err != nil {
-		return nil, fmt.Errorf("expiring open messages: %w", err)
+	if _, err := tx.Exec(`UPDATE messages SET state = ? WHERE state = ?`, to, from); err != nil {
+		return nil, err
 	}
-	return ids, nil
+	return moved, tx.Commit()
 }
 
 const attachmentColumns = `id, message_id, agent, filename, mime, bytes, path, created`
@@ -529,7 +559,10 @@ func (s *Store) Captures(agent string) ([]Capture, error) {
 // MarkCapturesToolPosted flags every pending capture of agent: the agent
 // posted through leo_chat_post since those deliveries.
 func (s *Store) MarkCapturesToolPosted(agent string) error {
-	if _, err := s.db.Exec(`UPDATE captures SET tool_posted = 1 WHERE agent = ?`, agent); err != nil {
+	// The oldest capture is the turn in progress; later ones are queued
+	// behind it and have not run yet.
+	if _, err := s.db.Exec(`UPDATE captures SET tool_posted = 1 WHERE message_id =
+		(SELECT message_id FROM captures WHERE agent = ? ORDER BY message_id LIMIT 1)`, agent); err != nil {
 		return fmt.Errorf("flagging captures: %w", err)
 	}
 	return nil

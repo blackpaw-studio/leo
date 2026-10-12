@@ -60,12 +60,13 @@ In reply to task daily-news run <run id> (<time>): <card text, up to 1500 charac
 ```
 
 On success the message is `delivered`; on failure it is `failed`, with a
-system note saying why.
+system note saying why. A message still `pending` when the daemon restarts
+is marked `failed` with a note to send it again, never replayed twice.
 
 **Replies.** For Claude agents the daemon captures the reply: on the agent's
 `Stop` hook it finds the delivered `[Leo Chat]` prompt in the transcript and
 posts that turn's last assistant message. It posts nothing when the agent
-called `leo_chat_post` since delivery, when another prompt (a message, a task,
+called `leo_chat_post` during that turn, when another prompt (a message, a task,
 a task-notification) took over the turn, or when the reply is empty. A prompt
 not yet in the transcript, for example one queued behind a running turn,
 waits up to 30 minutes. Codex and opencode agents reply with `leo_chat_post`.

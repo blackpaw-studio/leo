@@ -84,6 +84,13 @@ func TestPermissionAttentionAlertCarriesTheChatMessageID(t *testing.T) {
 		t.Fatalf("alert = %+v", a)
 	}
 
+	// A classic (unbridged) agent's permission_prompt hook carries no reason.
+	n.Publish(activity("a", observe.AttentionWorking, nil))
+	n.Publish(activity("a", observe.AttentionNeedsInput, nil))
+	if a = sender.next(t); a.MessageID != "p1" {
+		t.Fatalf("reasonless needs_input alert = %+v", a)
+	}
+
 	perm.State = chat.StateAnswered
 	n.Publish(chatUpdate(perm))
 	n.Publish(activity("a", observe.AttentionWorking, nil))

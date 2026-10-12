@@ -266,6 +266,24 @@ func TestStoreCapturesRoundTrip(t *testing.T) {
 	}
 }
 
+func TestStoreToolPostFlagsOnlyTheOldestCapture(t *testing.T) {
+	st := openTestStore(t)
+	clock := newTestClock()
+	for _, id := range []string{"01M4RMAZ800000000000000001", "01M4RMAZ800000000000000002"} {
+		clock.Advance(time.Second)
+		if err := st.AddCapture(Capture{MessageID: id, Agent: "assistant", Prompt: "[Leo Chat] " + id, DeliveredAt: clock.Now()}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := st.MarkCapturesToolPosted("assistant"); err != nil {
+		t.Fatal(err)
+	}
+	got, _ := st.Captures("assistant")
+	if len(got) != 2 || !got[0].ToolPosted || got[1].ToolPosted {
+		t.Fatalf("captures = %+v; a post belongs to the turn in progress, not the queued message", got)
+	}
+}
+
 func TestStoreSurvivesReopen(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "chat.db")
 	st, err := OpenStore(path)

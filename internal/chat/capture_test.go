@@ -159,6 +159,23 @@ func TestCaptureUsesLastOccurrenceOfARepeatedPrompt(t *testing.T) {
 	}
 }
 
+func TestCaptureRepeatedPromptsClaimDistinctOccurrences(t *testing.T) {
+	p := "[Leo Chat] ok"
+	first, second := capture("m1", p), capture("m2", p)
+	// Only the first "ok" has run: it alone is answered; the second waits.
+	tr := transcript{}.user(p).assistant("first answer")
+	out := ResolveCaptures(ReadTranscript(tr.write(t)), []Capture{first, second}, "first answer", captureNow)
+	if out[0].Action != CapturePost || out[0].Text != "first answer" || out[1].Action != CaptureKeep {
+		t.Fatalf("outcomes = %+v", out)
+	}
+	// Then the second runs.
+	tr = tr.user(p).assistant("second answer")
+	out = ResolveCaptures(ReadTranscript(tr.write(t)), []Capture{second}, "second answer", captureNow)
+	if out[0].Action != CapturePost || out[0].Text != "second answer" {
+		t.Fatalf("second outcome = %+v", out)
+	}
+}
+
 func TestReadTranscriptMissingFileIsEmpty(t *testing.T) {
 	if got := ReadTranscript(filepath.Join(t.TempDir(), "missing.jsonl")); len(got) != 0 {
 		t.Fatalf("entries = %+v", got)

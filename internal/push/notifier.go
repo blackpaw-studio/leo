@@ -200,7 +200,9 @@ func (n *Notifier) observe(agent string, att observe.AgentAttention) {
 		delete(n.previews, agent)
 	}
 	var permissionID string
-	if att.State == observe.AttentionNeedsInput && att.Reason != nil && att.Reason.Kind == observe.AttentionReasonPermission {
+	// A classic agent's permission_prompt hook reports no reason; any other
+	// reason (a question) is not the permission prompt.
+	if att.State == observe.AttentionNeedsInput && (att.Reason == nil || att.Reason.Kind == observe.AttentionReasonPermission) {
 		permissionID = n.openPermissions[agent]
 	}
 	n.mu.Unlock()

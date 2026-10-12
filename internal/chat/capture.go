@@ -187,18 +187,23 @@ func ResolveCaptures(entries []TranscriptEntry, captures []Capture, lastAssistan
 	for i, c := range captures {
 		prompts[i] = normalize(c.Prompt)
 	}
+	// Identical prompts (two "ok"s) must answer distinct occurrences:
+	// oldest first, each capture claims the latest occurrence not yet
+	// claimed, so a second "ok" that has not run yet waits for its own.
+	claimed := make(map[int]bool)
 	out := make([]CaptureOutcome, len(captures))
 	for i, c := range captures {
-		out[i] = resolveCapture(entries, c, prompts[i], lastAssistant, now)
+		out[i] = resolveCapture(entries, c, prompts[i], lastAssistant, now, claimed)
 	}
 	return out
 }
 
-func resolveCapture(entries []TranscriptEntry, c Capture, prompt string, lastAssistant string, now time.Time) CaptureOutcome {
+func resolveCapture(entries []TranscriptEntry, c Capture, prompt string, lastAssistant string, now time.Time, claimed map[int]bool) CaptureOutcome {
 	start := -1
 	for i := len(entries) - 1; i >= 0; i-- {
-		if entries[i].kind == entryPrompt && prompt != "" && strings.Contains(normalize(entries[i].text), prompt) {
+		if !claimed[i] && entries[i].kind == entryPrompt && prompt != "" && strings.Contains(normalize(entries[i].text), prompt) {
 			start = i
+			claimed[i] = true
 			break
 		}
 	}
