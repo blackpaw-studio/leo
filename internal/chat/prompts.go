@@ -180,7 +180,9 @@ func (s *Service) resolveCaptures(agent string, ev HookEvent) {
 		return
 	}
 	entries := ReadTranscript(ev.TranscriptPath)
-	for _, out := range ResolveCaptures(entries, captures, ev.LastAssistantMessage, s.opts.Now()) {
+	outcomes, mark := ResolveCaptures(entries, captures, ev.LastAssistantMessage, s.opts.Now(), s.marks.get(agent))
+	s.marks.advance(agent, mark)
+	for _, out := range outcomes {
 		if out.Action == CaptureKeep {
 			continue
 		}
@@ -192,6 +194,30 @@ func (s *Service) resolveCaptures(agent string, ev HookEvent) {
 		if removed && out.Action == CapturePost {
 			s.postReply(agent, out.Capture.MessageID, out.Text)
 		}
+	}
+}
+
+// captureMarks holds each agent's capture mark: the stamp of the last
+// prompt occurrence a capture answered. It lives in memory; after a
+// restart the delivery time alone separates repeats.
+type captureMarks struct {
+	mu sync.Mutex
+	m  map[string]time.Time
+}
+
+func (c *captureMarks) get(agent string) time.Time {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.m[agent]
+}
+
+// advance moves agent's mark forward only, as concurrent Stop hooks may
+// finish out of order.
+func (c *captureMarks) advance(agent string, t time.Time) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if t.After(c.m[agent]) {
+		c.m[agent] = t
 	}
 }
 

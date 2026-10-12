@@ -35,10 +35,6 @@ type TranscriptEntry struct {
 	at time.Time
 }
 
-// captureClockSkew tolerates a transcript stamp slightly older than the
-// capture's delivery time.
-const captureClockSkew = 2 * time.Second
-
 // harnessInjectionMarkers are the envelopes of prompts Claude Code submits
 // on its own, which fold into the running turn (leo #216).
 var harnessInjectionMarkers = []string{"task-notification"}
@@ -190,27 +186,34 @@ func normalize(s string) string { return strings.Join(strings.Fields(s), " ") }
 // unless a non-chat prompt superseded it, a later chat prompt in the same
 // turn owns the reply, the agent already posted with leo_chat_post, or the
 // reply is empty. A prompt not found yet waits CaptureWindow.
-func ResolveCaptures(entries []TranscriptEntry, captures []Capture, lastAssistant string, now time.Time) []CaptureOutcome {
-	prompts := make([]string, len(captures))
-	for i, c := range captures {
-		prompts[i] = normalize(c.Prompt)
-	}
-	// Identical prompts (two "ok"s) must answer distinct occurrences:
-	// oldest first, each capture claims its own (see findPrompt), so a
-	// second "ok" that has not run yet waits for its own.
+//
+// after is the stamp of the last prompt occurrence an earlier call already
+// answered; the returned time advances it. Identical prompts (two "ok"s)
+// must answer distinct occurrences, so a capture only claims an unclaimed
+// occurrence stamped after both its delivery and that mark.
+func ResolveCaptures(entries []TranscriptEntry, captures []Capture, lastAssistant string, now, after time.Time) ([]CaptureOutcome, time.Time) {
 	claimed := make(map[int]bool)
 	out := make([]CaptureOutcome, len(captures))
+	mark := after
 	for i, c := range captures {
-		out[i] = resolveCapture(entries, c, prompts[i], lastAssistant, now, claimed)
+		start := findPrompt(entries, c, normalize(c.Prompt), claimed, after)
+		out[i] = resolveCapture(entries, c, start, lastAssistant, now)
+		if start >= 0 {
+			claimed[start] = true
+			if entries[start].at.After(mark) {
+				mark = entries[start].at
+			}
+		}
 	}
-	return out
+	return out, mark
 }
 
 // findPrompt returns the index of the unclaimed prompt entry c delivered:
-// the earliest one containing prompt stamped at or after its delivery, so
-// an identical prompt from history never matches. A transcript without
-// stamps falls back to the latest match.
-func findPrompt(entries []TranscriptEntry, c Capture, prompt string, claimed map[int]bool) int {
+// the earliest one containing prompt stamped at or after its delivery and
+// after the mark, so neither an identical prompt from history nor one an
+// earlier capture answered matches. A transcript without stamps falls back
+// to the latest match.
+func findPrompt(entries []TranscriptEntry, c Capture, prompt string, claimed map[int]bool, after time.Time) int {
 	if prompt == "" {
 		return -1
 	}
@@ -223,18 +226,14 @@ func findPrompt(entries []TranscriptEntry, c Capture, prompt string, claimed map
 			latestUnstamped = i
 			continue
 		}
-		if !e.at.Before(c.DeliveredAt.Add(-captureClockSkew)) {
+		if !e.at.Before(c.DeliveredAt) && e.at.After(after) {
 			return i
 		}
 	}
 	return latestUnstamped
 }
 
-func resolveCapture(entries []TranscriptEntry, c Capture, prompt string, lastAssistant string, now time.Time, claimed map[int]bool) CaptureOutcome {
-	start := findPrompt(entries, c, prompt, claimed)
-	if start >= 0 {
-		claimed[start] = true
-	}
+func resolveCapture(entries []TranscriptEntry, c Capture, start int, lastAssistant string, now time.Time) CaptureOutcome {
 	if start < 0 {
 		if now.Sub(c.DeliveredAt) < CaptureWindow {
 			return CaptureOutcome{Capture: c, Action: CaptureKeep}

@@ -63,7 +63,7 @@ func capture(id, prompt string) Capture {
 
 func resolveOne(t *testing.T, tr transcript, c Capture, last string) CaptureOutcome {
 	t.Helper()
-	out := ResolveCaptures(ReadTranscript(tr.write(t)), []Capture{c}, last, captureNow)
+	out, _ := ResolveCaptures(ReadTranscript(tr.write(t)), []Capture{c}, last, captureNow, time.Time{})
 	if len(out) != 1 {
 		t.Fatalf("outcomes = %+v", out)
 	}
@@ -150,7 +150,7 @@ func TestCaptureSkippedWhenToolPostedOrEmpty(t *testing.T) {
 func TestCaptureTwoChatPromptsInOneTurnPostOnce(t *testing.T) {
 	p1, p2 := "[Leo Chat] first", "[Leo Chat] second"
 	tr := transcript{}.user(p1).assistant("thinking").user(p2).assistant("Both done.")
-	out := ResolveCaptures(ReadTranscript(tr.write(t)), []Capture{capture("m1", p1), capture("m2", p2)}, "Both done.", captureNow)
+	out, _ := ResolveCaptures(ReadTranscript(tr.write(t)), []Capture{capture("m1", p1), capture("m2", p2)}, "Both done.", captureNow, time.Time{})
 	if len(out) != 2 || out[0].Action != CaptureDrop || out[1].Action != CapturePost || out[1].Text != "Both done." {
 		t.Fatalf("outcomes = %+v", out)
 	}
@@ -166,23 +166,27 @@ func TestCaptureUsesLastOccurrenceOfARepeatedPrompt(t *testing.T) {
 
 func TestCaptureRepeatedPromptsClaimDistinctOccurrences(t *testing.T) {
 	p := "[Leo Chat] ok"
-	first := Capture{MessageID: "m1", Agent: "assistant", Prompt: p, DeliveredAt: captureNow.Add(-2 * time.Minute)}
-	second := Capture{MessageID: "m2", Agent: "assistant", Prompt: p, DeliveredAt: captureNow.Add(-90 * time.Second)}
+	t0 := captureNow.Add(-time.Minute)
+	first := Capture{MessageID: "m1", Agent: "assistant", Prompt: p, DeliveredAt: t0}
+	// The second "ok" is delivered while the first still waits its turn.
+	second := Capture{MessageID: "m2", Agent: "assistant", Prompt: p, DeliveredAt: t0.Add(200 * time.Millisecond)}
+	occ1, occ2 := t0.Add(500*time.Millisecond), t0.Add(10*time.Second)
 	// Yesterday's "ok" is history; only the first of today's has run.
 	tr := transcript{}.userAt(p, captureNow.Add(-24*time.Hour)).assistant("old answer").
-		userAt(p, captureNow.Add(-2*time.Minute)).assistant("first answer")
-	out := ResolveCaptures(ReadTranscript(tr.write(t)), []Capture{first, second}, "first answer", captureNow)
-	if out[0].Action != CapturePost || out[0].Text != "first answer" || out[1].Action != CaptureKeep {
-		t.Fatalf("outcomes = %+v", out)
+		userAt(p, occ1).assistant("first answer")
+	out, mark := ResolveCaptures(ReadTranscript(tr.write(t)), []Capture{first, second}, "first answer", captureNow, time.Time{})
+	if out[0].Action != CapturePost || out[0].Text != "first answer" || out[1].Action != CaptureKeep || !mark.Equal(occ1) {
+		t.Fatalf("outcomes = %+v, mark %v", out, mark)
 	}
-	// Then the second runs; it answers the second message.
-	tr = tr.userAt(p, captureNow.Add(-time.Minute)).assistant("second answer")
-	out = ResolveCaptures(ReadTranscript(tr.write(t)), []Capture{second}, "second answer", captureNow)
+	// Then the second runs; it answers the second message, not the first
+	// occurrence that the cleared capture already answered.
+	tr = tr.userAt(p, occ2).assistant("second answer")
+	out, _ = ResolveCaptures(ReadTranscript(tr.write(t)), []Capture{second}, "second answer", captureNow, mark)
 	if out[0].Action != CapturePost || out[0].Text != "second answer" {
 		t.Fatalf("second outcome = %+v", out)
 	}
 	// Both already in the transcript at one Stop: the reply is the second's.
-	out = ResolveCaptures(ReadTranscript(tr.write(t)), []Capture{first, second}, "second answer", captureNow)
+	out, _ = ResolveCaptures(ReadTranscript(tr.write(t)), []Capture{first, second}, "second answer", captureNow, time.Time{})
 	if out[0].Action != CaptureDrop || out[1].Action != CapturePost || out[1].Text != "second answer" {
 		t.Fatalf("both-present outcomes = %+v", out)
 	}

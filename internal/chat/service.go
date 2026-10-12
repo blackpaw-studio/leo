@@ -66,8 +66,10 @@ type Service struct {
 
 	queues  *serialQueues
 	waiters *waiters
-	stop    chan struct{}
-	once    sync.Once
+	// marks is each agent's last answered prompt stamp (ResolveCaptures).
+	marks *captureMarks
+	stop  chan struct{}
+	once  sync.Once
 }
 
 // NewService builds a Service; zero-valued options take defaults.
@@ -87,7 +89,7 @@ func NewService(opts Options) *Service {
 	if opts.Agents == nil {
 		opts.Agents = func() []AgentRef { return nil }
 	}
-	return &Service{opts: opts, queues: newSerialQueues(), waiters: newWaiters(), stop: make(chan struct{})}
+	return &Service{opts: opts, queues: newSerialQueues(), waiters: newWaiters(), marks: &captureMarks{m: make(map[string]time.Time)}, stop: make(chan struct{})}
 }
 
 // Recover runs once at daemon start: prompts left open by the previous
