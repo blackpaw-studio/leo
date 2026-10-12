@@ -361,8 +361,8 @@ the call and reports a generic harness timeout, hiding leo's own structured
 one.
 
 So leo owns the deadline and tells each harness about it. The ceiling
-(`leomcp.ToolTimeout`, currently **32 minutes** — the consult run deadline
-plus margin) is handed to whichever adapter is launching, and each renders it
+(`leomcp.ToolTimeout`, currently **62 minutes** — above `leo_chat_ask`'s
+one-hour cap and the 30-minute consult run deadline, plus margin) is handed to whichever adapter is launching, and each renders it
 through its native knob:
 
 | Harness  | Knob                                | Scope       |

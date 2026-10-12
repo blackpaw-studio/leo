@@ -50,6 +50,7 @@ internal/session/         → Session ID persistence (JSON key-value store)
 internal/history/         → Task execution history tracking
 internal/update/          → Self-update (binary download from GitHub releases)
 internal/env/             → Shared environment capture for daemon/cron processes
+internal/chat/            → Leo Chat: SQLite message store, delivery framing, reply capture, voice transcription, ask/permission prompts (docs/configuration/chat.md)
 ```
 
 Key design patterns:
