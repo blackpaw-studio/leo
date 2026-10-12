@@ -206,9 +206,6 @@ type Supervisor struct {
 	publisher observe.Publisher
 	// attention is the per-agent attention store — see SetAttention.
 	attention *observe.AttentionStore
-	// surfacedFiles is the per-agent surfaced-file store, reset to each new
-	// incarnation (StartedAt) — see SetSurfacedFiles.
-	surfacedFiles *observe.SurfacedFileStore
 	// bridge is the claude mod bridge (nil: every launch is legacy) — see
 	// SetBridge.
 	bridge *supervisorBridge
@@ -324,7 +321,6 @@ func (s *Supervisor) initState(name string) {
 		// Preserve fields (e.g. Ephemeral) set before superviseProcess starts
 		existing.Status = "starting"
 		existing.StartedAt = time.Now()
-		s.surfacedFiles.Reset(name, existing.StartedAt)
 		return
 	}
 	s.states[name] = &ProcessState{
@@ -332,7 +328,6 @@ func (s *Supervisor) initState(name string) {
 		Status:    "starting",
 		StartedAt: time.Now(),
 	}
-	s.surfacedFiles.Reset(name, s.states[name].StartedAt)
 }
 
 // incrementRestarts bumps name's restart counter, subject to the same
@@ -347,7 +342,6 @@ func (s *Supervisor) incrementRestarts(name string, id *procIdentity) {
 	}
 	st.Restarts++
 	st.StartedAt = time.Now()
-	s.surfacedFiles.Reset(name, st.StartedAt)
 	restarts := st.Restarts
 	status := st.Status
 	s.mu.Unlock()
@@ -433,7 +427,6 @@ func (s *Supervisor) SpawnAgent(spec daemon.AgentSpawnSpec) error {
 	id.harness = spec.Harness
 	s.identities[spec.Name] = id
 	spawnedAt := s.states[spec.Name].StartedAt
-	s.surfacedFiles.Reset(spec.Name, spawnedAt)
 	s.mu.Unlock()
 
 	// A resumed agent (agent.SpawnRequest.Resumed) already exists from a
@@ -1102,13 +1095,7 @@ func wireObservability(ctx context.Context, sv *Supervisor, tmuxPath string) obs
 	attention.SetActivityProvider(tracker)
 	go tracker.Start(ctx)
 
-	// Surfaced files publish through runLog like every other agent event;
-	// the supervisor resets an agent's list whenever it starts a new
-	// incarnation.
-	surfaced := observe.NewSurfacedFileStore(runLog, nil)
-	sv.SetSurfacedFiles(surfaced)
-
-	return observability{Bus: bus, RunLog: runLog, MessageLog: messageLog, Tracker: tracker, Attention: attention, SurfacedFiles: surfaced, Publisher: pub}
+	return observability{Bus: bus, RunLog: runLog, MessageLog: messageLog, Tracker: tracker, Attention: attention, Publisher: pub}
 }
 
 // openChat opens Leo Chat's store at <home>/state/chat.db and names its
@@ -1132,7 +1119,6 @@ func openChat(homePath string) (*chat.Store, string) {
 func (o observability) wireDaemon(srv *daemon.Server, version string) {
 	srv.SetObservability(o.Bus, o.RunLog, o.MessageLog, o.Tracker, version)
 	srv.SetAttention(o.Attention)
-	srv.SetSurfacedFiles(o.SurfacedFiles)
 	if o.Chat != nil {
 		srv.SetChat(o.Chat, o.ChatAttachments, o.Publisher)
 	}
@@ -1147,7 +1133,6 @@ func (o observability) wireDaemon(srv *daemon.Server, version string) {
 func (o observability) wireManager(m *agent.Manager) {
 	m.SetPublisher(o.RunLog)
 	m.SetAttention(o.Attention)
-	m.SetSurfacedFiles(o.SurfacedFiles)
 }
 
 // observability bundles what wireObservability builds for daemon boot.
@@ -1157,9 +1142,6 @@ type observability struct {
 	MessageLog *observe.MessageLog
 	Tracker    *observe.Tracker
 	Attention  *observe.AttentionStore
-	// SurfacedFiles is shared by the supervisor (incarnation resets), the
-	// agent manager (delete/rename), and the daemon's state + web surfaces.
-	SurfacedFiles *observe.SurfacedFileStore
 	// Publisher is the full publish chain (push-wrapped when the daemon has
 	// a home), which Leo Chat events go through so chat messages push.
 	Publisher observe.Publisher

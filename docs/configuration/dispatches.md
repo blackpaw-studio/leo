@@ -113,7 +113,7 @@ calling dispatch as its `parent_dispatch_id` and files the child under the same
 
 Every dispatch and consult run carries `LEO_DISPATCH_ID` (headless, interactive,
 and headless continuations alike), which Leo's MCP server uses to refuse
-caller-only tools such as `leo_surface_file`: a subagent inherits its
+caller-only tools such as `leo_chat_post`: a subagent inherits its
 orchestrator's `LEO_PROCESS_NAME`, so without it the subagent would pass for
 the orchestrator. The subagent should report files to its orchestrator instead.
 

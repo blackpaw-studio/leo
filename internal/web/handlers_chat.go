@@ -447,7 +447,7 @@ type chatToolRequest struct {
 // which inherit their orchestrator's process name and would post into its
 // thread.
 //
-// Trust boundary (as for leo_surface_file): {name} and the task fields are
+// Trust boundary: {name} and the task fields are
 // self-asserted by the calling MCP server and every agent shares one agent
 // token, so this keeps honest callers in their own thread; it is not
 // authentication.
