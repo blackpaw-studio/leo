@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -43,10 +44,25 @@ func modelFile(t *testing.T) string {
 }
 
 func TestTranscribeConvertsThenRunsWhisper(t *testing.T) {
-	model := modelFile(t)
+	// Every path has a space: argv must carry each one as a single element.
+	tmp := filepath.Join(t.TempDir(), "tmp dir")
+	if err := os.Mkdir(tmp, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("TMPDIR", tmp)
+	model := filepath.Join(t.TempDir(), "whisper models", "ggml large.bin")
+	if err := os.MkdirAll(filepath.Dir(model), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(model, []byte("model"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	const bin = "/opt/my tools/bin/"
+	lookPath := func(name string) (string, error) { return bin + name, nil }
 	fr := &fakeRunner{outputs: map[string]string{"whisper-cli": "\n Remind me to call Sam.\n\n"}}
-	tr := Transcriber{Run: fr.run, LookPath: fakeLookPath(), Model: func() string { return model }}
-	got, err := tr.Transcribe(context.Background(), "/att/voice.m4a")
+	tr := Transcriber{Run: fr.run, LookPath: lookPath, Model: func() string { return model }}
+	const note = "/att/my notes/voice memo.m4a"
+	got, err := tr.Transcribe(context.Background(), note)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -54,19 +70,19 @@ func TestTranscribeConvertsThenRunsWhisper(t *testing.T) {
 		t.Fatalf("transcript %q", got)
 	}
 	if len(fr.calls) != 2 {
-		t.Fatalf("calls = %v", fr.calls)
-	}
-	ffmpeg, whisper := strings.Join(fr.calls[0], " "), strings.Join(fr.calls[1], " ")
-	for _, want := range []string{"/usr/bin/ffmpeg", "-i /att/voice.m4a", "-ar 16000", "-ac 1"} {
-		if !strings.Contains(ffmpeg, want) {
-			t.Errorf("ffmpeg argv %q lacks %q", ffmpeg, want)
-		}
+		t.Fatalf("calls = %q", fr.calls)
 	}
 	wav := fr.calls[0][len(fr.calls[0])-1]
-	for _, want := range []string{"/usr/bin/whisper-cli", "-m " + model, "-f " + wav, "-nt", "-np"} {
-		if !strings.Contains(whisper, want) {
-			t.Errorf("whisper argv %q lacks %q", whisper, want)
-		}
+	if filepath.Base(wav) != "note.wav" || !strings.HasPrefix(wav, tmp+string(filepath.Separator)) {
+		t.Fatalf("wav %q is not a note.wav under %q", wav, tmp)
+	}
+	wantFFmpeg := []string{bin + "ffmpeg", "-nostdin", "-hide_banner", "-loglevel", "error", "-y", "-i", note, "-ar", "16000", "-ac", "1", "-c:a", "pcm_s16le", wav}
+	if !slices.Equal(fr.calls[0], wantFFmpeg) {
+		t.Errorf("ffmpeg argv\n got %q\nwant %q", fr.calls[0], wantFFmpeg)
+	}
+	wantWhisper := []string{bin + "whisper-cli", "-m", model, "-f", wav, "-l", "auto", "-nt", "-np"}
+	if !slices.Equal(fr.calls[1], wantWhisper) {
+		t.Errorf("whisper argv\n got %q\nwant %q", fr.calls[1], wantWhisper)
 	}
 	if _, err := os.Stat(filepath.Dir(wav)); !os.IsNotExist(err) {
 		t.Errorf("temporary wav directory left behind: %v", err)

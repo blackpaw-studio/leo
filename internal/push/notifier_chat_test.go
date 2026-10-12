@@ -3,7 +3,6 @@ package push
 import (
 	"slices"
 	"testing"
-	"time"
 
 	"github.com/blackpaw-studio/leo/internal/chat"
 	"github.com/blackpaw-studio/leo/internal/observe"
@@ -17,12 +16,16 @@ func chatUpdate(m chat.Message) observe.Event {
 	return observe.Event{Type: chat.EventUpdated, Payload: &chat.UpdatedPayload{Agent: m.Agent, Message: m, Change: chat.ChangeState}}
 }
 
-func noAlert(t *testing.T, s *recordingSender) {
+// idleNotifier is a Notifier with no delivery worker: Publish queues
+// synchronously, so its queue holds exactly the alerts queued so far.
+func idleNotifier(opts ...NotifierOption) *Notifier {
+	return NewNotifier(nil, newRecordingSender(), opts...)
+}
+
+func noAlert(t *testing.T, n *Notifier) {
 	t.Helper()
-	select {
-	case a := <-s.got:
-		t.Fatalf("unexpected alert %+v", a)
-	case <-time.After(50 * time.Millisecond):
+	if len(n.queue) != 0 {
+		t.Fatalf("unexpected alert %+v", <-n.queue)
 	}
 }
 
@@ -50,7 +53,7 @@ func TestOutboundChatMessagesPush(t *testing.T) {
 }
 
 func TestChatMessagesThatDoNotPush(t *testing.T) {
-	n, sender, _ := startNotifier(t)
+	n := idleNotifier()
 	for _, m := range []chat.Message{
 		{ID: "in", Agent: "a", Direction: chat.DirectionIn, Kind: chat.KindText, Text: "from me"},
 		{ID: "sys", Agent: "a", Direction: chat.DirectionOut, Kind: chat.KindSystem, Text: "Starting a…"},
@@ -58,17 +61,17 @@ func TestChatMessagesThatDoNotPush(t *testing.T) {
 	} {
 		n.Publish(chatEvent(m))
 	}
-	noAlert(t, sender)
+	noAlert(t, n)
 }
 
 func TestChatPushFollowsThePolicy(t *testing.T) {
 	var asked []string
-	n, sender, _ := startNotifier(t, WithPolicy(func(agent, state string) bool {
+	n := idleNotifier(WithPolicy(func(agent, state string) bool {
 		asked = append(asked, agent+"/"+state)
 		return false
 	}))
 	n.Publish(chatEvent(chat.Message{ID: "m1", Agent: "web", Direction: chat.DirectionOut, Kind: chat.KindTask, Text: "report"}))
-	noAlert(t, sender)
+	noAlert(t, n)
 	if !slices.Equal(asked, []string{"web/chat"}) {
 		t.Fatalf("policy asked %v", asked)
 	}
