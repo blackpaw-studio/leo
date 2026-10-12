@@ -95,6 +95,36 @@ func (m *manualTimers) fireLast() {
 	m.chs[len(m.chs)-1] <- time.Time{}
 }
 
+// gatedIDs mints ULIDs; once armed, the next New mints its id, then blocks
+// (after telling blocked) until release is closed — a caller that is slow
+// between taking an id and using it.
+type gatedIDs struct {
+	src     *ULIDSource
+	mu      sync.Mutex
+	blocked chan struct{}
+	release chan struct{}
+}
+
+func (g *gatedIDs) arm() (blocked, release chan struct{}) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.blocked, g.release = make(chan struct{}), make(chan struct{})
+	return g.blocked, g.release
+}
+
+func (g *gatedIDs) New() string {
+	g.mu.Lock()
+	blocked, release := g.blocked, g.release
+	g.blocked, g.release = nil, nil
+	g.mu.Unlock()
+	id := g.src.New()
+	if blocked != nil {
+		close(blocked)
+		<-release
+	}
+	return id
+}
+
 type harnessFixture struct {
 	svc        *Service
 	store      *Store
@@ -102,6 +132,7 @@ type harnessFixture struct {
 	pub        *recordingPublisher
 	clock      *testClock
 	timers     *manualTimers
+	ids        *gatedIDs
 	cfg        *config.Config
 	root       string
 	transcript func(ctx context.Context, path string) (string, error)
@@ -115,10 +146,12 @@ func newFixture(t *testing.T) *harnessFixture {
 		pub:     &recordingPublisher{},
 		clock:   newTestClock(),
 		timers:  newManualTimers(),
+		ids:     &gatedIDs{},
 		cfg:     &config.Config{HomePath: "/home/leo", Tasks: map[string]config.TaskConfig{}},
 		root:    t.TempDir(),
 	}
 	f.transcript = func(context.Context, string) (string, error) { return "", errors.New("no whisper") }
+	f.ids.src = NewULIDSource(f.clock.Now, nil)
 	f.svc = NewService(Options{
 		Store:   f.store,
 		Files:   Files{Root: f.root},
@@ -128,7 +161,7 @@ func newFixture(t *testing.T) *harnessFixture {
 		},
 		Publish: f.pub,
 		Now:     f.clock.Now,
-		IDs:     NewULIDSource(f.clock.Now, nil),
+		IDs:     f.ids,
 		After:   f.timers.after,
 		Agents: func() []AgentRef {
 			return []AgentRef{{Name: "assistant", Workspace: "/home/leo/workspace"}, {Name: "web", Workspace: "/src/web"}}
@@ -383,6 +416,47 @@ func TestPostCopiesFilesAndFlagsCaptures(t *testing.T) {
 	caps, _ := f.store.Captures("assistant")
 	if len(caps) != 1 || !caps[0].ToolPosted {
 		t.Fatalf("leo_chat_post must flag the pending capture: %+v", caps)
+	}
+}
+
+// A post's id is taken when it is stored, not before its files are copied:
+// a message stored meanwhile must not end up above it, behind a read
+// watermark or a paging cursor a client already took.
+func TestPostIsOrderedByWhenItIsStored(t *testing.T) {
+	f := newFixture(t)
+	src := filepath.Join(t.TempDir(), "big.bin")
+	if err := os.WriteFile(src, []byte("data"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	blocked, release := f.ids.arm()
+	type result struct {
+		m   Message
+		err error
+	}
+	done := make(chan result, 1)
+	go func() {
+		m, err := f.svc.Post(context.Background(), PostRequest{Caller: "assistant", Text: "with file", Files: []string{src}})
+		done <- result{m, err}
+	}()
+	<-blocked
+	other, err := f.svc.Post(context.Background(), PostRequest{Caller: "assistant", Text: "meanwhile"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.svc.MarkRead("assistant", other.ID); err != nil {
+		t.Fatal(err)
+	}
+	close(release)
+	r := <-done
+	if r.err != nil {
+		t.Fatal(r.err)
+	}
+	if r.m.ID <= other.ID {
+		t.Fatalf("post stored last has id %s, below %s stored before it", r.m.ID, other.ID)
+	}
+	threads, err := f.svc.Threads()
+	if err != nil || len(threads) != 1 || threads[0].Unread != 1 {
+		t.Fatalf("threads = %+v, %v; the later post must count as unread", threads, err)
 	}
 }
 

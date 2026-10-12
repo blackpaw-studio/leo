@@ -1,6 +1,7 @@
 package chat
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -186,12 +187,15 @@ func TestStoreAttachmentsJoinMessagesAndPrune(t *testing.T) {
 		t.Fatal(err)
 	}
 	m := msg(ids, clock, "assistant", DirectionIn, KindFile, "")
-	mustInsert(t, st, m)
-	if err := st.LinkAttachments(m.ID, "assistant", []string{att.ID}); err != nil {
+	if err := st.InsertMessageWith(m, nil, []string{att.ID}); err != nil {
 		t.Fatal(err)
 	}
-	if err := st.LinkAttachments(m.ID, "assistant", []string{att.ID}); err == nil {
-		t.Fatal("an attachment links to one message only")
+	again := msg(ids, clock, "assistant", DirectionIn, KindFile, "")
+	if err := st.InsertMessageWith(again, nil, []string{att.ID}); !errors.Is(err, ErrUnusable) {
+		t.Fatalf("an attachment links to one message only: %v", err)
+	}
+	if _, err := st.Message(again.ID); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("a message whose link failed must not be stored: %v", err)
 	}
 	page, _, _ := st.Messages("assistant", Page{})
 	if len(page) != 1 || len(page[0].Attachments) != 1 || !page[0].Attachments[0].Available {
@@ -218,8 +222,8 @@ func TestStoreLinkClaimsAnUnassignedUpload(t *testing.T) {
 	ids := NewULIDSource(clock.Now, nil)
 	att := Attachment{ID: ids.New(), Filename: "a.txt", MIME: "text/plain", Path: "/x", Created: clock.Now()}
 	_ = st.InsertAttachment(att)
-	m := mustInsert(t, st, msg(ids, clock, "assistant", DirectionIn, KindFile, ""))
-	if err := st.LinkAttachments(m.ID, "assistant", []string{att.ID}); err != nil {
+	m := msg(ids, clock, "assistant", DirectionIn, KindFile, "")
+	if err := st.InsertMessageWith(m, nil, []string{att.ID}); err != nil {
 		t.Fatal(err)
 	}
 	if got, _ := st.Attachment(att.ID); got.Agent != "assistant" || got.MessageID != m.ID {
@@ -233,9 +237,8 @@ func TestStoreLinkRefusesAnotherAgentsAttachment(t *testing.T) {
 	ids := NewULIDSource(clock.Now, nil)
 	att := Attachment{ID: ids.New(), Agent: "web", Filename: "a.txt", MIME: "text/plain", Path: "/x", Created: clock.Now()}
 	_ = st.InsertAttachment(att)
-	m := mustInsert(t, st, msg(ids, clock, "assistant", DirectionIn, KindFile, ""))
-	if err := st.LinkAttachments(m.ID, "assistant", []string{att.ID}); err == nil {
-		t.Fatal("linking another agent's upload must fail")
+	if err := st.InsertMessageWith(msg(ids, clock, "assistant", DirectionIn, KindFile, ""), nil, []string{att.ID}); !errors.Is(err, ErrUnusable) {
+		t.Fatalf("linking another agent's upload must fail: %v", err)
 	}
 }
 

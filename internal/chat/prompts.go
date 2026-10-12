@@ -63,9 +63,14 @@ func (s *Service) await(ctx context.Context, m Message, timeout time.Duration) (
 }
 
 func (s *Service) awaitWith(ctx context.Context, m Message, timeout time.Duration, gone awaitEnd) (string, bool) {
-	ch := s.waiters.add(m.ID)
-	defer s.waiters.remove(m.ID)
-	if err := s.opts.Store.InsertMessage(m); err != nil {
+	var ch chan string
+	// The waiter is in place before the message is stored, so no answer can
+	// arrive unheard.
+	m, err := s.insert(m, nil, nil, func(id string) { ch = s.waiters.add(id) })
+	if ch != nil {
+		defer s.waiters.remove(m.ID)
+	}
+	if err != nil {
 		s.opts.Logf("chat: storing %s prompt for %s: %v", m.Kind, m.Agent, err)
 		return "", false
 	}
@@ -119,8 +124,8 @@ func (s *Service) RequestPermission(ctx context.Context, agent string, payload j
 	}
 	summary := summarizeToolInput(req.ToolInput)
 	m := Message{
-		ID: s.opts.IDs.New(), Agent: agent, Direction: DirectionOut, Kind: KindPermission,
-		Text: req.ToolName + ": " + summary, State: StateOpen, TS: s.opts.Now(),
+		Agent: agent, Direction: DirectionOut, Kind: KindPermission,
+		Text: req.ToolName + ": " + summary, State: StateOpen,
 		Options:    permissionOptions,
 		Permission: &Permission{Tool: req.ToolName, Summary: summary, input: req.ToolInput},
 	}
@@ -227,8 +232,8 @@ func (s *Service) postReply(agent, replyTo, text string) {
 	if len(text) > MaxTextBytes {
 		text = clipRunes(text, MaxTextBytes/4)
 	}
-	m := Message{ID: s.opts.IDs.New(), Agent: agent, Direction: DirectionOut, Kind: KindText, Text: text, ReplyTo: replyTo, TS: s.opts.Now()}
-	if err := s.opts.Store.InsertMessage(m); err != nil {
+	m, err := s.insert(Message{Agent: agent, Direction: DirectionOut, Kind: KindText, Text: text, ReplyTo: replyTo}, nil, nil, nil)
+	if err != nil {
 		s.opts.Logf("chat: posting reply for %s: %v", agent, err)
 		return
 	}

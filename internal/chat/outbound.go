@@ -88,14 +88,19 @@ func (s *Service) Post(_ context.Context, req PostRequest) (Message, error) {
 	case text == "":
 		kind = KindFile
 	}
-	m := Message{ID: s.opts.IDs.New(), Agent: agent, Direction: DirectionOut, Kind: kind, Text: text, TS: s.opts.Now()}
+	m := Message{Agent: agent, Direction: DirectionOut, Kind: kind, Text: text}
 	if req.Task != "" {
 		m.Task, m.RunID = req.Task, req.RunID
 	}
-	if err := s.copyFiles(agent, m.ID, req.Files); err != nil {
+	// The files are copied before the message takes its id (see insert):
+	// a slow copy must not hold an id that later messages pass.
+	files, err := s.copyFiles(agent, req.Files)
+	if err != nil {
 		return Message{}, err
 	}
-	if err := s.opts.Store.InsertMessage(m); err != nil {
+	m, err = s.insert(m, files, nil, nil)
+	if err != nil {
+		s.removeFiles(files)
 		return Message{}, err
 	}
 	if req.Task == "" {
@@ -112,31 +117,27 @@ func (s *Service) Post(_ context.Context, req PostRequest) (Message, error) {
 	return stored, nil
 }
 
-// copyFiles copies each file into the store as an attachment of messageID.
-// On any failure the copies already made are removed.
-func (s *Service) copyFiles(agent, messageID string, files []string) error {
+// copyFiles copies each file into the store, returning the attachments for
+// the message that carries them. On any failure the copies already made are
+// removed.
+func (s *Service) copyFiles(agent string, files []string) ([]Attachment, error) {
 	var stored []Attachment
-	undo := func() {
-		for _, a := range stored {
-			_ = s.opts.Files.Remove(a.Path)
-		}
-	}
 	for _, src := range files {
 		id := s.opts.IDs.New()
 		path, name, n, err := s.opts.Files.Copy(agent, id, src)
 		if err != nil {
-			undo()
-			return fmt.Errorf("%w: %v", ErrInvalid, err)
+			s.removeFiles(stored)
+			return nil, fmt.Errorf("%w: %v", ErrInvalid, err)
 		}
-		stored = append(stored, Attachment{ID: id, MessageID: messageID, Agent: agent, Filename: name, MIME: DetectMIME(name, "", nil), Bytes: n, Path: path, Created: s.opts.Now()})
+		stored = append(stored, Attachment{ID: id, Agent: agent, Filename: name, MIME: DetectMIME(name, "", nil), Bytes: n, Path: path, Created: s.opts.Now()})
 	}
-	for _, a := range stored {
-		if err := s.opts.Store.InsertAttachment(a); err != nil {
-			undo()
-			return err
-		}
+	return stored, nil
+}
+
+func (s *Service) removeFiles(as []Attachment) {
+	for _, a := range as {
+		_ = s.opts.Files.Remove(a.Path)
 	}
-	return nil
 }
 
 // AskRequest is leo_chat_ask.
@@ -201,7 +202,7 @@ func (s *Service) Ask(ctx context.Context, req AskRequest) (AskResult, error) {
 			options[i].Label = o.Value
 		}
 	}
-	m := Message{ID: s.opts.IDs.New(), Agent: agent, Direction: DirectionOut, Kind: KindAsk, Text: strings.TrimSpace(req.Question), State: StateOpen, Options: options, TS: s.opts.Now()}
+	m := Message{Agent: agent, Direction: DirectionOut, Kind: KindAsk, Text: strings.TrimSpace(req.Question), State: StateOpen, Options: options}
 	if req.Task != "" {
 		m.Task = req.Task
 	}

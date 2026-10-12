@@ -26,6 +26,10 @@ const AttachmentRetention = 90 * 24 * time.Hour
 // ErrNotFound reports an unknown message or attachment.
 var ErrNotFound = errors.New("not found")
 
+// ErrUnusable reports an upload a message may not link: another agent's,
+// or already sent.
+var ErrUnusable = errors.New("unusable upload")
+
 // schemaVersion is stored in PRAGMA user_version.
 const schemaVersion = 1
 
@@ -135,15 +139,37 @@ type storedMeta struct {
 }
 
 // InsertMessage stores m.
-func (s *Store) InsertMessage(m Message) error {
+func (s *Store) InsertMessage(m Message) error { return s.InsertMessageWith(m, nil, nil) }
+
+// InsertMessageWith stores m together with its new attachments add and the
+// earlier uploads link (each agent's own or unassigned, and unused) in one
+// transaction: on any failure nothing is stored.
+func (s *Store) InsertMessageWith(m Message, add []Attachment, link []string) error {
 	options, meta, err := encodeExtras(m)
 	if err != nil {
 		return err
 	}
-	_, err = s.db.Exec(`INSERT INTO messages (id, agent, direction, kind, text, transcript, reply_to, task, run_id, state, answer, options, meta, ts)
+	tx, err := s.db.Begin()
+	if err != nil {
+		return fmt.Errorf("inserting chat message: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	_, err = tx.Exec(`INSERT INTO messages (id, agent, direction, kind, text, transcript, reply_to, task, run_id, state, answer, options, meta, ts)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		m.ID, m.Agent, m.Direction, m.Kind, m.Text, m.Transcript, m.ReplyTo, m.Task, m.RunID, m.State, m.Answer, options, meta, m.TS.UnixMilli())
 	if err != nil {
+		return fmt.Errorf("inserting chat message: %w", err)
+	}
+	for _, a := range add {
+		a.MessageID = m.ID
+		if err := insertAttachment(tx, a); err != nil {
+			return err
+		}
+	}
+	if err := linkAttachments(tx, m.ID, m.Agent, link); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("inserting chat message: %w", err)
 	}
 	return nil
@@ -469,8 +495,12 @@ func scanAttachment(row interface{ Scan(...any) error }) (Attachment, error) {
 }
 
 // InsertAttachment stores a, not yet linked to a message.
-func (s *Store) InsertAttachment(a Attachment) error {
-	_, err := s.db.Exec(`INSERT INTO attachments (`+attachmentColumns+`) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+func (s *Store) InsertAttachment(a Attachment) error { return insertAttachment(s.db, a) }
+
+func insertAttachment(db interface {
+	Exec(string, ...any) (sql.Result, error)
+}, a Attachment) error {
+	_, err := db.Exec(`INSERT INTO attachments (`+attachmentColumns+`) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
 		a.ID, a.MessageID, a.Agent, a.Filename, a.MIME, a.Bytes, a.Path, a.Created.UnixMilli())
 	if err != nil {
 		return fmt.Errorf("inserting attachment: %w", err)
@@ -490,14 +520,9 @@ func (s *Store) Attachment(id string) (Attachment, error) {
 	return a, nil
 }
 
-// LinkAttachments attaches uploads ids to message messageID. Each must be
-// agent's own and not yet linked; otherwise nothing is linked.
-func (s *Store) LinkAttachments(messageID, agent string, ids []string) error {
-	tx, err := s.db.Begin()
-	if err != nil {
-		return fmt.Errorf("linking attachments: %w", err)
-	}
-	defer func() { _ = tx.Rollback() }()
+// linkAttachments attaches uploads ids to message messageID. Each must be
+// agent's own or unassigned, and not yet linked.
+func linkAttachments(tx *sql.Tx, messageID, agent string, ids []string) error {
 	for _, id := range ids {
 		// An upload made without an agent is claimed by the first message
 		// that links it.
@@ -506,11 +531,8 @@ func (s *Store) LinkAttachments(messageID, agent string, ids []string) error {
 			return fmt.Errorf("linking attachment: %w", err)
 		}
 		if n, _ := res.RowsAffected(); n != 1 {
-			return fmt.Errorf("attachment %s is not an unused upload for %s", id, agent)
+			return fmt.Errorf("%w: attachment %s is not an unused upload for %s", ErrUnusable, id, agent)
 		}
-	}
-	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("linking attachments: %w", err)
 	}
 	return nil
 }

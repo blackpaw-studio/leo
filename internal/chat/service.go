@@ -66,6 +66,11 @@ type Service struct {
 
 	queues  *serialQueues
 	waiters *waiters
+	// insertMu is the one point every message is stored through: it takes
+	// the message's id and stores it under one lock, so ids increase in
+	// store order and a message never lands below a read watermark or a
+	// paging cursor a client already took.
+	insertMu sync.Mutex
 	// marks is each agent's last answered prompt stamp (ResolveCaptures).
 	marks *captureMarks
 	stop  chan struct{}
@@ -258,15 +263,12 @@ func (s *Service) Send(_ context.Context, agent string, req SendRequest) (Messag
 	if err != nil {
 		return Message{}, err
 	}
-	m := Message{ID: s.opts.IDs.New(), Agent: agent, Direction: DirectionIn, Kind: kind, Text: strings.TrimSpace(req.Text), ReplyTo: req.ReplyTo, State: StatePending, TS: s.opts.Now()}
-	if err := s.opts.Store.InsertMessage(m); err != nil {
-		return Message{}, err
+	m, err := s.insert(Message{Agent: agent, Direction: DirectionIn, Kind: kind, Text: strings.TrimSpace(req.Text), ReplyTo: req.ReplyTo, State: StatePending}, nil, req.AttachmentIDs, nil)
+	if errors.Is(err, ErrUnusable) {
+		return Message{}, fmt.Errorf("%w: %v", ErrInvalid, err)
 	}
-	if len(req.AttachmentIDs) > 0 {
-		if err := s.opts.Store.LinkAttachments(m.ID, agent, req.AttachmentIDs); err != nil {
-			_, _ = s.opts.Store.Transition(m.ID, []string{StatePending}, StateFailed, "")
-			return Message{}, fmt.Errorf("%w: %v", ErrInvalid, err)
-		}
+	if err != nil {
+		return Message{}, err
 	}
 	stored, err := s.opts.Store.Message(m.ID)
 	if err != nil {
@@ -384,10 +386,26 @@ func (s *Service) transcribe(ctx context.Context, m Message) (transcript string,
 	return "", true
 }
 
+// insert stores m — with its new attachments add and the earlier uploads
+// link — under insertMu, taking its id and time there; taken (may be nil)
+// sees the id first.
+func (s *Service) insert(m Message, add []Attachment, link []string, taken func(id string)) (Message, error) {
+	s.insertMu.Lock()
+	defer s.insertMu.Unlock()
+	m.ID, m.TS = s.opts.IDs.New(), s.opts.Now()
+	if taken != nil {
+		taken(m.ID)
+	}
+	if err := s.opts.Store.InsertMessageWith(m, add, link); err != nil {
+		return Message{}, err
+	}
+	return m, nil
+}
+
 // postSystem adds a daemon note to agent's thread.
 func (s *Service) postSystem(agent, text string) {
-	m := Message{ID: s.opts.IDs.New(), Agent: agent, Direction: DirectionOut, Kind: KindSystem, Text: text, TS: s.opts.Now()}
-	if err := s.opts.Store.InsertMessage(m); err != nil {
+	m, err := s.insert(Message{Agent: agent, Direction: DirectionOut, Kind: KindSystem, Text: text}, nil, nil, nil)
+	if err != nil {
 		s.opts.Logf("chat: system note for %s: %v", agent, err)
 		return
 	}
