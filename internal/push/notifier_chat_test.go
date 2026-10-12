@@ -3,6 +3,7 @@ package push
 import (
 	"slices"
 	"testing"
+	"time"
 
 	"github.com/blackpaw-studio/leo/internal/chat"
 	"github.com/blackpaw-studio/leo/internal/observe"
@@ -100,5 +101,107 @@ func TestPermissionAttentionAlertCarriesTheChatMessageID(t *testing.T) {
 	n.Publish(activity("a", observe.AttentionNeedsInput, &observe.AttentionReason{Kind: observe.AttentionReasonPermission, Tool: "Bash"}))
 	if a = sender.next(t); a.MessageID != "" {
 		t.Fatalf("an answered prompt's id must not ride a later alert: %+v", a)
+	}
+}
+
+// fakeAfter is a timer seam the test fires by hand.
+type fakeAfter struct {
+	waits []time.Duration
+	fns   []func()
+	live  []bool
+}
+
+func (f *fakeAfter) afterFunc(d time.Duration, fn func()) func() bool {
+	i := len(f.fns)
+	f.waits, f.fns, f.live = append(f.waits, d), append(f.fns, fn), append(f.live, true)
+	return func() bool {
+		was := f.live[i]
+		f.live[i] = false
+		return was
+	}
+}
+
+// fire runs every timer not stopped yet.
+func (f *fakeAfter) fire() {
+	for i, fn := range f.fns {
+		if f.live[i] {
+			f.live[i] = false
+			fn()
+		}
+	}
+}
+
+func waitingNotifier(timers *fakeAfter) *Notifier {
+	n := idleNotifier(WithPermissionWait(2 * time.Second))
+	n.afterFunc = timers.afterFunc
+	return n
+}
+
+func nextQueued(t *testing.T, n *Notifier) Alert {
+	t.Helper()
+	select {
+	case a := <-n.queue:
+		return a
+	default:
+		t.Fatal("no alert queued")
+		return Alert{}
+	}
+}
+
+var permissionReason = &observe.AttentionReason{Kind: observe.AttentionReasonPermission, Tool: "Bash"}
+
+// The chat permission message usually opens first; either way round the
+// alert carries its id.
+func TestPermissionAlertCarriesTheIDInEitherArrivalOrder(t *testing.T) {
+	perm := chat.Message{ID: "p1", Agent: "a", Direction: chat.DirectionOut, Kind: chat.KindPermission, State: chat.StateOpen}
+
+	t.Run("chat message first", func(t *testing.T) {
+		timers := &fakeAfter{}
+		n := waitingNotifier(timers)
+		n.Publish(chatEvent(perm))
+		n.Publish(activity("a", observe.AttentionNeedsInput, permissionReason))
+		if a := nextQueued(t, n); a.MessageID != "p1" || a.MessageKind != chat.KindPermission {
+			t.Fatalf("alert = %+v", a)
+		}
+		if len(timers.fns) != 0 {
+			t.Fatal("an alert that has its id waits for nothing")
+		}
+	})
+
+	t.Run("attention first", func(t *testing.T) {
+		timers := &fakeAfter{}
+		n := waitingNotifier(timers)
+		n.Publish(activity("a", observe.AttentionNeedsInput, permissionReason))
+		noAlert(t, n)
+		if len(timers.waits) != 1 || timers.waits[0] != 2*time.Second {
+			t.Fatalf("waits = %v", timers.waits)
+		}
+		n.Publish(chatEvent(perm))
+		if a := nextQueued(t, n); a.MessageID != "p1" || a.Kind != string(observe.AttentionNeedsInput) {
+			t.Fatalf("alert = %+v", a)
+		}
+		timers.fire()
+		noAlert(t, n)
+	})
+
+	t.Run("attention first, no chat message", func(t *testing.T) {
+		timers := &fakeAfter{}
+		n := waitingNotifier(timers)
+		n.Publish(activity("a", observe.AttentionNeedsInput, nil))
+		noAlert(t, n)
+		timers.fire()
+		if a := nextQueued(t, n); a.MessageID != "" || a.Kind != string(observe.AttentionNeedsInput) {
+			t.Fatalf("alert = %+v", a)
+		}
+	})
+}
+
+// A question is not a permission prompt: it never waits.
+func TestQuestionAlertDoesNotWaitForAPermissionMessage(t *testing.T) {
+	timers := &fakeAfter{}
+	n := waitingNotifier(timers)
+	n.Publish(activity("a", observe.AttentionNeedsInput, &observe.AttentionReason{Kind: observe.AttentionReasonQuestion}))
+	if a := nextQueued(t, n); a.MessageID != "" {
+		t.Fatalf("alert = %+v", a)
 	}
 }
