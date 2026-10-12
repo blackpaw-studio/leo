@@ -69,6 +69,9 @@ type registry struct {
 	// leo_dispatch subagent. Such a subagent inherits its orchestrator's
 	// LEO_PROCESS_NAME, so this is the only thing that tells them apart.
 	dispatchID string
+	// task and runID are LEO_TASK and LEO_RUN_ID, set only in a headless
+	// task run.
+	task, runID string
 }
 
 // registryOption adjusts a registry before its tools are registered.
@@ -489,6 +492,8 @@ func newRegistry(client *daemonClient, processName string, perms leotools.Permis
 		}
 		return string(encoded), nil
 	})
+
+	r.registerChat(client, processName, objectSchema)
 
 	r.addContext(toolDef{Name: "leo_delegation", Description: "Show active delegation routing.", InputSchema: emptyArgs}, func(ctx context.Context, _ map[string]any) (string, error) { return client.delegationStatus(ctx) })
 

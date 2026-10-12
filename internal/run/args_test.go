@@ -208,7 +208,7 @@ func TestBuildArgsCodexWithLeoMCP(t *testing.T) {
 	for _, want := range []string{
 		`-c mcp_servers.leo.command="leo"`,
 		`-c mcp_servers.leo.args=["mcp-server"]`,
-		`-c mcp_servers.leo.env_vars=["LEO_PROCESS_NAME","LEO_WEB_PORT","LEO_API_TOKEN"]`,
+		`-c mcp_servers.leo.env_vars=["LEO_PROCESS_NAME","LEO_WEB_PORT","LEO_API_TOKEN","LEO_TASK","LEO_RUN_ID"]`,
 		`-c mcp_servers.leo.default_tools_approval_mode="approve"`,
 		// leo's ceiling overrides codex's much shorter per-tool default, so
 		// a long leo_consult isn't truncated harness-side.

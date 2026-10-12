@@ -136,7 +136,7 @@ func Preview(cfg *config.Config, taskName string, sessions *session.Store, mcp l
 		sessionID = sid
 	}
 
-	leoEnv := leoMCPEnv(cfg, taskName)
+	leoEnv := leoMCPEnv(cfg, taskName, "")
 
 	args, _ := buildArgs(cfg, task, taskName, prompt, sessionID, leoEnv, mcp)
 	return prompt, args, nil
@@ -217,7 +217,7 @@ func RunWith(cfg *config.Config, taskName string, sessions *session.Store, mcp l
 	// leoEnv rides along on every claude invocation for this task (main
 	// attempts and the notify-on-fail child alike) — the leo MCP server is
 	// always wired into the args by buildArgs now; see leoMCPEnv.
-	leoEnv := leoMCPEnv(cfg, taskName)
+	leoEnv := leoMCPEnv(cfg, taskName, runID)
 	// task.Env lets a task target a custom endpoint (ANTHROPIC_BASE_URL/
 	// ANTHROPIC_AUTH_TOKEN) or inject other env vars; leoEnv wins on key
 	// collision so the leo MCP wiring can never be shadowed by task config.
@@ -978,10 +978,16 @@ func assemblePrompt(cfg *config.Config, task config.TaskConfig) (string, error) 
 // is always wired in for every task; LEO_WEB_PORT/LEO_API_TOKEN are simply
 // absent/empty when the web UI is disabled or no readable, non-empty API
 // token file exists, in which case the server self-selects local-only mode
-// (only the local leo_skill tool is served).
-func leoMCPEnv(cfg *config.Config, taskName string) map[string]string {
+// (only the local leo_skill tool is served). LEO_TASK and LEO_RUN_ID name
+// this firing so leo_chat_post can file its output as a task card in the
+// owner's thread; runID is empty only when no run exists (prompt preview).
+func leoMCPEnv(cfg *config.Config, taskName, runID string) map[string]string {
 	env := map[string]string{
 		"LEO_PROCESS_NAME": "task:" + taskName,
+		"LEO_TASK":         taskName,
+	}
+	if runID != "" {
+		env["LEO_RUN_ID"] = runID
 	}
 	if cfg == nil {
 		return env
@@ -1070,7 +1076,7 @@ func buildArgs(cfg *config.Config, task config.TaskConfig, taskName, prompt, ses
 		opts.LeoMCP = &codexharness.LeoMCPBridge{
 			Command:      mcp.Executable(),
 			Args:         mcp.Args(),
-			EnvVars:      []string{"LEO_PROCESS_NAME", "LEO_WEB_PORT", "LEO_API_TOKEN"},
+			EnvVars:      []string{"LEO_PROCESS_NAME", "LEO_WEB_PORT", "LEO_API_TOKEN", "LEO_TASK", "LEO_RUN_ID"},
 			ApprovalMode: "approve",
 			ToolTimeout:  leomcp.ToolTimeout,
 		}
