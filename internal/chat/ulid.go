@@ -64,7 +64,7 @@ func (s *ULIDSource) New() string {
 	}
 	var raw [16]byte
 	for i := 0; i < 6; i++ {
-		raw[i] = byte(ms >> (40 - 8*i))
+		raw[i] = byte(ms >> (40 - 8*i)) // #nosec G115 -- deliberate truncation to one byte of the 48-bit time
 	}
 	copy(raw[6:], s.last[:])
 	return encodeULID(raw)

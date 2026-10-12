@@ -40,7 +40,8 @@ func TestFramePromptReplyToTaskCardIsClipped(t *testing.T) {
 	if !strings.HasPrefix(lines[1], prefix) {
 		t.Fatalf("reply line %q", lines[1])
 	}
-	if n := utf8.RuneCountInString(strings.TrimPrefix(got[strings.Index(got, prefix):], prefix)); n > MaxReplyCardRunes {
+	_, quoted, _ := strings.Cut(got, prefix)
+	if n := utf8.RuneCountInString(quoted); n > MaxReplyCardRunes {
 		t.Fatalf("card text not clipped: %d runes", n)
 	}
 }

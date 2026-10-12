@@ -35,9 +35,6 @@ const (
 	chatTransferTimeout = 10 * time.Minute
 	// maxChatJSONBody caps the chat JSON bodies.
 	maxChatJSONBody = 4 * chat.MaxTextBytes
-	// chatAskSlack is how much longer an ask request may run than its own
-	// timeout.
-	chatAskSlack = 30 * time.Second
 )
 
 // ChatOptions wires Leo Chat into the web server. The zero value disables it.

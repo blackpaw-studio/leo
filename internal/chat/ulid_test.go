@@ -14,12 +14,12 @@ func TestULIDsSortByTimeThenSequence(t *testing.T) {
 	if len(a) != 26 || len(b) != 26 {
 		t.Fatalf("ULIDs must be 26 chars: %q %q", a, b)
 	}
-	if !(a < b) {
+	if a >= b {
 		t.Fatalf("ids within one millisecond must still increase: %q !< %q", a, b)
 	}
 	now = now.Add(time.Millisecond)
 	c := ids.New()
-	if !(b < c) {
+	if b >= c {
 		t.Fatalf("a later millisecond must sort after: %q !< %q", b, c)
 	}
 	if strings.ToUpper(c) != c {

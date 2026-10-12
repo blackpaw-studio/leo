@@ -283,7 +283,7 @@ func TestStoreSurvivesReopen(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer st.Close()
+	defer func() { _ = st.Close() }()
 	got, err := st.Message(m.ID)
 	if err != nil || got.Text != "persist me" {
 		t.Fatalf("reopened message = %+v, %v", got, err)

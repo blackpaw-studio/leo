@@ -229,7 +229,7 @@ func (s *Store) Messages(agent string, p Page) ([]Message, bool, error) {
 	if err != nil {
 		return nil, false, fmt.Errorf("reading chat messages: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	out := []Message{}
 	for rows.Next() {
 		m, err := scanMessage(rows)
@@ -260,11 +260,12 @@ func (s *Store) attachTo(ms []Message) ([]Message, error) {
 		ids[i] = m.ID
 		index[m.ID] = i
 	}
+	// #nosec G202 -- only constant columns and "?" placeholders are concatenated
 	rows, err := s.db.Query(`SELECT `+attachmentColumns+` FROM attachments WHERE message_id IN (?`+strings.Repeat(",?", len(ids)-1)+`) ORDER BY id`, ids...)
 	if err != nil {
 		return nil, fmt.Errorf("reading attachments: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	out := append([]Message(nil), ms...)
 	for rows.Next() {
 		a, err := scanAttachment(rows)
@@ -292,13 +293,13 @@ func (s *Store) Threads() ([]Thread, error) {
 	for rows.Next() {
 		m, err := scanMessage(rows)
 		if err != nil {
-			rows.Close()
+			_ = rows.Close()
 			return nil, err
 		}
 		last = append(last, m)
 	}
 	err = rows.Err()
-	rows.Close()
+	_ = rows.Close()
 	if err != nil {
 		return nil, fmt.Errorf("reading chat threads: %w", err)
 	}
@@ -340,6 +341,7 @@ func (s *Store) Transition(id string, from []string, state, answer string) (bool
 	for _, f := range from {
 		args = append(args, f)
 	}
+	// #nosec G202 -- only "?" placeholders are concatenated
 	res, err := s.db.Exec(`UPDATE messages SET state = ?, answer = CASE WHEN ? = '' THEN answer ELSE ? END
 		WHERE id = ? AND state IN (?`+strings.Repeat(",?", len(from)-1)+`)`, args...)
 	if err != nil {
@@ -366,7 +368,7 @@ func (s *Store) OpenMessages(agent, kind, state string) ([]Message, error) {
 	if err != nil {
 		return nil, fmt.Errorf("reading open messages: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	var out []Message
 	for rows.Next() {
 		m, err := scanMessage(rows)
@@ -389,13 +391,13 @@ func (s *Store) ExpireOpen() ([]string, error) {
 	for rows.Next() {
 		var id string
 		if err := rows.Scan(&id); err != nil {
-			rows.Close()
+			_ = rows.Close()
 			return nil, err
 		}
 		ids = append(ids, id)
 	}
 	err = rows.Err()
-	rows.Close()
+	_ = rows.Close()
 	if err != nil {
 		return nil, err
 	}
@@ -476,13 +478,13 @@ func (s *Store) PruneAttachments(cutoff time.Time) ([]string, error) {
 	for rows.Next() {
 		var p string
 		if err := rows.Scan(&p); err != nil {
-			rows.Close()
+			_ = rows.Close()
 			return nil, err
 		}
 		paths = append(paths, p)
 	}
 	err = rows.Err()
-	rows.Close()
+	_ = rows.Close()
 	if err != nil {
 		return nil, err
 	}
@@ -508,7 +510,7 @@ func (s *Store) Captures(agent string) ([]Capture, error) {
 	if err != nil {
 		return nil, fmt.Errorf("reading captures: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	var out []Capture
 	for rows.Next() {
 		var c Capture
