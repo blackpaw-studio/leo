@@ -126,7 +126,9 @@ func (d chatDeliverer) start(ctx context.Context, name, harnessName, prompt stri
 		return fmt.Errorf("agent %s is not running", name)
 	}
 	starting()
-	if err := s.agentSvc.Start(name); err != nil {
+	// Started by someone else since the live check: deliver all the same,
+	// through the readiness-aware path below, as it may still be booting.
+	if err := s.agentSvc.Start(name); err != nil && !errors.Is(err, agent.ErrAgentAlreadyRunning) {
 		return fmt.Errorf("starting %s: %w", name, err)
 	}
 	if harnessName != "claude" {

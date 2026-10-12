@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"mime/multipart"
 	"net/http"
@@ -374,6 +375,25 @@ func TestChatDelivererStartsAStoppedAgentThenInjects(t *testing.T) {
 	}
 	if !started || !svc.startCalled || svc.startName != "web" {
 		t.Fatalf("starting=%v startCalled=%v name=%q", started, svc.startCalled, svc.startName)
+	}
+	if h != "claude" || len(injected) != 1 || injected[0] != "leo-web|[Leo Chat] hi" {
+		t.Fatalf("harness %q injected %q", h, injected)
+	}
+}
+
+// An agent started by someone else between the live check and Start is not
+// a failure: the prompt still goes in once it is ready.
+func TestChatDelivererAgentStartedMeanwhileStillDelivers(t *testing.T) {
+	s, _, svc := newTestServerWithAgents(t)
+	svc.startErr = fmt.Errorf("%w: %q", agent.ErrAgentAlreadyRunning, "web")
+	var injected []string
+	s.injectPrompt = func(_ context.Context, session, body string) error {
+		injected = append(injected, session+"|"+body)
+		return nil
+	}
+	h, err := chatDeliverer{s}.Deliver(context.Background(), "web", "[Leo Chat] hi", func() {})
+	if err != nil {
+		t.Fatalf("Deliver: %v", err)
 	}
 	if h != "claude" || len(injected) != 1 || injected[0] != "leo-web|[Leo Chat] hi" {
 		t.Fatalf("harness %q injected %q", h, injected)
