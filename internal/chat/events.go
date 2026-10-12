@@ -22,12 +22,20 @@ const (
 // MessagePayload is the chat.message event.
 type MessagePayload struct {
 	observe.Meta
+	Agent   string  `json:"agent"`
 	Message Message `json:"message"`
 }
 
 // UpdatedPayload is the chat.updated event: the message as it now is.
 type UpdatedPayload struct {
 	observe.Meta
+	Agent   string  `json:"agent"`
 	Message Message `json:"message"`
 	Change  string  `json:"change"`
+}
+
+func messageEvent(m Message) *MessagePayload { return &MessagePayload{Agent: m.Agent, Message: m} }
+
+func updatedEvent(m Message, change string) *UpdatedPayload {
+	return &UpdatedPayload{Agent: m.Agent, Message: m, Change: change}
 }

@@ -90,6 +90,13 @@ type Attachment struct {
 	Created   time.Time `json:"-"`
 }
 
+// PageResult is one page of a thread, newest first; HasMore says an older
+// page exists.
+type PageResult struct {
+	Messages []Message `json:"messages"`
+	HasMore  bool      `json:"has_more"`
+}
+
 // Thread is one agent's conversation summary.
 type Thread struct {
 	Agent       string  `json:"agent"`

@@ -64,8 +64,14 @@ type Files struct {
 	MaxBytes int64
 }
 
+// unassignedDir holds uploads made without an agent. The leading underscore
+// keeps it apart from every agent name.
+const unassignedDir = "_unassigned"
+
 func (f Files) dir(agent, id string) (string, error) {
-	if !config.IsAgentName(agent) {
+	if agent == "" {
+		agent = unassignedDir
+	} else if !config.IsAgentName(agent) {
 		return "", fmt.Errorf("invalid agent name %q", agent)
 	}
 	if !storeIDRe.MatchString(id) {

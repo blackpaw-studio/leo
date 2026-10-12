@@ -211,7 +211,7 @@ func (p Page) limit() int {
 }
 
 // Messages returns a page of agent's thread, newest first.
-func (s *Store) Messages(agent string, p Page) ([]Message, error) {
+func (s *Store) Messages(agent string, p Page) ([]Message, bool, error) {
 	query := `SELECT ` + messageColumns + ` FROM messages WHERE agent = ?`
 	args := []any{agent}
 	if p.Before != "" {
@@ -222,25 +222,31 @@ func (s *Store) Messages(agent string, p Page) ([]Message, error) {
 		query += ` AND task = ?`
 		args = append(args, p.Task)
 	}
+	// One row past the page says whether an older page exists.
 	query += ` ORDER BY id DESC LIMIT ?`
-	args = append(args, p.limit())
+	args = append(args, p.limit()+1)
 	rows, err := s.db.Query(query, args...)
 	if err != nil {
-		return nil, fmt.Errorf("reading chat messages: %w", err)
+		return nil, false, fmt.Errorf("reading chat messages: %w", err)
 	}
 	defer rows.Close()
-	var out []Message
+	out := []Message{}
 	for rows.Next() {
 		m, err := scanMessage(rows)
 		if err != nil {
-			return nil, err
+			return nil, false, err
 		}
 		out = append(out, m)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("reading chat messages: %w", err)
+		return nil, false, fmt.Errorf("reading chat messages: %w", err)
 	}
-	return s.attachTo(out)
+	hasMore := len(out) > p.limit()
+	if hasMore {
+		out = out[:p.limit()]
+	}
+	out, err = s.attachTo(out)
+	return out, hasMore, err
 }
 
 // attachTo fills each message's attachments.
@@ -443,7 +449,9 @@ func (s *Store) LinkAttachments(messageID, agent string, ids []string) error {
 	}
 	defer func() { _ = tx.Rollback() }()
 	for _, id := range ids {
-		res, err := tx.Exec(`UPDATE attachments SET message_id = ? WHERE id = ? AND agent = ? AND message_id = ''`, messageID, id, agent)
+		// An upload made without an agent is claimed by the first message
+		// that links it.
+		res, err := tx.Exec(`UPDATE attachments SET message_id = ?, agent = ? WHERE id = ? AND (agent = ? OR agent = '') AND message_id = ''`, messageID, agent, id, agent)
 		if err != nil {
 			return fmt.Errorf("linking attachment: %w", err)
 		}

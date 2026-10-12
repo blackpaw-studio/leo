@@ -699,7 +699,7 @@ func New(configPath string, processes ProcessStateProvider, scheduler SchedulerP
 	// Leo Chat (docs/configuration/chat.md): the apps' routes, operator or
 	// paired-device token only — the agent token reaches its own thread
 	// through the /api/agent/{name}/chat tool routes instead.
-	s.registerChatRoutes(apiMux, "/api/v1/chat", s.requireOperatorToken)
+	s.registerChatRoutes(apiMux, chatAPIPrefix, s.requireOperatorToken)
 	// /api/* is the agent-facing surface: both tokens work there, as do
 	// paired device tokens.
 	protectedAPI := bearerAuthWith([]string{s.apiToken, s.agentToken}, s.isDeviceToken, s.trustedProxies, apiMux)

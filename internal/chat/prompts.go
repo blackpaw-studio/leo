@@ -69,7 +69,7 @@ func (s *Service) awaitWith(ctx context.Context, m Message, timeout time.Duratio
 		s.opts.Logf("chat: storing %s prompt for %s: %v", m.Kind, m.Agent, err)
 		return "", false
 	}
-	s.publish(EventMessage, &MessagePayload{Message: m})
+	s.publish(EventMessage, messageEvent(m))
 	timer := s.opts.After(timeout)
 	var end awaitEnd
 	select {
@@ -103,6 +103,10 @@ type permissionRequest struct {
 	ToolInput json.RawMessage `json:"tool_input"`
 }
 
+// permissionOptions are a permission message's answers, listed so clients
+// render it like an ask.
+var permissionOptions = []Option{{Value: "allow", Label: "Allow"}, {Value: "deny", Label: "Deny"}}
+
 // RequestPermission posts a Claude permission prompt to agent's thread and
 // waits up to timeout for allow or deny from chat. It returns "" (no
 // decision: the terminal dialog, already on screen, stands) on timeout, or
@@ -117,6 +121,7 @@ func (s *Service) RequestPermission(ctx context.Context, agent string, payload j
 	m := Message{
 		ID: s.opts.IDs.New(), Agent: agent, Direction: DirectionOut, Kind: KindPermission,
 		Text: req.ToolName + ": " + summary, State: StateOpen, TS: s.opts.Now(),
+		Options:    permissionOptions,
 		Permission: &Permission{Tool: req.ToolName, Summary: summary, input: req.ToolInput},
 	}
 	answer, settled := s.awaitWith(ctx, m, timeout, awaitEnd{state: StateAnswered, answer: AnswerTerminal})
@@ -201,7 +206,7 @@ func (s *Service) postReply(agent, replyTo, text string) {
 		s.opts.Logf("chat: posting reply for %s: %v", agent, err)
 		return
 	}
-	s.publish(EventMessage, &MessagePayload{Message: m})
+	s.publish(EventMessage, messageEvent(m))
 }
 
 func (s *Service) settlePermissionInTerminal(agent string, ev HookEvent) {

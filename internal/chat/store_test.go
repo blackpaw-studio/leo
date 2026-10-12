@@ -49,19 +49,23 @@ func TestStorePagesNewestFirstWithBeforeAndLimit(t *testing.T) {
 	}
 	mustInsert(t, st, msg(ids, clock, "other", DirectionIn, KindText, "elsewhere"))
 
-	page, err := st.Messages("assistant", Page{Limit: 2})
+	page, more, err := st.Messages("assistant", Page{Limit: 2})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(page) != 2 || page[0].Text != "e" || page[1].Text != "d" {
-		t.Fatalf("first page = %+v; want e, d", texts(page))
+	if len(page) != 2 || page[0].Text != "e" || page[1].Text != "d" || !more {
+		t.Fatalf("first page = %+v (more %v); want e, d and more", texts(page), more)
 	}
-	page, err = st.Messages("assistant", Page{Limit: 2, Before: page[1].ID})
+	page, more, err = st.Messages("assistant", Page{Limit: 2, Before: page[1].ID})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := texts(page); len(got) != 2 || got[0] != "c" || got[1] != "b" {
-		t.Fatalf("second page = %v; want c, b", got)
+	if got := texts(page); len(got) != 2 || got[0] != "c" || got[1] != "b" || !more {
+		t.Fatalf("second page = %v (more %v); want c, b and more", got, more)
+	}
+	last, more, _ := st.Messages("assistant", Page{Limit: 2, Before: page[1].ID})
+	if len(last) != 1 || more {
+		t.Fatalf("last page = %v (more %v); want a alone", texts(last), more)
 	}
 	if !page[0].TS.Equal(all[2].TS) {
 		t.Fatalf("ts round-trip: got %v want %v", page[0].TS, all[2].TS)
@@ -86,7 +90,7 @@ func TestStoreFiltersByTask(t *testing.T) {
 	mustInsert(t, st, card)
 	mustInsert(t, st, msg(ids, clock, "assistant", DirectionOut, KindText, "chatter"))
 
-	page, err := st.Messages("assistant", Page{Task: "daily-news"})
+	page, _, err := st.Messages("assistant", Page{Task: "daily-news"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -188,7 +192,7 @@ func TestStoreAttachmentsJoinMessagesAndPrune(t *testing.T) {
 	if err := st.LinkAttachments(m.ID, "assistant", []string{att.ID}); err == nil {
 		t.Fatal("an attachment links to one message only")
 	}
-	page, _ := st.Messages("assistant", Page{})
+	page, _, _ := st.Messages("assistant", Page{})
 	if len(page) != 1 || len(page[0].Attachments) != 1 || !page[0].Attachments[0].Available {
 		t.Fatalf("attachments not joined: %+v", page)
 	}
@@ -204,6 +208,21 @@ func TestStoreAttachmentsJoinMessagesAndPrune(t *testing.T) {
 	got, _ := st.Attachment(att.ID)
 	if got.Path != "" || got.Available {
 		t.Fatalf("pruned attachment keeps its row with path cleared: %+v", got)
+	}
+}
+
+func TestStoreLinkClaimsAnUnassignedUpload(t *testing.T) {
+	st := openTestStore(t)
+	clock := newTestClock()
+	ids := NewULIDSource(clock.Now, nil)
+	att := Attachment{ID: ids.New(), Filename: "a.txt", MIME: "text/plain", Path: "/x", Created: clock.Now()}
+	_ = st.InsertAttachment(att)
+	m := mustInsert(t, st, msg(ids, clock, "assistant", DirectionIn, KindFile, ""))
+	if err := st.LinkAttachments(m.ID, "assistant", []string{att.ID}); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := st.Attachment(att.ID); got.Agent != "assistant" || got.MessageID != m.ID {
+		t.Fatalf("claimed attachment = %+v", got)
 	}
 }
 

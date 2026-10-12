@@ -141,7 +141,7 @@ func TestChatAskHTTPDeadlineOutlivesTheAsk(t *testing.T) {
 }
 
 func TestChatHistoryPassesPaging(t *testing.T) {
-	d := chatDaemon(t, `{"ok":true,"data":[{"id":"01A","text":"hi"}]}`)
+	d := chatDaemon(t, `{"ok":true,"data":{"messages":[{"id":"01A","text":"hi"}],"has_more":false}}`)
 	reg := newRegistry(newDaemonClient(d.port(), ""), "assistant", leotools.Permissions{})
 	out, err := reg.call("leo_chat_history", json.RawMessage(`{"limit":20,"before":"01B","task":"daily"}`))
 	if err != nil {

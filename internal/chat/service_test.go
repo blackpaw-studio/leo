@@ -141,7 +141,7 @@ func newFixture(t *testing.T) *harnessFixture {
 
 func (f *harnessFixture) thread(t *testing.T, agent string) []Message {
 	t.Helper()
-	ms, err := f.store.Messages(agent, Page{})
+	ms, _, err := f.store.Messages(agent, Page{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -266,6 +266,38 @@ func TestSendVoiceTranscriptionFailureStillDelivers(t *testing.T) {
 	got := f.deliver.delivered()
 	if len(got) != 1 || !strings.Contains(got[0], "transcription failed") {
 		t.Fatalf("delivered %q", got)
+	}
+}
+
+func TestSendTakesAnUploadWithoutAnAgent(t *testing.T) {
+	f := newFixture(t)
+	a := upload(t, f, "", "x.txt", "text/plain", "x")
+	m, err := f.svc.Send(context.Background(), "web", SendRequest{AttachmentIDs: []string{a.ID}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m.Kind != KindFile || len(m.Attachments) != 1 {
+		t.Fatalf("message = %+v", m)
+	}
+	if _, err := f.svc.Send(context.Background(), "assistant", SendRequest{AttachmentIDs: []string{a.ID}}); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("reusing a claimed upload: err = %v", err)
+	}
+}
+
+func TestEventsNameTheirAgent(t *testing.T) {
+	f := newFixture(t)
+	_, _ = f.svc.Send(context.Background(), "web", SendRequest{Text: "hi"})
+	f.svc.Flush()
+	f.pub.mu.Lock()
+	defer f.pub.mu.Unlock()
+	if len(f.pub.events) == 0 {
+		t.Fatal("no events")
+	}
+	for _, ev := range f.pub.events {
+		b, _ := json.Marshal(ev.Payload)
+		if !strings.Contains(string(b), `"agent":"web","message":{`) {
+			t.Fatalf("%s payload lacks a top-level agent: %s", ev.Type, b)
+		}
 	}
 }
 
@@ -450,6 +482,9 @@ func TestPermissionAnsweredFromChat(t *testing.T) {
 	m := f.thread(t, "assistant")[0]
 	if m.Kind != KindPermission || m.Permission == nil || m.Permission.Tool != "Bash" || m.Permission.Summary != "rm -rf build" {
 		t.Fatalf("permission message = %+v", m)
+	}
+	if len(m.Options) != 2 || m.Options[0].Value != "allow" || m.Options[1].Value != "deny" {
+		t.Fatalf("permission options = %+v, want allow and deny", m.Options)
 	}
 	if _, err := f.svc.Answer("assistant", m.ID, "allow"); err != nil {
 		t.Fatal(err)

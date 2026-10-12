@@ -157,14 +157,18 @@ func (s *Service) knownAgent(name string) bool {
 func (s *Service) Threads() ([]Thread, error) { return s.opts.Store.Threads() }
 
 // Messages returns a page of agent's thread.
-func (s *Service) Messages(agent string, p Page) ([]Message, error) {
+func (s *Service) Messages(agent string, p Page) (PageResult, error) {
 	if !config.IsAgentName(agent) {
-		return nil, fmt.Errorf("%w: agent name %q", ErrInvalid, agent)
+		return PageResult{}, fmt.Errorf("%w: agent name %q", ErrInvalid, agent)
 	}
 	if p.Before != "" && !validID(p.Before) {
-		return nil, fmt.Errorf("%w: before must be a message id", ErrInvalid)
+		return PageResult{}, fmt.Errorf("%w: before must be a message id", ErrInvalid)
 	}
-	return s.opts.Store.Messages(agent, p)
+	msgs, more, err := s.opts.Store.Messages(agent, p)
+	if err != nil {
+		return PageResult{}, err
+	}
+	return PageResult{Messages: msgs, HasMore: more}, nil
 }
 
 // MarkRead marks agent's thread read up to id.
@@ -183,13 +187,14 @@ func (s *Service) Attachment(id string) (Attachment, error) {
 	return s.opts.Store.Attachment(id)
 }
 
-// Upload stores one file for agent's next message and returns its record.
-// Audio uploads make that message a voice note.
+// Upload stores one file for a later message and returns its record. Audio
+// uploads make that message a voice note. agent is optional: an upload
+// without one is claimed by the first message that sends it.
 func (s *Service) Upload(agent, filename, declaredMIME string, r io.Reader) (Attachment, error) {
-	if !config.IsAgentName(agent) {
+	if agent != "" && !config.IsAgentName(agent) {
 		return Attachment{}, fmt.Errorf("%w: agent name %q", ErrInvalid, agent)
 	}
-	if !s.knownAgent(agent) {
+	if agent != "" && !s.knownAgent(agent) {
 		return Attachment{}, fmt.Errorf("%w: %s", ErrUnknownAgent, agent)
 	}
 	id := s.opts.IDs.New()
@@ -254,7 +259,7 @@ func (s *Service) Send(_ context.Context, agent string, req SendRequest) (Messag
 	if err != nil {
 		return Message{}, err
 	}
-	s.publish(EventMessage, &MessagePayload{Message: stored})
+	s.publish(EventMessage, messageEvent(stored))
 	s.queues.enqueue(agent, func() { s.deliver(stored) })
 	return stored, nil
 }
@@ -282,7 +287,7 @@ func (s *Service) inboundKind(agent string, ids []string) (string, error) {
 	kind := KindText
 	for _, id := range ids {
 		a, err := s.opts.Store.Attachment(id)
-		if err != nil || a.Agent != agent || a.MessageID != "" {
+		if err != nil || (a.Agent != agent && a.Agent != "") || a.MessageID != "" {
 			return "", fmt.Errorf("%w: attachment %s is not an unused upload for %s", ErrInvalid, id, agent)
 		}
 		switch {
@@ -373,7 +378,7 @@ func (s *Service) postSystem(agent, text string) {
 		s.opts.Logf("chat: system note for %s: %v", agent, err)
 		return
 	}
-	s.publish(EventMessage, &MessagePayload{Message: m})
+	s.publish(EventMessage, messageEvent(m))
 }
 
 func (s *Service) publish(t observe.EventType, p observe.Payload) {
@@ -388,7 +393,7 @@ func (s *Service) publishUpdated(id, change string) {
 		s.opts.Logf("chat: reading %s for an update event: %v", id, err)
 		return
 	}
-	s.publish(EventUpdated, &UpdatedPayload{Message: m, Change: change})
+	s.publish(EventUpdated, updatedEvent(m, change))
 }
 
 // serialQueues runs each agent's jobs one at a time, in order.

@@ -141,10 +141,13 @@ func TestChatSendThenPage(t *testing.T) {
 		t.Fatalf("delivered %q", cs.deliver.prompts)
 	}
 	w = chatRequest(t, cs.s, http.MethodGet, "/api/v1/chat/assistant/messages?limit=10", testAPIToken, "")
-	var page []chat.Message
+	var page chat.PageResult
 	decodeChatData(t, w, &page)
-	if len(page) != 1 || page[0].ID != sent.ID || page[0].State != chat.StateDelivered {
+	if len(page.Messages) != 1 || page.Messages[0].ID != sent.ID || page.Messages[0].State != chat.StateDelivered || page.HasMore {
 		t.Fatalf("page = %+v", page)
+	}
+	if !strings.Contains(w.Body.String(), `"has_more":false`) {
+		t.Fatalf("page body = %s", w.Body)
 	}
 	if w := chatRequest(t, cs.s, http.MethodPost, "/api/v1/chat/ghost/messages", testAPIToken, `{"text":"x"}`); w.Code != http.StatusNotFound {
 		t.Fatalf("unknown agent = %d", w.Code)
@@ -152,7 +155,7 @@ func TestChatSendThenPage(t *testing.T) {
 	if w := chatRequest(t, cs.s, http.MethodGet, "/api/v1/chat/assistant/messages?limit=x", testAPIToken, ""); w.Code != http.StatusBadRequest {
 		t.Fatalf("bad limit = %d", w.Code)
 	}
-	if w := chatRequest(t, cs.s, http.MethodPost, "/api/v1/chat/assistant/read", testAPIToken, `{"id":"`+sent.ID+`"}`); w.Code != http.StatusOK {
+	if w := chatRequest(t, cs.s, http.MethodPost, "/api/v1/chat/assistant/read", testAPIToken, `{"up_to":"`+sent.ID+`"}`); w.Code != http.StatusOK {
 		t.Fatalf("read = %d %s", w.Code, w.Body)
 	}
 }
@@ -190,7 +193,7 @@ func upload(t *testing.T, s *Server, agentName, filename, contentType string, bo
 
 func TestChatUploadVoiceAndServeWithRange(t *testing.T) {
 	cs := newChatServer(t)
-	w := upload(t, cs.s, "assistant", "../../note.m4a", "audio/mp4", []byte("0123456789"))
+	w := upload(t, cs.s, "", "../../note.m4a", "audio/mp4", []byte("0123456789"))
 	if w.Code != http.StatusOK {
 		t.Fatalf("upload = %d %s", w.Code, w.Body)
 	}
@@ -222,9 +225,6 @@ func TestChatUploadVoiceAndServeWithRange(t *testing.T) {
 
 func TestChatUploadRejections(t *testing.T) {
 	cs := newChatServer(t)
-	if w := upload(t, cs.s, "", "a.txt", "text/plain", []byte("x")); w.Code != http.StatusBadRequest {
-		t.Fatalf("missing agent = %d", w.Code)
-	}
 	if w := upload(t, cs.s, "ghost", "a.txt", "text/plain", []byte("x")); w.Code != http.StatusNotFound {
 		t.Fatalf("unknown agent = %d", w.Code)
 	}
@@ -301,9 +301,9 @@ func TestChatToolRoutes(t *testing.T) {
 		t.Fatalf("post = %d %s", w.Code, w.Body)
 	}
 	w = chatRequest(t, cs.s, http.MethodPost, "/api/agent/assistant/chat/history", testAgentToken, `{"limit":5}`)
-	var hist []chat.Message
+	var hist chat.PageResult
 	decodeChatData(t, w, &hist)
-	if len(hist) != 1 || hist[0].Text != "build is green" {
+	if len(hist.Messages) != 1 || hist.Messages[0].Text != "build is green" {
 		t.Fatalf("history = %+v", hist)
 	}
 	if w := chatRequest(t, cs.s, http.MethodPost, "/api/agent/ghost/chat/post", testAgentToken, `{"text":"x"}`); w.Code != http.StatusBadRequest {
@@ -342,13 +342,13 @@ func TestAgentPermissionDecidedFromChat(t *testing.T) {
 func TestChatSocketHandlerServesTheAppRoutes(t *testing.T) {
 	cs := newChatServer(t)
 	w := httptest.NewRecorder()
-	cs.s.ChatHandler().ServeHTTP(w, httptest.NewRequest(http.MethodPost, "/chat/assistant/messages", strings.NewReader(`{"text":"from the mac"}`)))
+	cs.s.ChatHandler().ServeHTTP(w, httptest.NewRequest(http.MethodPost, "/api/v1/chat/assistant/messages", strings.NewReader(`{"text":"from the mac"}`)))
 	if w.Code != http.StatusAccepted {
 		t.Fatalf("socket send = %d %s", w.Code, w.Body)
 	}
 	w = httptest.NewRecorder()
-	cs.s.ChatHandler().ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/chat/threads", nil))
-	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), "from the mac") {
+	cs.s.ChatHandler().ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/api/v1/chat/threads", nil))
+	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `{"threads":[{"agent":"assistant","last_message":{`) {
 		t.Fatalf("socket threads = %d %s", w.Code, w.Body)
 	}
 }

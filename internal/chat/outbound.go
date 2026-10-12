@@ -108,7 +108,7 @@ func (s *Service) Post(_ context.Context, req PostRequest) (Message, error) {
 	if err != nil {
 		return Message{}, err
 	}
-	s.publish(EventMessage, &MessagePayload{Message: stored})
+	s.publish(EventMessage, messageEvent(stored))
 	return stored, nil
 }
 
@@ -267,10 +267,10 @@ type HistoryRequest struct {
 }
 
 // History returns a page of the caller's own thread.
-func (s *Service) History(_ context.Context, req HistoryRequest) ([]Message, error) {
+func (s *Service) History(_ context.Context, req HistoryRequest) (PageResult, error) {
 	agent, _, err := s.thread(req.Caller, req.RunTask)
 	if err != nil {
-		return nil, err
+		return PageResult{}, err
 	}
 	return s.Messages(agent, req.Page)
 }

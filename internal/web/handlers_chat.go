@@ -163,11 +163,15 @@ func (s *Server) registerChatRoutes(mux *http.ServeMux, prefix string, wrap func
 	mux.HandleFunc("POST "+prefix+"/{agent}/read", wrap(s.handleChatRead))
 }
 
-// ChatHandler serves the app routes unauthenticated under /chat, for the
-// daemon to mount on its unix socket, whose 0600 mode is the auth.
+// chatAPIPrefix is where the app routes live, on TCP and on the socket.
+const chatAPIPrefix = "/api/v1/chat"
+
+// ChatHandler serves the app routes unauthenticated at the same
+// /api/v1/chat paths, for the daemon to mount on its unix socket, whose
+// 0600 mode is the auth.
 func (s *Server) ChatHandler() http.Handler {
 	mux := http.NewServeMux()
-	s.registerChatRoutes(mux, "/chat", func(h http.HandlerFunc) http.HandlerFunc { return h })
+	s.registerChatRoutes(mux, chatAPIPrefix, func(h http.HandlerFunc) http.HandlerFunc { return h })
 	return mux
 }
 
@@ -209,7 +213,7 @@ func (s *Server) handleChatThreads(w http.ResponseWriter, _ *http.Request) {
 	if threads == nil {
 		threads = []chat.Thread{}
 	}
-	writeJSON(w, http.StatusOK, apiResponse{OK: true, Data: threads})
+	writeJSON(w, http.StatusOK, apiResponse{OK: true, Data: map[string][]chat.Thread{"threads": threads}})
 }
 
 func (s *Server) handleChatGet(w http.ResponseWriter, r *http.Request) {
@@ -243,9 +247,6 @@ func (s *Server) handleChatMessages(w http.ResponseWriter, r *http.Request, agen
 	if err != nil {
 		writeChatError(w, err)
 		return
-	}
-	if msgs == nil {
-		msgs = []chat.Message{}
 	}
 	writeJSON(w, http.StatusOK, apiResponse{OK: true, Data: msgs})
 }
@@ -286,7 +287,8 @@ func (s *Server) handleChatSend(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusAccepted, apiResponse{OK: true, Data: m})
 }
 
-// POST /api/v1/chat/uploads — multipart: agent (field), file (one part).
+// POST /api/v1/chat/uploads — multipart: file (one part), optionally after
+// an agent field that files the upload under that agent at once.
 func (s *Server) handleChatUpload(w http.ResponseWriter, r *http.Request) {
 	if !s.chatAvailable(w) {
 		return
@@ -320,10 +322,6 @@ func (s *Server) handleChatUpload(w http.ResponseWriter, r *http.Request) {
 			}
 			agentName = strings.TrimSpace(string(b))
 		case "file":
-			if agentName == "" {
-				writeJSON(w, http.StatusBadRequest, apiResponse{Error: "the agent field must precede the file part"})
-				return
-			}
 			a, err := s.chat.Upload(agentName, part.FileName(), part.Header.Get("Content-Type"), part)
 			if err != nil {
 				if errors.As(err, new(*http.MaxBytesError)) {
@@ -400,18 +398,18 @@ func (s *Server) handleChatAnswer(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, apiResponse{OK: true, Data: m})
 }
 
-// POST /api/v1/chat/{agent}/read {id}
+// POST /api/v1/chat/{agent}/read {up_to}
 func (s *Server) handleChatRead(w http.ResponseWriter, r *http.Request) {
 	if !s.chatAvailable(w) {
 		return
 	}
 	var req struct {
-		ID string `json:"id"`
+		UpTo string `json:"up_to"`
 	}
 	if !decodeChatJSON(w, r, &req) {
 		return
 	}
-	if err := s.chat.MarkRead(r.PathValue("agent"), req.ID); err != nil {
+	if err := s.chat.MarkRead(r.PathValue("agent"), req.UpTo); err != nil {
 		writeChatError(w, err)
 		return
 	}
@@ -506,9 +504,6 @@ func (s *Server) handleAgentChatHistory(w http.ResponseWriter, r *http.Request) 
 	if err != nil {
 		writeChatError(w, err)
 		return
-	}
-	if msgs == nil {
-		msgs = []chat.Message{}
 	}
 	writeJSON(w, http.StatusOK, apiResponse{OK: true, Data: msgs})
 }
