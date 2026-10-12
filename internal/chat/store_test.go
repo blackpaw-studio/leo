@@ -1,6 +1,7 @@
 package chat
 
 import (
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
@@ -314,4 +315,59 @@ func texts(ms []Message) []string {
 		out[i] = m.Text
 	}
 	return out
+}
+
+// assertPrivate fails unless every one of the store's files at path is 0600.
+func assertPrivate(t *testing.T, path string) {
+	t.Helper()
+	for _, p := range []string{path, path + "-wal", path + "-shm"} {
+		info, err := os.Stat(p)
+		if err != nil {
+			t.Fatalf("stat %s: %v", p, err)
+		}
+		if got := info.Mode().Perm(); got != 0o600 {
+			t.Errorf("%s mode = %o, want 600", filepath.Base(p), got)
+		}
+	}
+}
+
+func TestStoreCreatesItsFilesPrivate(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "chat.db")
+	st, err := OpenStore(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = st.Close() }()
+	clock := newTestClock()
+	mustInsert(t, st, msg(NewULIDSource(clock.Now, nil), clock, "assistant", DirectionIn, KindText, "hi"))
+	assertPrivate(t, path)
+}
+
+func TestStoreRepairsReadableSidecars(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "chat.db")
+	st, err := OpenStore(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	clock := newTestClock()
+	mustInsert(t, st, msg(NewULIDSource(clock.Now, nil), clock, "assistant", DirectionIn, KindText, "hi"))
+	_ = st.Close()
+	// An earlier build left the database and its sidecars group- and
+	// world-readable.
+	for _, p := range []string{path, path + "-wal", path + "-shm"} {
+		f, err := os.OpenFile(p, os.O_CREATE|os.O_WRONLY, 0o644)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_ = f.Close()
+		if err := os.Chmod(p, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	st, err = OpenStore(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = st.Close() }()
+	assertPrivate(t, path)
 }

@@ -83,6 +83,9 @@ func OpenStore(path string) (*Store, error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return nil, fmt.Errorf("creating chat store directory: %w", err)
 	}
+	if err := createPrivate(path); err != nil {
+		return nil, err
+	}
 	dsn := "file:" + path + "?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)&_pragma=synchronous(NORMAL)&_pragma=foreign_keys(ON)"
 	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
@@ -99,11 +102,26 @@ func OpenStore(path string) (*Store, error) {
 		_ = db.Close()
 		return nil, fmt.Errorf("stamping chat schema: %w", err)
 	}
-	if err := os.Chmod(path, 0o600); err != nil {
-		_ = db.Close()
-		return nil, fmt.Errorf("restricting chat store permissions: %w", err)
-	}
 	return &Store{db: db}, nil
+}
+
+// createPrivate creates the database file at path with mode 0600 before
+// SQLite opens it — SQLite gives the -wal and -shm files it creates the
+// database file's mode — and restricts an existing database and its
+// sidecars, which an earlier build may have left readable.
+func createPrivate(path string) error {
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o600) // #nosec G304 -- the daemon's own state path
+	if err != nil {
+		return fmt.Errorf("creating chat store: %w", err)
+	}
+	_ = f.Close()
+	// -wal and -shm are the files SQLite keeps beside a WAL-mode database.
+	for _, p := range []string{path, path + "-wal", path + "-shm"} {
+		if err := os.Chmod(p, 0o600); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("restricting chat store permissions: %w", err)
+		}
+	}
+	return nil
 }
 
 // Close closes the database.
