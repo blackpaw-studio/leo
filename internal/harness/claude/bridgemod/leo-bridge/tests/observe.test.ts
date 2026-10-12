@@ -199,6 +199,12 @@ test('a long question is shortened so the remaining-count suffix survives the da
   expect(summary.endsWith('… (+1 more)')).toBe(true)
 })
 
+test('a long question is clipped by code points, never through a surrogate pair', async ($, on) => {
+  // 108 + 1 emoji fill the 109 code points left beside the ellipsis and suffix
+  const got = await askedAttention($, on, [{ question: 'a'.repeat(108) + '😀😀😀😀' }, { question: 'y' }])
+  expect(got[0].summary).toBe('a'.repeat(108) + '😀… (+1 more)')
+})
+
 test('question text is whitespace-folded, and a question with no usable text reports none', async ($, on) => {
   const folded = await askedAttention($, on, [{ question: '  Deploy\n  now?  ' }])
   expect(folded[0].summary).toBe('Deploy now?')

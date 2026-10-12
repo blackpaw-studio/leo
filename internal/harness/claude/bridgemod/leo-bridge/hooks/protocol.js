@@ -445,7 +445,8 @@ function toolSummary(tool, input, home) {
   return undefined
 }
 
-// What the daemon keeps of an attention summary (observe.MaxActionDetail).
+// What the daemon keeps of an attention summary, in code points
+// (observe.MaxActionDetail).
 // A question summary is shortened to this up front so its "(+N more)" suffix
 // is not the part the daemon's clamp cuts.
 export const MAX_ATTENTION_DETAIL_CHARS = 120
@@ -463,9 +464,12 @@ export function questionSummary(questions) {
     .filter((text) => text !== '')
   if (texts.length === 0) return undefined
   const suffix = texts.length > 1 ? ` (+${texts.length - 1} more)` : ''
-  const room = MAX_ATTENTION_DETAIL_CHARS - suffix.length
-  const first = texts[0].length > room ? texts[0].slice(0, room - 1) + '…' : texts[0]
-  return capField(first + suffix)
+  // Counted in code points, as the daemon counts runes, so a clip never
+  // lands inside a surrogate pair.
+  const room = MAX_ATTENTION_DETAIL_CHARS - Array.from(suffix).length
+  const chars = Array.from(texts[0])
+  const first = chars.length > room ? chars.slice(0, room - 1).join('') + '…' : texts[0]
+  return first + suffix
 }
 
 /**
