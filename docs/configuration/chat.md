@@ -121,12 +121,12 @@ without a token for the Mac app.
 | `POST /api/v1/chat/{agent}/read` | `{up_to}` | |
 
 An upload without an `agent` belongs to the first message that sends it.
-Audio uploads make that message a `voice` note. `attachments` is reserved and
-cannot be used as an agent name in these routes.
+Audio uploads make that message a `voice` note.
 
 **Message:** `{id, agent, direction (in|out), kind (text|voice|file|task|ask|permission|system),
 text, transcript?, reply_to?, task?, run_id?, state, answer?, options?, permission?: {tool, summary},
-attachments?: [{id, filename, mime, bytes, available}], ts}`. States: inbound
+attachments: [{id, filename, mime, bytes, available}], ts}`; `state` is always
+present (empty on outbound text) and `attachments` is `[]` when there are none. States: inbound
 `pending|delivered|failed`; `ask` and `permission` `open|answered|expired`.
 
 **Thread:** `{agent, last_message, unread, pinned}`. Only `assistant` is

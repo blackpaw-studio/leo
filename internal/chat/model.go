@@ -68,12 +68,22 @@ type Message struct {
 	ReplyTo     string       `json:"reply_to,omitempty"`
 	Task        string       `json:"task,omitempty"`
 	RunID       string       `json:"run_id,omitempty"`
-	State       string       `json:"state,omitempty"`
+	State       string       `json:"state"`
 	Answer      string       `json:"answer,omitempty"`
 	Options     []Option     `json:"options,omitempty"`
 	Permission  *Permission  `json:"permission,omitempty"`
-	Attachments []Attachment `json:"attachments,omitempty"`
+	Attachments []Attachment `json:"attachments"`
 	TS          time.Time    `json:"ts"`
+}
+
+// MarshalJSON writes the wire shape: state always, and attachments as []
+// rather than null when there are none.
+func (m Message) MarshalJSON() ([]byte, error) {
+	type wire Message // no methods: avoids recursion
+	if m.Attachments == nil {
+		m.Attachments = []Attachment{}
+	}
+	return json.Marshal(wire(m))
 }
 
 // Attachment is a file stored with a message. Path is the file on the
