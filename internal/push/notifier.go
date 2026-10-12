@@ -122,8 +122,15 @@ func (n *Notifier) observe(agent string, att observe.AgentAttention) {
 		n.mu.Unlock()
 		return
 	}
-	preview := n.previews[agent]
+	// A preview belongs to one turn: leaving finished drops any that arrived
+	// late, and a finished transition consumes it whether or not it alerts.
+	preview := att.Preview
 	if att.State == observe.AttentionFinished {
+		if preview == "" {
+			preview = n.previews[agent]
+		}
+		delete(n.previews, agent)
+	} else {
 		delete(n.previews, agent)
 	}
 	n.mu.Unlock()

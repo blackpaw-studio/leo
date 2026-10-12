@@ -17,6 +17,8 @@ type agentHookPayload struct {
 	HookEventName    string `json:"hook_event_name"`
 	SessionID        string `json:"session_id"`
 	NotificationType string `json:"notification_type"`
+	// LastAssistantMessage is the turn's final message, on a Stop hook.
+	LastAssistantMessage string `json:"last_assistant_message"`
 }
 
 // agentHookRequest is what `leo dispatch report` POSTs for a supervised
@@ -78,7 +80,11 @@ func (s *Server) handleAPIAgentHook(w http.ResponseWriter, r *http.Request) {
 		// The session check needs the name; SetByToken re-resolves the
 		// token atomically, so a stop or rename in between still wins.
 		if name, known := s.attention.AgentForToken(req.Token); known && s.isAgentHookSession(name, req.Payload.SessionID) {
-			s.attention.SetByToken(req.Token, tr.state, tr.from...)
+			if req.Payload.HookEventName == "Stop" {
+				s.attention.SetByTokenFinished(req.Token, req.Payload.LastAssistantMessage)
+			} else {
+				s.attention.SetByToken(req.Token, tr.state, tr.from...)
+			}
 		}
 	}
 	writeJSON(w, http.StatusOK, apiResponse{OK: true})

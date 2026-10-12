@@ -26,6 +26,10 @@ type AgentAttention struct {
 	// Reason says what a needs_input agent is waiting on; absent otherwise
 	// or when the source cannot tell.
 	Reason *AttentionReason `json:"reason,omitempty"`
+	// Preview is the final assistant message of the turn that just finished,
+	// clamped by ClampPreview, when the source supplied it with the
+	// transition (the native Stop hook); absent otherwise.
+	Preview string `json:"preview,omitempty"`
 	// Outstanding explains a working state held after the turn completed
 	// (B-051); absent when nothing is outstanding.
 	Outstanding *Outstanding `json:"outstanding,omitempty"`
@@ -73,6 +77,9 @@ type AttentionStore struct {
 	held   map[string]bool
 	// reasons holds what a needs_input agent is waiting on, when known.
 	reasons map[string]AttentionReason
+	// previews holds the preview riding a finished transition; it lives
+	// only while the agent stays finished.
+	previews map[string]string
 	// dispatches is read for fresh dispatch counts whenever a turn
 	// finishes, outside mu (see dispatchCounts). dispatchGen is the newest
 	// snapshot generation applied; an older one arriving late is ignored.
@@ -91,6 +98,8 @@ func NewAttentionStore(publisher Publisher) *AttentionStore {
 		bridge:  newBridgeOutstanding(),
 		held:    make(map[string]bool),
 		reasons: make(map[string]AttentionReason),
+
+		previews: make(map[string]string),
 	}
 }
 
@@ -153,6 +162,12 @@ func (s *AttentionStore) SetIfUntracked(agent string, state AttentionState) (Age
 // turn or a lifecycle transition drops the hold, but answering a prompt
 // raised during it (needs_input → working) keeps it.
 func (s *AttentionStore) setLocked(agent string, state AttentionState) AgentAttention {
+	return s.setPreviewLocked(agent, state, "")
+}
+
+// setPreviewLocked is setLocked for a transition that may carry the finished
+// turn's preview. The preview is kept only if the agent ends up finished.
+func (s *AttentionStore) setPreviewLocked(agent string, state AttentionState, preview string) AgentAttention {
 	prev := s.states[agent]
 	switch {
 	case state == AttentionFinished && s.bridge.of(agent).total() > 0:
@@ -164,6 +179,10 @@ func (s *AttentionStore) setLocked(agent string, state AttentionState) AgentAtte
 	}
 	if state != AttentionNeedsInput {
 		delete(s.reasons, agent)
+	}
+	delete(s.previews, agent)
+	if state == AttentionFinished && preview != "" {
+		s.previews[agent] = ClampPreview(preview)
 	}
 	s.revisions[agent]++
 	s.states[agent] = state
@@ -178,6 +197,7 @@ func (s *AttentionStore) attentionLocked(agent string) AgentAttention {
 	if r, ok := s.reasons[agent]; ok {
 		att.Reason = &r
 	}
+	att.Preview = s.previews[agent]
 	if o := s.bridge.of(agent); o.total() > 0 {
 		att.Outstanding = &o
 	}
@@ -502,6 +522,16 @@ func (s *AttentionStore) AgentForToken(token string) (string, bool) {
 // only the dispatch snapshot it read. ok=false means no transition was
 // recorded.
 func (s *AttentionStore) SetByToken(token string, state AttentionState, from ...AttentionState) (AgentAttention, bool) {
+	return s.setByToken(token, state, "", from)
+}
+
+// SetByTokenFinished is SetByToken to finished, carrying the turn's final
+// assistant message as the transition's preview (empty for none).
+func (s *AttentionStore) SetByTokenFinished(token, preview string) (AgentAttention, bool) {
+	return s.setByToken(token, AttentionFinished, preview, nil)
+}
+
+func (s *AttentionStore) setByToken(token string, state AttentionState, preview string, from []AttentionState) (AgentAttention, bool) {
 	if s == nil || token == "" {
 		return AgentAttention{}, false
 	}
@@ -518,7 +548,7 @@ func (s *AttentionStore) SetByToken(token string, state AttentionState, from ...
 		return AgentAttention{}, false
 	}
 	s.reconcileLocked(gen, counts, agent)
-	return s.setLocked(agent, state), true
+	return s.setPreviewLocked(agent, state, preview), true
 }
 
 // Move re-keys an agent's attention, tokens and bridge key binding after a
@@ -545,6 +575,7 @@ func (s *AttentionStore) Move(oldName, newName string) {
 	}
 	moveKey(s.held, oldName, newName)
 	moveKey(s.reasons, oldName, newName)
+	moveKey(s.previews, oldName, newName)
 	rev := max(s.revisions[oldName], s.revisions[newName]) + 1
 	delete(s.states, oldName)
 	s.states[newName] = state

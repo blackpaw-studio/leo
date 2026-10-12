@@ -158,3 +158,26 @@ func TestAgentHookAuth(t *testing.T) {
 		t.Errorf("agent token = %d, want 200", w.Code)
 	}
 }
+
+func TestAgentHookStopCarriesTheLastMessageAsPreview(t *testing.T) {
+	long := strings.Repeat("word ", 100)
+	for _, tc := range []struct {
+		name, body, want string
+	}{
+		{"stop with a message", `{"hook_event_name":"Stop","session_id":"sid-a","last_assistant_message":"Done.\n\nAll green."}`, "Done. All green."},
+		{"stop clamps a long message", `{"hook_event_name":"Stop","session_id":"sid-a","last_assistant_message":"` + long + `"}`, observe.ClampPreview(long)},
+		{"stop without a message", `{"hook_event_name":"Stop","session_id":"sid-a"}`, ""},
+		{"interrupt never previews", `{"hook_event_name":"Interrupt","session_id":"sid-a","last_assistant_message":"nope"}`, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := newHookServer(t)
+
+			postHook(t, s, "tok-a", tc.body)
+
+			att, ok := s.attention.Get("leo-a")
+			if !ok || att.State != observe.AttentionFinished || att.Preview != tc.want {
+				t.Fatalf("attention = %+v, %v; want finished with preview %q", att, ok, tc.want)
+			}
+		})
+	}
+}
