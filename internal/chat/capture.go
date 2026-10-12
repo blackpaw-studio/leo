@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"io"
 	"os"
+	"slices"
 	"strings"
 	"time"
 )
@@ -31,6 +32,8 @@ const (
 type TranscriptEntry struct {
 	kind entryKind
 	text string
+	// chatPost: an assistant entry calling leo_chat_post.
+	chatPost bool
 	// at is Claude's entry timestamp; zero when absent.
 	at time.Time
 }
@@ -87,6 +90,15 @@ type rawEntry struct {
 type contentBlock struct {
 	Type string `json:"type"`
 	Text string `json:"text"`
+	Name string `json:"name"` // tool_use
+}
+
+// chatPostTool is leo_chat_post's tool name; Claude prefixes an MCP tool's
+// name with mcp__<server>__.
+const chatPostTool = "leo_chat_post"
+
+func isChatPost(name string) bool {
+	return name == chatPostTool || strings.HasSuffix(name, "__"+chatPostTool)
 }
 
 func parseEntry(raw []byte) (TranscriptEntry, bool) {
@@ -94,13 +106,13 @@ func parseEntry(raw []byte) (TranscriptEntry, bool) {
 	if err := json.Unmarshal(raw, &e); err != nil || e.IsMeta || e.IsCompactSummary || e.IsSidechain {
 		return TranscriptEntry{}, false
 	}
-	text, onlyText := contentText(e.Message.Content)
+	text, onlyText, posted := contentText(e.Message.Content)
 	switch e.Type {
 	case "assistant":
-		if strings.TrimSpace(text) == "" {
+		if strings.TrimSpace(text) == "" && !posted {
 			return TranscriptEntry{}, false
 		}
-		return TranscriptEntry{kind: entryAssistant, text: text}, true
+		return TranscriptEntry{kind: entryAssistant, text: text, chatPost: posted}, true
 	case "user":
 		// Tool results are user entries too; only typed text is a prompt.
 		if !onlyText || strings.TrimSpace(text) == "" {
@@ -116,32 +128,34 @@ func parseEntry(raw []byte) (TranscriptEntry, bool) {
 }
 
 // contentText joins a message's text blocks; onlyText is false when it
-// carries any non-text block (tool_use, tool_result, image).
-func contentText(raw json.RawMessage) (text string, onlyText bool) {
+// carries any non-text block (tool_use, tool_result, image), and posted
+// says one of those is a leo_chat_post call.
+func contentText(raw json.RawMessage) (text string, onlyText, posted bool) {
 	if len(raw) == 0 {
-		return "", false
+		return "", false, false
 	}
 	if raw[0] == '"' {
 		var s string
 		if json.Unmarshal(raw, &s) != nil {
-			return "", false
+			return "", false, false
 		}
-		return s, true
+		return s, true, false
 	}
 	var blocks []contentBlock
 	if json.Unmarshal(raw, &blocks) != nil {
-		return "", false
+		return "", false, false
 	}
 	parts := make([]string, 0, len(blocks))
 	onlyText = true
 	for _, b := range blocks {
 		if b.Type != "text" {
 			onlyText = false
+			posted = posted || (b.Type == "tool_use" && isChatPost(b.Name))
 			continue
 		}
 		parts = append(parts, b.Text)
 	}
-	return strings.Join(parts, "\n"), onlyText
+	return strings.Join(parts, "\n"), onlyText, posted
 }
 
 func isInjected(text string) bool {
@@ -184,8 +198,12 @@ func normalize(s string) string { return strings.Join(strings.Fields(s), " ") }
 // hook, from the transcript entries and the hook's last_assistant_message.
 // A capture posts the final assistant text of the turn its prompt opened,
 // unless a non-chat prompt superseded it, a later chat prompt in the same
-// turn owns the reply, the agent already posted with leo_chat_post, or the
+// turn owns the reply, the agent called leo_chat_post in that turn, or the
 // reply is empty. A prompt not found yet waits CaptureWindow.
+//
+// The turn starts at the earliest prompt the pending captures matched: a
+// capture still pending at this Stop had its prompt in the turn ending now,
+// so a post made before a second chat prompt folded into that turn counts.
 //
 // after is the stamp of the last prompt occurrence an earlier call already
 // answered; the returned time advances it. Identical prompts (two "ok"s)
@@ -193,17 +211,27 @@ func normalize(s string) string { return strings.Join(strings.Fields(s), " ") }
 // occurrence stamped after both its delivery and that mark.
 func ResolveCaptures(entries []TranscriptEntry, captures []Capture, lastAssistant string, now, after time.Time) ([]CaptureOutcome, time.Time) {
 	claimed := make(map[int]bool)
-	out := make([]CaptureOutcome, len(captures))
+	starts := make([]int, len(captures))
+	turn := -1
 	mark := after
 	for i, c := range captures {
 		start := findPrompt(entries, c, normalize(c.Prompt), claimed, after)
-		out[i] = resolveCapture(entries, c, start, lastAssistant, now)
-		if start >= 0 {
-			claimed[start] = true
-			if entries[start].at.After(mark) {
-				mark = entries[start].at
-			}
+		starts[i] = start
+		if start < 0 {
+			continue
 		}
+		claimed[start] = true
+		if turn < 0 || start < turn {
+			turn = start
+		}
+		if entries[start].at.After(mark) {
+			mark = entries[start].at
+		}
+	}
+	toolPosted := turn >= 0 && slices.ContainsFunc(entries[turn:], func(e TranscriptEntry) bool { return e.chatPost })
+	out := make([]CaptureOutcome, len(captures))
+	for i, c := range captures {
+		out[i] = resolveCapture(entries, c, starts[i], lastAssistant, now, toolPosted)
 	}
 	return out, mark
 }
@@ -233,7 +261,7 @@ func findPrompt(entries []TranscriptEntry, c Capture, prompt string, claimed map
 	return latestUnstamped
 }
 
-func resolveCapture(entries []TranscriptEntry, c Capture, start int, lastAssistant string, now time.Time) CaptureOutcome {
+func resolveCapture(entries []TranscriptEntry, c Capture, start int, lastAssistant string, now time.Time, toolPosted bool) CaptureOutcome {
 	if start < 0 {
 		if now.Sub(c.DeliveredAt) < CaptureWindow {
 			return CaptureOutcome{Capture: c, Action: CaptureKeep}
@@ -248,7 +276,9 @@ func resolveCapture(entries []TranscriptEntry, c Capture, start int, lastAssista
 			// other prompt superseded this one. Either way, nothing here.
 			return CaptureOutcome{Capture: c, Action: CaptureDrop}
 		case entryAssistant:
-			reply = e.text
+			if strings.TrimSpace(e.text) != "" {
+				reply = e.text
+			}
 		}
 	}
 	// The chat turn is the transcript's current one, so the hook's own
@@ -256,7 +286,7 @@ func resolveCapture(entries []TranscriptEntry, c Capture, start int, lastAssista
 	if strings.TrimSpace(lastAssistant) != "" {
 		reply = lastAssistant
 	}
-	if c.ToolPosted || strings.TrimSpace(reply) == "" {
+	if toolPosted || strings.TrimSpace(reply) == "" {
 		return CaptureOutcome{Capture: c, Action: CaptureDrop}
 	}
 	return CaptureOutcome{Capture: c, Action: CapturePost, Text: strings.TrimSpace(reply)}

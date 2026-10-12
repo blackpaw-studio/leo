@@ -398,7 +398,7 @@ func TestPostFromTaskWithMissingOwnerNotesIt(t *testing.T) {
 	}
 }
 
-func TestPostCopiesFilesAndFlagsCaptures(t *testing.T) {
+func TestPostCopiesFiles(t *testing.T) {
 	f := newFixture(t)
 	_, _ = f.svc.Send(context.Background(), "assistant", SendRequest{Text: "make a chart"})
 	f.svc.Flush()
@@ -412,10 +412,6 @@ func TestPostCopiesFilesAndFlagsCaptures(t *testing.T) {
 	}
 	if len(m.Attachments) != 1 || m.Attachments[0].Filename != "chart.png" || m.Attachments[0].MIME != "image/png" {
 		t.Fatalf("attachments = %+v", m.Attachments)
-	}
-	caps, _ := f.store.Captures("assistant")
-	if len(caps) != 1 || !caps[0].ToolPosted {
-		t.Fatalf("leo_chat_post must flag the pending capture: %+v", caps)
 	}
 }
 
@@ -643,11 +639,29 @@ func TestStopHookAfterToolPostPostsNothing(t *testing.T) {
 	if _, err := f.svc.Post(context.Background(), PostRequest{Caller: "assistant", Text: "posted myself"}); err != nil {
 		t.Fatal(err)
 	}
-	path := transcript{}.user("[Leo Chat] status?").assistant("Posted it.").write(t)
+	path := transcript{}.user("[Leo Chat] status?").chatPost().toolResult().assistant("Posted it.").write(t)
 	f.svc.OnHook("assistant", HookEvent{Event: "Stop", TranscriptPath: path, LastAssistantMessage: "Posted it."})
 	thread := f.thread(t, "assistant")
 	if len(thread) != 2 || thread[0].Text != "posted myself" {
 		t.Fatalf("thread = %+v", texts(thread))
+	}
+}
+
+// Two chat prompts run in one turn, which answers with leo_chat_post: the
+// turn's final text must not be posted as well.
+func TestStopHookAfterToolPostInATwoPromptTurnPostsNothing(t *testing.T) {
+	f := newFixture(t)
+	_, _ = f.svc.Send(context.Background(), "assistant", SendRequest{Text: "first"})
+	_, _ = f.svc.Send(context.Background(), "assistant", SendRequest{Text: "second"})
+	f.svc.Flush()
+	if _, err := f.svc.Post(context.Background(), PostRequest{Caller: "assistant", Text: "posted myself"}); err != nil {
+		t.Fatal(err)
+	}
+	path := transcript{}.user("[Leo Chat] first").chatPost().toolResult().user("[Leo Chat] second").assistant("Posted it.").write(t)
+	f.svc.OnHook("assistant", HookEvent{Event: "Stop", TranscriptPath: path, LastAssistantMessage: "Posted it."})
+	thread := f.thread(t, "assistant")
+	if len(thread) != 3 || thread[0].Text != "posted myself" {
+		t.Fatalf("thread = %q", texts(thread))
 	}
 }
 

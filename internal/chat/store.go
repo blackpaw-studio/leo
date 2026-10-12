@@ -71,8 +71,7 @@ CREATE TABLE IF NOT EXISTS captures (
 	message_id   TEXT PRIMARY KEY,
 	agent        TEXT NOT NULL,
 	prompt       TEXT NOT NULL,
-	delivered_at INTEGER NOT NULL,
-	tool_posted  INTEGER NOT NULL DEFAULT 0
+	delivered_at INTEGER NOT NULL
 );
 `
 
@@ -566,8 +565,8 @@ func (s *Store) PruneAttachments(cutoff time.Time) ([]string, error) {
 
 // AddCapture records a pending auto-capture.
 func (s *Store) AddCapture(c Capture) error {
-	_, err := s.db.Exec(`INSERT OR REPLACE INTO captures (message_id, agent, prompt, delivered_at, tool_posted) VALUES (?, ?, ?, ?, ?)`,
-		c.MessageID, c.Agent, c.Prompt, c.DeliveredAt.UnixMilli(), boolInt(c.ToolPosted))
+	_, err := s.db.Exec(`INSERT OR REPLACE INTO captures (message_id, agent, prompt, delivered_at) VALUES (?, ?, ?, ?)`,
+		c.MessageID, c.Agent, c.Prompt, c.DeliveredAt.UnixMilli())
 	if err != nil {
 		return fmt.Errorf("recording capture: %w", err)
 	}
@@ -576,7 +575,7 @@ func (s *Store) AddCapture(c Capture) error {
 
 // Captures returns agent's pending captures, oldest first.
 func (s *Store) Captures(agent string) ([]Capture, error) {
-	rows, err := s.db.Query(`SELECT message_id, agent, prompt, delivered_at, tool_posted FROM captures WHERE agent = ? ORDER BY message_id`, agent)
+	rows, err := s.db.Query(`SELECT message_id, agent, prompt, delivered_at FROM captures WHERE agent = ? ORDER BY message_id`, agent)
 	if err != nil {
 		return nil, fmt.Errorf("reading captures: %w", err)
 	}
@@ -585,27 +584,13 @@ func (s *Store) Captures(agent string) ([]Capture, error) {
 	for rows.Next() {
 		var c Capture
 		var at int64
-		var posted int
-		if err := rows.Scan(&c.MessageID, &c.Agent, &c.Prompt, &at, &posted); err != nil {
+		if err := rows.Scan(&c.MessageID, &c.Agent, &c.Prompt, &at); err != nil {
 			return nil, err
 		}
 		c.DeliveredAt = time.UnixMilli(at).UTC()
-		c.ToolPosted = posted != 0
 		out = append(out, c)
 	}
 	return out, rows.Err()
-}
-
-// MarkCapturesToolPosted flags every pending capture of agent: the agent
-// posted through leo_chat_post since those deliveries.
-func (s *Store) MarkCapturesToolPosted(agent string) error {
-	// The oldest capture is the turn in progress; later ones are queued
-	// behind it and have not run yet.
-	if _, err := s.db.Exec(`UPDATE captures SET tool_posted = 1 WHERE message_id =
-		(SELECT message_id FROM captures WHERE agent = ? ORDER BY message_id LIMIT 1)`, agent); err != nil {
-		return fmt.Errorf("flagging captures: %w", err)
-	}
-	return nil
 }
 
 // RemoveCapture clears one pending capture, reporting whether it was still
@@ -620,11 +605,4 @@ func (s *Store) RemoveCapture(messageID string) (bool, error) {
 		return false, fmt.Errorf("clearing capture: %w", err)
 	}
 	return n == 1, nil
-}
-
-func boolInt(b bool) int {
-	if b {
-		return 1
-	}
-	return 0
 }

@@ -249,14 +249,11 @@ func TestStoreCapturesRoundTrip(t *testing.T) {
 	if err := st.AddCapture(c); err != nil {
 		t.Fatal(err)
 	}
-	if err := st.MarkCapturesToolPosted("assistant"); err != nil {
-		t.Fatal(err)
-	}
 	got, err := st.Captures("assistant")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(got) != 1 || !got[0].ToolPosted || got[0].Prompt != c.Prompt || !got[0].DeliveredAt.Equal(c.DeliveredAt) {
+	if len(got) != 1 || got[0].Prompt != c.Prompt || !got[0].DeliveredAt.Equal(c.DeliveredAt) {
 		t.Fatalf("captures = %+v", got)
 	}
 	if removed, err := st.RemoveCapture(c.MessageID); err != nil || !removed {
@@ -267,24 +264,6 @@ func TestStoreCapturesRoundTrip(t *testing.T) {
 	}
 	if got, _ := st.Captures("assistant"); len(got) != 0 {
 		t.Fatalf("capture not removed: %+v", got)
-	}
-}
-
-func TestStoreToolPostFlagsOnlyTheOldestCapture(t *testing.T) {
-	st := openTestStore(t)
-	clock := newTestClock()
-	for _, id := range []string{"01M4RMAZ800000000000000001", "01M4RMAZ800000000000000002"} {
-		clock.Advance(time.Second)
-		if err := st.AddCapture(Capture{MessageID: id, Agent: "assistant", Prompt: "[Leo Chat] " + id, DeliveredAt: clock.Now()}); err != nil {
-			t.Fatal(err)
-		}
-	}
-	if err := st.MarkCapturesToolPosted("assistant"); err != nil {
-		t.Fatal(err)
-	}
-	got, _ := st.Captures("assistant")
-	if len(got) != 2 || !got[0].ToolPosted || got[1].ToolPosted {
-		t.Fatalf("captures = %+v; a post belongs to the turn in progress, not the queued message", got)
 	}
 }
 

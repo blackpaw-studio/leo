@@ -122,9 +122,6 @@ type Capture struct {
 	Agent       string
 	Prompt      string
 	DeliveredAt time.Time
-	// ToolPosted is set when the agent called leo_chat_post after the
-	// delivery, so the captured reply would be a duplicate.
-	ToolPosted bool
 }
 
 // DefaultAgent receives task output whose owner cannot be resolved, and is

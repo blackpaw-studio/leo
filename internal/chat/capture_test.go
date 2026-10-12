@@ -41,6 +41,12 @@ func (tr transcript) toolUse() transcript {
 	return append(tr, line(map[string]any{"type": "assistant", "message": map[string]any{"role": "assistant", "content": []any{map[string]any{"type": "tool_use", "name": "Bash"}}}}))
 }
 
+// chatPost is an assistant entry calling leo_chat_post, as Claude names an
+// MCP tool.
+func (tr transcript) chatPost() transcript {
+	return append(tr, line(map[string]any{"type": "assistant", "message": map[string]any{"role": "assistant", "content": []any{map[string]any{"type": "tool_use", "name": "mcp__leo__leo_chat_post", "input": map[string]any{"text": "posted"}}}}}))
+}
+
 func (tr transcript) write(t *testing.T) string {
 	t.Helper()
 	p := filepath.Join(t.TempDir(), "t.jsonl")
@@ -137,13 +143,31 @@ func TestCaptureNotYetSubmittedIsKeptThenExpires(t *testing.T) {
 
 func TestCaptureSkippedWhenToolPostedOrEmpty(t *testing.T) {
 	p := "[Leo Chat] hi"
-	c := capture("m1", p)
-	c.ToolPosted = true
-	if got := resolveOne(t, transcript{}.user(p).assistant("hello"), c, ""); got.Action != CaptureDrop {
+	if got := resolveOne(t, transcript{}.user(p).chatPost().toolResult().assistant("hello"), capture("m1", p), "hello"); got.Action != CaptureDrop {
 		t.Fatalf("leo_chat_post since delivery must suppress the capture: %+v", got)
 	}
 	if got := resolveOne(t, transcript{}.user(p).toolUse(), capture("m1", p), ""); got.Action != CaptureDrop {
 		t.Fatalf("an empty final message posts nothing: %+v", got)
+	}
+}
+
+// A leo_chat_post anywhere in the turn the capture matched suppresses it,
+// even when the post came before a second chat prompt folded into that turn.
+func TestCaptureToolPostSuppressesTheMatchedTurn(t *testing.T) {
+	p1, p2 := "[Leo Chat] first", "[Leo Chat] second"
+	tr := transcript{}.user(p1).chatPost().toolResult().user(p2).assistant("Posted both.")
+	out, _ := ResolveCaptures(ReadTranscript(tr.write(t)), []Capture{capture("m1", p1), capture("m2", p2)}, "Posted both.", captureNow, time.Time{})
+	if len(out) != 2 || out[0].Action != CaptureDrop || out[1].Action != CaptureDrop {
+		t.Fatalf("outcomes = %+v; the tool post already answered this turn", out)
+	}
+}
+
+// A post in an earlier, already settled turn does not suppress a later one.
+func TestCaptureToolPostInAnEarlierTurnDoesNotSuppress(t *testing.T) {
+	p1, p2 := "[Leo Chat] first", "[Leo Chat] second"
+	tr := transcript{}.user(p1).chatPost().toolResult().assistant("Posted.").user(p2).assistant("Plain answer.")
+	if got := resolveOne(t, tr, capture("m2", p2), "Plain answer."); got.Action != CapturePost || got.Text != "Plain answer." {
+		t.Fatalf("outcome = %+v", got)
 	}
 }
 

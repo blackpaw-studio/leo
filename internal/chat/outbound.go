@@ -103,12 +103,6 @@ func (s *Service) Post(_ context.Context, req PostRequest) (Message, error) {
 		s.removeFiles(files)
 		return Message{}, err
 	}
-	if req.Task == "" {
-		// The agent answered by tool: its turn's final text would repeat it.
-		if err := s.opts.Store.MarkCapturesToolPosted(agent); err != nil {
-			s.opts.Logf("chat: flagging captures of %s: %v", agent, err)
-		}
-	}
 	stored, err := s.opts.Store.Message(m.ID)
 	if err != nil {
 		return Message{}, err
