@@ -31,7 +31,12 @@ func Values(target any, section Section, defaults any) []FieldValue {
 		val := v.FieldByIndex(sf.Index)
 		switch fv.Kind {
 		case KindBool:
-			fv.Checked = val.Bool()
+			if val.Kind() == reflect.Pointer {
+				// A *bool toggle treats unset as on.
+				fv.Checked = val.IsNil() || val.Elem().Bool()
+			} else {
+				fv.Checked = val.Bool()
+			}
 		case KindTriBool:
 			if !val.IsNil() {
 				fv.Value = strconv.FormatBool(val.Elem().Bool())
@@ -66,6 +71,10 @@ func Apply(target any, section Section, form url.Values) error {
 		switch effectiveKind(f, sf) {
 		case KindBool:
 			vals := form[f.Key]
+			if sf.Type.Kind() == reflect.Pointer {
+				applyDefaultOnBool(val, sf, vals)
+				continue
+			}
 			val.SetBool(len(vals) > 0 && vals[len(vals)-1] == "true")
 		case KindTriBool:
 			switch raw {
@@ -92,6 +101,22 @@ func Apply(target any, section Section, form url.Values) error {
 		}
 	}
 	return nil
+}
+
+// applyDefaultOnBool writes a *bool toggle whose unset state means on: checked
+// clears the pointer (on is the default, so no key is written), unchecked sets
+// an explicit false. A form that omits the field leaves it untouched, so a
+// partial submit cannot silently switch anything off.
+func applyDefaultOnBool(val reflect.Value, sf reflect.StructField, vals []string) {
+	if len(vals) == 0 {
+		return
+	}
+	if vals[len(vals)-1] == "true" {
+		val.Set(reflect.Zero(sf.Type))
+		return
+	}
+	off := false
+	val.Set(reflect.ValueOf(&off))
 }
 
 // mustFieldByYAMLKey locates the struct field for a registered field's yaml

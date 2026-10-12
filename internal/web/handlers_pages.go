@@ -186,7 +186,9 @@ func (s *Server) buildDefaultsData(r *http.Request) (any, error) {
 	if err != nil {
 		return nil, fmt.Errorf("loading config: %w", err)
 	}
-	return s.buildFormWithHarness(schema.SectionDefaults, &cfg.Defaults, cfg, "/web/config/defaults", ""), nil
+	form := s.buildFormWithHarness(schema.SectionDefaults, &cfg.Defaults, cfg, "/web/config/defaults", "")
+	form.Fields = append(form.Fields, s.pushFields(schema.SectionPushDefaults, &cfg.Defaults.Push, cfg, scopeSuffix(schema.SectionDefaults, ""), "")...)
+	return form, nil
 }
 
 // hostCard is one entry of settingsPageData.Hosts: a remote-host name paired
@@ -451,6 +453,7 @@ func (s *Server) handleTemplateEditPage(w http.ResponseWriter, r *http.Request) 
 	// Their yaml keys don't collide with any template key, so both sections
 	// can parse the same submitted form independently on save.
 	form.Fields = append(form.Fields, s.permissionFields(&tmpl.Permissions, cfg, name)...)
+	form.Fields = append(form.Fields, s.pushFields(schema.SectionPushTemplate, &tmpl.Push, cfg, scopeSuffix(schema.SectionTemplate, name), name)...)
 
 	pd := pageData{
 		Page:  "template_edit",

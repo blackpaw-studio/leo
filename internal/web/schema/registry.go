@@ -30,7 +30,10 @@ var Excluded = map[Section][]string{
 	// Web UI section.
 	SectionDefaults: {"harness_options", "provider",
 		"permission_mode", "bypass_permissions", "remote_control",
-		"allowed_tools", "disallowed_tools", "append_system_prompt", "dispatch"},
+		"allowed_tools", "disallowed_tools", "append_system_prompt", "dispatch",
+		// push is a nested struct rendered from SectionPushDefaults as an extra
+		// field group (see handleDefaultsPage), like permissions on templates.
+		"push"},
 	SectionTask: {"harness_options", "provider",
 		"permission_mode", "allowed_tools", "disallowed_tools", "append_system_prompt"},
 	// permissions is a nested struct, not a flat field: it is rendered from
@@ -40,7 +43,7 @@ var Excluded = map[Section][]string{
 	SectionTemplate: {"harness_options", "provider",
 		"permission_mode", "remote_control", "agent",
 		"allowed_tools", "disallowed_tools", "append_system_prompt",
-		"permissions"},
+		"permissions", "push"},
 }
 
 // --- Shared field builders -------------------------------------------------
@@ -76,6 +79,20 @@ func fEnvironments(group string, advanced bool) Field {
 func fEnv(group string, advanced bool) Field {
 	return Field{Key: "env", Label: "Environment", Kind: KindEnvMap, Group: group, Advanced: advanced,
 		Help: "KEY=VALUE, one per line"}
+}
+
+const pushGroup = "Push notifications"
+
+// fPush builds the three push-state fields in the given control kind.
+func fPush(kind Kind) []Field {
+	return []Field{
+		{Key: "needs_input", Label: "Needs input", Kind: kind, Group: pushGroup,
+			Help: "Push to paired phones when an agent needs permission, has a question, or awaits your input"},
+		{Key: "finished", Label: "Finished", Kind: kind, Group: pushGroup,
+			Help: "Push when an agent finishes its turn"},
+		{Key: "errored", Label: "Errored", Kind: kind, Group: pushGroup,
+			Help: "Push when an agent hits an error"},
+	}
 }
 
 var registry = map[Section][]Field{
@@ -141,6 +158,12 @@ var registry = map[Section][]Field{
 		{Key: "can_consult", Label: "Can consult", Group: "Advanced", Advanced: true,
 			Help: "Templates this template may consult. Empty means any"},
 	},
+
+	// Defaults show toggles: an unset state is on, so a checked toggle clears
+	// its key rather than writing an explicit true.
+	SectionPushDefaults: fPush(KindBool),
+	// Templates show inherit/on/off; inherit removes the key.
+	SectionPushTemplate: fPush(KindTriBool),
 
 	SectionEnvironment: {
 		{Key: "env", Label: "Variables", Kind: KindEnvMap, Group: "General",

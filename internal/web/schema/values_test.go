@@ -120,3 +120,33 @@ func TestInheritedPlaceholder(t *testing.T) {
 	}
 	t.Fatal("model field not rendered")
 }
+
+// A *bool toggle (push defaults) reads unset as on, clears on checked, writes
+// an explicit false on unchecked, and ignores a form that omits it.
+func TestApplyDefaultOnPointerBool(t *testing.T) {
+	var p config.PushConfig
+	if v := Values(&p, SectionPushDefaults, nil); !v[0].Checked {
+		t.Fatal("unset toggle should render checked")
+	}
+
+	if err := Apply(&p, SectionPushDefaults, url.Values{"finished": {"false"}}); err != nil {
+		t.Fatal(err)
+	}
+	if p.Finished == nil || *p.Finished || p.NeedsInput != nil {
+		t.Fatalf("after unchecking finished: %+v", p)
+	}
+
+	if err := Apply(&p, SectionPushDefaults, url.Values{}); err != nil {
+		t.Fatal(err)
+	}
+	if p.Finished == nil || *p.Finished {
+		t.Fatalf("omitted field must stay untouched: %+v", p)
+	}
+
+	if err := Apply(&p, SectionPushDefaults, url.Values{"finished": {"false", "true"}}); err != nil {
+		t.Fatal(err)
+	}
+	if p.Finished != nil {
+		t.Fatalf("checked toggle must clear the key: %+v", p)
+	}
+}

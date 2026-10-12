@@ -51,7 +51,7 @@ func TestWirePushDeliversAttentionTransitionsToPairedDevices(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	pub := wirePush(ctx, nil, stateDir, push.WithHTTPClient(relay.Client()))
+	pub := wirePush(ctx, nil, stateDir, nil, push.WithHTTPClient(relay.Client()))
 	attention := observe.NewAttentionStore(pub)
 
 	attention.Set("builder", observe.AttentionFinished)
@@ -89,5 +89,49 @@ func recvPush(t *testing.T, ch <-chan map[string]string) map[string]string {
 	case <-time.After(5 * time.Second):
 		t.Fatal("relay received no push")
 		return nil
+	}
+}
+
+// A policy handed to wirePush keeps a denied state off the relay while the
+// allowed one right behind it still goes out.
+func TestWirePushHonorsThePolicy(t *testing.T) {
+	stateDir := t.TempDir()
+	store := devices.NewStore(stateDir, nil)
+	code, _, err := store.NewPairingCode()
+	if err != nil {
+		t.Fatal(err)
+	}
+	dev, _, err := store.Pair(code, "phone")
+	if err != nil {
+		t.Fatal(err)
+	}
+	pushes := make(chan map[string]string, 4)
+	relay := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]string
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		pushes <- body
+		w.WriteHeader(http.StatusAccepted)
+	}))
+	defer relay.Close()
+	key := make([]byte, 32)
+	if err := store.SetPush(dev.ID, devices.PushRegistration{
+		Grant: "grant", Key: base64.StdEncoding.EncodeToString(key), RelayURL: relay.URL,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	allow := func(agent, state string) bool { return state != "finished" }
+	pub := wirePush(ctx, nil, stateDir, allow, push.WithHTTPClient(relay.Client()))
+	attention := observe.NewAttentionStore(pub)
+
+	attention.Set("quiet", observe.AttentionFinished) // denied
+	attention.Set("loud", observe.AttentionErrored)   // allowed
+
+	daemonID, _ := devices.EnsureDaemonID(stateDir)
+	got := recvPush(t, pushes)
+	if got["collapse_id"] != push.CollapseID(daemonID, "loud") {
+		t.Fatalf("first push = %v, want the allowed agent's (the denied one must not reach the relay)", got)
 	}
 }

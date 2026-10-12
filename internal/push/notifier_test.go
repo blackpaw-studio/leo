@@ -227,3 +227,61 @@ func equal(a, b []string) bool {
 	}
 	return true
 }
+
+// denyStates is a policy that blocks the given states for every agent and
+// records each (agent, state) it was asked about.
+func denyStates(asked *[][2]string, denied ...observe.AttentionState) func(agent, state string) bool {
+	return func(agent, state string) bool {
+		*asked = append(*asked, [2]string{agent, state})
+		for _, d := range denied {
+			if string(d) == state {
+				return false
+			}
+		}
+		return true
+	}
+}
+
+func TestPolicyBlocksASuppressedStateAndOnlyAllowedStatesQueue(t *testing.T) {
+	var asked [][2]string
+	n, sender, _ := startNotifier(t, WithPolicy(denyStates(&asked, observe.AttentionFinished)))
+
+	n.Publish(activity("a", observe.AttentionFinished, nil))   // blocked
+	n.Publish(activity("a", observe.AttentionFinished, nil))   // repeat of a suppressed state: still nothing
+	n.Publish(activity("a", observe.AttentionErrored, nil))    // allowed, different state
+	n.Publish(activity("a", observe.AttentionWorking, nil))    // quiet state: policy not consulted
+	n.Publish(activity("a", observe.AttentionFinished, nil))   // new transition into blocked state
+	n.Publish(activity("b", observe.AttentionNeedsInput, nil)) // other agent, allowed
+
+	if got := sender.next(t); got.Agent != "a" || got.Kind != "errored" {
+		t.Fatalf("first alert = %+v, want a/errored (a suppressed finished must not queue)", got)
+	}
+	if got := sender.next(t); got.Agent != "b" || got.Kind != "needs_input" {
+		t.Fatalf("second alert = %+v, want b/needs_input", got)
+	}
+	select {
+	case extra := <-sender.got:
+		t.Fatalf("unexpected extra alert %+v", extra)
+	default:
+	}
+	// Consulted once per needs-you transition: finished, errored, finished, needs_input.
+	if len(asked) != 4 {
+		t.Fatalf("policy consulted %d times (%v), want 4", len(asked), asked)
+	}
+}
+
+// A suppressed transition still updates last, so flipping the policy later
+// does not turn the already-seen state into a push.
+func TestSuppressedTransitionStillRecordsState(t *testing.T) {
+	allow := false
+	n, sender, _ := startNotifier(t, WithPolicy(func(string, string) bool { return allow }))
+
+	n.Publish(activity("a", observe.AttentionFinished, nil)) // suppressed
+	allow = true
+	n.Publish(activity("a", observe.AttentionFinished, nil)) // same state: not a transition
+	n.Publish(activity("a", observe.AttentionErrored, nil))  // real transition
+
+	if got := sender.next(t); got.Kind != "errored" {
+		t.Fatalf("alert = %+v, want errored first", got)
+	}
+}
