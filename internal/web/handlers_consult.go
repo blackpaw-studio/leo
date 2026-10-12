@@ -201,28 +201,6 @@ func (s *Server) writeDispatchSendConflict(w http.ResponseWriter, id string, err
 	}{err.Error(), status})
 }
 
-// handleAPIDispatchPermission is the long poll behind a dispatched claude's
-// PermissionRequest hook: it answers with the orchestrator's decision, or
-// with none (an empty object) once the approval timeout passes, the run
-// settles, or the hook goes away, and claude then shows its own prompt.
-func (s *Server) handleAPIDispatchPermission(w http.ResponseWriter, r *http.Request) {
-	_ = http.NewResponseController(w).SetWriteDeadline(time.Time{})
-	var req struct {
-		Payload json.RawMessage `json:"payload"`
-	}
-	if err := decodeDispatchJSON(r, &req); err != nil {
-		writeJSON(w, http.StatusBadRequest, apiResponse{Error: fmt.Sprintf("invalid request: %v", err)})
-		return
-	}
-	cfg, err := s.loadConfig()
-	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, apiResponse{Error: fmt.Sprintf("loading config: %v", err)})
-		return
-	}
-	decision := s.consults.RequestPermission(r.Context(), r.PathValue("id"), req.Payload, cfg.DispatchApprovalTimeout())
-	writeJSON(w, http.StatusOK, apiResponse{OK: true, Data: decision})
-}
-
 func (s *Server) handleAPIDispatchReport(w http.ResponseWriter, r *http.Request) {
 	var report consult.HookReport
 	if err := decodeDispatchJSON(r, &report); err != nil {

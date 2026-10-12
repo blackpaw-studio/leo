@@ -12,7 +12,7 @@ func TestDispatchPermissionHTTP(t *testing.T) {
 	w := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/api/dispatch/d-nope/permission", strings.NewReader(`{`))
 	req.SetPathValue("id", "d-nope")
-	s.handleAPIDispatchPermission(w, req)
+	s.handleAPIPermission(w, req)
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("malformed: status %d: %s", w.Code, w.Body.String())
 	}
@@ -21,7 +21,7 @@ func TestDispatchPermissionHTTP(t *testing.T) {
 	w = httptest.NewRecorder()
 	req = httptest.NewRequest(http.MethodPost, "/api/dispatch/d-nope/permission", strings.NewReader(`{"payload":{"tool_name":"Bash","tool_input":{"command":"ls"}}}`))
 	req.SetPathValue("id", "d-nope")
-	s.handleAPIDispatchPermission(w, req)
+	s.handleAPIPermission(w, req)
 	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"data":{}`) {
 		t.Fatalf("unknown run: status %d: %s", w.Code, w.Body.String())
 	}

@@ -298,12 +298,25 @@ func extractBearer(h string) string {
 // giving a misbehaving or malicious client an arbitrary disk-write handle.
 const maxRequestBodyBytes int64 = 10 << 20
 
-// bodySizeMiddleware enforces maxRequestBodyBytes on every request body.
-// A read past the limit returns a 413 to the handler via http.MaxBytesReader.
-func bodySizeMiddleware(max int64, next http.Handler) http.Handler {
+// bodyLimit raises the body cap for one exact POST path (the chat upload).
+type bodyLimit struct {
+	path string
+	max  int64
+}
+
+// bodySizeMiddleware enforces max on every request body, or an override's
+// own cap for a POST to its exact path. A read past the limit returns a 413
+// to the handler via http.MaxBytesReader.
+func bodySizeMiddleware(max int64, next http.Handler, overrides ...bodyLimit) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Body != nil {
-			r.Body = http.MaxBytesReader(w, r.Body, max)
+			limit := max
+			for _, o := range overrides {
+				if r.Method == http.MethodPost && r.URL.Path == o.path {
+					limit = o.max
+				}
+			}
+			r.Body = http.MaxBytesReader(w, r.Body, limit)
 		}
 		next.ServeHTTP(w, r)
 	})

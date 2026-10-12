@@ -56,6 +56,9 @@ func (s *Service) thread(caller, task string) (agent, note string, err error) {
 	if !config.IsAgentName(caller) {
 		return "", "", fmt.Errorf("%w: %q is not an agent; only supervised agents and task runs may use Leo Chat", ErrInvalid, caller)
 	}
+	if !s.knownAgent(caller) {
+		return "", "", fmt.Errorf("%w: %q is not a supervised agent", ErrInvalid, caller)
+	}
 	return caller, "", nil
 }
 

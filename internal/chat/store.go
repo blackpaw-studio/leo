@@ -525,12 +525,18 @@ func (s *Store) MarkCapturesToolPosted(agent string) error {
 	return nil
 }
 
-// RemoveCapture clears one pending capture.
-func (s *Store) RemoveCapture(messageID string) error {
-	if _, err := s.db.Exec(`DELETE FROM captures WHERE message_id = ?`, messageID); err != nil {
-		return fmt.Errorf("clearing capture: %w", err)
+// RemoveCapture clears one pending capture, reporting whether it was still
+// there: of two concurrent Stop hooks, only the one that removes it posts.
+func (s *Store) RemoveCapture(messageID string) (bool, error) {
+	res, err := s.db.Exec(`DELETE FROM captures WHERE message_id = ?`, messageID)
+	if err != nil {
+		return false, fmt.Errorf("clearing capture: %w", err)
 	}
-	return nil
+	n, err := res.RowsAffected()
+	if err != nil {
+		return false, fmt.Errorf("clearing capture: %w", err)
+	}
+	return n == 1, nil
 }
 
 func boolInt(b bool) int {

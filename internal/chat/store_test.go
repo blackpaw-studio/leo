@@ -236,8 +236,11 @@ func TestStoreCapturesRoundTrip(t *testing.T) {
 	if len(got) != 1 || !got[0].ToolPosted || got[0].Prompt != c.Prompt || !got[0].DeliveredAt.Equal(c.DeliveredAt) {
 		t.Fatalf("captures = %+v", got)
 	}
-	if err := st.RemoveCapture(c.MessageID); err != nil {
-		t.Fatal(err)
+	if removed, err := st.RemoveCapture(c.MessageID); err != nil || !removed {
+		t.Fatalf("first remove = %v, %v", removed, err)
+	}
+	if removed, _ := st.RemoveCapture(c.MessageID); removed {
+		t.Fatal("a second remove must report the capture already gone")
 	}
 	if got, _ := st.Captures("assistant"); len(got) != 0 {
 		t.Fatalf("capture not removed: %+v", got)

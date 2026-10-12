@@ -179,11 +179,12 @@ func (s *Service) resolveCaptures(agent string, ev HookEvent) {
 		if out.Action == CaptureKeep {
 			continue
 		}
-		if err := s.opts.Store.RemoveCapture(out.Capture.MessageID); err != nil {
+		removed, err := s.opts.Store.RemoveCapture(out.Capture.MessageID)
+		if err != nil {
 			s.opts.Logf("chat: clearing capture %s: %v", out.Capture.MessageID, err)
 			continue
 		}
-		if out.Action == CapturePost {
+		if removed && out.Action == CapturePost {
 			s.postReply(agent, out.Capture.MessageID, out.Text)
 		}
 	}

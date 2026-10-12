@@ -327,7 +327,7 @@ func (s *Service) deliver(m Message) {
 	if err != nil || harness != "claude" {
 		// Only claude agents' replies are auto-captured; the others post
 		// with leo_chat_post.
-		_ = s.opts.Store.RemoveCapture(m.ID)
+		_, _ = s.opts.Store.RemoveCapture(m.ID)
 	}
 	if err != nil {
 		s.opts.Logf("chat: delivering %s to %s: %v", m.ID, m.Agent, err)
