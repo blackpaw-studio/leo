@@ -263,14 +263,14 @@ func (s *Service) expireAsk(id string, wt *waiter, deadline <-chan time.Time) {
 	case <-deadline:
 	case <-s.ctx.Done():
 	}
-	ok, err := s.opts.Store.Transition(id, []string{StateOpen}, StateExpired, Answer{})
+	ok, err := s.opts.Store.Transition(id, []string{StateOpen}, StateExpired, nil)
 	if err != nil {
 		s.opts.Logf("chat: expiring ask %s: %v", id, err)
 	}
 	if ok {
 		s.publishUpdated(id, ChangeState)
 	}
-	s.waiters.settle(id, Answer{})
+	s.waiters.settle(id, nil)
 }
 
 // waitAsk waits for ask id to settle, up to window (0: no bound) or ctx's
@@ -350,14 +350,14 @@ func (s *Service) Answer(agent, id string, answer Answer) (Message, error) {
 	if m.State != StateOpen {
 		return Message{}, ErrConflict
 	}
-	ok, err := s.opts.Store.Transition(id, []string{StateOpen}, StateAnswered, answer)
+	ok, err := s.opts.Store.Transition(id, []string{StateOpen}, StateAnswered, &answer)
 	if err != nil {
 		return Message{}, err
 	}
 	if !ok {
 		return Message{}, ErrConflict
 	}
-	s.waiters.settle(id, answer)
+	s.waiters.settle(id, &answer)
 	s.publishUpdated(id, ChangeAnswer)
 	return s.opts.Store.Message(id)
 }

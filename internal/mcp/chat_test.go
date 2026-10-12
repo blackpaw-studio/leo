@@ -143,6 +143,7 @@ func TestChatAskRejectsBadInputLocally(t *testing.T) {
 		"min not an integer":  `{"question":"q","input":{"type":"checkboxes","options":["a"],"min":"1"}}`,
 		"allow_text not bool": `{"question":"q","input":{"type":"radio","options":["a"],"allow_text":"yes"}}`,
 		"bad option":          `{"question":"q","input":{"type":"radio","options":[7]}}`,
+		"max zero":            `{"question":"q","input":{"type":"checkboxes","options":["a"],"max":0}}`,
 		"resume with input":   `{"message_id":"01ASK","input":{"type":"text"}}`,
 	} {
 		if _, err := reg.call("leo_chat_ask", json.RawMessage(args)); err == nil {

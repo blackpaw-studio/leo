@@ -103,7 +103,7 @@ no files, and the thread keeps the two adjacent.
 |--------|-------------|---------|
 | `buttons` | tapping a choice, which submits at once | 1–12, required |
 | `radio` | selecting one choice, then submitting | 1–12, required |
-| `checkboxes` | selecting `min`–`max` choices (default 0 to all), then submitting | 1–12, required |
+| `checkboxes` | selecting `min`–`max` choices (`min` default 0; `max` default all when omitted, else 1 to the option count and at least `min`), then submitting | 1–12, required |
 | `text` | one free-text field | forbidden |
 
 Options are strings or `{value, label}`. `allow_text` (choice types) also
@@ -116,7 +116,8 @@ An answer is `{values, text}`:
   and non-empty `text`.
 - `checkboxes`: known, distinct values, `min ≤ count ≤ max`; with `allow_text`,
   `text` may accompany the values or replace them (an empty selection is
-  allowed only with `text`, even if `min > 0`).
+  allowed only with `text`, even if `min > 0`). Without `allow_text`, an empty
+  selection is a valid answer when `min` is 0.
 - `text`: no values, non-empty `text`.
 - `text` is at most 4000 characters, and refused on a choice type without
   `allow_text`.

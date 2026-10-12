@@ -495,7 +495,7 @@ func TestChatTypedAskAnsweredOverHTTP(t *testing.T) {
 			`{"question":"Which?","input":{"type":"checkboxes","options":[{"value":"a","label":"A"},{"value":"b","label":"B"},{"value":"c","label":"C"}],"min":1,"max":2,"allow_text":true},"timeout_s":60}`)
 	}()
 	ask := waitEvent(t, cs.events, chat.KindAsk)
-	if ask.Input == nil || ask.Input.Type != chat.InputCheckboxes || ask.Input.Max != 2 {
+	if ask.Input == nil || ask.Input.Type != chat.InputCheckboxes || ask.Input.Max == nil || *ask.Input.Max != 2 {
 		t.Fatalf("published input = %+v", ask.Input)
 	}
 	answer := "/api/v1/chat/assistant/messages/" + ask.ID + "/answer"
@@ -519,6 +519,15 @@ func TestChatTypedAskAnsweredOverHTTP(t *testing.T) {
 	got := <-done
 	if got.Code != http.StatusOK || !strings.Contains(got.Body.String(), `"values":["a","c"]`) || !strings.Contains(got.Body.String(), `"labels":["A","C"]`) || !strings.Contains(got.Body.String(), `"text":"and d"`) {
 		t.Fatalf("ask = %d %s", got.Code, got.Body)
+	}
+}
+
+func TestChatAskRejectsExplicitMaxZeroOverHTTP(t *testing.T) {
+	cs := newChatServer(t)
+	w := chatRequest(t, cs.s, http.MethodPost, "/api/agent/assistant/chat/ask", testAgentToken,
+		`{"question":"?","input":{"type":"checkboxes","options":[{"value":"a"}],"max":0}}`)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("code = %d %s", w.Code, w.Body)
 	}
 }
 

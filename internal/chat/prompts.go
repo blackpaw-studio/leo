@@ -21,10 +21,10 @@ type waiters struct {
 }
 
 // waiter is one open message's: done closes once it is settled, with value
-// (the answer; zero when it ended without one).
+// (the answer; nil when it ended without one).
 type waiter struct {
 	done  chan struct{}
-	value Answer
+	value *Answer
 }
 
 func newWaiters() *waiters { return &waiters{m: map[string]*waiter{}} }
@@ -52,7 +52,7 @@ func (w *waiters) remove(id string) {
 
 // settle settles id's waiter with value, if it has one not yet settled.
 // Never blocks.
-func (w *waiters) settle(id string, value Answer) {
+func (w *waiters) settle(id string, value *Answer) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	wt, ok := w.m[id]
@@ -71,7 +71,7 @@ func (w *waiters) settle(id string, value Answer) {
 // answer it is left in when the waiter's context ends first.
 type awaitEnd struct {
 	state  string
-	answer Answer
+	answer *Answer
 }
 
 // awaitWith stores open message m, announces it, and blocks until it is
@@ -88,7 +88,10 @@ func (s *Service) awaitWith(ctx context.Context, m Message, timeout time.Duratio
 	var end awaitEnd
 	select {
 	case <-wt.done:
-		return wt.value, !wt.value.IsZero()
+		if wt.value == nil {
+			return Answer{}, false
+		}
+		return *wt.value, true
 	case <-timer:
 		end = awaitEnd{state: StateExpired}
 	case <-s.ctx.Done():
@@ -291,7 +294,7 @@ func (s *Service) settlePermissionInTerminal(agent string, ev HookEvent) {
 		if err != nil || !ok {
 			continue
 		}
-		s.waiters.settle(m.ID, Answer{})
+		s.waiters.settle(m.ID, nil)
 		s.publishUpdated(m.ID, ChangeAnswer)
 		return
 	}

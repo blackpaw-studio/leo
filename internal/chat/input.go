@@ -22,13 +22,15 @@ const (
 )
 
 // Input is the answer control of an ask message (and, as buttons, of a
-// permission message). Checkboxes' Max is always set once resolved.
+// permission message). Max is a pointer so omitted (nil: all options) is
+// distinct from an explicit 0, which is invalid; it is always set once a
+// checkboxes input is resolved.
 type Input struct {
 	Type        string   `json:"type"`
 	Options     []Option `json:"options,omitempty"`
 	AllowText   bool     `json:"allow_text,omitempty"`
 	Min         int      `json:"min,omitempty"`
-	Max         int      `json:"max,omitempty"`
+	Max         *int     `json:"max,omitempty"`
 	Placeholder string   `json:"placeholder,omitempty"`
 }
 
@@ -37,9 +39,6 @@ type Answer struct {
 	Values []string `json:"values"`
 	Text   string   `json:"text"`
 }
-
-// IsZero reports an empty answer (none recorded).
-func (a Answer) IsZero() bool { return len(a.Values) == 0 && a.Text == "" }
 
 // MarshalJSON writes values as [] rather than null.
 func (a Answer) MarshalJSON() ([]byte, error) {
@@ -52,7 +51,7 @@ func (a Answer) MarshalJSON() ([]byte, error) {
 
 // terminalAnswer is the answer recorded when a permission prompt was
 // settled in the agent's own terminal.
-var terminalAnswer = Answer{Values: []string{AnswerTerminal}}
+var terminalAnswer = &Answer{Values: []string{AnswerTerminal}}
 
 // isTerminal reports whether the answer says the terminal settled it.
 func (a Answer) isTerminal() bool {
@@ -79,7 +78,7 @@ func validateInput(in Input) (Input, error) {
 		return Input{}, fmt.Errorf("%w: placeholder exceeds %d characters", ErrInvalid, MaxPlaceholderRunes)
 	}
 	if in.Type == InputText {
-		if len(in.Options) > 0 || in.AllowText || in.Min != 0 || in.Max != 0 {
+		if len(in.Options) > 0 || in.AllowText || in.Min != 0 || in.Max != nil {
 			return Input{}, fmt.Errorf("%w: a text input takes only a placeholder", ErrInvalid)
 		}
 		return in, nil
@@ -96,17 +95,19 @@ func validateInput(in Input) (Input, error) {
 		return Input{}, fmt.Errorf("%w: placeholder needs a text input or allow_text", ErrInvalid)
 	}
 	if in.Type != InputCheckboxes {
-		if in.Min != 0 || in.Max != 0 {
+		if in.Min != 0 || in.Max != nil {
 			return Input{}, fmt.Errorf("%w: min and max apply to checkboxes only", ErrInvalid)
 		}
 		return in, nil
 	}
-	if in.Max == 0 {
-		in.Max = len(options)
+	max := len(options)
+	if in.Max != nil {
+		max = *in.Max
 	}
-	if in.Min < 0 || in.Min > in.Max || in.Max > len(options) {
-		return Input{}, fmt.Errorf("%w: checkboxes need 0 <= min <= max <= %d options", ErrInvalid, len(options))
+	if in.Min < 0 || max < 1 || in.Min > max || max > len(options) {
+		return Input{}, fmt.Errorf("%w: checkboxes need 0 <= min <= max <= %d options, and max at least 1", ErrInvalid, len(options))
 	}
+	in.Max = &max
 	return in, nil
 }
 
@@ -160,13 +161,20 @@ func validAnswerFor(in Input, a Answer) error {
 		}
 		seen[v] = true
 	}
-	if len(a.Values) == 0 && in.AllowText && a.Text != "" {
+	if len(a.Values) == 0 && in.AllowText {
+		if a.Text == "" {
+			return fmt.Errorf("%w: choose an option or answer with text", ErrInvalid)
+		}
 		return nil // free text instead of a choice
 	}
 	switch in.Type {
 	case InputCheckboxes:
-		if len(a.Values) < in.Min || len(a.Values) > in.Max {
-			return fmt.Errorf("%w: choose %d to %d options", ErrInvalid, in.Min, in.Max)
+		max := len(in.Options)
+		if in.Max != nil {
+			max = *in.Max
+		}
+		if len(a.Values) < in.Min || len(a.Values) > max {
+			return fmt.Errorf("%w: choose %d to %d options", ErrInvalid, in.Min, max)
 		}
 	default:
 		if len(a.Values) != 1 {

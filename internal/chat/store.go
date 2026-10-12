@@ -133,10 +133,8 @@ func encodeExtras(m Message) (input, meta, answer string, err error) {
 		}
 		input = string(b)
 	}
-	if m.Answer != nil {
-		if answer, err = encodeAnswer(*m.Answer); err != nil {
-			return "", "", "", err
-		}
+	if answer, err = encodeAnswer(m.Answer); err != nil {
+		return "", "", "", err
 	}
 	if m.Permission != nil {
 		b, err := json.Marshal(storedMeta{Tool: m.Permission.Tool, Summary: m.Permission.Summary, Input: m.Permission.input})
@@ -148,9 +146,10 @@ func encodeExtras(m Message) (input, meta, answer string, err error) {
 	return input, meta, answer, nil
 }
 
-// encodeAnswer renders an answer for the answer column; "" for none.
-func encodeAnswer(a Answer) (string, error) {
-	if a.IsZero() {
+// encodeAnswer renders an answer for the answer column; "" for none (nil).
+// An empty selection is an answer: it encodes as {"values":[],"text":""}.
+func encodeAnswer(a *Answer) (string, error) {
+	if a == nil {
 		return "", nil
 	}
 	b, err := json.Marshal(a)
@@ -348,9 +347,9 @@ func (s *Store) MarkRead(agent, id string) error {
 }
 
 // Transition moves message id from one of from to state, recording answer
-// when it is not zero. It reports false, without error, when the message was not
+// when it is not nil. It reports false, without error, when the message was not
 // in one of from — someone else settled it first.
-func (s *Store) Transition(id string, from []string, state string, answer Answer) (bool, error) {
+func (s *Store) Transition(id string, from []string, state string, answer *Answer) (bool, error) {
 	if len(from) == 0 {
 		return false, errors.New("transition needs at least one from-state")
 	}

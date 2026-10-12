@@ -66,7 +66,7 @@ type chatInput struct {
 	Options     []chatOption `json:"options,omitempty"`
 	AllowText   bool         `json:"allow_text,omitempty"`
 	Min         int          `json:"min,omitempty"`
-	Max         int          `json:"max,omitempty"`
+	Max         *int         `json:"max,omitempty"` // nil: all options; an explicit 0 is invalid
 	Placeholder string       `json:"placeholder,omitempty"`
 }
 
@@ -284,8 +284,15 @@ func parseChatInput(raw any) (chatInput, error) {
 	if in.Min, err = optionalIntArg(obj, "min"); err != nil {
 		return in, err
 	}
-	if in.Max, err = optionalIntArg(obj, "max"); err != nil {
-		return in, err
+	if _, ok := obj["max"]; ok {
+		max, err := optionalIntArg(obj, "max")
+		if err != nil {
+			return in, err
+		}
+		if max < 1 {
+			return in, fmt.Errorf("max must be an integer from 1 to %d", maxChatAskOptions)
+		}
+		in.Max = &max
 	}
 	if _, ok := obj["options"]; ok {
 		if in.Options, err = parseChatOptions(obj["options"]); err != nil {

@@ -18,7 +18,7 @@ func TestResolveInput(t *testing.T) {
 		want    Input
 	}{
 		"legacy options become buttons": {options: []Option{{Value: "y"}}, want: Input{Type: InputButtons, Options: []Option{{Value: "y", Label: "y"}}}},
-		"checkboxes default to 0..len":  {in: &Input{Type: InputCheckboxes, Options: abc}, want: Input{Type: InputCheckboxes, Options: abc, Min: 0, Max: 3}},
+		"checkboxes default to 0..len":  {in: &Input{Type: InputCheckboxes, Options: abc}, want: Input{Type: InputCheckboxes, Options: abc, Min: 0, Max: ip(3)}},
 		"radio with free text":          {in: &Input{Type: InputRadio, Options: abc, AllowText: true, Placeholder: "other"}, want: Input{Type: InputRadio, Options: abc, AllowText: true, Placeholder: "other"}},
 		"text":                          {in: &Input{Type: InputText, Placeholder: "why?"}, want: Input{Type: InputText, Placeholder: "why?"}},
 	}
@@ -45,9 +45,13 @@ func TestResolveInput(t *testing.T) {
 		"text with options":           {in: &Input{Type: InputText, Options: abc}},
 		"text with allow_text":        {in: &Input{Type: InputText, AllowText: true}},
 		"buttons with min":            {in: &Input{Type: InputButtons, Options: abc, Min: 1}},
-		"radio with max":              {in: &Input{Type: InputRadio, Options: abc, Max: 2}},
-		"min above max":               {in: &Input{Type: InputCheckboxes, Options: abc, Min: 3, Max: 2}},
-		"max above option count":      {in: &Input{Type: InputCheckboxes, Options: abc, Max: 4}},
+		"radio with max":              {in: &Input{Type: InputRadio, Options: abc, Max: ip(2)}},
+		"min above max":               {in: &Input{Type: InputCheckboxes, Options: abc, Min: 3, Max: ip(2)}},
+		"max above option count":      {in: &Input{Type: InputCheckboxes, Options: abc, Max: ip(4)}},
+		"explicit max 0":              {in: &Input{Type: InputCheckboxes, Options: abc, Max: ip(0)}},
+		"explicit max below min":      {in: &Input{Type: InputCheckboxes, Options: abc, Min: 2, Max: ip(1)}},
+		"text with explicit max 0":    {in: &Input{Type: InputText, Max: ip(0)}},
+		"radio with explicit max 0":   {in: &Input{Type: InputRadio, Options: abc, Max: ip(0)}},
 		"negative min":                {in: &Input{Type: InputCheckboxes, Options: abc, Min: -1}},
 		"placeholder on plain choice": {in: &Input{Type: InputRadio, Options: abc, Placeholder: "x"}},
 		"placeholder too long":        {in: &Input{Type: InputText, Placeholder: strings.Repeat("x", MaxPlaceholderRunes+1)}},
@@ -59,6 +63,8 @@ func TestResolveInput(t *testing.T) {
 		}
 	}
 }
+
+func ip(n int) *int { return &n }
 
 func sameInput(a, b Input) bool {
 	x, _ := json.Marshal(a)
@@ -83,8 +89,8 @@ func normalizeLabels(in Input) Input {
 
 func TestValidAnswerByInputType(t *testing.T) {
 	long := strings.Repeat("x", MaxAnswerTextRunes+1)
-	cb := Input{Type: InputCheckboxes, Options: abc, Min: 1, Max: 2}
-	cbText := Input{Type: InputCheckboxes, Options: abc, Min: 1, Max: 2, AllowText: true}
+	cb := Input{Type: InputCheckboxes, Options: abc, Min: 1, Max: ip(2)}
+	cbText := Input{Type: InputCheckboxes, Options: abc, Min: 1, Max: ip(2), AllowText: true}
 	btn := Input{Type: InputButtons, Options: abc}
 	radioText := Input{Type: InputRadio, Options: abc, AllowText: true}
 	txt := Input{Type: InputText}
@@ -157,7 +163,7 @@ func TestAskCheckboxesRoundTrip(t *testing.T) {
 	if got, _ := json.Marshal(res); string(got) != `{"values":["a","c"],"labels":["A","C"],"text":"","timed_out":false,"message_id":"`+open.ID+`"}` {
 		t.Fatalf("result = %s", got)
 	}
-	if open.Input == nil || open.Input.Type != InputCheckboxes || open.Input.Max != 3 {
+	if open.Input == nil || open.Input.Type != InputCheckboxes || open.Input.Max == nil || *open.Input.Max != 3 {
 		t.Fatalf("stored input = %+v", open.Input)
 	}
 	m, _ := f.store.Message(open.ID)
@@ -239,5 +245,39 @@ func TestResumeReturnsTypedAnswer(t *testing.T) {
 	// Resume refuses a new-ask field.
 	if _, err := f.svc.Ask(context.Background(), AskRequest{Caller: "assistant", MessageID: first.MessageID, Input: &Input{Type: InputText}}); !errors.Is(err, ErrInvalid) {
 		t.Fatalf("resume with input: %v", err)
+	}
+}
+
+// A valid empty selection is an answer, not the absence of one.
+func TestEmptyCheckboxSelectionIsAnAnswer(t *testing.T) {
+	f := newFixture(t)
+	res, open := askAndAnswer(t, f, AskRequest{Input: &Input{Type: InputCheckboxes, Options: abc}}, Answer{})
+	if res.TimedOut || res.Pending || len(res.Values) != 0 {
+		t.Fatalf("result = %+v, want an answered, empty selection", res)
+	}
+	m, _ := f.store.Message(open.ID)
+	if m.State != StateAnswered || m.Answer == nil || len(m.Answer.Values) != 0 {
+		t.Fatalf("stored = %s, %+v", m.State, m.Answer)
+	}
+	if b, _ := json.Marshal(m.Answer); string(b) != `{"values":[],"text":""}` {
+		t.Fatalf("answer JSON = %s", b)
+	}
+	resumed, err := f.svc.Ask(context.Background(), AskRequest{Caller: "assistant", MessageID: open.ID})
+	if err != nil || resumed.TimedOut || resumed.Pending {
+		t.Fatalf("resumed = %+v, %v", resumed, err)
+	}
+}
+
+func TestCheckboxesWithAllowTextNeedTextForAnEmptySelection(t *testing.T) {
+	in := Input{Type: InputCheckboxes, Options: abc, Max: ip(3), AllowText: true}
+	if err := validAnswerFor(in, Answer{}); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("empty selection and empty text: %v", err)
+	}
+	if err := validAnswerFor(in, Answer{Text: "none fit"}); err != nil {
+		t.Fatal(err)
+	}
+	plain := Input{Type: InputCheckboxes, Options: abc, Max: ip(3)}
+	if err := validAnswerFor(plain, Answer{}); err != nil {
+		t.Fatalf("plain checkboxes, min 0: %v", err)
 	}
 }
