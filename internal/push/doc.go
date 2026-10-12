@@ -1,5 +1,5 @@
-// Package push delivers "an agent needs you" notifications to paired phones
-// (the Leo iOS app) through the Leo push relay.
+// Package push delivers "an agent needs you" notifications and Leo Chat
+// messages to paired phones (the Leo iOS app) through the Leo push relay.
 //
 // The wire contract is shared with the relay and the app:
 //
@@ -8,7 +8,12 @@
 //     what needs attention: the question, the command or path awaiting
 //     permission, or the finished turn's summary. The body is sanitised,
 //     clipped to 400 runes, and trimmed before the title when the payload
-//     would exceed the relay's cap;
+//     would exceed the relay's cap. Leo Chat adds optional "message_id",
+//     "message_kind" and, for an ask, "options" ([{value, label}], dropped
+//     when they cannot fit). Kind "chat" is an agent's chat message (title
+//     = agent, body = its text or file names); a permission prompt's
+//     needs_input alert carries its chat message id with message_kind
+//     "permission";
 //   - ciphertext is base64(nonce(12) ‖ AES-256-GCM(key, plaintext,
 //     aad="leo-push-v1") ‖ tag(16)), under the key the device registered;
 //   - collapse_id is the first 32 hex chars of SHA-256(daemon_id + "/" +

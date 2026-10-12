@@ -1,0 +1,94 @@
+package push
+
+import (
+	"slices"
+	"testing"
+	"time"
+
+	"github.com/blackpaw-studio/leo/internal/chat"
+	"github.com/blackpaw-studio/leo/internal/observe"
+)
+
+func chatEvent(m chat.Message) observe.Event {
+	return observe.Event{Type: chat.EventMessage, Payload: &chat.MessagePayload{Agent: m.Agent, Message: m}}
+}
+
+func chatUpdate(m chat.Message) observe.Event {
+	return observe.Event{Type: chat.EventUpdated, Payload: &chat.UpdatedPayload{Agent: m.Agent, Message: m, Change: chat.ChangeState}}
+}
+
+func noAlert(t *testing.T, s *recordingSender) {
+	t.Helper()
+	select {
+	case a := <-s.got:
+		t.Fatalf("unexpected alert %+v", a)
+	case <-time.After(50 * time.Millisecond):
+	}
+}
+
+func TestOutboundChatMessagesPush(t *testing.T) {
+	n, sender, next := startNotifier(t)
+	n.Publish(chatEvent(chat.Message{ID: "m1", Agent: "assistant", Direction: chat.DirectionOut, Kind: chat.KindText, Text: "Build is green"}))
+	a := sender.next(t)
+	if a.Agent != "assistant" || a.Kind != "chat" || a.Title != "assistant" || a.Body != "Build is green" || a.MessageID != "m1" || a.MessageKind != chat.KindText {
+		t.Fatalf("alert = %+v", a)
+	}
+	if next.count() != 1 {
+		t.Fatal("the event must still be forwarded")
+	}
+
+	n.Publish(chatEvent(chat.Message{ID: "m2", Agent: "assistant", Direction: chat.DirectionOut, Kind: chat.KindAsk, Text: "Deploy?", Options: []chat.Option{{Value: "y", Label: "Yes"}}}))
+	a = sender.next(t)
+	if a.MessageKind != chat.KindAsk || !slices.Equal(a.Options, []Option{{Value: "y", Label: "Yes"}}) {
+		t.Fatalf("ask alert = %+v", a)
+	}
+
+	n.Publish(chatEvent(chat.Message{ID: "m3", Agent: "assistant", Direction: chat.DirectionOut, Kind: chat.KindFile, Attachments: []chat.Attachment{{Filename: "r.pdf"}, {Filename: "s.png"}}}))
+	if a = sender.next(t); a.Body != "r.pdf, s.png" {
+		t.Fatalf("file alert body = %q", a.Body)
+	}
+}
+
+func TestChatMessagesThatDoNotPush(t *testing.T) {
+	n, sender, _ := startNotifier(t)
+	for _, m := range []chat.Message{
+		{ID: "in", Agent: "a", Direction: chat.DirectionIn, Kind: chat.KindText, Text: "from me"},
+		{ID: "sys", Agent: "a", Direction: chat.DirectionOut, Kind: chat.KindSystem, Text: "Starting a…"},
+		{ID: "perm", Agent: "a", Direction: chat.DirectionOut, Kind: chat.KindPermission, State: chat.StateOpen},
+	} {
+		n.Publish(chatEvent(m))
+	}
+	noAlert(t, sender)
+}
+
+func TestChatPushFollowsThePolicy(t *testing.T) {
+	var asked []string
+	n, sender, _ := startNotifier(t, WithPolicy(func(agent, state string) bool {
+		asked = append(asked, agent+"/"+state)
+		return false
+	}))
+	n.Publish(chatEvent(chat.Message{ID: "m1", Agent: "web", Direction: chat.DirectionOut, Kind: chat.KindTask, Text: "report"}))
+	noAlert(t, sender)
+	if !slices.Equal(asked, []string{"web/chat"}) {
+		t.Fatalf("policy asked %v", asked)
+	}
+}
+
+func TestPermissionAttentionAlertCarriesTheChatMessageID(t *testing.T) {
+	n, sender, _ := startNotifier(t)
+	perm := chat.Message{ID: "p1", Agent: "a", Direction: chat.DirectionOut, Kind: chat.KindPermission, State: chat.StateOpen}
+	n.Publish(chatEvent(perm))
+	n.Publish(activity("a", observe.AttentionNeedsInput, &observe.AttentionReason{Kind: observe.AttentionReasonPermission, Tool: "Bash"}))
+	a := sender.next(t)
+	if a.Kind != string(observe.AttentionNeedsInput) || a.MessageID != "p1" || a.MessageKind != chat.KindPermission {
+		t.Fatalf("alert = %+v", a)
+	}
+
+	perm.State = chat.StateAnswered
+	n.Publish(chatUpdate(perm))
+	n.Publish(activity("a", observe.AttentionWorking, nil))
+	n.Publish(activity("a", observe.AttentionNeedsInput, &observe.AttentionReason{Kind: observe.AttentionReasonPermission, Tool: "Bash"}))
+	if a = sender.next(t); a.MessageID != "" {
+		t.Fatalf("an answered prompt's id must not ride a later alert: %+v", a)
+	}
+}

@@ -6,6 +6,9 @@ const (
 	PushStateNeedsInput = "needs_input"
 	PushStateFinished   = "finished"
 	PushStateErrored    = "errored"
+	// PushStateChat is not an attention state: it filters Leo Chat pushes
+	// for an agent's outbound messages.
+	PushStateChat = "chat"
 )
 
 // PushConfig chooses which attention transitions push to paired iOS devices.
@@ -15,6 +18,7 @@ type PushConfig struct {
 	NeedsInput *bool `yaml:"needs_input,omitempty"`
 	Finished   *bool `yaml:"finished,omitempty"`
 	Errored    *bool `yaml:"errored,omitempty"`
+	Chat       *bool `yaml:"chat,omitempty"`
 }
 
 // state returns the setting for an attention state; nil when unset or the
@@ -27,6 +31,8 @@ func (p PushConfig) state(state string) *bool {
 		return p.Finished
 	case PushStateErrored:
 		return p.Errored
+	case PushStateChat:
+		return p.Chat
 	}
 	return nil
 }

@@ -2,9 +2,12 @@ package push
 
 import (
 	"context"
+	"strings"
 	"sync"
 	"time"
 
+	"github.com/blackpaw-studio/leo/internal/chat"
+	"github.com/blackpaw-studio/leo/internal/config"
 	"github.com/blackpaw-studio/leo/internal/observe"
 )
 
@@ -30,6 +33,9 @@ type Notifier struct {
 	// transition it precedes consumes it. The bridge feed publishes the
 	// turn_completed event before advancing attention to finished.
 	previews map[string]string
+	// openPermissions holds each agent's open Leo Chat permission message,
+	// whose id rides that agent's permission attention alert.
+	openPermissions map[string]string
 }
 
 // NotifierOption configures a Notifier.
@@ -67,7 +73,8 @@ func NewNotifier(next observe.Publisher, sender Sender, opts ...NotifierOption) 
 		queue:  make(chan Alert, defaultQueueSize),
 		last:   make(map[string]observe.AttentionState),
 
-		previews: make(map[string]string),
+		previews:        make(map[string]string),
+		openPermissions: make(map[string]string),
 	}
 	for _, opt := range opts {
 		opt(n)
@@ -108,7 +115,66 @@ func (n *Notifier) Publish(ev observe.Event) {
 		n.mu.Lock()
 		delete(n.last, p.Agent)
 		delete(n.previews, p.Agent)
+		delete(n.openPermissions, p.Agent)
 		n.mu.Unlock()
+	case *chat.MessagePayload:
+		n.trackPermission(p.Message)
+		n.chatMessage(p.Message)
+	case *chat.UpdatedPayload:
+		n.trackPermission(p.Message)
+	}
+}
+
+// trackPermission keeps openPermissions current with a permission
+// message's state.
+func (n *Notifier) trackPermission(m chat.Message) {
+	if m.Kind != chat.KindPermission {
+		return
+	}
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	switch {
+	case m.State == chat.StateOpen:
+		n.openPermissions[m.Agent] = m.ID
+	case n.openPermissions[m.Agent] == m.ID:
+		delete(n.openPermissions, m.Agent)
+	}
+}
+
+// chatMessage queues a chat push for an agent's outbound message. Permission
+// prompts push through attention (with their message id) and system notes
+// not at all, so each event has one push source.
+func (n *Notifier) chatMessage(m chat.Message) {
+	if m.Direction != chat.DirectionOut || m.Kind == chat.KindPermission || m.Kind == chat.KindSystem {
+		return
+	}
+	if n.allow != nil && !n.allow(m.Agent, config.PushStateChat) {
+		return
+	}
+	a := Alert{Agent: m.Agent, Kind: config.PushStateChat, Title: m.Agent, Body: chatBody(m), At: n.now(), MessageID: m.ID, MessageKind: m.Kind}
+	for _, o := range m.Options {
+		a.Options = append(a.Options, Option(o))
+	}
+	n.enqueue(a)
+}
+
+// chatBody is a chat message's text, or its file names when it has none.
+func chatBody(m chat.Message) string {
+	if m.Text != "" {
+		return m.Text
+	}
+	names := make([]string, 0, len(m.Attachments))
+	for _, a := range m.Attachments {
+		names = append(names, a.Filename)
+	}
+	return strings.Join(names, ", ")
+}
+
+// enqueue queues a without ever blocking the publisher.
+func (n *Notifier) enqueue(a Alert) {
+	select {
+	case n.queue <- a:
+	default: // queue full: shed the alert rather than block the publisher
 	}
 }
 
@@ -133,6 +199,10 @@ func (n *Notifier) observe(agent string, att observe.AgentAttention) {
 	} else {
 		delete(n.previews, agent)
 	}
+	var permissionID string
+	if att.State == observe.AttentionNeedsInput && att.Reason != nil && att.Reason.Kind == observe.AttentionReasonPermission {
+		permissionID = n.openPermissions[agent]
+	}
 	n.mu.Unlock()
 	title, ok := needsYouTitle(att)
 	if !ok {
@@ -141,10 +211,11 @@ func (n *Notifier) observe(agent string, att observe.AgentAttention) {
 	if n.allow != nil && !n.allow(agent, string(att.State)) {
 		return
 	}
-	select {
-	case n.queue <- Alert{Agent: agent, Kind: string(att.State), Title: title, Body: alertBody(att, preview), At: n.now()}:
-	default: // queue full: shed the alert rather than block the publisher
+	a := Alert{Agent: agent, Kind: string(att.State), Title: title, Body: alertBody(att, preview), At: n.now()}
+	if permissionID != "" {
+		a.MessageID, a.MessageKind = permissionID, chat.KindPermission
 	}
+	n.enqueue(a)
 }
 
 // needsYouTitle is the human summary for a needs-you state; ok=false for

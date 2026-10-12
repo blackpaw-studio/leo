@@ -666,3 +666,33 @@ func TestAlertWithNoRoomForABodyStillDeliversItsTitle(t *testing.T) {
 		t.Errorf("body = %d bytes, want it trimmed", len(body))
 	}
 }
+
+func TestChatFieldsRideInThePlaintext(t *testing.T) {
+	a := alert
+	a.Kind = "chat"
+	a.MessageID = "01M4RMAZ800000000000000001"
+	a.MessageKind = "ask"
+	a.Options = []Option{{Value: "y", Label: "Yes"}, {Value: "n", Label: "No"}}
+	got := sendAndDecrypt(t, a)
+	opts, _ := got["options"].([]any)
+	if got["message_id"] != a.MessageID || got["message_kind"] != "ask" || len(opts) != 2 || opts[0].(map[string]any)["label"] != "Yes" {
+		t.Fatalf("plaintext = %v", got)
+	}
+	if got := sendAndDecrypt(t, alert); func() bool { _, ok := got["message_id"]; return ok }() {
+		t.Errorf("plaintext = %v, want no chat keys on a plain attention alert", got)
+	}
+}
+
+func TestOptionsAreDroppedWhenTheyCannotFit(t *testing.T) {
+	a := alert
+	a.Agent = strings.Repeat("a", 1300)
+	a.MessageID = "01M4RMAZ800000000000000001"
+	a.MessageKind = "ask"
+	for i := 0; i < 12; i++ {
+		a.Options = append(a.Options, Option{Value: strings.Repeat("v", 20), Label: strings.Repeat("l", 40)})
+	}
+	got := sendAndDecrypt(t, a)
+	if _, ok := got["options"]; ok || got["message_id"] != a.MessageID {
+		t.Fatalf("plaintext = %v, want the options dropped and the message id kept", got)
+	}
+}

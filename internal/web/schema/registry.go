@@ -83,7 +83,7 @@ func fEnv(group string, advanced bool) Field {
 
 const pushGroup = "Push notifications"
 
-// fPush builds the three push-state fields in the given control kind.
+// fPush builds the push-state fields in the given control kind.
 func fPush(kind Kind) []Field {
 	return []Field{
 		{Key: "needs_input", Label: "Needs input", Kind: kind, Group: pushGroup,
@@ -92,6 +92,8 @@ func fPush(kind Kind) []Field {
 			Help: "Push when an agent finishes its turn"},
 		{Key: "errored", Label: "Errored", Kind: kind, Group: pushGroup,
 			Help: "Push when an agent hits an error"},
+		{Key: "chat", Label: "Chat messages", Kind: kind, Group: pushGroup,
+			Help: "Push an agent's Leo Chat messages and questions"},
 	}
 }
 
@@ -124,6 +126,8 @@ var registry = map[Section][]Field{
 		{Key: "channels", Label: "Channels", Group: "Notifications"},
 		{Key: "dev_channels", Label: "Dev channels", Group: "Notifications", Help: "Overrides channels when LEO_ENV=dev"},
 		{Key: "notify_on_fail", Label: "Notify on fail", Group: "Notifications"},
+		{Key: "owner", Label: "Chat owner", Group: "Notifications",
+			Help: "Agent whose Leo Chat thread gets this task's cards; empty picks the persistent target, the workspace's agent, or assistant"},
 	}, Field{Key: "workspace", Label: "Workspace", Group: "Advanced", Advanced: true}, fEnvironments("Advanced", true), fEnv("Advanced", true)),
 
 	SectionTemplate: append([]Field{
