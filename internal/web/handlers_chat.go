@@ -215,11 +215,13 @@ func (s *Server) handleChatThreads(w http.ResponseWriter, _ *http.Request) {
 
 func (s *Server) handleChatGet(w http.ResponseWriter, r *http.Request) {
 	seg, rest := r.PathValue("seg"), r.PathValue("rest")
+	// Thread routes first: "attachments" is a valid agent name, and an
+	// attachment id (a ULID) is never "messages".
 	switch {
-	case seg == "attachments":
-		s.serveChatAttachment(w, r, rest)
 	case rest == "messages":
 		s.handleChatMessages(w, r, seg)
+	case seg == "attachments":
+		s.serveChatAttachment(w, r, rest)
 	default:
 		http.NotFound(w, r)
 	}

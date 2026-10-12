@@ -395,3 +395,23 @@ func TestChatDelivererLiveAgentUsesPeerInbox(t *testing.T) {
 		t.Fatalf("peer delivery %q", got)
 	}
 }
+
+func TestChatAgentNamedAttachmentsKeepsItsThread(t *testing.T) {
+	cs := newChatServer(t)
+	cs.svc.records = append(cs.svc.records, agent.Record{Name: "attachments", Workspace: "/ws2"})
+	if w := chatRequest(t, cs.s, http.MethodPost, "/api/v1/chat/attachments/messages", testAPIToken, `{"text":"hi"}`); w.Code != http.StatusAccepted {
+		t.Fatalf("send = %d %s", w.Code, w.Body)
+	}
+	w := chatRequest(t, cs.s, http.MethodGet, "/api/v1/chat/attachments/messages", testAPIToken, "")
+	var page chat.PageResult
+	decodeChatData(t, w, &page)
+	if len(page.Messages) != 1 || page.Messages[0].Agent != "attachments" {
+		t.Fatalf("page = %+v", page)
+	}
+	// Attachment downloads share the pattern and still resolve.
+	var att chat.Attachment
+	decodeChatData(t, upload(t, cs.s, "attachments", "a.txt", "text/plain", []byte("x")), &att)
+	if w := chatRequest(t, cs.s, http.MethodGet, "/api/v1/chat/attachments/"+att.ID, testAPIToken, ""); w.Code != http.StatusOK || w.Body.String() != "x" {
+		t.Fatalf("attachment GET = %d %q", w.Code, w.Body)
+	}
+}
