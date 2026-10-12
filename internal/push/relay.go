@@ -22,6 +22,8 @@ const (
 	// retryBackoff is the pause before the single retry.
 	retryBackoff  = time.Second
 	maxTitleRunes = 160
+	// maxBodyRunes bounds the alert body before it is fitted to the relay cap.
+	maxBodyRunes = 400
 	// The relay caps ciphertext at 2 KiB of base64. base64(nonce 12 ‖ plaintext
 	// ‖ tag 16) ≤ 2048 bytes means plaintext ≤ 1536-28 = 1508 bytes.
 	maxPlaintextBytes = 1508
@@ -37,7 +39,10 @@ type Alert struct {
 	Kind string
 	// Title is the human summary shown as the notification body.
 	Title string
-	At    time.Time
+	// Body is optional detail under the title (the question, command or
+	// agent summary). It may span lines; empty sends the title alone.
+	Body string
+	At   time.Time
 }
 
 // Sender delivers an Alert to every registered device. Implementations must
@@ -53,6 +58,7 @@ type payload struct {
 	Agent    string `json:"agent"`
 	Kind     string `json:"kind"`
 	Title    string `json:"title"`
+	Body     string `json:"body,omitempty"`
 	TS       int64  `json:"ts"`
 }
 
@@ -169,27 +175,55 @@ func (s *RelaySender) Send(ctx context.Context, a Alert) {
 var errPayloadTooLarge = errors.New("push: payload exceeds relay limit")
 
 // plaintext encodes a. The agent name is sent exactly, since a tap targets
-// it; only the title is trimmed to fit maxPlaintextBytes.
+// it; to fit maxPlaintextBytes the body is trimmed first, then the title.
 func (s *RelaySender) plaintext(a Alert) ([]byte, error) {
 	title := []rune(clip(a.Title, maxTitleRunes))
-	for {
-		out, err := s.encode(a, string(title))
+	body := []rune(sanitizeBody(a.Body, maxBodyRunes))
+	fits := func(title, body []rune) (bool, error) {
+		out, err := s.encode(a, string(title), string(body))
+		return len(out) <= maxPlaintextBytes, err
+	}
+	if ok, err := fits(title, body); err != nil {
+		return nil, err
+	} else if !ok {
+		// A body is trimmed first, to the longest prefix that fits.
+		body, err = longestFit(body, func(b []rune) (bool, error) { return fits(title, b) })
 		if err != nil {
 			return nil, err
 		}
-		if len(out) <= maxPlaintextBytes {
-			return out, nil
+		if ok, _ := fits(title, body); !ok {
+			title, err = longestFit(title, func(t []rune) (bool, error) { return fits(t, body) })
+			if err != nil {
+				return nil, err
+			}
+			if ok, _ := fits(title, body); !ok {
+				return nil, errPayloadTooLarge
+			}
 		}
-		if len(title) == 0 {
-			return nil, errPayloadTooLarge
-		}
-		// Every rune encodes to at least one byte, so dropping as many
-		// runes as there are excess bytes is always enough.
-		title = title[:max(0, len(title)-(len(out)-maxPlaintextBytes))]
 	}
+	return s.encode(a, string(title), string(body))
 }
 
-func (s *RelaySender) encode(a Alert, title string) ([]byte, error) {
+// longestFit returns the longest prefix of r for which fit holds, or an empty
+// slice when none does. Encoded size grows with the prefix, so it bisects.
+func longestFit(r []rune, fit func([]rune) (bool, error)) ([]rune, error) {
+	lo, hi := 0, len(r) // r[:lo] fits, or lo == 0
+	for lo < hi {
+		mid := (lo + hi + 1) / 2
+		ok, err := fit(r[:mid])
+		if err != nil {
+			return nil, err
+		}
+		if ok {
+			lo = mid
+		} else {
+			hi = mid - 1
+		}
+	}
+	return r[:lo], nil
+}
+
+func (s *RelaySender) encode(a Alert, title, body string) ([]byte, error) {
 	var buf bytes.Buffer
 	enc := json.NewEncoder(&buf)
 	enc.SetEscapeHTML(false)
@@ -199,6 +233,7 @@ func (s *RelaySender) encode(a Alert, title string) ([]byte, error) {
 		Agent:    a.Agent,
 		Kind:     a.Kind,
 		Title:    title,
+		Body:     body,
 		TS:       a.At.Unix(),
 	})
 	return bytes.TrimRight(buf.Bytes(), "\n"), err
@@ -297,6 +332,32 @@ func clip(s string, max int) string {
 		return s
 	}
 	return string([]rune(s)[:max])
+}
+
+// sanitizeBody strips control characters except newlines, trims trailing
+// space from each line, collapses runs of blank lines to one, trims the
+// ends, and clips to max runes with an ellipsis.
+func sanitizeBody(s string, max int) string {
+	s = strings.Map(func(r rune) rune {
+		if r != '\n' && unicode.IsControl(r) {
+			return -1
+		}
+		return r
+	}, s)
+	lines := strings.Split(s, "\n")
+	kept := make([]string, 0, len(lines))
+	for _, line := range lines {
+		line = strings.TrimRightFunc(line, unicode.IsSpace)
+		if line == "" && len(kept) > 0 && kept[len(kept)-1] == "" {
+			continue
+		}
+		kept = append(kept, line)
+	}
+	s = strings.TrimSpace(strings.Join(kept, "\n"))
+	if utf8.RuneCountInString(s) <= max {
+		return s
+	}
+	return string([]rune(s)[:max-1]) + "…"
 }
 
 func sleepContext(ctx context.Context, d time.Duration) error {
