@@ -445,6 +445,29 @@ function toolSummary(tool, input, home) {
   return undefined
 }
 
+// What the daemon keeps of an attention summary (observe.MaxActionDetail).
+// A question summary is shortened to this up front so its "(+N more)" suffix
+// is not the part the daemon's clamp cuts.
+export const MAX_ATTENTION_DETAIL_CHARS = 120
+
+/**
+ * The attention summary of an AskUserQuestion: the first question's text,
+ * whitespace-folded, plus " (+N more)" when it asks several.
+ * @param {unknown} questions the tool's `questions` argument
+ * @returns {string | undefined} undefined when no question has text
+ */
+export function questionSummary(questions) {
+  if (!Array.isArray(questions)) return undefined
+  const texts = questions
+    .map((q) => (isRecord(q) && typeof q.question === 'string' ? q.question.trim().split(/\s+/).join(' ') : ''))
+    .filter((text) => text !== '')
+  if (texts.length === 0) return undefined
+  const suffix = texts.length > 1 ? ` (+${texts.length - 1} more)` : ''
+  const room = MAX_ATTENTION_DETAIL_CHARS - suffix.length
+  const first = texts[0].length > room ? texts[0].slice(0, room - 1) + '…' : texts[0]
+  return capField(first + suffix)
+}
+
 /**
  * What an activity or attention report says of a tool call: its name and a
  * summary of its input, each capped; keys without a value are left out.
