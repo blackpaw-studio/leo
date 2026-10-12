@@ -780,3 +780,27 @@ func TestBridgeFeedTrailingEdgeOfARetiredLaunchIsDropped(t *testing.T) {
 		t.Fatalf("published %d activity events; want only the leading edge", len(evs))
 	}
 }
+
+// The push notifier takes a finished alert's body from the turn's preview,
+// which only works while turn_completed is published before the finished
+// attention transition. Pin that order.
+func TestBridgeFeedPublishesTurnPreviewBeforeFinishedAttention(t *testing.T) {
+	h := newFeedHarness(t, nil)
+
+	h.send(bridge.Event{Name: bridge.EventTurnComplete, EventID: "tc1", Message: "All done."})
+
+	var order []string
+	for _, ev := range h.pub.snapshot() {
+		switch p := ev.Payload.(type) {
+		case *AgentTurnCompletedPayload:
+			order = append(order, "turn_completed:"+p.Preview)
+		case *AgentActivityPayload:
+			if p.Attention != nil && p.Attention.State == AttentionFinished {
+				order = append(order, "finished")
+			}
+		}
+	}
+	if want := []string{"turn_completed:All done.", "finished"}; fmt.Sprint(order) != fmt.Sprint(want) {
+		t.Fatalf("event order = %v, want %v", order, want)
+	}
+}

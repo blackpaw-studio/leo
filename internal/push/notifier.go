@@ -26,6 +26,10 @@ type Notifier struct {
 
 	mu   sync.Mutex
 	last map[string]observe.AttentionState
+	// previews holds each agent's latest turn preview until the finished
+	// transition it precedes consumes it. The bridge feed publishes the
+	// turn_completed event before advancing attention to finished.
+	previews map[string]string
 }
 
 // NotifierOption configures a Notifier.
@@ -62,6 +66,8 @@ func NewNotifier(next observe.Publisher, sender Sender, opts ...NotifierOption) 
 		now:    time.Now,
 		queue:  make(chan Alert, defaultQueueSize),
 		last:   make(map[string]observe.AttentionState),
+
+		previews: make(map[string]string),
 	}
 	for _, opt := range opts {
 		opt(n)
@@ -94,9 +100,14 @@ func (n *Notifier) Publish(ev observe.Event) {
 		if p.Attention != nil {
 			n.observe(p.Agent, *p.Attention)
 		}
+	case *observe.AgentTurnCompletedPayload:
+		n.mu.Lock()
+		n.previews[p.Agent] = p.Preview
+		n.mu.Unlock()
 	case *observe.AgentStoppedPayload:
 		n.mu.Lock()
 		delete(n.last, p.Agent)
+		delete(n.previews, p.Agent)
 		n.mu.Unlock()
 	}
 }
@@ -107,10 +118,15 @@ func (n *Notifier) observe(agent string, att observe.AgentAttention) {
 	n.mu.Lock()
 	prev, seen := n.last[agent]
 	n.last[agent] = att.State
-	n.mu.Unlock()
 	if seen && prev == att.State {
+		n.mu.Unlock()
 		return
 	}
+	preview := n.previews[agent]
+	if att.State == observe.AttentionFinished {
+		delete(n.previews, agent)
+	}
+	n.mu.Unlock()
 	title, ok := needsYouTitle(att)
 	if !ok {
 		return
@@ -119,7 +135,7 @@ func (n *Notifier) observe(agent string, att observe.AgentAttention) {
 		return
 	}
 	select {
-	case n.queue <- Alert{Agent: agent, Kind: string(att.State), Title: title, At: n.now()}:
+	case n.queue <- Alert{Agent: agent, Kind: string(att.State), Title: title, Body: alertBody(att, preview), At: n.now()}:
 	default: // queue full: shed the alert rather than block the publisher
 	}
 }
@@ -136,6 +152,19 @@ func needsYouTitle(att observe.AgentAttention) (string, bool) {
 		return "Hit an error", true
 	}
 	return "", false
+}
+
+// alertBody is what needs attention, shown under the title: the reason's
+// detail (question text, command, path) for needs_input and errored, and the
+// turn's preview for finished. Empty means a title-only push.
+func alertBody(att observe.AgentAttention, preview string) string {
+	if att.State == observe.AttentionFinished {
+		return preview
+	}
+	if att.Reason == nil {
+		return ""
+	}
+	return att.Reason.Detail
 }
 
 func needsInputTitle(r *observe.AttentionReason) string {
