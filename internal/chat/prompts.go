@@ -82,6 +82,9 @@ func (s *Service) awaitWith(ctx context.Context, m Message, timeout time.Duratio
 		return v, v != ""
 	case <-timer:
 		end = awaitEnd{state: StateExpired}
+	case <-s.ctx.Done():
+		// Shutdown: nobody can answer it now.
+		end = awaitEnd{state: StateExpired}
 	case <-ctx.Done():
 		end = gone
 	}
@@ -118,6 +121,10 @@ var permissionOptions = []Option{{Value: "allow", Label: "Allow"}, {Value: "deny
 // when the hook goes away — Claude kills it once the prompt is answered in
 // the terminal, which marks the message answered there.
 func (s *Service) RequestPermission(ctx context.Context, agent string, payload json.RawMessage, timeout time.Duration) string {
+	if s.enter() != nil {
+		return ""
+	}
+	defer s.leave()
 	var req permissionRequest
 	if err := json.Unmarshal(payload, &req); err != nil || req.ToolName == "" {
 		return ""
@@ -167,6 +174,10 @@ type HookEvent struct {
 // auto-captures; a PostToolUse for the tool call an open permission prompt
 // asked about marks it answered in the terminal.
 func (s *Service) OnHook(agent string, ev HookEvent) {
+	if s.enter() != nil {
+		return
+	}
+	defer s.leave()
 	switch ev.Event {
 	case "Stop":
 		s.resolveCaptures(agent, ev)

@@ -455,3 +455,29 @@ func TestChatAgentNamedAttachmentsKeepsItsThread(t *testing.T) {
 		t.Fatalf("attachment GET = %d %q", w.Code, w.Body)
 	}
 }
+
+// Shutdown closes chat before the HTTP server: a held ask is answered (timed
+// out) rather than outliving the store, and new chat calls get 503.
+func TestShutdownClosesChatFirst(t *testing.T) {
+	cs := newChatServer(t)
+	asked := make(chan *httptest.ResponseRecorder, 1)
+	go func() {
+		asked <- chatRequest(t, cs.s, http.MethodPost, "/api/agent/assistant/chat/ask", testAgentToken, `{"question":"?","options":[{"value":"a","label":"a"}],"timeout_s":3600}`)
+	}()
+	waitEvent(t, cs.events, chat.KindAsk)
+	if err := cs.s.Shutdown(); err != nil {
+		t.Fatal(err)
+	}
+	var w *httptest.ResponseRecorder
+	select {
+	case w = <-asked:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the held ask was never answered")
+	}
+	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"timed_out":true`) {
+		t.Fatalf("held ask = %d %s", w.Code, w.Body.String())
+	}
+	if w := chatRequest(t, cs.s, "POST", "/api/v1/chat/assistant/messages", testAPIToken, `{"text":"late"}`); w.Code != http.StatusServiceUnavailable {
+		t.Fatalf("send after shutdown = %d %s", w.Code, w.Body.String())
+	}
+}

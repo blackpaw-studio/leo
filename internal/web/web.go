@@ -784,9 +784,16 @@ func (s *Server) ListenAndServe(addr string) error {
 // Shutdown gracefully stops the web server and its background consult loop.
 // The loop must not outlive the server: a daemon whose parent context is
 // never canceled would otherwise keep sweeping and redrawing rosters forever.
+//
+// Leo Chat closes first — no new calls, its held asks, permission prompts
+// and deliveries cancelled and drained — so none outlives the chat store,
+// which the daemon closes after this returns.
 func (s *Server) Shutdown() error {
 	if s.stopConsultLoop != nil {
 		s.stopConsultLoop()
+	}
+	if s.chat != nil {
+		s.chat.Close()
 	}
 	if s.httpServer == nil {
 		return nil

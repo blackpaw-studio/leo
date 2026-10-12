@@ -796,3 +796,51 @@ func TestPruneDeletesOldAttachmentFiles(t *testing.T) {
 		t.Fatal("pruned attachment still available")
 	}
 }
+
+// blockingDeliverer holds each delivery until its context ends.
+type blockingDeliverer struct{ started chan struct{} }
+
+func (b blockingDeliverer) Deliver(ctx context.Context, _, _, _ string, _ func()) (string, error) {
+	close(b.started)
+	<-ctx.Done()
+	return "", ctx.Err()
+}
+
+// Close stops admission, then cancels and drains the waits and deliveries
+// in flight, so none outlives the store the daemon closes next.
+func TestCloseCancelsAndDrainsWaitersAndDeliveries(t *testing.T) {
+	f := newFixture(t)
+	started := make(chan struct{})
+	f.svc.opts.Deliver = blockingDeliverer{started: started}
+	in, err := f.svc.Send(context.Background(), "assistant", SendRequest{Text: "slow"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	<-started
+	asked := make(chan AskResult, 1)
+	go func() {
+		r, _ := f.svc.Ask(context.Background(), AskRequest{Caller: "assistant", Question: "?", Options: []Option{{Value: "a"}}})
+		asked <- r
+	}()
+	<-f.timers.got
+	f.svc.Close()
+	select {
+	case r := <-asked:
+		if !r.TimedOut {
+			t.Fatalf("ask after close = %+v", r)
+		}
+	default:
+		t.Fatal("Close returned while an ask still waited")
+	}
+	got, _ := f.store.Message(in.ID)
+	notes, _ := f.store.OpenMessages("assistant", KindSystem, "")
+	if got.State != StatePending || len(notes) != 0 {
+		t.Fatalf("a delivery cut short by shutdown stays pending for recovery: %s, notes %+v", got.State, notes)
+	}
+	if _, err := f.svc.Send(context.Background(), "assistant", SendRequest{Text: "late"}); !errors.Is(err, ErrClosed) {
+		t.Fatalf("send after close = %v", err)
+	}
+	if _, err := f.svc.Post(context.Background(), PostRequest{Caller: "assistant", Text: "late"}); !errors.Is(err, ErrClosed) {
+		t.Fatalf("post after close = %v", err)
+	}
+}

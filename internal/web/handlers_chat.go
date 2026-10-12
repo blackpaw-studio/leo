@@ -202,6 +202,8 @@ func writeChatError(w http.ResponseWriter, err error) {
 		status = http.StatusConflict
 	case errors.Is(err, chat.ErrTooLarge):
 		status = http.StatusRequestEntityTooLarge
+	case errors.Is(err, chat.ErrClosed):
+		status = http.StatusServiceUnavailable
 	}
 	writeJSON(w, status, apiResponse{Error: err.Error()})
 }

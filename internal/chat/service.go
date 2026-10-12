@@ -20,6 +20,8 @@ var (
 	ErrInvalid      = errors.New("invalid chat request")
 	ErrUnknownAgent = errors.New("unknown agent")
 	ErrConflict     = errors.New("message already settled")
+	// ErrClosed: the daemon is shutting chat down.
+	ErrClosed = errors.New("Leo Chat is shutting down")
 )
 
 // Limits.
@@ -81,8 +83,14 @@ type Service struct {
 	insertMu sync.Mutex
 	// marks is each agent's last answered prompt stamp (ResolveCaptures).
 	marks *captureMarks
-	stop  chan struct{}
-	once  sync.Once
+
+	// ctx ends at Close: it cancels every wait and delivery in flight.
+	ctx    context.Context
+	cancel context.CancelFunc
+	// mu guards closed; active counts the calls admitted before it was set.
+	mu     sync.Mutex
+	closed bool
+	active sync.WaitGroup
 }
 
 // NewService builds a Service; zero-valued options take defaults.
@@ -102,8 +110,22 @@ func NewService(opts Options) *Service {
 	if opts.Agents == nil {
 		opts.Agents = func() []AgentRef { return nil }
 	}
-	return &Service{opts: opts, queues: newSerialQueues(), waiters: newWaiters(), marks: &captureMarks{m: make(map[string]time.Time)}, stop: make(chan struct{})}
+	ctx, cancel := context.WithCancel(context.Background())
+	return &Service{opts: opts, queues: newSerialQueues(), waiters: newWaiters(), marks: &captureMarks{m: make(map[string]time.Time)}, ctx: ctx, cancel: cancel}
 }
+
+// enter admits a call unless Close has begun; an admitted call must leave.
+func (s *Service) enter() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return ErrClosed
+	}
+	s.active.Add(1)
+	return nil
+}
+
+func (s *Service) leave() { s.active.Done() }
 
 // Recover runs once at daemon start: prompts left open by the previous
 // daemon have no waiter any more, so they expire.
@@ -164,13 +186,13 @@ func (s *Service) Run(ctx context.Context) {
 	ticker := time.NewTicker(pruneInterval)
 	defer ticker.Stop()
 	for {
-		if err := s.Prune(); err != nil {
+		if err := s.Prune(); err != nil && !errors.Is(err, ErrClosed) {
 			s.opts.Logf("chat: pruning attachments: %v", err)
 		}
 		select {
 		case <-ctx.Done():
 			return
-		case <-s.stop:
+		case <-s.ctx.Done():
 			return
 		case <-ticker.C:
 		}
@@ -179,6 +201,10 @@ func (s *Service) Run(ctx context.Context) {
 
 // Prune deletes attachment files past AttachmentRetention; their rows stay.
 func (s *Service) Prune() error {
+	if err := s.enter(); err != nil {
+		return err
+	}
+	defer s.leave()
 	paths, err := s.opts.Store.PruneAttachments(s.opts.Now().Add(-AttachmentRetention))
 	if err != nil {
 		return err
@@ -194,9 +220,16 @@ func (s *Service) Prune() error {
 // Flush waits for every queued delivery to finish.
 func (s *Service) Flush() { s.queues.wait() }
 
-// Close stops background work and waits for deliveries in flight.
+// Close shuts chat down ahead of the store: it stops admitting calls, then
+// cancels and waits out the asks, permission prompts and deliveries in
+// flight. A delivery it cuts short stays pending, for the next daemon's
+// Recover. Safe to call more than once.
 func (s *Service) Close() {
-	s.once.Do(func() { close(s.stop) })
+	s.mu.Lock()
+	s.closed = true
+	s.mu.Unlock()
+	s.cancel()
+	s.active.Wait()
 	s.queues.wait()
 }
 
@@ -229,6 +262,10 @@ func (s *Service) Messages(agent string, p Page) (PageResult, error) {
 
 // MarkRead marks agent's thread read up to id.
 func (s *Service) MarkRead(agent, id string) error {
+	if err := s.enter(); err != nil {
+		return err
+	}
+	defer s.leave()
 	if !config.IsAgentName(agent) || !validID(id) {
 		return fmt.Errorf("%w: agent and message id required", ErrInvalid)
 	}
@@ -247,6 +284,10 @@ func (s *Service) Attachment(id string) (Attachment, error) {
 // uploads make that message a voice note. agent is optional: an upload
 // without one is claimed by the first message that sends it.
 func (s *Service) Upload(agent, filename, declaredMIME string, r io.Reader) (Attachment, error) {
+	if err := s.enter(); err != nil {
+		return Attachment{}, err
+	}
+	defer s.leave()
 	if agent != "" && !config.IsAgentName(agent) {
 		return Attachment{}, fmt.Errorf("%w: agent name %q", ErrInvalid, agent)
 	}
@@ -282,6 +323,10 @@ type SendRequest struct {
 // Send records an inbound message (pending) and queues its delivery into
 // the agent: voice notes are transcribed first, a stopped agent is started.
 func (s *Service) Send(_ context.Context, agent string, req SendRequest) (Message, error) {
+	if err := s.enter(); err != nil {
+		return Message{}, err
+	}
+	defer s.leave()
 	if !config.IsAgentName(agent) {
 		return Message{}, fmt.Errorf("%w: agent name %q", ErrInvalid, agent)
 	}
@@ -356,7 +401,7 @@ func (s *Service) inboundKind(agent string, ids []string) (string, error) {
 // deliver runs on agent's serial queue: transcribe, frame, deliver, then
 // record the capture and the outcome.
 func (s *Service) deliver(m Message) {
-	ctx, cancel := context.WithTimeout(context.Background(), deliverTimeout)
+	ctx, cancel := context.WithTimeout(s.ctx, deliverTimeout)
 	defer cancel()
 	d := Delivery{Text: m.Text, Voice: m.Kind == KindVoice}
 	for _, a := range m.Attachments {
@@ -392,6 +437,12 @@ func (s *Service) deliver(m Message) {
 		// Only claude agents' replies are auto-captured; the others post
 		// with leo_chat_post.
 		_, _ = s.opts.Store.RemoveCapture(m.ID)
+	}
+	if err != nil && s.ctx.Err() != nil {
+		// Cut short by shutdown: left pending for the next daemon's
+		// Recover, which knows whether the agent's outbox still holds it.
+		s.opts.Logf("chat: delivery of %s to %s cut short by shutdown: %v", m.ID, m.Agent, err)
+		return
 	}
 	if err != nil {
 		s.opts.Logf("chat: delivering %s to %s: %v", m.ID, m.Agent, err)

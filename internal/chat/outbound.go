@@ -79,6 +79,10 @@ func (s *Service) thread(caller, task string) (agent, note string, err error) {
 // Post adds an agent's (or a task run's) message to its thread, copying
 // files into the attachment store.
 func (s *Service) Post(_ context.Context, req PostRequest) (Message, error) {
+	if err := s.enter(); err != nil {
+		return Message{}, err
+	}
+	defer s.leave()
 	text := strings.TrimSpace(req.Text)
 	switch {
 	case text == "" && len(req.Files) == 0:
@@ -194,6 +198,10 @@ func validateAsk(req AskRequest) (time.Duration, error) {
 // Ask posts a question with options to the caller's thread and blocks until
 // it is answered, times out, or ctx ends (both expire it).
 func (s *Service) Ask(ctx context.Context, req AskRequest) (AskResult, error) {
+	if err := s.enter(); err != nil {
+		return AskResult{}, err
+	}
+	defer s.leave()
 	timeout, err := validateAsk(req)
 	if err != nil {
 		return AskResult{}, err
@@ -231,6 +239,10 @@ func (s *Service) Ask(ctx context.Context, req AskRequest) (AskResult, error) {
 
 // Answer settles an open ask or permission message from the apps.
 func (s *Service) Answer(agent, id, value string) (Message, error) {
+	if err := s.enter(); err != nil {
+		return Message{}, err
+	}
+	defer s.leave()
 	m, err := s.opts.Store.Message(id)
 	if err != nil || m.Agent != agent {
 		return Message{}, ErrNotFound
