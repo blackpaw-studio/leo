@@ -108,8 +108,8 @@ no files, and the thread keeps the two adjacent.
 
 `min` and `max` apply to `checkboxes` only: `min` defaults to 0 and `max`
 defaults to the number of options. An ask is rejected when `min < 0`,
-`max < 1`, `min > max` or `max` exceeds the option count, or when `min` or
-`max` is set on any other input type.
+`max < 1`, `min > max` or `max` exceeds the option count, or when a nonzero `min`
+or any `max` is set on another input type.
 
 Bare-string options are accepted only as MCP tool input; on the wire (API
 and events) options are always `{value, label}` objects. `allow_text` (choice
