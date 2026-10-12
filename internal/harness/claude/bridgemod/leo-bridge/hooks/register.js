@@ -38,6 +38,7 @@ import {
   splitLines,
   REJECTED_REPORT_EXIT_CODE,
   STALE_LAUNCH_EXIT_CODE,
+  questionSummary,
   toolActivity,
   touchedEntry,
   turnTokens,
@@ -1308,7 +1309,7 @@ export function register(on) {
     const isQuestion = e.tool === 'AskUserQuestion'
     mainCalls = [...mainCalls, call]
     reportActivity($)
-    if (isQuestion) raiseAttention($, { kind: 'question', tool: e.tool })
+    if (isQuestion) raiseAttention($, defined({ kind: 'question', tool: e.tool, summary: questionSummary(e.questions) }))
     try {
       return await next(e)
     } finally {

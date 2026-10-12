@@ -170,12 +170,49 @@ test('AskUserQuestion needs input while the question is open', async ($, on) => 
   await start($, h)
   const call = $.tool.call({ tool: 'AskUserQuestion', tool_use_id: 'q1', questions: [{ question: 'private?' }] } as any)
   await h.settle()
-  expect(named(h, 'attention')).toEqual([needsInput('question', { tool: 'AskUserQuestion' })])
+  expect(named(h, 'attention')).toEqual([needsInput('question', { tool: 'AskUserQuestion', summary: 'private?' })])
   g.release('AskUserQuestion')
   await call
   await $.classic.PostToolUse({ tool_name: 'AskUserQuestion', tool_input: {}, tool_response: 'a', tool_use_id: 'q1' })
   await h.settle()
-  expect(named(h, 'attention')).toEqual([needsInput('question', { tool: 'AskUserQuestion' }), cleared])
+  expect(named(h, 'attention')).toEqual([needsInput('question', { tool: 'AskUserQuestion', summary: 'private?' }), cleared])
+})
+
+async function askedAttention($: any, on: any, questions: unknown) {
+  const g = gates()
+  const h = setup(on, { toolCall: g.toolCall })
+  await start($, h)
+  $.tool.call({ tool: 'AskUserQuestion', tool_use_id: 'q1', questions } as any)
+  await h.settle()
+  return named(h, 'attention')
+}
+
+test('an AskUserQuestion with several questions shows the first and counts the rest', async ($, on) => {
+  const got = await askedAttention($, on, [{ question: 'Which branch?' }, { question: 'Run tests?' }, { question: 'Tag it?' }])
+  expect(got).toEqual([needsInput('question', { tool: 'AskUserQuestion', summary: 'Which branch? (+2 more)' })])
+})
+
+test('a long question is shortened so the remaining-count suffix survives the daemon clamp', async ($, on) => {
+  const got = await askedAttention($, on, [{ question: 'x'.repeat(300) }, { question: 'y' }])
+  const summary = got[0].summary as string
+  expect(summary.length).toBeLessThanOrEqual(120)
+  expect(summary.endsWith('… (+1 more)')).toBe(true)
+})
+
+test('a long question is clipped by code points, never through a surrogate pair', async ($, on) => {
+  // 108 + 1 emoji fill the 109 code points left beside the ellipsis and suffix
+  const got = await askedAttention($, on, [{ question: 'a'.repeat(108) + '😀😀😀😀' }, { question: 'y' }])
+  expect(got[0].summary).toBe('a'.repeat(108) + '😀… (+1 more)')
+})
+
+test('question text is whitespace-folded, and a question with no usable text reports none', async ($, on) => {
+  const folded = await askedAttention($, on, [{ question: '  Deploy\n  now?  ' }])
+  expect(folded[0].summary).toBe('Deploy now?')
+})
+
+test('an AskUserQuestion without readable questions still needs input, with no summary', async ($, on) => {
+  const got = await askedAttention($, on, [{ header: 'no question key' }, 7, null])
+  expect(got).toEqual([needsInput('question', { tool: 'AskUserQuestion' })])
 })
 
 test('an MCP elicitation needs input, naming the server', async ($, on) => {

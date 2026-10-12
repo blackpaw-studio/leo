@@ -574,3 +574,95 @@ func TestRedirectsAreNotFollowed(t *testing.T) {
 		t.Fatal("the sender followed a relay redirect")
 	}
 }
+
+func sendAndDecrypt(t *testing.T, a Alert) map[string]any {
+	t.Helper()
+	h := newHarness(t)
+	h.sender.Send(context.Background(), a)
+	bodies := h.relay.Bodies()
+	if len(bodies) != 1 {
+		t.Fatalf("relay got %d pushes, want 1", len(bodies))
+	}
+	got, err := decrypt(t, h.key, bodies[0].Ciphertext)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return got
+}
+
+func TestBodyIsIncludedInThePlaintextWhenSetAndOmittedWhenEmpty(t *testing.T) {
+	withBody := alert
+	withBody.Body = "rm -rf build/"
+	if got := sendAndDecrypt(t, withBody); got["body"] != "rm -rf build/" || got["v"] != float64(1) {
+		t.Errorf("plaintext = %v, want body %q at v1", got, withBody.Body)
+	}
+	if got := sendAndDecrypt(t, alert); func() bool { _, ok := got["body"]; return ok }() {
+		t.Errorf("plaintext = %v, want no body key for an empty body", got)
+	}
+}
+
+func TestBodyIsSanitisedAndClipped(t *testing.T) {
+	cases := []struct {
+		name, in, want string
+	}{
+		{"keeps newlines, strips other controls", "line1\x00\x1b[31m\nline2\ttab\r", "line1[31m\nline2tab"},
+		{"collapses runs of blank lines", "a\n\n\n\nb\n \n \nc", "a\n\nb\n\nc"},
+		{"trims surrounding whitespace", "\n\n  hi  \n", "hi"},
+		{"clips to 400 runes with an ellipsis", strings.Repeat("é", 500), strings.Repeat("é", 399) + "…"},
+		{"leaves exactly 400 runes alone", strings.Repeat("x", 400), strings.Repeat("x", 400)},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			a := alert
+			a.Body = tc.in
+			got := sendAndDecrypt(t, a)
+			if got["body"] != tc.want {
+				t.Errorf("body = %q, want %q", got["body"], tc.want)
+			}
+		})
+	}
+}
+
+func TestBlankBodyAfterSanitisingIsOmitted(t *testing.T) {
+	a := alert
+	a.Body = "\x00\n \n"
+	if got := sendAndDecrypt(t, a); func() bool { _, ok := got["body"]; return ok }() {
+		t.Errorf("plaintext = %v, want no body key", got)
+	}
+}
+
+func TestOversizedBodyIsTrimmedBeforeTheTitle(t *testing.T) {
+	a := alert
+	a.Title = "Needs permission: Bash"
+	a.Body = strings.Repeat("é", 400)
+	a.Agent = strings.Repeat("a", 1200) // leaves little room: body must shrink, title must not
+
+	got := sendAndDecrypt(t, a)
+
+	if got["title"] != a.Title {
+		t.Errorf("title = %v, want the full title %q", got["title"], a.Title)
+	}
+	body, _ := got["body"].(string)
+	if body == "" || !strings.HasPrefix(strings.Repeat("é", 400), strings.TrimSuffix(body, "…")) {
+		t.Errorf("body = %q, want a non-empty trimmed prefix", body)
+	}
+	if len(body) >= len(a.Body) {
+		t.Errorf("body was not trimmed (%d bytes)", len(body))
+	}
+}
+
+func TestAlertWithNoRoomForABodyStillDeliversItsTitle(t *testing.T) {
+	a := alert
+	a.Agent = strings.Repeat("a", 1390) // the title fits, a 400-rune body cannot
+	a.Body = strings.Repeat("b", 400)
+	a.Title = strings.Repeat("t", 20)
+
+	got := sendAndDecrypt(t, a)
+
+	if got["title"] != a.Title {
+		t.Errorf("title = %v, want it kept in full", got["title"])
+	}
+	if body, _ := got["body"].(string); len(body) >= len(a.Body) {
+		t.Errorf("body = %d bytes, want it trimmed", len(body))
+	}
+}

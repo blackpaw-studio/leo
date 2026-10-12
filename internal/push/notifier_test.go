@@ -285,3 +285,95 @@ func TestSuppressedTransitionStillRecordsState(t *testing.T) {
 		t.Fatalf("alert = %+v, want errored first", got)
 	}
 }
+
+func turnCompleted(agent, preview string) observe.Event {
+	return observe.Event{
+		Type:    observe.EventAgentTurnCompleted,
+		Payload: &observe.AgentTurnCompletedPayload{Agent: agent, Outcome: observe.TurnCompleted, Preview: preview},
+	}
+}
+
+func TestAlertBodyPerState(t *testing.T) {
+	cases := []struct {
+		name     string
+		state    observe.AttentionState
+		reason   *observe.AttentionReason
+		wantBody string
+	}{
+		{"question carries its text", observe.AttentionNeedsInput,
+			&observe.AttentionReason{Kind: observe.AttentionReasonQuestion, Tool: "AskUserQuestion", Detail: "Ship it? (+1 more)"}, "Ship it? (+1 more)"},
+		{"permission carries the command", observe.AttentionNeedsInput,
+			&observe.AttentionReason{Kind: observe.AttentionReasonPermission, Tool: "Bash", Detail: "rm -rf build/"}, "rm -rf build/"},
+		{"elicitation carries its detail", observe.AttentionNeedsInput,
+			&observe.AttentionReason{Kind: observe.AttentionReasonElicitation, Detail: "github"}, "github"},
+		{"needs input without a detail is title only", observe.AttentionNeedsInput,
+			&observe.AttentionReason{Kind: observe.AttentionReasonPermission, Tool: "Bash"}, ""},
+		{"needs input without a reason is title only", observe.AttentionNeedsInput, nil, ""},
+		{"errored carries its detail when set", observe.AttentionErrored,
+			&observe.AttentionReason{Detail: "exit 1"}, "exit 1"},
+		{"errored without a reason is title only", observe.AttentionErrored, nil, ""},
+		{"finished with no preview is title only", observe.AttentionFinished, nil, ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			n, sender, _ := startNotifier(t)
+
+			n.Publish(activity("builder", tc.state, tc.reason))
+
+			if got := sender.next(t); got.Body != tc.wantBody {
+				t.Fatalf("body = %q, want %q", got.Body, tc.wantBody)
+			}
+		})
+	}
+}
+
+func TestFinishedAlertUsesTheTurnPreviewPublishedBeforeIt(t *testing.T) {
+	n, sender, _ := startNotifier(t)
+
+	n.Publish(turnCompleted("builder", "Refactored the parser and added tests."))
+	n.Publish(activity("builder", observe.AttentionFinished, nil))
+
+	got := sender.next(t)
+	if got.Body != "Refactored the parser and added tests." || got.Title != "Finished" {
+		t.Fatalf("alert = %+v, want the finished title with the turn preview as body", got)
+	}
+}
+
+func TestFinishedPreviewIsPerAgentAndLatestWins(t *testing.T) {
+	n, sender, _ := startNotifier(t)
+
+	n.Publish(turnCompleted("a", "first"))
+	n.Publish(turnCompleted("b", "other agent"))
+	n.Publish(turnCompleted("a", "second"))
+	n.Publish(activity("a", observe.AttentionFinished, nil))
+
+	if got := sender.next(t); got.Body != "second" {
+		t.Fatalf("body = %q, want the agent's latest preview", got.Body)
+	}
+}
+
+func TestFinishedPreviewIsNotReusedByALaterFinished(t *testing.T) {
+	n, sender, _ := startNotifier(t)
+
+	n.Publish(turnCompleted("a", "turn one"))
+	n.Publish(activity("a", observe.AttentionFinished, nil))
+	n.Publish(activity("a", observe.AttentionWorking, nil))
+	n.Publish(activity("a", observe.AttentionFinished, nil)) // no new turn_completed first
+
+	sender.next(t)
+	if got := sender.next(t); got.Body != "" {
+		t.Fatalf("body = %q, want no stale preview", got.Body)
+	}
+}
+
+func TestStoppedAgentForgetsItsPreview(t *testing.T) {
+	n, sender, _ := startNotifier(t)
+
+	n.Publish(turnCompleted("a", "before the stop"))
+	n.Publish(observe.Event{Type: observe.EventAgentStopped, Payload: &observe.AgentStoppedPayload{Agent: "a"}})
+	n.Publish(activity("a", observe.AttentionFinished, nil))
+
+	if got := sender.next(t); got.Body != "" {
+		t.Fatalf("body = %q, want a respawned agent not to inherit the old preview", got.Body)
+	}
+}

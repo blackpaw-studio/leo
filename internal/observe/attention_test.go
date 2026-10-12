@@ -304,3 +304,40 @@ func TestAttentionSetByTokenFromGuard(t *testing.T) {
 		t.Fatalf("guarded transition from needs_input = %+v, %v", att, ok)
 	}
 }
+
+func TestFinishedFromAHookCarriesItsPreviewUntilTheNextTransition(t *testing.T) {
+	pub := &syncRecorder{}
+	s := NewAttentionStore(pub)
+	s.RegisterToken("tok", "a")
+
+	att, ok := s.SetByTokenFinished("tok", "Fixed the bug.")
+	if !ok || att.State != AttentionFinished || att.Preview != "Fixed the bug." {
+		t.Fatalf("finished = %+v, %v; want the preview on the transition", att, ok)
+	}
+	if got, _ := s.Get("a"); got.Preview != "Fixed the bug." {
+		t.Fatalf("Get = %+v, want the preview kept while finished", got)
+	}
+
+	working, _ := s.SetByToken("tok", AttentionWorking)
+	if working.Preview != "" {
+		t.Fatalf("working = %+v, want the preview gone", working)
+	}
+	again, _ := s.SetByTokenFinished("tok", "")
+	if again.Preview != "" {
+		t.Fatalf("a later finished without a preview inherited %q", again.Preview)
+	}
+}
+
+func TestHeldFinishedCarriesNoPreview(t *testing.T) {
+	s := NewAttentionStore(nil)
+	s.RegisterToken("tok", "a")
+	s.BindBridgeKey("k", "k-launch", "a")
+	s.SetOutstandingSubagents("k", "k-launch", 1)
+	s.Set("a", AttentionWorking)
+
+	att, _ := s.SetByTokenFinished("tok", "not yet")
+
+	if att.State != AttentionWorking || att.Preview != "" {
+		t.Fatalf("held finished = %+v, want working without a preview", att)
+	}
+}
