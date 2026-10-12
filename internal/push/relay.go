@@ -45,9 +45,11 @@ type Alert struct {
 	At   time.Time
 	// MessageID and MessageKind name the Leo Chat message an alert is
 	// about (a chat push, or a permission prompt's attention push), so a
-	// notification action can answer it. Options are an ask's choices.
+	// notification action can answer it. Options are an ask's choices and
+	// InputType is the ask's input type (empty for posts and permissions).
 	MessageID   string
 	MessageKind string
+	InputType   string
 	Options     []Option
 }
 
@@ -75,6 +77,7 @@ type payload struct {
 	// Leo Chat additions; absent on plain attention alerts.
 	MessageID   string   `json:"message_id,omitempty"`
 	MessageKind string   `json:"message_kind,omitempty"`
+	InputType   string   `json:"input_type,omitempty"`
 	Options     []Option `json:"options,omitempty"`
 }
 
@@ -265,6 +268,7 @@ func (s *RelaySender) encode(a Alert, title, body string) ([]byte, error) {
 
 		MessageID:   a.MessageID,
 		MessageKind: a.MessageKind,
+		InputType:   a.InputType,
 		Options:     a.Options,
 	})
 	return bytes.TrimRight(buf.Bytes(), "\n"), err
