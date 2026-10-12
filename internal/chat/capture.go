@@ -31,7 +31,13 @@ const (
 type TranscriptEntry struct {
 	kind entryKind
 	text string
+	// at is Claude's entry timestamp; zero when absent.
+	at time.Time
 }
+
+// captureClockSkew tolerates a transcript stamp slightly older than the
+// capture's delivery time.
+const captureClockSkew = 2 * time.Second
 
 // harnessInjectionMarkers are the envelopes of prompts Claude Code submits
 // on its own, which fold into the running turn (leo #216).
@@ -76,6 +82,7 @@ type rawEntry struct {
 	IsMeta           bool   `json:"isMeta"`
 	IsCompactSummary bool   `json:"isCompactSummary"`
 	IsSidechain      bool   `json:"isSidechain"`
+	Timestamp        string `json:"timestamp"`
 	Message          struct {
 		Content json.RawMessage `json:"content"`
 	} `json:"message"`
@@ -106,7 +113,8 @@ func parseEntry(raw []byte) (TranscriptEntry, bool) {
 		if isInjected(text) {
 			return TranscriptEntry{kind: entryInjected, text: text}, true
 		}
-		return TranscriptEntry{kind: entryPrompt, text: text}, true
+		at, _ := time.Parse(time.RFC3339Nano, e.Timestamp)
+		return TranscriptEntry{kind: entryPrompt, text: text, at: at}, true
 	}
 	return TranscriptEntry{}, false
 }
@@ -188,8 +196,8 @@ func ResolveCaptures(entries []TranscriptEntry, captures []Capture, lastAssistan
 		prompts[i] = normalize(c.Prompt)
 	}
 	// Identical prompts (two "ok"s) must answer distinct occurrences:
-	// oldest first, each capture claims the latest occurrence not yet
-	// claimed, so a second "ok" that has not run yet waits for its own.
+	// oldest first, each capture claims its own (see findPrompt), so a
+	// second "ok" that has not run yet waits for its own.
 	claimed := make(map[int]bool)
 	out := make([]CaptureOutcome, len(captures))
 	for i, c := range captures {
@@ -198,14 +206,34 @@ func ResolveCaptures(entries []TranscriptEntry, captures []Capture, lastAssistan
 	return out
 }
 
-func resolveCapture(entries []TranscriptEntry, c Capture, prompt string, lastAssistant string, now time.Time, claimed map[int]bool) CaptureOutcome {
-	start := -1
-	for i := len(entries) - 1; i >= 0; i-- {
-		if !claimed[i] && entries[i].kind == entryPrompt && prompt != "" && strings.Contains(normalize(entries[i].text), prompt) {
-			start = i
-			claimed[i] = true
-			break
+// findPrompt returns the index of the unclaimed prompt entry c delivered:
+// the earliest one containing prompt stamped at or after its delivery, so
+// an identical prompt from history never matches. A transcript without
+// stamps falls back to the latest match.
+func findPrompt(entries []TranscriptEntry, c Capture, prompt string, claimed map[int]bool) int {
+	if prompt == "" {
+		return -1
+	}
+	latestUnstamped := -1
+	for i, e := range entries {
+		if claimed[i] || e.kind != entryPrompt || !strings.Contains(normalize(e.text), prompt) {
+			continue
 		}
+		if e.at.IsZero() {
+			latestUnstamped = i
+			continue
+		}
+		if !e.at.Before(c.DeliveredAt.Add(-captureClockSkew)) {
+			return i
+		}
+	}
+	return latestUnstamped
+}
+
+func resolveCapture(entries []TranscriptEntry, c Capture, prompt string, lastAssistant string, now time.Time, claimed map[int]bool) CaptureOutcome {
+	start := findPrompt(entries, c, prompt, claimed)
+	if start >= 0 {
+		claimed[start] = true
 	}
 	if start < 0 {
 		if now.Sub(c.DeliveredAt) < CaptureWindow {
