@@ -696,3 +696,30 @@ func TestOptionsAreDroppedWhenTheyCannotFit(t *testing.T) {
 		t.Fatalf("plaintext = %v, want the options dropped and the message id kept", got)
 	}
 }
+
+func TestInputTypeRidesInThePlaintextAndSurvivesTrimming(t *testing.T) {
+	a := alert
+	a.Kind = "chat"
+	a.MessageID = "01M4RMAZ800000000000000001"
+	a.MessageKind = "ask"
+	a.InputType = "checkboxes"
+	if got := sendAndDecrypt(t, a); got["input_type"] != "checkboxes" {
+		t.Fatalf("plaintext = %v, want input_type", got)
+	}
+	a.Options = nil
+	post := a
+	post.InputType = ""
+	if got := sendAndDecrypt(t, post); got["input_type"] != nil {
+		t.Errorf("plaintext = %v, want no input_type on a post", got)
+	}
+
+	// Options are dropped to fit; the input type must stay.
+	a.Agent = strings.Repeat("a", 1300)
+	for i := 0; i < 12; i++ {
+		a.Options = append(a.Options, Option{Value: strings.Repeat("v", 20), Label: strings.Repeat("l", 40)})
+	}
+	got := sendAndDecrypt(t, a)
+	if _, ok := got["options"]; ok || got["input_type"] != "checkboxes" {
+		t.Fatalf("plaintext = %v, want options dropped and input_type kept", got)
+	}
+}

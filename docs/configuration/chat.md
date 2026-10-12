@@ -103,11 +103,17 @@ no files, and the thread keeps the two adjacent.
 |--------|-------------|---------|
 | `buttons` | tapping a choice, which submits at once | 1–12, required |
 | `radio` | selecting one choice, then submitting | 1–12, required |
-| `checkboxes` | selecting `min`–`max` choices (`min` default 0; `max` default all when omitted, else 1 to the option count and at least `min`), then submitting | 1–12, required |
+| `checkboxes` | selecting `min`–`max` choices, then submitting | 1–12, required |
 | `text` | one free-text field | forbidden |
 
-Options are strings or `{value, label}`. `allow_text` (choice types) also
-accepts a free-text answer, `placeholder` hints the text field. Omitting
+`min` and `max` apply to `checkboxes` only: `min` defaults to 0 and `max`
+defaults to the number of options. An ask is rejected when `min < 0`,
+`max < 1`, `min > max` or `max` exceeds the option count, or when a nonzero `min`
+or any `max` is set on another input type.
+
+Bare-string options are accepted only as MCP tool input; on the wire (API
+and events) options are always `{value, label}` objects. `allow_text` (choice
+types) also accepts a free-text answer, `placeholder` hints the text field. Omitting
 `input` and giving top-level `options` asks `buttons`; giving both is an error.
 
 An answer is `{values, text}`:
@@ -190,7 +196,8 @@ pinned.
 
 An agent's outbound messages (not permission prompts or system notes) push
 as kind `chat`: title the agent, body the text or file names, plus
-`message_id`, `message_kind` and, for a `buttons` ask, `options` when they fit. A
+`message_id`, `message_kind`, `input_type` for an ask (always sent; omitted on
+posts and permission prompts) and, for a `buttons` ask, `options` when they fit. A
 permission prompt keeps the `needs_input` attention push as its only alert,
 which carries the prompt's `message_id` with `message_kind: "permission"`.
 Both go through the per-state [push policy](config-reference.md#pairing-a-phone).

@@ -211,3 +211,17 @@ func TestQuestionAlertDoesNotWaitForAPermissionMessage(t *testing.T) {
 		t.Fatalf("alert = %+v", a)
 	}
 }
+
+func TestChatAsksPushTheirInputType(t *testing.T) {
+	n, sender, _ := startNotifier(t)
+	for _, typ := range []string{chat.InputRadio, chat.InputCheckboxes, chat.InputButtons} {
+		n.Publish(chatEvent(chat.Message{ID: "m-" + typ, Agent: "assistant", Direction: chat.DirectionOut, Kind: chat.KindAsk, Text: "Which?", Input: &chat.Input{Type: typ, Options: []chat.Option{{Value: "a", Label: "A"}}}}))
+		if a := sender.next(t); a.InputType != typ {
+			t.Errorf("%s ask: InputType = %q", typ, a.InputType)
+		}
+	}
+	n.Publish(chatEvent(chat.Message{ID: "p", Agent: "assistant", Direction: chat.DirectionOut, Kind: chat.KindText, Text: "hi"}))
+	if a := sender.next(t); a.InputType != "" {
+		t.Errorf("post: InputType = %q, want empty", a.InputType)
+	}
+}
