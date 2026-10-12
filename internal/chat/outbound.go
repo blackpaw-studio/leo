@@ -156,11 +156,13 @@ func (s *Service) removeFiles(as []Attachment) {
 // AskRequest is leo_chat_ask: a new question, or with MessageID the resume
 // of one an earlier call left pending.
 type AskRequest struct {
-	Caller    string
-	Task      string
-	RunID     string
-	Question  string
+	Caller   string
+	Task     string
+	RunID    string
+	Question string
+	// Options (legacy: buttons) and Input are alternatives; give one.
 	Options   []Option
+	Input     *Input
 	Timeout   time.Duration
 	MessageID string
 	// Wait bounds this call's wait (0: until the ask settles). A call can be
@@ -169,44 +171,48 @@ type AskRequest struct {
 	Wait time.Duration
 }
 
-// AskResult is leo_chat_ask's answer. Pending says the call's wait ended
-// with the question still open: ask again with MessageID to keep waiting.
+// AskResult is leo_chat_ask's answer: the chosen values with their labels,
+// and any free text. Pending says the call's wait ended with the question
+// still open: ask again with MessageID to keep waiting.
 type AskResult struct {
-	Value     string `json:"value"`
-	Label     string `json:"label"`
-	TimedOut  bool   `json:"timed_out"`
-	Pending   bool   `json:"pending,omitempty"`
-	MessageID string `json:"message_id,omitempty"`
+	Values    []string `json:"values"`
+	Labels    []string `json:"labels"`
+	Text      string   `json:"text"`
+	TimedOut  bool     `json:"timed_out"`
+	Pending   bool     `json:"pending,omitempty"`
+	MessageID string   `json:"message_id,omitempty"`
 }
 
-func validateAsk(req AskRequest) (time.Duration, error) {
+// noAnswer is the result of an ask that has no answer (yet): empty, not
+// null, lists.
+func noAnswer(id string) AskResult {
+	return AskResult{Values: []string{}, Labels: []string{}, MessageID: id}
+}
+
+// validateAsk checks req and resolves its input.
+func validateAsk(req AskRequest) (Input, time.Duration, error) {
 	timeout := req.Timeout
 	if timeout == 0 {
 		timeout = DefaultAskTimeout
 	}
 	switch {
 	case strings.TrimSpace(req.Question) == "":
-		return 0, fmt.Errorf("%w: question is required", ErrInvalid)
+		return Input{}, 0, fmt.Errorf("%w: question is required", ErrInvalid)
 	case len(req.Question) > MaxTextBytes:
-		return 0, fmt.Errorf("%w: question exceeds %d bytes", ErrInvalid, MaxTextBytes)
-	case len(req.Options) == 0 || len(req.Options) > MaxAskOptions:
-		return 0, fmt.Errorf("%w: give 1 to %d options", ErrInvalid, MaxAskOptions)
+		return Input{}, 0, fmt.Errorf("%w: question exceeds %d bytes", ErrInvalid, MaxTextBytes)
 	case timeout < 0 || timeout > MaxAskTimeout:
-		return 0, fmt.Errorf("%w: timeout must be at most %s", ErrInvalid, MaxAskTimeout)
+		return Input{}, 0, fmt.Errorf("%w: timeout must be at most %s", ErrInvalid, MaxAskTimeout)
 	case req.Wait < 0:
-		return 0, fmt.Errorf("%w: wait must not be negative", ErrInvalid)
+		return Input{}, 0, fmt.Errorf("%w: wait must not be negative", ErrInvalid)
 	}
-	seen := map[string]bool{}
-	for _, o := range req.Options {
-		if strings.TrimSpace(o.Value) == "" || seen[o.Value] {
-			return 0, fmt.Errorf("%w: option values must be non-empty and distinct", ErrInvalid)
-		}
-		seen[o.Value] = true
+	input, err := resolveInput(req.Options, req.Input)
+	if err != nil {
+		return Input{}, 0, err
 	}
-	return timeout, nil
+	return input, timeout, nil
 }
 
-// Ask posts a question with options to the caller's thread and waits for
+// Ask posts a question with an answer input to the caller's thread and waits for
 // the answer: until it is answered or its own deadline (Timeout) passes,
 // which expires it, or until the call's Wait or ctx ends first, which
 // leaves it open and the result Pending.
@@ -218,7 +224,7 @@ func (s *Service) Ask(ctx context.Context, req AskRequest) (AskResult, error) {
 	if req.MessageID != "" {
 		return s.resumeAsk(ctx, req)
 	}
-	timeout, err := validateAsk(req)
+	input, timeout, err := validateAsk(req)
 	if err != nil {
 		return AskResult{}, err
 	}
@@ -230,14 +236,7 @@ func (s *Service) Ask(ctx context.Context, req AskRequest) (AskResult, error) {
 	if note != "" {
 		s.postSystem(agent, note)
 	}
-	options := make([]Option, len(req.Options))
-	for i, o := range req.Options {
-		options[i] = o
-		if options[i].Label == "" {
-			options[i].Label = o.Value
-		}
-	}
-	m := Message{Agent: agent, Direction: DirectionOut, Kind: KindAsk, Text: strings.TrimSpace(req.Question), State: StateOpen, Options: options}
+	m := Message{Agent: agent, Direction: DirectionOut, Kind: KindAsk, Text: strings.TrimSpace(req.Question), State: StateOpen, Input: &input}
 	if req.Task != "" {
 		m.Task, m.RunID = req.Task, req.RunID
 	}
@@ -264,14 +263,14 @@ func (s *Service) expireAsk(id string, wt *waiter, deadline <-chan time.Time) {
 	case <-deadline:
 	case <-s.ctx.Done():
 	}
-	ok, err := s.opts.Store.Transition(id, []string{StateOpen}, StateExpired, "")
+	ok, err := s.opts.Store.Transition(id, []string{StateOpen}, StateExpired, nil)
 	if err != nil {
 		s.opts.Logf("chat: expiring ask %s: %v", id, err)
 	}
 	if ok {
 		s.publishUpdated(id, ChangeState)
 	}
-	s.waiters.settle(id, "")
+	s.waiters.settle(id, nil)
 }
 
 // waitAsk waits for ask id to settle, up to window (0: no bound) or ctx's
@@ -287,20 +286,23 @@ func (s *Service) waitAsk(ctx context.Context, id string, wt *waiter, window tim
 	case <-windowEnd:
 	case <-ctx.Done():
 	}
-	return AskResult{Pending: true, MessageID: id}
+	res := noAnswer(id)
+	res.Pending = true
+	return res
 }
 
-// askOutcome is a settled ask's result: the chosen option, else timed out.
+// askOutcome is a settled ask's result: the answer, else timed out.
 func (s *Service) askOutcome(id string) AskResult {
+	res := noAnswer(id)
 	m, err := s.opts.Store.Message(id)
-	if err == nil && m.State == StateAnswered {
-		for _, o := range m.Options {
-			if o.Value == m.Answer {
-				return AskResult{Value: o.Value, Label: o.Label, MessageID: id}
-			}
-		}
+	if err != nil || m.State != StateAnswered || m.Answer == nil {
+		res.TimedOut = true
+		return res
 	}
-	return AskResult{TimedOut: true, MessageID: id}
+	res.Values = append(res.Values, m.Answer.Values...)
+	res.Labels = labelsOf(m.Input, m.Answer.Values)
+	res.Text = m.Answer.Text
+	return res
 }
 
 // resumeAsk waits again on an ask an earlier call of the same caller left
@@ -309,7 +311,7 @@ func (s *Service) resumeAsk(ctx context.Context, req AskRequest) (AskResult, err
 	switch {
 	case !validID(req.MessageID):
 		return AskResult{}, fmt.Errorf("%w: message_id must be a message id", ErrInvalid)
-	case req.Question != "" || len(req.Options) > 0:
+	case req.Question != "" || len(req.Options) > 0 || req.Input != nil:
 		return AskResult{}, fmt.Errorf("%w: resume an ask with message_id alone", ErrInvalid)
 	case req.Wait < 0:
 		return AskResult{}, fmt.Errorf("%w: wait must not be negative", ErrInvalid)
@@ -330,8 +332,9 @@ func (s *Service) resumeAsk(ctx context.Context, req AskRequest) (AskResult, err
 	return s.waitAsk(ctx, m.ID, wt, req.Wait), nil
 }
 
-// Answer settles an open ask or permission message from the apps.
-func (s *Service) Answer(agent, id, value string) (Message, error) {
+// Answer settles an open ask or permission message from the apps. Its
+// text is trimmed before it is checked against the message's input.
+func (s *Service) Answer(agent, id string, answer Answer) (Message, error) {
 	if err := s.enter(); err != nil {
 		return Message{}, err
 	}
@@ -340,40 +343,32 @@ func (s *Service) Answer(agent, id, value string) (Message, error) {
 	if err != nil || m.Agent != agent {
 		return Message{}, ErrNotFound
 	}
-	if err := validAnswer(m, value); err != nil {
+	answer.Text = strings.TrimSpace(answer.Text)
+	if err := validAnswer(m, answer); err != nil {
 		return Message{}, err
 	}
 	if m.State != StateOpen {
 		return Message{}, ErrConflict
 	}
-	ok, err := s.opts.Store.Transition(id, []string{StateOpen}, StateAnswered, value)
+	ok, err := s.opts.Store.Transition(id, []string{StateOpen}, StateAnswered, &answer)
 	if err != nil {
 		return Message{}, err
 	}
 	if !ok {
 		return Message{}, ErrConflict
 	}
-	s.waiters.settle(id, value)
+	s.waiters.settle(id, &answer)
 	s.publishUpdated(id, ChangeAnswer)
 	return s.opts.Store.Message(id)
 }
 
-func validAnswer(m Message, value string) error {
-	switch m.Kind {
-	case KindAsk:
-		for _, o := range m.Options {
-			if o.Value == value {
-				return nil
-			}
-		}
-		return fmt.Errorf("%w: %q is not one of the options", ErrInvalid, value)
-	case KindPermission:
-		if value == "allow" || value == "deny" {
-			return nil
-		}
-		return fmt.Errorf("%w: answer allow or deny", ErrInvalid)
+// validAnswer checks answer against the input of an ask or permission
+// message.
+func validAnswer(m Message, answer Answer) error {
+	if (m.Kind != KindAsk && m.Kind != KindPermission) || m.Input == nil {
+		return fmt.Errorf("%w: only ask and permission messages take answers", ErrInvalid)
 	}
-	return fmt.Errorf("%w: only ask and permission messages take answers", ErrInvalid)
+	return validAnswerFor(*m.Input, answer)
 }
 
 // HistoryRequest is leo_chat_history.

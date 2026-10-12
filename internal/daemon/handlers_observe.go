@@ -169,7 +169,7 @@ func (s *Server) setWebSources(src web.AgentSources) {
 // daemon's own observability stores plus, once StartWeb has built it, the
 // web server's bridge feed and dispatch counts.
 func (s *Server) agentSources() web.AgentSources {
-	src := web.AgentSources{Activity: s.observeActivity, Attention: s.observeAttention, Surfaced: s.observeSurfaced}
+	src := web.AgentSources{Activity: s.observeActivity, Attention: s.observeAttention}
 	if w := s.webSources.Load(); w != nil {
 		src.BridgeFeed, src.Dispatches = w.BridgeFeed, w.Dispatches
 	}

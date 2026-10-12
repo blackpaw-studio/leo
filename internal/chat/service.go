@@ -164,7 +164,7 @@ func (s *Service) recoverPending(m Message) {
 			state = StateDelivered
 		}
 	}
-	ok, err := s.opts.Store.Transition(m.ID, []string{StatePending}, state, "")
+	ok, err := s.opts.Store.Transition(m.ID, []string{StatePending}, state, nil)
 	if err != nil || !ok {
 		if err != nil {
 			s.opts.Logf("chat: settling undelivered %s: %v", m.ID, err)
@@ -446,13 +446,13 @@ func (s *Service) deliver(m Message) {
 	}
 	if err != nil {
 		s.opts.Logf("chat: delivering %s to %s: %v", m.ID, m.Agent, err)
-		if ok, _ := s.opts.Store.Transition(m.ID, []string{StatePending}, StateFailed, ""); ok {
+		if ok, _ := s.opts.Store.Transition(m.ID, []string{StatePending}, StateFailed, nil); ok {
 			s.publishUpdated(m.ID, ChangeState)
 		}
 		s.postSystem(m.Agent, "Delivery failed: "+clipRunes(err.Error(), 300))
 		return
 	}
-	if ok, _ := s.opts.Store.Transition(m.ID, []string{StatePending}, StateDelivered, ""); ok {
+	if ok, _ := s.opts.Store.Transition(m.ID, []string{StatePending}, StateDelivered, nil); ok {
 		s.publishUpdated(m.ID, ChangeState)
 	}
 }

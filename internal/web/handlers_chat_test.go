@@ -277,22 +277,22 @@ func TestChatAskAnsweredOverHTTP(t *testing.T) {
 		done <- result{w.Code, w.Body.String()}
 	}()
 	ask := waitEvent(t, cs.events, chat.KindAsk)
-	if w := chatRequest(t, cs.s, http.MethodPost, "/api/v1/chat/assistant/messages/"+ask.ID+"/answer", testAPIToken, `{"value":"nope"}`); w.Code != http.StatusBadRequest {
+	if w := chatRequest(t, cs.s, http.MethodPost, "/api/v1/chat/assistant/messages/"+ask.ID+"/answer", testAPIToken, `{"values":["nope"]}`); w.Code != http.StatusBadRequest {
 		t.Fatalf("bad answer = %d", w.Code)
 	}
-	if w := chatRequest(t, cs.s, http.MethodPost, "/api/v1/chat/assistant/messages/"+ask.ID+"/answer", testAPIToken, `{"value":"y"}`); w.Code != http.StatusOK {
+	if w := chatRequest(t, cs.s, http.MethodPost, "/api/v1/chat/assistant/messages/"+ask.ID+"/answer", testAPIToken, `{"values":["y"]}`); w.Code != http.StatusOK {
 		t.Fatalf("answer = %d %s", w.Code, w.Body)
 	}
 	got := <-done
-	if got.code != http.StatusOK || !strings.Contains(got.body, `"value":"y"`) || !strings.Contains(got.body, `"label":"Yes"`) {
+	if got.code != http.StatusOK || !strings.Contains(got.body, `"values":["y"]`) || !strings.Contains(got.body, `"labels":["Yes"]`) {
 		t.Fatalf("ask = %d %s", got.code, got.body)
 	}
-	if w := chatRequest(t, cs.s, http.MethodPost, "/api/v1/chat/assistant/messages/"+ask.ID+"/answer", testAPIToken, `{"value":"n"}`); w.Code != http.StatusConflict {
+	if w := chatRequest(t, cs.s, http.MethodPost, "/api/v1/chat/assistant/messages/"+ask.ID+"/answer", testAPIToken, `{"values":["n"]}`); w.Code != http.StatusConflict {
 		t.Fatalf("second answer = %d", w.Code)
 	}
 	// A call resuming the settled ask by its id gets the answer at once.
 	w := chatRequest(t, cs.s, http.MethodPost, "/api/agent/assistant/chat/ask", testAgentToken, `{"message_id":"`+ask.ID+`","wait_s":1800}`)
-	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"value":"y"`) {
+	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"values":["y"]`) {
 		t.Fatalf("resume = %d %s", w.Code, w.Body)
 	}
 }
@@ -332,7 +332,7 @@ func TestAgentPermissionDecidedFromChat(t *testing.T) {
 	if perm.Permission == nil || perm.Permission.Summary != "make deploy" {
 		t.Fatalf("permission = %+v", perm)
 	}
-	if w := chatRequest(t, cs.s, http.MethodPost, "/api/v1/chat/assistant/messages/"+perm.ID+"/answer", testAPIToken, `{"value":"deny"}`); w.Code != http.StatusOK {
+	if w := chatRequest(t, cs.s, http.MethodPost, "/api/v1/chat/assistant/messages/"+perm.ID+"/answer", testAPIToken, `{"values":["deny"]}`); w.Code != http.StatusOK {
 		t.Fatalf("answer = %d %s", w.Code, w.Body)
 	}
 	if got := <-done; !strings.Contains(got, `"behavior":"deny"`) {
@@ -484,5 +484,58 @@ func TestShutdownClosesChatFirst(t *testing.T) {
 	}
 	if w := chatRequest(t, cs.s, "POST", "/api/v1/chat/assistant/messages", testAPIToken, `{"text":"late"}`); w.Code != http.StatusServiceUnavailable {
 		t.Fatalf("send after shutdown = %d %s", w.Code, w.Body.String())
+	}
+}
+
+func TestChatTypedAskAnsweredOverHTTP(t *testing.T) {
+	cs := newChatServer(t)
+	done := make(chan *httptest.ResponseRecorder, 1)
+	go func() {
+		done <- chatRequest(t, cs.s, http.MethodPost, "/api/agent/assistant/chat/ask", testAgentToken,
+			`{"question":"Which?","input":{"type":"checkboxes","options":[{"value":"a","label":"A"},{"value":"b","label":"B"},{"value":"c","label":"C"}],"min":1,"max":2,"allow_text":true},"timeout_s":60}`)
+	}()
+	ask := waitEvent(t, cs.events, chat.KindAsk)
+	if ask.Input == nil || ask.Input.Type != chat.InputCheckboxes || ask.Input.Max == nil || *ask.Input.Max != 2 {
+		t.Fatalf("published input = %+v", ask.Input)
+	}
+	answer := "/api/v1/chat/assistant/messages/" + ask.ID + "/answer"
+	for name, body := range map[string]string{
+		"legacy value shape":  `{"value":"a"}`,
+		"no selection":        `{"values":[]}`,
+		"unknown value":       `{"values":["z"]}`,
+		"above max":           `{"values":["a","b","c"]}`,
+		"duplicate":           `{"values":["a","a"]}`,
+		"text over the limit": `{"values":["a"],"text":"` + strings.Repeat("x", chat.MaxAnswerTextRunes+1) + `"}`,
+		"malformed":           `{"values":"a"}`,
+	} {
+		if w := chatRequest(t, cs.s, http.MethodPost, answer, testAPIToken, body); w.Code != http.StatusBadRequest {
+			t.Errorf("%s: code = %d %s", name, w.Code, w.Body)
+		}
+	}
+	w := chatRequest(t, cs.s, http.MethodPost, answer, testAPIToken, `{"values":["a","c"],"text":"and d"}`)
+	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"answer":{"values":["a","c"],"text":"and d"}`) {
+		t.Fatalf("answer = %d %s", w.Code, w.Body)
+	}
+	got := <-done
+	if got.Code != http.StatusOK || !strings.Contains(got.Body.String(), `"values":["a","c"]`) || !strings.Contains(got.Body.String(), `"labels":["A","C"]`) || !strings.Contains(got.Body.String(), `"text":"and d"`) {
+		t.Fatalf("ask = %d %s", got.Code, got.Body)
+	}
+}
+
+func TestChatAskRejectsExplicitMaxZeroOverHTTP(t *testing.T) {
+	cs := newChatServer(t)
+	w := chatRequest(t, cs.s, http.MethodPost, "/api/agent/assistant/chat/ask", testAgentToken,
+		`{"question":"?","input":{"type":"checkboxes","options":[{"value":"a"}],"max":0}}`)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("code = %d %s", w.Code, w.Body)
+	}
+}
+
+func TestChatAskToolRequestRejectsOptionsWithInput(t *testing.T) {
+	cs := newChatServer(t)
+	w := chatRequest(t, cs.s, http.MethodPost, "/api/agent/assistant/chat/ask", testAgentToken,
+		`{"question":"?","options":[{"value":"a"}],"input":{"type":"text"}}`)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("code = %d %s", w.Code, w.Body)
 	}
 }

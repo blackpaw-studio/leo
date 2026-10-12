@@ -224,8 +224,11 @@ func (n *Notifier) chatMessage(m chat.Message) {
 		return
 	}
 	a := Alert{Agent: m.Agent, Kind: config.PushStateChat, Title: m.Agent, Body: chatBody(m), At: n.now(), MessageID: m.ID, MessageKind: m.Kind}
-	for _, o := range m.Options {
-		a.Options = append(a.Options, Option(o))
+	// Only buttons can be answered from a notification action.
+	if m.Input != nil && m.Input.Type == chat.InputButtons {
+		for _, o := range m.Input.Options {
+			a.Options = append(a.Options, Option(o))
+		}
 	}
 	n.enqueue(a)
 }

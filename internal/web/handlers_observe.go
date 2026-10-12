@@ -69,7 +69,6 @@ func (s *Server) handleAPIState(w http.ResponseWriter, r *http.Request) {
 			History:       s.loadHistory(cfg).All(),
 			Activity:      s.activity,
 			Attention:     s.attention,
-			SurfacedFiles: s.surfacedFiles,
 			RunLog:        s.runLog,
 			MessageLog:    s.messageLog,
 			BridgeFeed:    s.bridgeFeed,
@@ -114,9 +113,6 @@ type snapshotInput struct {
 	// Attention is the attention store's read seam. nil leaves every
 	// agent's attention absent.
 	Attention attentionProvider
-	// SurfacedFiles is the surfaced-file store's read seam. nil leaves
-	// every agent's surfaced_files absent.
-	SurfacedFiles surfacedProvider
 	// RunLog is the run log's read seam (observe.RunLog satisfies it). It
 	// alone knows about in-flight runs, so it takes priority over History
 	// for the runs it holds; History only tops up older completed runs the
@@ -161,7 +157,6 @@ func buildSnapshot(in snapshotInput) observe.Snapshot {
 	agents := projectAgents(in.Records, in.ProcessStates, AgentSources{
 		Activity:   in.Activity,
 		Attention:  in.Attention,
-		Surfaced:   in.SurfacedFiles,
 		BridgeFeed: in.BridgeFeed,
 		Dispatches: in.Dispatches,
 	}, in.Config)
@@ -225,7 +220,6 @@ func DispatchRows(src observe.DispatchCounter, now time.Time) []observe.Dispatch
 type agentViews struct {
 	activities  map[string]observe.AgentActivity
 	attention   map[string]observe.AgentAttention
-	surfaced    map[string][]observe.SurfacedFile
 	bridge      map[string]observe.BridgeAgentState
 	dispatches  map[string]int
 	bridgeWired bool
@@ -234,7 +228,6 @@ type agentViews struct {
 func readAgentViews(src AgentSources) agentViews {
 	v := agentViews{
 		attention:   attentionSnapshot(src.Attention),
-		surfaced:    surfacedSnapshot(src.Surfaced),
 		bridgeWired: src.BridgeFeed != nil,
 	}
 	if src.Activity != nil {
@@ -298,7 +291,6 @@ func buildAgent(rec agent.Record, states map[string]ProcessStateInfo, views agen
 	if att, ok := views.attention[rec.Name]; ok {
 		a.Attention = &att
 	}
-	a.SurfacedFiles = views.surfaced[rec.Name]
 	mergeBridge(&a, views)
 
 	return a
@@ -344,26 +336,11 @@ func attentionSnapshot(p attentionProvider) map[string]observe.AgentAttention {
 	return p.All()
 }
 
-// surfacedProvider is the narrow read seam onto observe.SurfacedFileStore.
-type surfacedProvider interface {
-	All() map[string][]observe.SurfacedFile
-}
-
-// surfacedSnapshot reads every agent's surfaced files once, nil-safe. A
-// typed-nil store is nil-safe itself, so only the interface needs checking.
-func surfacedSnapshot(p surfacedProvider) map[string][]observe.SurfacedFile {
-	if p == nil {
-		return nil
-	}
-	return p.All()
-}
-
 // AgentSources are the per-agent read seams an agent projection merges.
 // Every field is optional; a nil one leaves its fields absent.
 type AgentSources struct {
 	Activity   observe.ActivityProvider
 	Attention  attentionProvider
-	Surfaced   surfacedProvider
 	BridgeFeed bridgeFeedProvider
 	Dispatches observe.DispatchCounter
 }

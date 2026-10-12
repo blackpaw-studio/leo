@@ -57,15 +57,10 @@ var Names = []string{
 	"leo_wait",
 	"leo_cancel",
 	"leo_release",
-	"leo_surface_file",
 	"leo_chat_post",
 	"leo_chat_ask",
 	"leo_chat_history",
 }
-
-// MaxSurfaceReasonRunes caps leo_surface_file's reason, in Unicode code
-// points. Longer reasons are rejected, never truncated.
-const MaxSurfaceReasonRunes = 200
 
 // IsKnownTool reports whether name is a tool Leo's MCP server registers.
 func IsKnownTool(name string) bool {

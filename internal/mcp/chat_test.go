@@ -86,13 +86,13 @@ func TestChatToolsRefuseDispatchSubagents(t *testing.T) {
 }
 
 func TestChatAskNormalizesOptionsAndDefaultsTimeout(t *testing.T) {
-	d := chatDaemon(t, `{"ok":true,"data":{"value":"y","label":"Yes","timed_out":false}}`)
+	d := chatDaemon(t, `{"ok":true,"data":{"values":["y"],"labels":["Yes"],"text":"","timed_out":false}}`)
 	reg := newRegistry(newDaemonClient(d.port(), ""), "assistant", leotools.Permissions{})
 	out, err := reg.call("leo_chat_ask", json.RawMessage(`{"question":"Ship?","options":["y",{"value":"n","label":"No"}]}`))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if out != `{"value":"y","label":"Yes","timed_out":false}` {
+	if out != `{"values":["y"],"labels":["Yes"],"text":"","timed_out":false}` {
 		t.Fatalf("result = %s", out)
 	}
 	path, body := lastBody(t, d)
@@ -105,6 +105,53 @@ func TestChatAskNormalizesOptionsAndDefaultsTimeout(t *testing.T) {
 	}
 	if o := opts[1].(map[string]any); o["value"] != "n" || o["label"] != "No" {
 		t.Fatalf("object option = %v", o)
+	}
+}
+
+func TestChatAskPassesATypedInput(t *testing.T) {
+	d := chatDaemon(t, `{"ok":true,"data":{"values":["a"],"labels":["A"],"text":"","timed_out":false}}`)
+	reg := newRegistry(newDaemonClient(d.port(), ""), "assistant", leotools.Permissions{})
+	_, err := reg.call("leo_chat_ask", json.RawMessage(`{"question":"Which?","input":{"type":"checkboxes","options":["a",{"value":"b","label":"B"}],"min":1,"max":2,"allow_text":true,"placeholder":"other"}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, body := lastBody(t, d)
+	in, _ := body["input"].(map[string]any)
+	opts, _ := in["options"].([]any)
+	if body["options"] != nil || in["type"] != "checkboxes" || in["min"] != float64(1) || in["max"] != float64(2) || in["allow_text"] != true || in["placeholder"] != "other" || len(opts) != 2 {
+		t.Fatalf("body = %v", body)
+	}
+	if o := opts[0].(map[string]any); o["value"] != "a" || o["label"] != "a" {
+		t.Fatalf("string option = %v", o)
+	}
+	if _, err := reg.call("leo_chat_ask", json.RawMessage(`{"question":"Why?","input":{"type":"text","placeholder":"because"}}`)); err != nil {
+		t.Fatal(err)
+	}
+	if _, body = lastBody(t, d); body["input"].(map[string]any)["type"] != "text" {
+		t.Fatalf("text body = %v", body)
+	}
+}
+
+func TestChatAskRejectsBadInputLocally(t *testing.T) {
+	d := chatDaemon(t, `{"ok":true,"data":{}}`)
+	reg := newRegistry(newDaemonClient(d.port(), ""), "assistant", leotools.Permissions{})
+	for name, args := range map[string]string{
+		"options and input":   `{"question":"q","options":["a"],"input":{"type":"buttons","options":["a"]}}`,
+		"input not an object": `{"question":"q","input":"text"}`,
+		"no type":             `{"question":"q","input":{"options":["a"]}}`,
+		"unknown type":        `{"question":"q","input":{"type":"slider","options":["a"]}}`,
+		"min not an integer":  `{"question":"q","input":{"type":"checkboxes","options":["a"],"min":"1"}}`,
+		"allow_text not bool": `{"question":"q","input":{"type":"radio","options":["a"],"allow_text":"yes"}}`,
+		"bad option":          `{"question":"q","input":{"type":"radio","options":[7]}}`,
+		"max zero":            `{"question":"q","input":{"type":"checkboxes","options":["a"],"max":0}}`,
+		"resume with input":   `{"message_id":"01ASK","input":{"type":"text"}}`,
+	} {
+		if _, err := reg.call("leo_chat_ask", json.RawMessage(args)); err == nil {
+			t.Errorf("%s: accepted", name)
+		}
+	}
+	if len(d.calls) != 0 {
+		t.Fatalf("invalid asks reached the daemon: %+v", d.calls)
 	}
 }
 
@@ -141,7 +188,7 @@ func TestChatAskWaitsInCallsUnderTheToolCeiling(t *testing.T) {
 	if got := chatAskHTTPTimeout(chatAskCallWindow); got >= leomcp.ToolTimeout {
 		t.Fatalf("one ask call (%s HTTP) is not under the harness tool ceiling %s", got, leomcp.ToolTimeout)
 	}
-	d := chatDaemon(t, `{"ok":true,"data":{"value":"","label":"","timed_out":false,"pending":true,"message_id":"01ASK"}}`)
+	d := chatDaemon(t, `{"ok":true,"data":{"values":[],"labels":[],"text":"","timed_out":false,"pending":true,"message_id":"01ASK"}}`)
 	reg := newRegistry(newDaemonClient(d.port(), ""), "assistant", leotools.Permissions{})
 	out, err := reg.call("leo_chat_ask", json.RawMessage(`{"question":"Ship?","options":["y"],"timeout_s":3600}`))
 	if err != nil {
@@ -163,7 +210,7 @@ func TestChatAskWaitsInCallsUnderTheToolCeiling(t *testing.T) {
 }
 
 func TestChatAskResumesByMessageID(t *testing.T) {
-	d := chatDaemon(t, `{"ok":true,"data":{"value":"y","label":"y","timed_out":false,"message_id":"01ASK"}}`)
+	d := chatDaemon(t, `{"ok":true,"data":{"values":["y"],"labels":["y"],"text":"","timed_out":false,"message_id":"01ASK"}}`)
 	reg := newRegistry(newDaemonClient(d.port(), ""), "assistant", leotools.Permissions{})
 	if _, err := reg.call("leo_chat_ask", json.RawMessage(`{"message_id":"01ASK"}`)); err != nil {
 		t.Fatal(err)

@@ -41,10 +41,16 @@ func TestOutboundChatMessagesPush(t *testing.T) {
 		t.Fatal("the event must still be forwarded")
 	}
 
-	n.Publish(chatEvent(chat.Message{ID: "m2", Agent: "assistant", Direction: chat.DirectionOut, Kind: chat.KindAsk, Text: "Deploy?", Options: []chat.Option{{Value: "y", Label: "Yes"}}}))
+	n.Publish(chatEvent(chat.Message{ID: "m2", Agent: "assistant", Direction: chat.DirectionOut, Kind: chat.KindAsk, Text: "Deploy?", Input: &chat.Input{Type: chat.InputButtons, Options: []chat.Option{{Value: "y", Label: "Yes"}}}}))
 	a = sender.next(t)
 	if a.MessageKind != chat.KindAsk || !slices.Equal(a.Options, []Option{{Value: "y", Label: "Yes"}}) {
 		t.Fatalf("ask alert = %+v", a)
+	}
+
+	// Only buttons answer from a notification action.
+	n.Publish(chatEvent(chat.Message{ID: "m2b", Agent: "assistant", Direction: chat.DirectionOut, Kind: chat.KindAsk, Text: "Which?", Input: &chat.Input{Type: chat.InputCheckboxes, Options: []chat.Option{{Value: "a", Label: "A"}}}}))
+	if a = sender.next(t); len(a.Options) != 0 {
+		t.Fatalf("checkboxes ask pushed options: %+v", a.Options)
 	}
 
 	n.Publish(chatEvent(chat.Message{ID: "m3", Agent: "assistant", Direction: chat.DirectionOut, Kind: chat.KindFile, Attachments: []chat.Attachment{{Filename: "r.pdf"}, {Filename: "s.png"}}}))

@@ -151,7 +151,6 @@ Routes for the app (bearer auth; device or operator token):
 |---|---|
 | `PUT /api/v1/devices/{id}/push` | `{grant, key, relay_url}` push registration (key: base64 of 32 bytes, AES-256; `relay_url` must be `https://`). A device may write only its own; the operator `api.token` may write any. |
 | `DELETE /api/v1/devices/{id}/push` | Unregisters push for that device (same auth; idempotent). |
-| `GET`/`HEAD /api/v1/files/{surfaced_id}` | Streams a file an agent surfaced, by id only, with `Range` support. 404 once evicted. |
 | `GET /api/v1/agents/{name}/attach` | WebSocket onto `tmux attach -r`. Binary frames: terminal output. Text frames: JSON control — `ping`/`pong` (the daemon pings every 30 s) and `{"type":"resize","cols":N,"rows":M}`. Optional `?cols=&rows=`. Binary input frames close the socket with 1008. |
 
 ## `chat`

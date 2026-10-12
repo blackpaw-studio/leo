@@ -5,7 +5,9 @@ the daemon for the Leo iOS and Mac apps. The daemon owns the state; apps are
 clients. Messages live in SQLite at `~/.leo/state/chat.db` and are kept
 indefinitely; attachments live under
 `~/.leo/state/chat/attachments/<agent>/<id>/<name>` and are pruned after 90
-days (the row stays, marked unavailable).
+days (the row stays, marked unavailable). The database is versioned
+(`PRAGMA user_version`) and upgraded in place, each step in a transaction, when
+the daemon opens it; a database from a newer leo is refused.
 
 ## Config
 
@@ -76,18 +78,52 @@ waits up to 30 minutes. Codex and opencode agents reply with `leo_chat_post`.
 ## Agent tools
 
 Supervised agents and task runs get three MCP tools; `leo_dispatch`
-subagents are refused, as for `leo_surface_file`.
+subagents are refused.
 
 | Tool | Arguments | Result |
 |------|-----------|--------|
 | `leo_chat_post` | `text`, `files` (paths, up to 10, 50 MB each; relative to the workspace) | `{id, agent}` |
-| `leo_chat_ask` | `question`, `options` (1–12 strings or `{value, label}`), `timeout_s` (default 300, max 3600); or `message_id` alone to resume | `{value, label, timed_out, message_id, pending?}` |
+| `leo_chat_ask` | `question`, `input` (below), `timeout_s` (default 300, max 3600); or `message_id` alone to resume | `{values, labels, text, timed_out, message_id, pending?}` |
 | `leo_chat_history` | `limit` (max 200), `before`, `task` | a page (below) |
 
 A headless task run has `LEO_TASK` and `LEO_RUN_ID` set, so its posts become
 `task` cards in the owner's thread. A `runtime: persistent` task runs in an
 agent that serves every turn, so the daemon files that agent's posts and asks
 under the task run whose turn is in flight.
+
+To show a file, post it: `leo_chat_post` with `text` as the caption and `files`.
+To ask about a file, post it first and then call `leo_chat_ask`: an ask carries
+no files, and the thread keeps the two adjacent.
+
+### Ask inputs
+
+`input` is `{type, options?, allow_text?, min?, max?, placeholder?}`, one per ask:
+
+| `type` | Answered by | Options |
+|--------|-------------|---------|
+| `buttons` | tapping a choice, which submits at once | 1–12, required |
+| `radio` | selecting one choice, then submitting | 1–12, required |
+| `checkboxes` | selecting `min`–`max` choices (`min` default 0; `max` default all when omitted, else 1 to the option count and at least `min`), then submitting | 1–12, required |
+| `text` | one free-text field | forbidden |
+
+Options are strings or `{value, label}`. `allow_text` (choice types) also
+accepts a free-text answer, `placeholder` hints the text field. Omitting
+`input` and giving top-level `options` asks `buttons`; giving both is an error.
+
+An answer is `{values, text}`:
+
+- `buttons`/`radio`: exactly one known value, or, with `allow_text`, no value
+  and non-empty `text`.
+- `checkboxes`: known, distinct values, `min ≤ count ≤ max`; with `allow_text`,
+  `text` may accompany the values or replace them (an empty selection is
+  allowed only with `text`, even if `min > 0`). Without `allow_text`, an empty
+  selection is a valid answer when `min` is 0.
+- `text`: no values, non-empty `text`.
+- `text` is at most 4000 characters, and refused on a choice type without
+  `allow_text`.
+
+The tool returns `values` with their `labels` (same order) and the `text`;
+on timeout `values` is empty and `timed_out` is true.
 
 An ask's `timeout_s` deadline is kept by the daemon, not by the tool call.
 One `leo_chat_ask` call waits at most 30 minutes, under Leo's 32-minute MCP
@@ -100,13 +136,13 @@ ask open until its own deadline.
 
 Supervised Claude agents get a `PermissionRequest` hook. When Claude asks
 for permission, the prompt posts to the agent's thread as a `permission`
-message with `allow` and `deny` options, and the hook waits up to
+message with `allow` and `deny` buttons, and the hook waits up to
 `chat.permission_timeout` for your answer. Claude's own terminal dialog stays
 up meanwhile, so either side can answer:
 
 - Answered in chat: the hook returns the decision and the dialog closes.
 - Answered in the terminal: Claude ends the hook and runs or skips the tool;
-  the message becomes `answered` with answer `terminal`.
+  the message becomes `answered` with answer `{values: ["terminal"]}`.
 - No answer in time: the hook returns no decision, the dialog stays, and the
   message becomes `expired`.
 
@@ -126,14 +162,14 @@ without a token for the Mac app.
 | `POST /api/v1/chat/{agent}/messages` | `{text, reply_to?, attachment_ids?}` | `Message` (`202`) |
 | `POST /api/v1/chat/uploads` | multipart: one `file` part, optionally after an `agent` field; 50 MB | `Attachment` |
 | `GET /api/v1/chat/attachments/{id}` | | the file, with `Range` support; `410` once pruned |
-| `POST /api/v1/chat/{agent}/messages/{id}/answer` | `{value}` | `Message`; `409` once settled |
+| `POST /api/v1/chat/{agent}/messages/{id}/answer` | `{values, text?}` | `Message`; `400` when the answer does not fit the message's `input`, `409` once settled |
 | `POST /api/v1/chat/{agent}/read` | `{up_to}` | |
 
 An upload without an `agent` belongs to the first message that sends it.
 Audio uploads make that message a `voice` note.
 
 **Message:** `{id, agent, direction (in|out), kind (text|voice|file|task|ask|permission|system),
-text, transcript?, reply_to?, task?, run_id?, state, answer?, options?, permission?: {tool, summary},
+text, transcript?, reply_to?, task?, run_id?, state, answer?: {values, text}, input?: {type, options?, allow_text?, min?, max?, placeholder?}, permission?: {tool, summary},
 attachments: [{id, filename, mime, bytes, available}], ts}`; `state` is always
 present (empty on outbound text) and `attachments` is `[]` when there are none. States: inbound
 `pending|delivered|failed`; `ask` and `permission` `open|answered|expired`.
@@ -154,7 +190,7 @@ pinned.
 
 An agent's outbound messages (not permission prompts or system notes) push
 as kind `chat`: title the agent, body the text or file names, plus
-`message_id`, `message_kind` and, for an `ask`, `options` when they fit. A
+`message_id`, `message_kind` and, for a `buttons` ask, `options` when they fit. A
 permission prompt keeps the `needs_input` attention push as its only alert,
 which carries the prompt's `message_id` with `message_kind: "permission"`.
 Both go through the per-state [push policy](config-reference.md#pairing-a-phone).

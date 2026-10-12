@@ -212,10 +212,6 @@ type Server struct {
 	// It backs both the snapshot's attention field and the agent hook
 	// callback. nil leaves attention absent everywhere.
 	attention *observe.AttentionStore
-	// surfacedFiles holds files agents pushed to the user's attention,
-	// wired via WithSurfacedFiles. It backs POST /api/agent/{name}/surface-file
-	// and the snapshot's surfaced_files. nil disables both.
-	surfacedFiles *observe.SurfacedFileStore
 	// chat is Leo Chat; nil when the daemon has no chat store.
 	chat *chat.Service
 
@@ -328,12 +324,6 @@ func WithActivityProvider(p observe.ActivityProvider) Option {
 // written by POST /api/agent/hook. Optional.
 func WithAttention(a *observe.AttentionStore) Option {
 	return func(s *Server) { s.attention = a }
-}
-
-// WithSurfacedFiles wires the surfaced-file store written by
-// POST /api/agent/{name}/surface-file and read by GET /api/v1/state. Optional.
-func WithSurfacedFiles(store *observe.SurfacedFileStore) Option {
-	return func(s *Server) { s.surfacedFiles = store }
 }
 
 // WithBridgeFeed wires the bridge feed GET /api/v1/state merges per-agent
@@ -651,7 +641,6 @@ func New(configPath string, processes ProcessStateProvider, scheduler SchedulerP
 	apiMux.HandleFunc("POST /api/agent/{name}/rename", s.handleAPIAgentRename)
 	apiMux.HandleFunc("POST /api/agent/{name}/environments", s.handleAPIAgentSetEnvironments)
 	apiMux.HandleFunc("POST /api/agent/hook", s.handleAPIAgentHook)
-	apiMux.HandleFunc("POST /api/agent/{name}/surface-file", s.handleAPIAgentSurfaceFile)
 	apiMux.HandleFunc("POST /api/agent/permission", s.handleAPIPermission)
 	apiMux.HandleFunc("POST /api/agent/{name}/chat/post", s.handleAgentChatPost)
 	apiMux.HandleFunc("POST /api/agent/{name}/chat/ask", s.handleAgentChatAsk)
@@ -693,8 +682,6 @@ func New(configPath string, processes ProcessStateProvider, scheduler SchedulerP
 	// identity themselves: the device owning {id}, or the operator token.
 	apiMux.HandleFunc("PUT /api/v1/devices/{id}/push", s.handleAPIDevicePush)
 	apiMux.HandleFunc("DELETE /api/v1/devices/{id}/push", s.handleAPIDevicePushDelete)
-	// GET also serves HEAD.
-	apiMux.HandleFunc("GET /api/v1/files/{id}", s.requireOperatorToken(s.handleAPIFile))
 	apiMux.HandleFunc("GET /api/v1/agents/{name}/attach", s.requireOperatorToken(s.handleAPIAgentAttach))
 	// Leo Chat (docs/configuration/chat.md): the apps' routes, operator or
 	// paired-device token only — the agent token reaches its own thread

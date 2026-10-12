@@ -389,18 +389,16 @@ func (s *Server) serveChatAttachment(w http.ResponseWriter, r *http.Request, id 
 	http.ServeContent(w, r, a.Filename, info.ModTime(), f)
 }
 
-// POST /api/v1/chat/{agent}/messages/{id}/answer {value}
+// POST /api/v1/chat/{agent}/messages/{id}/answer {values, text}
 func (s *Server) handleChatAnswer(w http.ResponseWriter, r *http.Request) {
 	if !s.chatAvailable(w) {
 		return
 	}
-	var req struct {
-		Value string `json:"value"`
-	}
+	var req chat.Answer
 	if !decodeChatJSON(w, r, &req) {
 		return
 	}
-	m, err := s.chat.Answer(r.PathValue("agent"), r.PathValue("id"), req.Value)
+	m, err := s.chat.Answer(r.PathValue("agent"), r.PathValue("id"), req)
 	if err != nil {
 		writeChatError(w, err)
 		return
@@ -432,7 +430,8 @@ type chatToolRequest struct {
 	Text       string        `json:"text"`
 	Files      []string      `json:"files"`
 	Question   string        `json:"question"`
-	Options    []chat.Option `json:"options"`
+	Options    []chat.Option `json:"options"` // legacy: buttons
+	Input      *chat.Input   `json:"input"`
 	TimeoutS   float64       `json:"timeout_s"`
 	WaitS      float64       `json:"wait_s"`
 	MessageID  string        `json:"message_id"`
@@ -448,7 +447,7 @@ type chatToolRequest struct {
 // which inherit their orchestrator's process name and would post into its
 // thread.
 //
-// Trust boundary (as for leo_surface_file): {name} and the task fields are
+// Trust boundary: {name} and the task fields are
 // self-asserted by the calling MCP server and every agent shares one agent
 // token, so this keeps honest callers in their own thread; it is not
 // authentication.
@@ -499,7 +498,7 @@ func (s *Server) handleAgentChatAsk(w http.ResponseWriter, r *http.Request) {
 	}
 	res, err := s.chat.Ask(r.Context(), chat.AskRequest{
 		Caller: r.PathValue("name"), Task: req.Task, RunID: req.RunID,
-		Question: req.Question, Options: req.Options, MessageID: req.MessageID,
+		Question: req.Question, Options: req.Options, Input: req.Input, MessageID: req.MessageID,
 		Timeout: time.Duration(req.TimeoutS * float64(time.Second)),
 		Wait:    time.Duration(req.WaitS * float64(time.Second)),
 	})

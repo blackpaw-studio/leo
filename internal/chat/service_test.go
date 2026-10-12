@@ -414,10 +414,10 @@ func TestChatToolsDuringAPersistentRunCarryItsTaskAndRun(t *testing.T) {
 	go func() {
 		<-f.timers.got
 		open, _ := f.store.OpenMessages("assistant", KindAsk, StateOpen)
-		_, _ = f.svc.Answer("assistant", open[0].ID, "y")
+		_, _ = f.svc.Answer("assistant", open[0].ID, Answer{Values: []string{"y"}})
 	}()
 	res, err := f.svc.Ask(context.Background(), AskRequest{Caller: "assistant", Question: "Publish?", Options: []Option{{Value: "y"}}})
-	if err != nil || res.Value != "y" {
+	if err != nil || len(res.Values) != 1 || res.Values[0] != "y" {
 		t.Fatalf("ask = %+v, %v", res, err)
 	}
 	asks, _, _ := f.store.Messages("assistant", Page{Task: "digest"})
@@ -525,17 +525,17 @@ func TestAskReturnsTheChosenOption(t *testing.T) {
 	if open.Kind != KindAsk || open.State != StateOpen {
 		t.Fatalf("ask message = %+v", open)
 	}
-	if _, err := f.svc.Answer("assistant", open.ID, "maybe"); !errors.Is(err, ErrInvalid) {
+	if _, err := f.svc.Answer("assistant", open.ID, Answer{Values: []string{"maybe"}}); !errors.Is(err, ErrInvalid) {
 		t.Fatalf("a value outside the options must be refused: %v", err)
 	}
-	if _, err := f.svc.Answer("assistant", open.ID, "y"); err != nil {
+	if _, err := f.svc.Answer("assistant", open.ID, Answer{Values: []string{"y"}}); err != nil {
 		t.Fatal(err)
 	}
 	got := <-done
-	if got.err != nil || got.r.Value != "y" || got.r.Label != "Yes" || got.r.TimedOut {
+	if got.err != nil || len(got.r.Values) != 1 || got.r.Values[0] != "y" || got.r.Labels[0] != "Yes" || got.r.TimedOut {
 		t.Fatalf("ask result = %+v", got)
 	}
-	if _, err := f.svc.Answer("assistant", open.ID, "n"); !errors.Is(err, ErrConflict) {
+	if _, err := f.svc.Answer("assistant", open.ID, Answer{Values: []string{"n"}}); !errors.Is(err, ErrConflict) {
 		t.Fatalf("second answer err = %v", err)
 	}
 }
@@ -594,10 +594,10 @@ func TestPermissionAnsweredFromChat(t *testing.T) {
 	if m.Kind != KindPermission || m.Permission == nil || m.Permission.Tool != "Bash" || m.Permission.Summary != "rm -rf build" {
 		t.Fatalf("permission message = %+v", m)
 	}
-	if len(m.Options) != 2 || m.Options[0].Value != "allow" || m.Options[1].Value != "deny" {
-		t.Fatalf("permission options = %+v, want allow and deny", m.Options)
+	if m.Input == nil || m.Input.Type != InputButtons || len(m.Input.Options) != 2 || m.Input.Options[0].Value != "allow" || m.Input.Options[1].Value != "deny" {
+		t.Fatalf("permission input = %+v, want allow and deny buttons", m.Input)
 	}
-	if _, err := f.svc.Answer("assistant", m.ID, "allow"); err != nil {
+	if _, err := f.svc.Answer("assistant", m.ID, Answer{Values: []string{"allow"}}); err != nil {
 		t.Fatal(err)
 	}
 	if got := <-done; got != "allow" {
@@ -638,7 +638,7 @@ func TestPermissionAnsweredInTerminalViaPostToolUse(t *testing.T) {
 		t.Fatalf("terminal-answered decision = %q, want none", got)
 	}
 	m := f.thread(t, "assistant")[0]
-	if m.State != StateAnswered || m.Answer != AnswerTerminal {
+	if m.State != StateAnswered || (m.Answer == nil || !m.Answer.isTerminal()) {
 		t.Fatalf("message = %s/%s", m.State, m.Answer)
 	}
 }
@@ -652,7 +652,7 @@ func TestPermissionHookGoneMarksAnsweredInTerminal(t *testing.T) {
 	cancel()
 	<-done
 	m := f.thread(t, "assistant")[0]
-	if m.State != StateAnswered || m.Answer != AnswerTerminal {
+	if m.State != StateAnswered || (m.Answer == nil || !m.Answer.isTerminal()) {
 		t.Fatalf("message = %s/%s", m.State, m.Answer)
 	}
 }
@@ -867,11 +867,11 @@ func TestAskOutlastsOneCallAndResumes(t *testing.T) {
 	if !first.Pending || first.TimedOut || first.MessageID != open.ID || open.State != StateOpen {
 		t.Fatalf("first call = %+v, message %s", first, open.State)
 	}
-	if _, err := f.svc.Answer("assistant", open.ID, "y"); err != nil {
+	if _, err := f.svc.Answer("assistant", open.ID, Answer{Values: []string{"y"}}); err != nil {
 		t.Fatal(err)
 	}
 	r, err := f.svc.Ask(context.Background(), AskRequest{Caller: "assistant", MessageID: open.ID, Wait: 30 * time.Minute})
-	if err != nil || r.Value != "y" || r.Label != "Yes" || r.Pending {
+	if err != nil || len(r.Values) != 1 || r.Values[0] != "y" || r.Labels[0] != "Yes" || r.Pending {
 		t.Fatalf("resumed = %+v, %v", r, err)
 	}
 }

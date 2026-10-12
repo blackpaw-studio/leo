@@ -9,7 +9,6 @@ import (
 	"os"
 	"strings"
 	"time"
-	"unicode/utf8"
 
 	"github.com/blackpaw-studio/leo/internal/consult"
 	"github.com/blackpaw-studio/leo/internal/harness/claude/bridgemod"
@@ -466,33 +465,6 @@ func newRegistry(client *daemonClient, processName string, perms leotools.Permis
 		return fmt.Sprintf("%s%s (%s/%s) · %s%s\nwatch: leo dispatch watch %s", prefix, started.ID, started.Harness, started.Model, started.Cwd, placement, started.ID), nil
 	})
 
-	r.addContext(toolDef{
-		Name:        "leo_surface_file",
-		Description: surfaceFileDescription,
-		InputSchema: objectSchema(map[string]any{
-			"path":   map[string]any{"type": "string", "description": "File to show the user: absolute, or relative to your agent workspace. Must exist and not be a directory."},
-			"line":   map[string]any{"type": "integer", "minimum": 1, "description": "Optional 1-based line to focus."},
-			"reason": map[string]any{"type": "string", "maxLength": leotools.MaxSurfaceReasonRunes, "description": "Optional short note on why the user should look (at most 200 characters)."},
-		}, "path"),
-	}, func(ctx context.Context, args map[string]any) (string, error) {
-		if r.dispatchID != "" {
-			return "", fmt.Errorf("leo_surface_file is only available to supervised Leo agents, not to a leo_dispatch subagent (dispatch %s); report the file path to your orchestrator instead", r.dispatchID)
-		}
-		req, err := parseSurfaceFileArgs(args)
-		if err != nil {
-			return "", err
-		}
-		id, err := client.surfaceFile(ctx, processName, req)
-		if err != nil {
-			return "", err
-		}
-		encoded, err := json.Marshal(map[string]string{"id": id})
-		if err != nil {
-			return "", err
-		}
-		return string(encoded), nil
-	})
-
 	r.registerChat(client, processName, objectSchema)
 
 	r.addContext(toolDef{Name: "leo_delegation", Description: "Show active delegation routing.", InputSchema: emptyArgs}, func(ctx context.Context, _ map[string]any) (string, error) { return client.delegationStatus(ctx) })
@@ -692,47 +664,6 @@ const consultDescription = "Run a one-off consultant subagent for a second opini
 // forkConsultDescription is leo_consult's fork argument description.
 const forkConsultDescription = "true asks a fork of yourself instead of a template: same model, sees this whole conversation, no tools, cheapest; " +
 	"use for a sanity check of your own plan. template and model are ignored. Needs a leo-bridged claude session."
-
-const surfaceFileDescription = "Push a file to the user's attention — a result, a diff, a report, or a line that needs their eyes. " +
-	"The file appears in Leo's observability state and event stream for dashboards to show. " +
-	"path is absolute or relative to your agent workspace; line optionally focuses a 1-based line; reason is an optional note of at most 200 characters. " +
-	"Returns {\"id\": \"<uuid>\"}. Only supervised Leo agents may call it; leo_dispatch subagents are refused."
-
-// surfaceFileRequest is the leo_surface_file call body sent to the daemon.
-type surfaceFileRequest struct {
-	Path   string `json:"path"`
-	Line   *int   `json:"line,omitempty"`
-	Reason string `json:"reason,omitempty"`
-}
-
-// parseSurfaceFileArgs checks argument shapes before the daemon call. The
-// daemon re-validates everything and alone checks the filesystem.
-func parseSurfaceFileArgs(args map[string]any) (surfaceFileRequest, error) {
-	path, err := stringArg(args, "path")
-	if err != nil {
-		return surfaceFileRequest{}, err
-	}
-	req := surfaceFileRequest{Path: path}
-	if raw, ok := args["line"]; ok {
-		n, ok := raw.(float64)
-		if !ok || n != math.Trunc(n) || n < 1 || n > math.MaxInt32 {
-			return surfaceFileRequest{}, fmt.Errorf("line must be an integer >= 1")
-		}
-		line := int(n)
-		req.Line = &line
-	}
-	if raw, ok := args["reason"]; ok {
-		reason, ok := raw.(string)
-		if !ok {
-			return surfaceFileRequest{}, fmt.Errorf("reason must be a string")
-		}
-		if utf8.RuneCountInString(reason) > leotools.MaxSurfaceReasonRunes {
-			return surfaceFileRequest{}, fmt.Errorf("reason must be at most %d characters", leotools.MaxSurfaceReasonRunes)
-		}
-		req.Reason = reason
-	}
-	return req, nil
-}
 
 // allowNote appends the allowlist to a tool description so the model sees the
 // boundary up front instead of discovering it by failing a call. An empty
