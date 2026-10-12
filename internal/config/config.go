@@ -243,6 +243,9 @@ type DefaultsConfig struct {
 	// Environments is the default ordered list of named environments applied
 	// when a template, task or spawn does not set its own.
 	Environments []string `yaml:"environments,omitempty"`
+	// Push chooses which attention transitions push to paired iOS devices.
+	// Unset states push.
+	Push PushConfig `yaml:"push,omitempty"`
 }
 
 type DispatchConfig struct {
@@ -382,6 +385,9 @@ type TemplateConfig struct {
 	// own MCP server, so it is a guardrail rather than a security boundary;
 	// see docs/configuration/permissions.md.
 	Permissions leotools.Permissions `yaml:"permissions,omitempty"`
+	// Push overrides defaults.push per state for agents spawned from this
+	// template; an unset state inherits.
+	Push PushConfig `yaml:"push,omitempty"`
 }
 
 // IsClientOnly reports whether the config is a client-only install: one

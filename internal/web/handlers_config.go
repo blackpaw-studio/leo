@@ -121,6 +121,19 @@ func (s *Server) permissionFields(perms *leotools.Permissions, cfg *config.Confi
 	return fd.Fields
 }
 
+// pushFields renders a nested push block (defaults' or a template's) as field
+// views for its parent form. scope and name stamp the fields the same way the
+// parent form's are, so element ids stay unique.
+func (s *Server) pushFields(section schema.Section, push *config.PushConfig, cfg *config.Config, scope, name string) []fieldView {
+	fd := s.buildForm(section, push, cfg, "")
+	for i := range fd.Fields {
+		fd.Fields[i].Section = section
+		fd.Fields[i].Scope = scope
+		fd.Fields[i].ScopeName = name
+	}
+	return fd.Fields
+}
+
 // harnessView resolves a form target's own options map, effective harness,
 // and the inherited-placeholder map per the cascade rules (mirrors
 // config.scopeHarnessOptions: defaults' options cascade only into scopes
@@ -234,7 +247,7 @@ func (s *Server) handleConfigDefaultsSave(w http.ResponseWriter, r *http.Request
 				return err
 			}
 			d.HarnessOptions = opts
-			return nil
+			return schema.Apply(&d.Push, schema.SectionPushDefaults, form)
 		},
 		"Defaults saved", &s.agentsRestartNeeded)
 }
@@ -288,7 +301,10 @@ func (s *Server) handleConfigTemplateSave(w http.ResponseWriter, r *http.Request
 			// The permissions sub-struct parses from the same submitted form
 			// under its own section; its keys never collide with a template
 			// field, so ordering between the two Apply passes is irrelevant.
-			return schema.Apply(&t.Permissions, schema.SectionPermissions, form)
+			if err := schema.Apply(&t.Permissions, schema.SectionPermissions, form); err != nil {
+				return err
+			}
+			return schema.Apply(&t.Push, schema.SectionPushTemplate, form)
 		},
 		fmt.Sprintf("Template %q saved", name), &s.agentsRestartNeeded)
 }

@@ -44,6 +44,13 @@ const (
 	// rendered as an extra field group inside the template form rather than
 	// as a page of its own — see handleTemplateEditPage.
 	SectionPermissions Section = "permissions"
+	// SectionPushDefaults and SectionPushTemplate are the nested push block of
+	// defaults and of a template. Both edit config.PushConfig; the defaults
+	// form shows on/off toggles (unset reads as on) while a template form
+	// shows inherit/on/off selects. Rendered as an extra field group inside
+	// those forms, like SectionPermissions.
+	SectionPushDefaults Section = "push_defaults"
+	SectionPushTemplate Section = "push_template"
 	// SectionEnvironment is one entry of the top-level environments map. The
 	// map's values are bare env maps, so the form edits them through
 	// EnvironmentEntry.
@@ -62,7 +69,8 @@ func AllSections() []Section {
 	return []Section{
 		SectionDefaults, SectionTask, SectionTemplate,
 		SectionClientHost, SectionWeb,
-		SectionClient, SectionPermissions, SectionEnvironment,
+		SectionClient, SectionPermissions, SectionPushDefaults, SectionPushTemplate,
+		SectionEnvironment,
 	}
 }
 
@@ -83,6 +91,8 @@ func StructFor(s Section) reflect.Type {
 		return reflect.TypeOf(config.ClientConfig{})
 	case SectionPermissions:
 		return reflect.TypeOf(leotools.Permissions{})
+	case SectionPushDefaults, SectionPushTemplate:
+		return reflect.TypeOf(config.PushConfig{})
 	case SectionEnvironment:
 		return reflect.TypeOf(EnvironmentEntry{})
 	}
