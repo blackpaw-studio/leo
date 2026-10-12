@@ -20,6 +20,9 @@ type Notifier struct {
 	sender Sender
 	now    func() time.Time
 	queue  chan Alert
+	// allow decides, per needs-you transition, whether to queue an alert.
+	// Nil sends every one.
+	allow func(agent, state string) bool
 
 	mu   sync.Mutex
 	last map[string]observe.AttentionState
@@ -40,6 +43,14 @@ func WithQueueSize(n int) NotifierOption {
 // WithNotifierClock sets the clock stamping each alert.
 func WithNotifierClock(now func() time.Time) NotifierOption {
 	return func(nt *Notifier) { nt.now = now }
+}
+
+// WithPolicy sets the filter consulted on each needs-you transition with the
+// agent name and attention state; the alert is queued only when it returns
+// true. It runs on the publisher's goroutine, so it must be quick and safe
+// for concurrent use. Without a policy every needs-you state sends.
+func WithPolicy(allow func(agent, state string) bool) NotifierOption {
+	return func(nt *Notifier) { nt.allow = allow }
 }
 
 // NewNotifier wraps next (nil forwards nowhere) and delivers through sender
@@ -102,6 +113,9 @@ func (n *Notifier) observe(agent string, att observe.AgentAttention) {
 	}
 	title, ok := needsYouTitle(att)
 	if !ok {
+		return
+	}
+	if n.allow != nil && !n.allow(agent, string(att.State)) {
 		return
 	}
 	select {
