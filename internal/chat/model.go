@@ -74,6 +74,10 @@ type Message struct {
 	Permission  *Permission  `json:"permission,omitempty"`
 	Attachments []Attachment `json:"attachments"`
 	TS          time.Time    `json:"ts"`
+	// DeliveryRef names an inbound message's delivery into its agent: the
+	// bridge command id it is delivered under, stored before delivery so a
+	// restarted daemon can ask the agent's outbox whether it still holds it.
+	DeliveryRef string `json:"-"`
 }
 
 // MarshalJSON writes the wire shape: state always, and attachments as []

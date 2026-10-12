@@ -61,7 +61,9 @@ In reply to task daily-news run <run id> (<time>): <card text, up to 1500 charac
 
 On success the message is `delivered`; on failure it is `failed`, with a
 system note saying why. A message still `pending` when the daemon restarts
-is marked `failed` with a note to send it again, never replayed twice.
+is `delivered` if it waits in the agent's bridge outbox, which delivers it
+after the restart. Otherwise it is marked `failed` with a note to send it
+again, never replayed twice.
 
 **Replies.** For Claude agents the daemon captures the reply: on the agent's
 `Stop` hook it finds the delivered `[Leo Chat]` prompt in the transcript and

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"slices"
 	"sync"
 	"time"
 
@@ -74,6 +75,22 @@ func (s *Supervisor) SetOutbox(store *outbox.Store) {
 	s.mail.mu.Lock()
 	defer s.mail.mu.Unlock()
 	s.mail.store = store
+}
+
+// MailHolds reports whether agent name's outbox still holds the deliver
+// queued under id.
+func (s *Supervisor) MailHolds(name, id string) (bool, error) {
+	s.mail.mu.Lock()
+	store := s.mail.store
+	s.mail.mu.Unlock()
+	if store == nil {
+		return false, nil
+	}
+	entries, err := store.List(name)
+	if err != nil {
+		return false, err
+	}
+	return slices.ContainsFunc(entries, func(e outbox.Entry) bool { return e.ID == id }), nil
 }
 
 // QueueDeliver queues cmd, a deliver from agent from ("" for a human or a

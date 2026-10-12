@@ -48,6 +48,7 @@ CREATE TABLE IF NOT EXISTS messages (
 	answer     TEXT NOT NULL DEFAULT '',
 	options    TEXT NOT NULL DEFAULT '',
 	meta       TEXT NOT NULL DEFAULT '',
+	delivery_ref TEXT NOT NULL DEFAULT '',
 	ts         INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS messages_agent_id ON messages(agent, id);
@@ -153,9 +154,8 @@ func (s *Store) InsertMessageWith(m Message, add []Attachment, link []string) er
 		return fmt.Errorf("inserting chat message: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
-	_, err = tx.Exec(`INSERT INTO messages (id, agent, direction, kind, text, transcript, reply_to, task, run_id, state, answer, options, meta, ts)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		m.ID, m.Agent, m.Direction, m.Kind, m.Text, m.Transcript, m.ReplyTo, m.Task, m.RunID, m.State, m.Answer, options, meta, m.TS.UnixMilli())
+	_, err = tx.Exec(`INSERT INTO messages (`+messageColumns+`) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		m.ID, m.Agent, m.Direction, m.Kind, m.Text, m.Transcript, m.ReplyTo, m.Task, m.RunID, m.State, m.Answer, options, meta, m.DeliveryRef, m.TS.UnixMilli())
 	if err != nil {
 		return fmt.Errorf("inserting chat message: %w", err)
 	}
@@ -193,13 +193,13 @@ func encodeExtras(m Message) (string, string, error) {
 	return options, meta, nil
 }
 
-const messageColumns = `id, agent, direction, kind, text, transcript, reply_to, task, run_id, state, answer, options, meta, ts`
+const messageColumns = `id, agent, direction, kind, text, transcript, reply_to, task, run_id, state, answer, options, meta, delivery_ref, ts`
 
 func scanMessage(row interface{ Scan(...any) error }) (Message, error) {
 	var m Message
 	var options, meta string
 	var ts int64
-	if err := row.Scan(&m.ID, &m.Agent, &m.Direction, &m.Kind, &m.Text, &m.Transcript, &m.ReplyTo, &m.Task, &m.RunID, &m.State, &m.Answer, &options, &meta, &ts); err != nil {
+	if err := row.Scan(&m.ID, &m.Agent, &m.Direction, &m.Kind, &m.Text, &m.Transcript, &m.ReplyTo, &m.Task, &m.RunID, &m.State, &m.Answer, &options, &meta, &m.DeliveryRef, &ts); err != nil {
 		return Message{}, err
 	}
 	m.TS = time.UnixMilli(ts).UTC()
@@ -437,15 +437,30 @@ func (s *Store) ExpireOpen() ([]string, error) {
 	return ids, nil
 }
 
-// FailPending marks every pending message failed and returns them (id and
-// agent): at startup these are deliveries the previous daemon never
-// finished.
-func (s *Store) FailPending() ([]Message, error) {
-	moved, err := s.moveAll(StatePending, StateFailed)
-	if err != nil {
-		return nil, fmt.Errorf("failing undelivered messages: %w", err)
+// SetDeliveryRef records the ref message id is being delivered under.
+func (s *Store) SetDeliveryRef(id, ref string) error {
+	if _, err := s.db.Exec(`UPDATE messages SET delivery_ref = ? WHERE id = ?`, ref, id); err != nil {
+		return fmt.Errorf("recording delivery ref: %w", err)
 	}
-	return moved, nil
+	return nil
+}
+
+// MessagesInState returns every message in state, oldest first.
+func (s *Store) MessagesInState(state string) ([]Message, error) {
+	rows, err := s.db.Query(`SELECT `+messageColumns+` FROM messages WHERE state = ? ORDER BY id`, state)
+	if err != nil {
+		return nil, fmt.Errorf("reading %s messages: %w", state, err)
+	}
+	defer func() { _ = rows.Close() }()
+	var out []Message
+	for rows.Next() {
+		m, err := scanMessage(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, m)
+	}
+	return out, rows.Err()
 }
 
 // moveAll moves every message in state from to state to, returning their

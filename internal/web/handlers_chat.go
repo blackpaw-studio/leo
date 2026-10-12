@@ -67,6 +67,7 @@ func (s *Server) setupChat(opts ChatOptions) {
 		Publish: opts.Publisher,
 		Agents:  s.chatAgents,
 		Config:  s.loadConfig,
+		Queued:  func(agent, ref string) (bool, error) { return s.bridgeRouter.Holds(agent, ref) },
 	})
 }
 
@@ -101,7 +102,9 @@ func (s *Server) chatAgents() []chat.AgentRef {
 // stopped agent is started first and its prompt injected once it is ready.
 type chatDeliverer struct{ s *Server }
 
-func (d chatDeliverer) Deliver(ctx context.Context, name, prompt string, starting func()) (string, error) {
+// A bridge delivery goes under the command id ref, which the agent's outbox
+// keeps it by until the mod acks it.
+func (d chatDeliverer) Deliver(ctx context.Context, name, prompt, ref string, starting func()) (string, error) {
 	s := d.s
 	harnessName := "claude"
 	if hn, _, ok := s.resolveMessageTarget(name); ok && hn != "" {
@@ -113,7 +116,7 @@ func (d chatDeliverer) Deliver(ctx context.Context, name, prompt string, startin
 		}
 		return harnessName, nil
 	}
-	out := s.messageAgent(ctx, name, "", prompt)
+	out := s.messageAgentAs(ctx, name, "", prompt, ref)
 	if out.err != "" {
 		return "", errors.New(out.err)
 	}

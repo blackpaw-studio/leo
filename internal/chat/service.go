@@ -38,8 +38,9 @@ const (
 type Deliverer interface {
 	// Deliver delivers prompt into agent, starting it first if it is
 	// stopped (calling starting before it does), and returns the agent's
-	// harness name.
-	Deliver(ctx context.Context, agent, prompt string, starting func()) (harness string, err error)
+	// harness name. ref is the id a durable (bridge) delivery is queued
+	// under; see Options.Queued.
+	Deliver(ctx context.Context, agent, prompt, ref string, starting func()) (harness string, err error)
 }
 
 // Options are a Service's dependencies.
@@ -57,6 +58,10 @@ type Options struct {
 	// Agents lists every known agent, running or stopped.
 	Agents func() []AgentRef
 	Config func() (*config.Config, error)
+	// Queued reports whether agent's durable outbox still holds the
+	// delivery queued under ref, which its next launch then delivers. Nil
+	// holds nothing.
+	Queued func(agent, ref string) (bool, error)
 	Logf   func(format string, args ...any)
 }
 
@@ -107,19 +112,49 @@ func (s *Service) Recover() error {
 	for _, id := range ids {
 		s.publishUpdated(id, ChangeState)
 	}
-	// Delivery queues live in memory, so a message still pending was never
-	// delivered (or not knowably so). Failing it visibly beats replaying
-	// it twice.
-	failed, err := s.opts.Store.FailPending()
+	pending, err := s.opts.Store.MessagesInState(StatePending)
 	if err != nil {
-		return err
+		return fmt.Errorf("reading undelivered messages: %w", err)
 	}
-	for _, m := range failed {
-		s.publishUpdated(m.ID, ChangeState)
-		s.postSystem(m.Agent, "Not delivered: the daemon restarted first. Send it again.")
+	for _, m := range pending {
+		s.recoverPending(m)
 	}
 	return nil
 }
+
+// recoverPending settles a message the previous daemon left pending. Its
+// delivery queues lived in memory, but a bridge delivery also waits in the
+// agent's durable outbox, which the agent's next launch delivers: that one
+// is delivered, and failing it would have the user send it twice. Any other
+// was never delivered, or not knowably so, and failing it visibly beats
+// replaying it twice.
+func (s *Service) recoverPending(m Message) {
+	state := StateFailed
+	if m.DeliveryRef != "" && s.opts.Queued != nil {
+		held, err := s.opts.Queued(m.Agent, m.DeliveryRef)
+		if err != nil {
+			s.opts.Logf("chat: checking the outbox of %s for %s: %v", m.Agent, m.ID, err)
+		}
+		if held {
+			state = StateDelivered
+		}
+	}
+	ok, err := s.opts.Store.Transition(m.ID, []string{StatePending}, state, "")
+	if err != nil || !ok {
+		if err != nil {
+			s.opts.Logf("chat: settling undelivered %s: %v", m.ID, err)
+		}
+		return
+	}
+	s.publishUpdated(m.ID, ChangeState)
+	if state == StateFailed {
+		s.postSystem(m.Agent, "Not delivered: the daemon restarted first. Send it again.")
+	}
+}
+
+// deliveryRef is the id message id is delivered under: a bridge command id
+// the mod dedups by, so a repeat of the same delivery is re-acked.
+func deliveryRef(id string) string { return "chat-" + id }
 
 // Run prunes expired attachments now and then daily until ctx ends.
 func (s *Service) Run(ctx context.Context) {
@@ -341,7 +376,13 @@ func (s *Service) deliver(m Message) {
 	if err := s.opts.Store.AddCapture(capture); err != nil {
 		s.opts.Logf("chat: recording capture for %s: %v", m.ID, err)
 	}
-	harness, err := s.opts.Deliver.Deliver(ctx, m.Agent, prompt, func() {
+	// The ref is stored before delivery: a restart while the delivery waits
+	// in the agent's outbox must find it there (see recoverPending).
+	ref := deliveryRef(m.ID)
+	if err := s.opts.Store.SetDeliveryRef(m.ID, ref); err != nil {
+		s.opts.Logf("chat: recording the delivery ref of %s: %v", m.ID, err)
+	}
+	harness, err := s.opts.Deliver.Deliver(ctx, m.Agent, prompt, ref, func() {
 		s.postSystem(m.Agent, "Starting "+m.Agent+"…")
 	})
 	if err != nil || harness != "claude" {

@@ -167,8 +167,10 @@ func agentMessageCommand(from, text string) bridge.Command {
 // 200 once accepted, 202 while still queued behind a running turn or
 // (durably) for the agent's next launch, 500 on rejection, a full outbox or
 // a lost bridge — never a tmux retry, which could deliver it twice.
-func (s *Server) deliverAgentMessageOverBridge(target bridge.Target, name, from, text string) controlOutcome {
-	ticket, err := s.bridgeRouter.Deliver(name, target, agentMessageCommand(from, text), from)
+func (s *Server) deliverAgentMessageOverBridge(target bridge.Target, name, from, text, cmdID string) controlOutcome {
+	cmd := agentMessageCommand(from, text)
+	cmd.ID = cmdID
+	ticket, err := s.bridgeRouter.Deliver(name, target, cmd, from)
 	if err != nil {
 		return controlFailed(http.StatusInternalServerError, transportBridge, "delivering message: %v", err)
 	}

@@ -18,15 +18,17 @@ import (
 type fakeDeliverer struct {
 	mu        sync.Mutex
 	prompts   []string
+	refs      []string
 	harness   string
 	err       error
 	stopped   map[string]bool
 	onDeliver func()
 }
 
-func (f *fakeDeliverer) Deliver(_ context.Context, agent, prompt string, starting func()) (string, error) {
+func (f *fakeDeliverer) Deliver(_ context.Context, agent, prompt, ref string, starting func()) (string, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	f.refs = append(f.refs, ref)
 	if f.stopped[agent] {
 		starting()
 	}
@@ -133,6 +135,8 @@ type harnessFixture struct {
 	clock      *testClock
 	timers     *manualTimers
 	ids        *gatedIDs
+	// held is what the agents' durable outboxes hold, as agent/ref.
+	held       map[string]bool
 	cfg        *config.Config
 	root       string
 	transcript func(ctx context.Context, path string) (string, error)
@@ -147,6 +151,7 @@ func newFixture(t *testing.T) *harnessFixture {
 		clock:   newTestClock(),
 		timers:  newManualTimers(),
 		ids:     &gatedIDs{},
+		held:    map[string]bool{},
 		cfg:     &config.Config{HomePath: "/home/leo", Tasks: map[string]config.TaskConfig{}},
 		root:    t.TempDir(),
 	}
@@ -167,6 +172,7 @@ func newFixture(t *testing.T) *harnessFixture {
 			return []AgentRef{{Name: "assistant", Workspace: "/home/leo/workspace"}, {Name: "web", Workspace: "/src/web"}}
 		},
 		Config: func() (*config.Config, error) { return f.cfg, nil },
+		Queued: func(agent, ref string) (bool, error) { return f.held[agent+"/"+ref], nil },
 	})
 	t.Cleanup(f.svc.Close)
 	return f
@@ -693,6 +699,50 @@ func TestStartupFailsMessagesTheLastDaemonNeverDelivered(t *testing.T) {
 	notes, _ := f.store.OpenMessages("assistant", KindSystem, "")
 	if got.State != StateFailed || len(notes) != 1 || !strings.Contains(notes[0].Text, "restarted") {
 		t.Fatalf("message %s, notes %+v", got.State, notes)
+	}
+}
+
+// The delivery ref (the bridge command id) is stored on the message before
+// the deliverer gets it, so a restart mid-delivery can find it.
+func TestDeliveryStoresItsRefFirst(t *testing.T) {
+	f := newFixture(t)
+	var stored string
+	f.deliver.onDeliver = func() {
+		ms, _, _ := f.store.Messages("assistant", Page{})
+		stored = ms[0].DeliveryRef
+	}
+	m, err := f.svc.Send(context.Background(), "assistant", SendRequest{Text: "hi"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.svc.Flush()
+	if want := "chat-" + m.ID; stored != want || len(f.deliver.refs) != 1 || f.deliver.refs[0] != want {
+		t.Fatalf("stored ref %q, delivered refs %q, want %q", stored, f.deliver.refs, want)
+	}
+}
+
+// A message the last daemon left pending whose deliver its agent's outbox
+// still holds is delivered by the outbox after restore: it is not failed,
+// so the user is not told to send it again.
+func TestStartupKeepsMessagesTheOutboxStillHolds(t *testing.T) {
+	f := newFixture(t)
+	ids := NewULIDSource(f.clock.Now, nil)
+	queued := Message{ID: ids.New(), Agent: "assistant", Direction: DirectionIn, Kind: KindText, Text: "queued", State: StatePending, DeliveryRef: "chat-a", TS: f.clock.Now()}
+	lost := Message{ID: ids.New(), Agent: "assistant", Direction: DirectionIn, Kind: KindText, Text: "lost", State: StatePending, DeliveryRef: "chat-b", TS: f.clock.Now()}
+	for _, m := range []Message{queued, lost} {
+		if err := f.store.InsertMessage(m); err != nil {
+			t.Fatal(err)
+		}
+	}
+	f.held["assistant/chat-a"] = true
+	if err := f.svc.Recover(); err != nil {
+		t.Fatal(err)
+	}
+	gotQueued, _ := f.store.Message(queued.ID)
+	gotLost, _ := f.store.Message(lost.ID)
+	notes, _ := f.store.OpenMessages("assistant", KindSystem, "")
+	if gotQueued.State != StateDelivered || gotLost.State != StateFailed || len(notes) != 1 {
+		t.Fatalf("queued %s, lost %s, notes %+v", gotQueued.State, gotLost.State, notes)
 	}
 }
 

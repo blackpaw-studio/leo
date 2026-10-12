@@ -27,7 +27,7 @@ type chatDeliveries struct {
 	prompts []string
 }
 
-func (d *chatDeliveries) Deliver(_ context.Context, _, prompt string, _ func()) (string, error) {
+func (d *chatDeliveries) Deliver(_ context.Context, _, prompt, _ string, _ func()) (string, error) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	d.prompts = append(d.prompts, prompt)
@@ -369,7 +369,7 @@ func TestChatDelivererStartsAStoppedAgentThenInjects(t *testing.T) {
 		return nil
 	}
 	started := false
-	h, err := chatDeliverer{s}.Deliver(context.Background(), "web", "[Leo Chat] hi", func() { started = true })
+	h, err := chatDeliverer{s}.Deliver(context.Background(), "web", "[Leo Chat] hi", "chat-1", func() { started = true })
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -391,7 +391,7 @@ func TestChatDelivererAgentStartedMeanwhileStillDelivers(t *testing.T) {
 		injected = append(injected, session+"|"+body)
 		return nil
 	}
-	h, err := chatDeliverer{s}.Deliver(context.Background(), "web", "[Leo Chat] hi", func() {})
+	h, err := chatDeliverer{s}.Deliver(context.Background(), "web", "[Leo Chat] hi", "chat-1", func() {})
 	if err != nil {
 		t.Fatalf("Deliver: %v", err)
 	}
@@ -408,11 +408,31 @@ func TestChatDelivererLiveAgentUsesPeerInbox(t *testing.T) {
 		got = text
 		return nil
 	}
-	if _, err := (chatDeliverer{s}).Deliver(context.Background(), "assistant", "[Leo Chat] live", func() { t.Error("a live agent is not started") }); err != nil {
+	if _, err := (chatDeliverer{s}).Deliver(context.Background(), "assistant", "[Leo Chat] live", "chat-1", func() { t.Error("a live agent is not started") }); err != nil {
 		t.Fatal(err)
 	}
 	if got != "[Leo Chat] live" {
 		t.Fatalf("peer delivery %q", got)
+	}
+}
+
+// A bridged agent gets the prompt under the chat message's ref, the id its
+// outbox keeps it by across a daemon restart.
+func TestChatDelivererBridgedAgentDeliversUnderTheRef(t *testing.T) {
+	s, _ := newTestServer(t)
+	b := newBridgedAgent(t, s, "assistant", true)
+	done := make(chan error, 1)
+	go func() {
+		_, err := chatDeliverer{s}.Deliver(context.Background(), "assistant", "[Leo Chat] hi", "chat-01ABC", func() {})
+		done <- err
+	}()
+	cmd := b.next()
+	if cmd.ID != "chat-01ABC" || cmd.Text != "[Leo Chat] hi" || !cmd.AsUser {
+		t.Fatalf("deliver = %+v", cmd)
+	}
+	b.ack(cmd, true, "")
+	if err := <-done; err != nil {
+		t.Fatal(err)
 	}
 }
 
