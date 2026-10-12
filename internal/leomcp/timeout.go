@@ -8,9 +8,9 @@ import "time"
 // a full agent run — long before leo's own deadline expires, replacing leo's
 // structured timeout error with a generic harness one.
 //
-// It sits above the longest leo tool deadline — leo_chat_ask's one-hour
-// cap (Leo's 30-minute consult deadline is shorter) — plus the MCP client's
-// HTTP margin, so leo always wins the race and reports the timeout itself. Callers wiring the leo MCP bridge pass this to the adapter, which
+// It sits above Leo's 30-minute consult deadline plus the MCP
+// client's HTTP margin, so leo always wins the race and reports the timeout
+// itself. Callers wiring the leo MCP bridge pass this to the adapter, which
 // renders it through its own native knob (codex `tool_timeout_sec`, opencode
 // `mcp.leo.timeout`, claude `MCP_TOOL_TIMEOUT`).
-const ToolTimeout = 62 * time.Minute
+const ToolTimeout = 32 * time.Minute

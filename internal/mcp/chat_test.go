@@ -131,12 +131,49 @@ func TestChatAskRejectsBadArgumentsLocally(t *testing.T) {
 	}
 }
 
-func TestChatAskHTTPDeadlineOutlivesTheAsk(t *testing.T) {
-	if got := chatAskHTTPTimeout(time.Hour); got <= time.Hour {
-		t.Fatalf("HTTP timeout %s must exceed the ask's own", got)
+// Leo's MCP ceiling stays at the consult deadline's: a long ask waits in
+// calls that each fit under it, and the ask's own deadline lives in the
+// daemon.
+func TestChatAskWaitsInCallsUnderTheToolCeiling(t *testing.T) {
+	if leomcp.ToolTimeout != 32*time.Minute {
+		t.Fatalf("leo's MCP tool ceiling = %s; a long ask must not raise it", leomcp.ToolTimeout)
 	}
-	if leoToolCeiling := chatAskHTTPTimeout(maxChatAskTimeout); leoToolCeiling > leomcp.ToolTimeout {
-		t.Fatalf("a maximal ask (%s HTTP) outlives the harness tool timeout %s", leoToolCeiling, leomcp.ToolTimeout)
+	if got := chatAskHTTPTimeout(chatAskCallWindow); got >= leomcp.ToolTimeout {
+		t.Fatalf("one ask call (%s HTTP) is not under the harness tool ceiling %s", got, leomcp.ToolTimeout)
+	}
+	d := chatDaemon(t, `{"ok":true,"data":{"value":"","label":"","timed_out":false,"pending":true,"message_id":"01ASK"}}`)
+	reg := newRegistry(newDaemonClient(d.port(), ""), "assistant", leotools.Permissions{})
+	out, err := reg.call("leo_chat_ask", json.RawMessage(`{"question":"Ship?","options":["y"],"timeout_s":3600}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, `"pending":true`) || !strings.Contains(out, `"message_id":"01ASK"`) {
+		t.Fatalf("result = %s", out)
+	}
+	_, body := lastBody(t, d)
+	if body["timeout_s"] != float64(3600) || body["wait_s"] != chatAskCallWindow.Seconds() {
+		t.Fatalf("long ask body = %v", body)
+	}
+	if _, err := reg.call("leo_chat_ask", json.RawMessage(`{"question":"Quick?","options":["y"],"timeout_s":60}`)); err != nil {
+		t.Fatal(err)
+	}
+	if _, body = lastBody(t, d); body["wait_s"] != float64(60) {
+		t.Fatalf("short ask waits its whole timeout in one call: %v", body)
+	}
+}
+
+func TestChatAskResumesByMessageID(t *testing.T) {
+	d := chatDaemon(t, `{"ok":true,"data":{"value":"y","label":"y","timed_out":false,"message_id":"01ASK"}}`)
+	reg := newRegistry(newDaemonClient(d.port(), ""), "assistant", leotools.Permissions{})
+	if _, err := reg.call("leo_chat_ask", json.RawMessage(`{"message_id":"01ASK"}`)); err != nil {
+		t.Fatal(err)
+	}
+	path, body := lastBody(t, d)
+	if path != "/api/agent/assistant/chat/ask" || body["message_id"] != "01ASK" || body["wait_s"] != chatAskCallWindow.Seconds() || body["question"] != nil {
+		t.Fatalf("resume call %s %v", path, body)
+	}
+	if _, err := reg.call("leo_chat_ask", json.RawMessage(`{"message_id":"01ASK","question":"again?","options":["y"]}`)); err == nil {
+		t.Fatal("a resume that also asks a question was accepted")
 	}
 }
 

@@ -434,6 +434,8 @@ type chatToolRequest struct {
 	Question   string        `json:"question"`
 	Options    []chat.Option `json:"options"`
 	TimeoutS   float64       `json:"timeout_s"`
+	WaitS      float64       `json:"wait_s"`
+	MessageID  string        `json:"message_id"`
 	Limit      int           `json:"limit"`
 	Before     string        `json:"before"`
 	Filter     string        `json:"task_filter"`
@@ -479,7 +481,8 @@ func (s *Server) handleAgentChatPost(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, apiResponse{OK: true, Data: map[string]string{"id": m.ID, "agent": m.Agent}})
 }
 
-// POST /api/agent/{name}/chat/ask — blocks until answered or timed out.
+// POST /api/agent/{name}/chat/ask — blocks until answered, timed out, or
+// wait_s passes (pending: resume with message_id).
 func (s *Server) handleAgentChatAsk(w http.ResponseWriter, r *http.Request) {
 	if !s.chatAvailable(w) {
 		return
@@ -489,11 +492,17 @@ func (s *Server) handleAgentChatAsk(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if req.TimeoutS < 0 || req.TimeoutS > chat.MaxAskTimeout.Seconds() {
-		writeJSON(w, http.StatusBadRequest, apiResponse{Error: fmt.Sprintf("timeout_s must be between 0 and %d", int(chat.MaxAskTimeout.Seconds()))})
+	maxS := chat.MaxAskTimeout.Seconds()
+	if req.TimeoutS < 0 || req.TimeoutS > maxS || req.WaitS < 0 || req.WaitS > maxS {
+		writeJSON(w, http.StatusBadRequest, apiResponse{Error: fmt.Sprintf("timeout_s and wait_s must be between 0 and %d", int(maxS))})
 		return
 	}
-	res, err := s.chat.Ask(r.Context(), chat.AskRequest{Caller: r.PathValue("name"), Task: req.Task, RunID: req.RunID, Question: req.Question, Options: req.Options, Timeout: time.Duration(req.TimeoutS * float64(time.Second))})
+	res, err := s.chat.Ask(r.Context(), chat.AskRequest{
+		Caller: r.PathValue("name"), Task: req.Task, RunID: req.RunID,
+		Question: req.Question, Options: req.Options, MessageID: req.MessageID,
+		Timeout: time.Duration(req.TimeoutS * float64(time.Second)),
+		Wait:    time.Duration(req.WaitS * float64(time.Second)),
+	})
 	if err != nil {
 		writeChatError(w, err)
 		return

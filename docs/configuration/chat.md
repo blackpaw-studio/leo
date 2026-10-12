@@ -81,15 +81,20 @@ subagents are refused, as for `leo_surface_file`.
 | Tool | Arguments | Result |
 |------|-----------|--------|
 | `leo_chat_post` | `text`, `files` (paths, up to 10, 50 MB each; relative to the workspace) | `{id, agent}` |
-| `leo_chat_ask` | `question`, `options` (1–12 strings or `{value, label}`), `timeout_s` (default 300, max 3600) | `{value, label, timed_out}` |
+| `leo_chat_ask` | `question`, `options` (1–12 strings or `{value, label}`), `timeout_s` (default 300, max 3600); or `message_id` alone to resume | `{value, label, timed_out, message_id, pending?}` |
 | `leo_chat_history` | `limit` (max 200), `before`, `task` | a page (below) |
 
 A headless task run has `LEO_TASK` and `LEO_RUN_ID` set, so its posts become
 `task` cards in the owner's thread. A `runtime: persistent` task runs in an
 agent that serves every turn, so the daemon files that agent's posts and asks
-under the task run whose turn is in flight. Leo's MCP tool ceiling is 62 minutes so a
-one-hour ask is never cut off; on Claude that ceiling (`MCP_TOOL_TIMEOUT`)
-applies to every MCP server in the agent.
+under the task run whose turn is in flight.
+
+An ask's `timeout_s` deadline is kept by the daemon, not by the tool call.
+One `leo_chat_ask` call waits at most 30 minutes, under Leo's 32-minute MCP
+tool ceiling. If the question is still open then, the call returns
+`pending: true` with its `message_id`, and calling `leo_chat_ask` again with
+only that `message_id` keeps waiting. A call the harness abandons leaves the
+ask open until its own deadline.
 
 ## Permission prompts
 

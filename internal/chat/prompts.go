@@ -14,37 +14,56 @@ import (
 const maxPermissionSummaryRunes = 300
 
 // waiters routes answers to the goroutines blocked on ask and permission
-// messages.
+// messages. A waiter is settled once; every goroutine waiting on it wakes.
 type waiters struct {
 	mu sync.Mutex
-	ch map[string]chan string
+	m  map[string]*waiter
 }
 
-func newWaiters() *waiters { return &waiters{ch: map[string]chan string{}} }
+// waiter is one open message's: done closes once it is settled, with value
+// (the answer; "" when it ended without one).
+type waiter struct {
+	done  chan struct{}
+	value string
+}
 
-func (w *waiters) add(id string) chan string {
+func newWaiters() *waiters { return &waiters{m: map[string]*waiter{}} }
+
+func (w *waiters) add(id string) *waiter {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	ch := make(chan string, 1)
-	w.ch[id] = ch
-	return ch
+	wt := &waiter{done: make(chan struct{})}
+	w.m[id] = wt
+	return wt
+}
+
+func (w *waiters) get(id string) (*waiter, bool) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	wt, ok := w.m[id]
+	return wt, ok
 }
 
 func (w *waiters) remove(id string) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	delete(w.ch, id)
+	delete(w.m, id)
 }
 
-// settle hands value to id's waiter, if any. Never blocks.
+// settle settles id's waiter with value, if it has one not yet settled.
+// Never blocks.
 func (w *waiters) settle(id, value string) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	if ch, ok := w.ch[id]; ok {
-		select {
-		case ch <- value:
-		default:
-		}
+	wt, ok := w.m[id]
+	if !ok {
+		return
+	}
+	select {
+	case <-wt.done:
+	default:
+		wt.value = value
+		close(wt.done)
 	}
 }
 
@@ -55,31 +74,21 @@ type awaitEnd struct {
 	answer string
 }
 
-// await stores open message m, announces it, and blocks until it is
-// answered (settled, with the answer), times out or ctx ends (both leave
-// it settled=false: expired, or as gone says).
-func (s *Service) await(ctx context.Context, m Message, timeout time.Duration) (string, bool) {
-	return s.awaitWith(ctx, m, timeout, awaitEnd{state: StateExpired})
-}
-
+// awaitWith stores open message m, announces it, and blocks until it is
+// answered (settled, with the answer), times out (expired) or ctx ends (as
+// gone says).
 func (s *Service) awaitWith(ctx context.Context, m Message, timeout time.Duration, gone awaitEnd) (string, bool) {
-	var ch chan string
-	// The waiter is in place before the message is stored, so no answer can
-	// arrive unheard.
-	m, err := s.insert(m, nil, nil, func(id string) { ch = s.waiters.add(id) })
-	if ch != nil {
-		defer s.waiters.remove(m.ID)
-	}
+	m, wt, err := s.insertOpen(m)
 	if err != nil {
 		s.opts.Logf("chat: storing %s prompt for %s: %v", m.Kind, m.Agent, err)
 		return "", false
 	}
-	s.publish(EventMessage, messageEvent(m))
+	defer s.waiters.remove(m.ID)
 	timer := s.opts.After(timeout)
 	var end awaitEnd
 	select {
-	case v := <-ch:
-		return v, v != ""
+	case <-wt.done:
+		return wt.value, wt.value != ""
 	case <-timer:
 		end = awaitEnd{state: StateExpired}
 	case <-s.ctx.Done():
@@ -102,6 +111,23 @@ func (s *Service) awaitWith(ctx context.Context, m Message, timeout time.Duratio
 		return cur.Answer, true
 	}
 	return "", false
+}
+
+// insertOpen stores open message m with a waiter for its answer, put in
+// place before the message is stored so no answer arrives unheard, and
+// announces it.
+func (s *Service) insertOpen(m Message) (Message, *waiter, error) {
+	var wt *waiter
+	var id string
+	m, err := s.insert(m, nil, nil, func(taken string) { id, wt = taken, s.waiters.add(taken) })
+	if err != nil {
+		if wt != nil {
+			s.waiters.remove(id)
+		}
+		return m, nil, err
+	}
+	s.publish(EventMessage, messageEvent(m))
+	return m, wt, nil
 }
 
 // permissionRequest is the part of a PermissionRequest hook payload chat

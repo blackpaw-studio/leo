@@ -844,3 +844,85 @@ func TestCloseCancelsAndDrainsWaitersAndDeliveries(t *testing.T) {
 		t.Fatalf("post after close = %v", err)
 	}
 }
+
+// An ask's deadline is its own, not one call's: a call that waits out its
+// window returns pending with the message id, and a later call resumes it.
+func TestAskOutlastsOneCallAndResumes(t *testing.T) {
+	f := newFixture(t)
+	req := AskRequest{Caller: "assistant", Question: "Ship it?", Options: []Option{{Value: "y", Label: "Yes"}}, Timeout: time.Hour, Wait: 30 * time.Minute}
+	done := make(chan AskResult, 1)
+	go func() {
+		r, _ := f.svc.Ask(context.Background(), req)
+		done <- r
+	}()
+	if d := <-f.timers.got; d != time.Hour {
+		t.Fatalf("deadline = %s", d)
+	}
+	if d := <-f.timers.got; d != 30*time.Minute {
+		t.Fatalf("call window = %s", d)
+	}
+	f.timers.fireLast()
+	first := <-done
+	open := f.thread(t, "assistant")[0]
+	if !first.Pending || first.TimedOut || first.MessageID != open.ID || open.State != StateOpen {
+		t.Fatalf("first call = %+v, message %s", first, open.State)
+	}
+	if _, err := f.svc.Answer("assistant", open.ID, "y"); err != nil {
+		t.Fatal(err)
+	}
+	r, err := f.svc.Ask(context.Background(), AskRequest{Caller: "assistant", MessageID: open.ID, Wait: 30 * time.Minute})
+	if err != nil || r.Value != "y" || r.Label != "Yes" || r.Pending {
+		t.Fatalf("resumed = %+v, %v", r, err)
+	}
+}
+
+// A caller that goes away (its harness gave up on the tool call) leaves the
+// ask open until its own deadline; resuming after that reports the timeout.
+func TestAskDeadlineDoesNotEndWithTheCall(t *testing.T) {
+	f := newFixture(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan AskResult, 1)
+	go func() {
+		r, _ := f.svc.Ask(ctx, AskRequest{Caller: "assistant", Question: "?", Options: []Option{{Value: "a"}}, Timeout: time.Hour})
+		done <- r
+	}()
+	<-f.timers.got
+	cancel()
+	if r := <-done; !r.Pending {
+		t.Fatalf("abandoned call = %+v", r)
+	}
+	open := f.thread(t, "assistant")[0]
+	if open.State != StateOpen {
+		t.Fatalf("the ask must outlive its call: %s", open.State)
+	}
+	f.timers.fireLast()
+	resumed := make(chan AskResult, 1)
+	go func() {
+		r, _ := f.svc.Ask(context.Background(), AskRequest{Caller: "assistant", MessageID: open.ID})
+		resumed <- r
+	}()
+	if r := <-resumed; !r.TimedOut {
+		t.Fatalf("resumed after the deadline = %+v", r)
+	}
+	if m, _ := f.store.Message(open.ID); m.State != StateExpired {
+		t.Fatalf("state = %s", m.State)
+	}
+}
+
+func TestAskResumeChecksTheMessage(t *testing.T) {
+	f := newFixture(t)
+	note, err := f.svc.Post(context.Background(), PostRequest{Caller: "assistant", Text: "not an ask"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, req := range map[string]AskRequest{
+		"not an ask":       {Caller: "assistant", MessageID: note.ID},
+		"another's ask":    {Caller: "web", MessageID: note.ID},
+		"malformed id":     {Caller: "assistant", MessageID: "nope"},
+		"question as well": {Caller: "assistant", MessageID: note.ID, Question: "?", Options: []Option{{Value: "a"}}},
+	} {
+		if _, err := f.svc.Ask(context.Background(), req); !errors.Is(err, ErrInvalid) {
+			t.Errorf("%s: err = %v", name, err)
+		}
+	}
+}

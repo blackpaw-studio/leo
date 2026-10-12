@@ -9,6 +9,8 @@ import (
 	"net/url"
 	"path/filepath"
 	"time"
+
+	"github.com/blackpaw-studio/leo/internal/leomcp"
 )
 
 // Leo Chat tool limits. The daemon re-validates every one of them; checking
@@ -22,6 +24,11 @@ const (
 	// chatAskHTTPMargin lets the daemon answer a timed-out ask before the
 	// HTTP client gives up on it.
 	chatAskHTTPMargin = time.Minute
+	// chatAskCallWindow is the longest one leo_chat_ask call waits: its
+	// HTTP deadline stays under leo's MCP tool ceiling, past which the
+	// harness kills the call. A longer ask comes back pending and is
+	// resumed by message_id; its own deadline lives in the daemon.
+	chatAskCallWindow = leomcp.ToolTimeout - 2*chatAskHTTPMargin
 )
 
 // withTaskRun marks the registry as serving a headless task run (LEO_TASK,
@@ -33,16 +40,18 @@ func withTaskRun(task, runID string) registryOption {
 // chatToolRequest is the body of /api/agent/{name}/chat/*; see
 // web.chatToolRequest.
 type chatToolRequest struct {
-	Text     string       `json:"text,omitempty"`
-	Files    []string     `json:"files,omitempty"`
-	Question string       `json:"question,omitempty"`
-	Options  []chatOption `json:"options,omitempty"`
-	TimeoutS float64      `json:"timeout_s,omitempty"`
-	Limit    int          `json:"limit,omitempty"`
-	Before   string       `json:"before,omitempty"`
-	Filter   string       `json:"task_filter,omitempty"`
-	Task     string       `json:"task,omitempty"`
-	RunID    string       `json:"run_id,omitempty"`
+	Text      string       `json:"text,omitempty"`
+	Files     []string     `json:"files,omitempty"`
+	Question  string       `json:"question,omitempty"`
+	Options   []chatOption `json:"options,omitempty"`
+	TimeoutS  float64      `json:"timeout_s,omitempty"`
+	WaitS     float64      `json:"wait_s,omitempty"`
+	MessageID string       `json:"message_id,omitempty"`
+	Limit     int          `json:"limit,omitempty"`
+	Before    string       `json:"before,omitempty"`
+	Filter    string       `json:"task_filter,omitempty"`
+	Task      string       `json:"task,omitempty"`
+	RunID     string       `json:"run_id,omitempty"`
 }
 
 type chatOption struct {
@@ -57,7 +66,8 @@ const (
 		"From a scheduled task run the post becomes a task card in the task owner's thread."
 	chatAskDescription = "Ask the user a multiple-choice question in Leo Chat and wait for the answer. " +
 		"options are 1–12 strings or {value, label} objects; timeout_s defaults to 300 (max 3600). " +
-		"Returns {value, label, timed_out}; on timeout value is empty and timed_out is true."
+		"Returns {value, label, timed_out, message_id}; on timeout value is empty and timed_out is true. " +
+		"One call waits at most 30 minutes: if the question is still open then, it returns pending: true — call leo_chat_ask again with only that message_id to keep waiting."
 	chatHistoryDescription = "Read your Leo Chat thread, newest first: limit (default 50, max 200), before (a message id, for older pages), task (only that task's cards)."
 )
 
@@ -89,22 +99,24 @@ func (r *registry) registerChat(client *daemonClient, processName string, schema
 		Name:        "leo_chat_ask",
 		Description: chatAskDescription,
 		InputSchema: schema(map[string]any{
-			"question": map[string]any{"type": "string"},
+			"message_id": map[string]any{"type": "string", "description": "Resume a pending ask (from an earlier call's result) instead of asking."},
+			"question":   map[string]any{"type": "string"},
 			"options": map[string]any{"type": "array", "minItems": 1, "maxItems": maxChatAskOptions, "items": map[string]any{"anyOf": []any{
 				map[string]any{"type": "string"},
 				map[string]any{"type": "object", "properties": map[string]any{"value": map[string]any{"type": "string"}, "label": map[string]any{"type": "string"}}, "required": []string{"value"}},
 			}}},
-			"timeout_s": map[string]any{"type": "integer", "minimum": 1, "maximum": int(maxChatAskTimeout.Seconds()), "description": "Seconds to wait (default 300)."},
-		}, "question", "options"),
+			"timeout_s": map[string]any{"type": "integer", "minimum": 1, "maximum": int(maxChatAskTimeout.Seconds()), "description": "Seconds the question stays open (default 300)."},
+		}),
 	}, func(ctx context.Context, args map[string]any) (string, error) {
 		if r.dispatchID != "" {
 			return "", refuse("leo_chat_ask")
 		}
-		req, timeout, err := r.parseChatAsk(args)
+		req, err := r.parseChatAsk(args)
 		if err != nil {
 			return "", err
 		}
-		return client.chatCall(ctx, processName, "ask", req, chatAskHTTPTimeout(timeout))
+		wait := time.Duration(req.WaitS) * time.Second
+		return client.chatCall(ctx, processName, "ask", req, chatAskHTTPTimeout(wait))
 	})
 	r.addContext(toolDef{
 		Name:        "leo_chat_history",
@@ -155,21 +167,37 @@ func (r *registry) parseChatPost(args map[string]any) (chatToolRequest, error) {
 	return req, nil
 }
 
-func (r *registry) parseChatAsk(args map[string]any) (chatToolRequest, time.Duration, error) {
-	req := chatToolRequest{Task: r.task, RunID: r.runID}
+// parseChatAsk builds a new ask, or with message_id the resume of a pending
+// one. Either way the call waits at most chatAskCallWindow.
+func (r *registry) parseChatAsk(args map[string]any) (chatToolRequest, error) {
+	req := chatToolRequest{Task: r.task, RunID: r.runID, WaitS: chatAskCallWindow.Seconds()}
+	id, err := optionalStringArg(args, "message_id")
+	if err != nil {
+		return req, err
+	}
+	if id != "" {
+		if _, ok := args["question"]; ok {
+			return req, fmt.Errorf("resume an ask with message_id alone")
+		}
+		if _, ok := args["options"]; ok {
+			return req, fmt.Errorf("resume an ask with message_id alone")
+		}
+		req.MessageID = id
+		return req, nil
+	}
 	question, err := stringArg(args, "question")
 	if err != nil {
-		return req, 0, err
+		return req, err
 	}
 	req.Question = question
 	raw, _ := args["options"].([]any)
 	if len(raw) == 0 || len(raw) > maxChatAskOptions {
-		return req, 0, fmt.Errorf("options must hold 1 to %d choices", maxChatAskOptions)
+		return req, fmt.Errorf("options must hold 1 to %d choices", maxChatAskOptions)
 	}
 	for i, item := range raw {
 		opt, err := parseChatOption(item)
 		if err != nil {
-			return req, 0, fmt.Errorf("options[%d]: %w", i, err)
+			return req, fmt.Errorf("options[%d]: %w", i, err)
 		}
 		req.Options = append(req.Options, opt)
 	}
@@ -177,12 +205,13 @@ func (r *registry) parseChatAsk(args map[string]any) (chatToolRequest, time.Dura
 	if v, ok := args["timeout_s"]; ok {
 		n, ok := v.(float64)
 		if !ok || n != math.Trunc(n) || n < 1 || n > maxChatAskTimeout.Seconds() {
-			return req, 0, fmt.Errorf("timeout_s must be an integer from 1 to %d", int(maxChatAskTimeout.Seconds()))
+			return req, fmt.Errorf("timeout_s must be an integer from 1 to %d", int(maxChatAskTimeout.Seconds()))
 		}
 		timeout = time.Duration(n) * time.Second
 	}
 	req.TimeoutS = timeout.Seconds()
-	return req, timeout, nil
+	req.WaitS = min(timeout, chatAskCallWindow).Seconds()
+	return req, nil
 }
 
 func parseChatOption(item any) (chatOption, error) {

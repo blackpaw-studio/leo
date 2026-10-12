@@ -290,6 +290,11 @@ func TestChatAskAnsweredOverHTTP(t *testing.T) {
 	if w := chatRequest(t, cs.s, http.MethodPost, "/api/v1/chat/assistant/messages/"+ask.ID+"/answer", testAPIToken, `{"value":"n"}`); w.Code != http.StatusConflict {
 		t.Fatalf("second answer = %d", w.Code)
 	}
+	// A call resuming the settled ask by its id gets the answer at once.
+	w := chatRequest(t, cs.s, http.MethodPost, "/api/agent/assistant/chat/ask", testAgentToken, `{"message_id":"`+ask.ID+`","wait_s":1800}`)
+	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"value":"y"`) {
+		t.Fatalf("resume = %d %s", w.Code, w.Body)
+	}
 }
 
 func TestChatToolRoutes(t *testing.T) {
