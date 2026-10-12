@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"regexp"
 	"time"
+
+	claudeharness "github.com/blackpaw-studio/leo/internal/harness/claude"
 )
 
 // ChatConfig configures Leo Chat (docs/configuration/chat.md).
@@ -22,7 +24,7 @@ const (
 	defaultChatPermissionTimeout = 120 * time.Second
 	// MaxChatPermissionTimeout bounds chat.permission_timeout; the
 	// PermissionRequest hook's own timeout is sized from it.
-	MaxChatPermissionTimeout = time.Hour
+	MaxChatPermissionTimeout = claudeharness.AgentPermissionWait
 )
 
 // ChatPermissionTimeout is the parsed chat.permission_timeout; Validate

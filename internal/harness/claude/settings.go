@@ -8,6 +8,7 @@ import (
 	"reflect"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/blackpaw-studio/leo/internal/harness"
 )
@@ -16,23 +17,42 @@ import (
 // that block on the operator.
 const attentionNotificationMatcher = "permission_prompt|elicitation_dialog"
 
+// AgentPermissionWait is the longest a supervised agent's PermissionRequest
+// hook waits for a Leo Chat answer (config.MaxChatPermissionTimeout). The
+// hook's own timeout adds permissionHookGrace, so the hook always exits on
+// its own; the daemon applies the configured, shorter wait.
+const AgentPermissionWait = time.Hour
+
 // AttentionHooks is TurnHooks plus a Notification group, so a supervised
 // agent also reports when it is blocked on a permission prompt or an
 // elicitation dialog, and a PostToolUse group, whose report clears that
 // needs_input once the prompt is answered and the tool runs.
+//
+// A PermissionRequest group (`<leo> dispatch permission`, derived from a
+// `<leo> dispatch report` command) offers each permission prompt in Leo
+// Chat. Claude keeps its own dialog up while the hook waits, so the
+// terminal can still answer first; the hook is then killed.
 func (c Claude) AttentionHooks(reportCmd []string) ([]string, error) {
 	turn, err := c.TurnHooks(reportCmd)
 	if err != nil {
 		return nil, err
 	}
 	command := []any{map[string]any{"type": "command", "command": shellCommand(reportCmd)}}
-	notification, err := json.Marshal(map[string]any{"hooks": map[string]any{
+	groups := map[string]any{
 		"Notification": []any{map[string]any{
 			"matcher": attentionNotificationMatcher,
 			"hooks":   command,
 		}},
 		"PostToolUse": []any{map[string]any{"hooks": command}},
-	}})
+	}
+	if n := len(reportCmd); n > 0 && reportCmd[n-1] == "report" {
+		permissionCmd := append(slices.Clone(reportCmd[:n-1]), "permission")
+		groups["PermissionRequest"] = []any{map[string]any{"hooks": []any{map[string]any{
+			"type": "command", "command": shellCommand(permissionCmd),
+			"timeout": int((AgentPermissionWait + permissionHookGrace).Seconds()),
+		}}}}
+	}
+	notification, err := json.Marshal(map[string]any{"hooks": groups})
 	if err != nil {
 		return nil, fmt.Errorf("claude: encoding attention hooks: %w", err)
 	}
