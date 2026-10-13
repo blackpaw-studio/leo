@@ -859,12 +859,14 @@ func TestCloseCancelsAndDrainsWaitersAndDeliveries(t *testing.T) {
 	}()
 	<-f.timers.got
 	f.svc.Close()
+	// Close waits for Ask to return, but the caller goroutine's send of the
+	// result may still be a step behind: block on it, under a guard.
 	select {
 	case r := <-asked:
 		if !r.TimedOut {
 			t.Fatalf("ask after close = %+v", r)
 		}
-	default:
+	case <-time.After(10 * time.Second):
 		t.Fatal("Close returned while an ask still waited")
 	}
 	got, _ := f.store.Message(in.ID)
