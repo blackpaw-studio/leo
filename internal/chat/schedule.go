@@ -68,3 +68,55 @@ func (s *Service) kick() {
 	default:
 	}
 }
+
+// ScheduleListRequest is leo_chat_schedule_list.
+type ScheduleListRequest struct {
+	Caller string
+	Task   string
+	RunID  string
+}
+
+// ScheduleCancelRequest is leo_chat_schedule_cancel.
+type ScheduleCancelRequest struct {
+	Caller string
+	Task   string
+	RunID  string
+	ID     string
+}
+
+// Schedules lists the pending reminders of the caller's thread, soonest first.
+func (s *Service) Schedules(_ context.Context, req ScheduleListRequest) ([]Schedule, error) {
+	if err := s.enter(); err != nil {
+		return nil, err
+	}
+	defer s.leave()
+	task, _ := s.withRun(req.Caller, req.Task, req.RunID)
+	agent, _, err := s.thread(req.Caller, task)
+	if err != nil {
+		return nil, err
+	}
+	return s.opts.Store.PendingSchedules(agent)
+}
+
+// CancelSchedule cancels a pending reminder of the caller's thread: ErrNotFound
+// when there is no such reminder there, ErrConflict when it has already fired
+// or been cancelled.
+func (s *Service) CancelSchedule(_ context.Context, req ScheduleCancelRequest) error {
+	if err := s.enter(); err != nil {
+		return err
+	}
+	defer s.leave()
+	task, _ := s.withRun(req.Caller, req.Task, req.RunID)
+	agent, _, err := s.thread(req.Caller, task)
+	if err != nil {
+		return err
+	}
+	if !validID(req.ID) {
+		return ErrNotFound
+	}
+	if err := s.opts.Store.CancelSchedule(req.ID, agent, s.opts.Now()); err != nil {
+		return err
+	}
+	s.kick()
+	return nil
+}

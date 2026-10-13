@@ -80,3 +80,58 @@ func TestScheduleFromATaskRunTargetsTheOwner(t *testing.T) {
 		t.Fatalf("scheduling posts nothing: %+v", ms)
 	}
 }
+
+func TestReminderListIsScopedToTheCallersThread(t *testing.T) {
+	f := newFixture(t)
+	f.cfg.Tasks["build"] = config.TaskConfig{Owner: "web"}
+	late := f.schedule(t, "web", 3*time.Hour, "late")
+	early := f.schedule(t, "web", time.Hour, "early")
+	f.schedule(t, "assistant", 2*time.Hour, "not web's")
+
+	for _, req := range []ScheduleListRequest{
+		{Caller: "web"},
+		{Caller: "task:build", Task: "build", RunID: "r1"},
+	} {
+		got, err := f.svc.Schedules(context.Background(), req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(got) != 2 || got[0].ID != early.ID || got[1].ID != late.ID {
+			t.Fatalf("%+v lists %+v, want early then late", req, got)
+		}
+	}
+	if _, err := f.svc.Schedules(context.Background(), ScheduleListRequest{Caller: "ghost"}); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("unknown caller = %v, want ErrInvalid", err)
+	}
+}
+
+func TestReminderCancelErrors(t *testing.T) {
+	f := newFixture(t)
+	ctx := context.Background()
+	mine := f.schedule(t, "assistant", time.Hour, "mine")
+	theirs := f.schedule(t, "web", time.Hour, "theirs")
+	cancel := func(caller, id string) error {
+		return f.svc.CancelSchedule(ctx, ScheduleCancelRequest{Caller: caller, ID: id})
+	}
+
+	for name, id := range map[string]string{"unknown": f.svc.opts.IDs.New(), "malformed": "../etc", "another thread's": theirs.ID} {
+		if err := cancel("assistant", id); !errors.Is(err, ErrNotFound) {
+			t.Fatalf("%s: err = %v, want ErrNotFound", name, err)
+		}
+	}
+	if err := cancel("assistant", mine.ID); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := f.svc.Schedules(ctx, ScheduleListRequest{Caller: "assistant"}); len(got) != 0 {
+		t.Fatalf("cancelled reminder still listed: %+v", got)
+	}
+	if err := cancel("assistant", mine.ID); !errors.Is(err, ErrConflict) {
+		t.Fatalf("cancelled twice = %v, want ErrConflict", err)
+	}
+	if ok, err := f.store.FireSchedule(theirs.ID, Message{ID: "M", Agent: "web", Direction: DirectionOut, Kind: KindText, TS: f.clock.Now()}, f.clock.Now()); err != nil || !ok {
+		t.Fatal(ok, err)
+	}
+	if err := cancel("web", theirs.ID); !errors.Is(err, ErrConflict) {
+		t.Fatalf("fired = %v, want ErrConflict", err)
+	}
+}
