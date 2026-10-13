@@ -11,6 +11,10 @@ import (
 // the TCP API, for the Mac app. The 0600 socket is the auth.
 const chatSocketPrefix = "/api/v1/chat/"
 
+// chatTaskFailurePath is the CLI-only route a `leo run` process reports a
+// failed oneshot task run to. It is served on the socket alone.
+const chatTaskFailurePath = "/chat/task-failure"
+
 // SetChat hands StartWeb the chat store, the attachment directory and the
 // publisher chat events go through (the push-wrapped chain, so chat
 // messages push). A nil store leaves chat off. Must run before StartWeb.

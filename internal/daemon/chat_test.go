@@ -37,3 +37,25 @@ func TestSocketChatRoutesDelegateToTheWebServer(t *testing.T) {
 		t.Fatalf("delegated %v", got)
 	}
 }
+
+// A `leo run` process reports a failed oneshot task over the socket; the
+// route is delegated to the web server like the app routes.
+func TestSocketTaskFailureRouteDelegatesToTheWebServer(t *testing.T) {
+	s := New(filepath.Join(t.TempDir(), "d.sock"), "", nil)
+	w := httptest.NewRecorder()
+	s.Handler().ServeHTTP(w, httptest.NewRequest("POST", chatTaskFailurePath, nil))
+	if w.Code != http.StatusServiceUnavailable {
+		t.Fatalf("before the web server: status = %d", w.Code)
+	}
+
+	var got string
+	s.setChat(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		got = r.Method + " " + r.URL.Path
+		w.WriteHeader(http.StatusTeapot)
+	}))
+	w = httptest.NewRecorder()
+	s.Handler().ServeHTTP(w, httptest.NewRequest("POST", chatTaskFailurePath, nil))
+	if w.Code != http.StatusTeapot || got != "POST /chat/task-failure" {
+		t.Fatalf("status = %d, delegated %q", w.Code, got)
+	}
+}

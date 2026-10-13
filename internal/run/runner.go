@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/blackpaw-studio/leo/internal/config"
+	"github.com/blackpaw-studio/leo/internal/daemon"
 	"github.com/blackpaw-studio/leo/internal/harness"
 	claudeharness "github.com/blackpaw-studio/leo/internal/harness/claude"
 	codexharness "github.com/blackpaw-studio/leo/internal/harness/codex"
@@ -367,12 +368,15 @@ func RunWith(cfg *config.Config, taskName string, sessions *session.Store, mcp l
 	}
 	finishRun(lastErr == nil, reason, logFile)
 
-	// Send failure notification if configured (via child claude invocation).
-	// Skipped when interrupted: the user asked the task to stop, so firing a
-	// notify-on-fail child (itself a claude invocation) would be surprising
-	// and unwanted, not helpful.
-	if lastErr != nil && !errors.Is(lastErr, errInterrupted) && task.NotifyOnFail && len(task.Channels) > 0 {
-		notifyFailure(cfg, taskName, task, taskWorkspace, lastErr, maxAttempts, spawnEnv, logFile)
+	// Notify on failure: a card in the owner's Leo Chat thread, plus the
+	// channel notification (a child claude invocation) when channels are set.
+	// Skipped when interrupted: the user asked the task to stop, so a card or
+	// a notify-on-fail child would be surprising and unwanted, not helpful.
+	if lastErr != nil && !errors.Is(lastErr, errInterrupted) && task.NotifyOnFail {
+		postFailureCard(cfg, taskName, runID, maxAttempts, lastErr, logFile)
+		if len(task.Channels) > 0 {
+			notifyFailure(cfg, taskName, task, taskWorkspace, lastErr, maxAttempts, spawnEnv, logFile)
+		}
 	}
 
 	if lastErr != nil {
@@ -442,6 +446,30 @@ func runTaskAttempt(cfg *config.Config, task config.TaskConfig, taskName, prompt
 // (when logFile is non-empty) so operators can see what the notify child
 // actually did. A single fresh-spawn retry is attempted on failure before
 // giving up.
+// reportTaskFailure is a seam for tests. In production it hands a failed
+// run to the daemon, which posts the card into the task owner's chat thread.
+var reportTaskFailure = func(ctx context.Context, homePath string, req daemon.TaskFailureRequest) error {
+	return daemon.ReportTaskFailure(ctx, homePath, req)
+}
+
+// postFailureCard asks the daemon to post a failure card in the task owner's
+// chat thread. It is best-effort: with no daemon or chat disabled it warns,
+// and the run's own result is unaffected.
+func postFailureCard(cfg *config.Config, taskName, runID string, attempts int, runErr error, logFile string) {
+	req := daemon.TaskFailureRequest{
+		Task:     taskName,
+		RunID:    runID,
+		Attempts: attempts,
+		Error:    runErr.Error(),
+	}
+	if logFile != "" {
+		req.LogPath = filepath.Join(cfg.StatePath(), "logs", logFile)
+	}
+	if err := reportTaskFailure(context.Background(), cfg.HomePath, req); err != nil {
+		fmt.Fprintf(os.Stderr, "warning: posting the failure card to Leo Chat: %v\n", err)
+	}
+}
+
 func notifyFailure(cfg *config.Config, taskName string, task config.TaskConfig, workspace string, taskErr error, attempts int, extraEnv map[string]string, logFile string) {
 	prompt := fmt.Sprintf(
 		"Task %q failed after %d attempt(s): %v.\n"+

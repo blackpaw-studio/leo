@@ -154,6 +154,29 @@ up meanwhile, so either side can answer:
 
 Agents with `bypass_permissions` never ask.
 
+## Task failure cards
+
+When a `runtime: oneshot` task ends in failure (every attempt used, not
+interrupted) and has `notify_on_fail: true`, the daemon posts a card into the
+task owner's thread, whether or not the task has `channels`. Cron firings and
+`leo run` both count. The card is a `task` message (`task`, `run_id` set) and
+pushes like any other agent message:
+
+```
+**Task failed: <name>**
+Run `<run_id>` · <n> attempt(s)
+<first 500 characters of the error, in a code block>
+Log: `<log path>`
+```
+
+The thread is the task's owner, resolved as for any task output, including the
+fallback to `assistant` with a system note when the owner is not an agent. If
+the task also has `channels`, the channel notification still fires; drop
+`channels` at cutover to end the duplicate. Persistent tasks run inside their
+agent and post no card, and interrupted runs post nothing. With the daemon
+down or chat off, `leo run` prints a warning and the run's result is
+unchanged.
+
 ## API
 
 Every route takes the operator token or a paired-device token (agent and
@@ -170,6 +193,11 @@ without a token for the Mac app.
 | `GET /api/v1/chat/attachments/{id}` | | the file, with `Range` support; `410` once pruned |
 | `POST /api/v1/chat/{agent}/messages/{id}/answer` | `{values, text?}` | `Message`; `400` when the answer does not fit the message's `input`, `409` once settled |
 | `POST /api/v1/chat/{agent}/read` | `{up_to}` | |
+
+The socket also serves `POST /chat/task-failure`
+`{task, run_id, attempts, error, log_path}` → `{id, agent}`, which `leo run`
+uses to report a failed run for a [failure card](#task-failure-cards). It is
+never served on TCP.
 
 An upload without an `agent` belongs to the first message that sends it.
 Audio uploads make that message a `voice` note.

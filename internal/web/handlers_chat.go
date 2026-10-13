@@ -174,11 +174,39 @@ const chatAPIPrefix = "/api/v1/chat"
 
 // ChatHandler serves the app routes unauthenticated at the same
 // /api/v1/chat paths, for the daemon to mount on its unix socket, whose
-// 0600 mode is the auth.
+// 0600 mode is the auth. It also serves the CLI-only routes that the TCP
+// listener never registers.
 func (s *Server) ChatHandler() http.Handler {
 	mux := http.NewServeMux()
 	s.registerChatRoutes(mux, chatAPIPrefix, func(h http.HandlerFunc) http.HandlerFunc { return h })
+	mux.HandleFunc("POST /chat/task-failure", s.handleChatTaskFailure)
 	return mux
+}
+
+// POST /chat/task-failure — a `leo run` process reports an exhausted oneshot
+// task run; the card lands in the task owner's thread. Socket-only.
+func (s *Server) handleChatTaskFailure(w http.ResponseWriter, r *http.Request) {
+	if !s.chatAvailable(w) {
+		return
+	}
+	var req struct {
+		Task     string `json:"task"`
+		RunID    string `json:"run_id"`
+		Attempts int    `json:"attempts"`
+		Error    string `json:"error"`
+		LogPath  string `json:"log_path"`
+	}
+	if !decodeChatJSON(w, r, &req) {
+		return
+	}
+	m, err := s.chat.TaskFailure(r.Context(), chat.TaskFailureRequest{
+		Task: req.Task, RunID: req.RunID, Attempts: req.Attempts, Error: req.Error, LogPath: req.LogPath,
+	})
+	if err != nil {
+		writeChatError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, apiResponse{OK: true, Data: map[string]string{"id": m.ID, "agent": m.Agent}})
 }
 
 // chatAvailable answers 503 when chat is not wired.

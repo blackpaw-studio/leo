@@ -539,3 +539,34 @@ func TestChatAskToolRequestRejectsOptionsWithInput(t *testing.T) {
 		t.Fatalf("code = %d %s", w.Code, w.Body)
 	}
 }
+
+func TestChatTaskFailureRouteIsSocketOnly(t *testing.T) {
+	cs := newChatServer(t)
+	body := `{"task":"heartbeat","run_id":"heartbeat-1","attempts":2,"error":"exit status 1","log_path":"/state/logs/heartbeat.log"}`
+
+	w := httptest.NewRecorder()
+	cs.s.ChatHandler().ServeHTTP(w, httptest.NewRequest(http.MethodPost, "/chat/task-failure", strings.NewReader(body)))
+	if w.Code != http.StatusOK {
+		t.Fatalf("socket = %d %s", w.Code, w.Body)
+	}
+	var got map[string]string
+	decodeChatData(t, w, &got)
+	if got["agent"] != "assistant" || got["id"] == "" {
+		t.Fatalf("reply = %v", got)
+	}
+	page, err := cs.s.chat.Messages("assistant", chat.Page{})
+	if err != nil || len(page.Messages) != 1 || page.Messages[0].Kind != chat.KindTask || !strings.Contains(page.Messages[0].Text, "Task failed: heartbeat") {
+		t.Fatalf("thread = %+v, %v", page.Messages, err)
+	}
+
+	// The operator token reaches no such route; the agent token is turned
+	// away by auth before routing.
+	for token, want := range map[string]int{testAPIToken: http.StatusNotFound, testAgentToken: http.StatusUnauthorized} {
+		if w := chatRequest(t, cs.s, http.MethodPost, "/chat/task-failure", token, body); w.Code != want {
+			t.Errorf("tcp with %q = %d, want %d (%s)", token, w.Code, want, w.Body)
+		}
+	}
+	if page, _ := cs.s.chat.Messages("assistant", chat.Page{}); len(page.Messages) != 1 {
+		t.Errorf("tcp calls posted cards: %+v", page.Messages)
+	}
+}

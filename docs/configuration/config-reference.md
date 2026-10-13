@@ -264,9 +264,9 @@ tasks:
 | `environments` | list | No | `defaults.environments` | Ordered [named environments](environments.md) for this task's run (or implicit persistent agent). Not allowed on a persistent task that names a `template:`. |
 | `timeout` | string | No | `30m` | Max duration before kill (e.g., `30m`, `1h`). |
 | `retries` | int | No | `0` | Retry attempts on failure. |
-| `channels` | list | No | -- | Channel plugin IDs used by `notify_on_fail` (oneshot tasks) or reply delivery (persistent tasks). Only valid on a channel-supporting harness. For a `runtime: persistent` task with `template:` set, must be a subset of the target template's `channels:`. |
+| `channels` | list | No | -- | Channel plugin IDs used by the channel notification of `notify_on_fail` (oneshot tasks) or reply delivery (persistent tasks). Only valid on a channel-supporting harness. For a `runtime: persistent` task with `template:` set, must be a subset of the target template's `channels:`. |
 | `dev_channels` | list | No | -- | Unpublished channel plugin IDs loaded via `--dangerously-load-development-channels`. |
-| `notify_on_fail` | bool | No | `false` | Spawn a short child `claude` invocation on non-zero exit (oneshot), or enqueue a follow-up failure-notice prompt into the target agent (persistent), instructing it to notify the configured channels. Requires `channels:` to be set. |
+| `notify_on_fail` | bool | No | `false` | On a oneshot task that fails (all attempts exhausted, not interrupted), post a failure card to the owner's [Leo Chat](chat.md#task-failure-cards) thread, and, when `channels:` is set, also spawn a short child `claude` invocation to notify those channels. On a persistent task, enqueue a follow-up failure-notice prompt into the target agent (requires `channels:`). |
 | `enabled` | bool | No | `false` | Whether the scheduler should run this task. |
 | `silent` | bool | No | `false` | Prepend silent-mode preamble to prompt. |
 | `runtime` | enum | No | `oneshot` | `oneshot` spawns a fresh `claude -p` per firing; `persistent` injects the prompt into a supervised agent instead. See [Persistent Tasks](persistent-tasks.md). |

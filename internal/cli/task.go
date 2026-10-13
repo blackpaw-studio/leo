@@ -314,7 +314,7 @@ command exits with a non-zero status and lists which flags are missing.`,
 	cmd.Flags().StringVar(&flagPromptFile, "prompt-file", "", "prompt file path relative to the task workspace (required)")
 	cmd.Flags().StringVar(&flagModel, "model", "", "claude model override (defaults.model is used when empty)")
 	cmd.Flags().StringVar(&flagChannels, "channels", "", "comma-separated channel plugin IDs")
-	cmd.Flags().BoolVar(&flagNotifyOnFail, "notify-on-fail", false, "spawn a child claude to notify configured channels on failure")
+	cmd.Flags().BoolVar(&flagNotifyOnFail, "notify-on-fail", false, "post a Leo Chat failure card (and notify configured channels, if any) on failure")
 	cmd.Flags().BoolVar(&flagSilent, "silent", false, "silent mode — skip chatter on successful runs")
 	cmd.Flags().BoolVar(&flagDisabled, "disabled", false, "create the task in a disabled state")
 
