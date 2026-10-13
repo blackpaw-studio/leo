@@ -7,8 +7,17 @@ import (
 	"time"
 )
 
-// maxScheduleHorizon bounds how far ahead a reminder may be set.
-const maxScheduleHorizon = 1 // years
+const (
+	// maxScheduleHorizon bounds how far ahead a reminder may be set, in years.
+	maxScheduleHorizon = 1
+	// lateFireThreshold is how overdue a reminder may be and still post
+	// without the late line (a daemon that was down past it adds one).
+	lateFireThreshold = 60 * time.Second
+	// scheduleRetry is how long the loop waits to retry after a store error.
+	scheduleRetry = time.Minute
+	// lateTimeLayout renders when a late reminder was meant to fire.
+	lateTimeLayout = "Mon 2 Jan 2006 15:04 MST"
+)
 
 // ScheduleRequest is leo_chat_schedule. Caller, Task and RunID are as for
 // PostRequest; At is an RFC3339 time with an offset.
@@ -119,4 +128,79 @@ func (s *Service) CancelSchedule(_ context.Context, req ScheduleCancelRequest) e
 	}
 	s.kick()
 	return nil
+}
+
+// runSchedules is the reminder loop: fire what is due, arm a timer for the
+// earliest pending reminder, and wait for that timer, a kick (a reminder
+// was added or cancelled) or shutdown. Which timer woke it never decides
+// anything — firing is guarded in SQL — so a stale timer is harmless.
+func (s *Service) runSchedules() {
+	var timer <-chan time.Time
+	var armedID string
+	var armedAt time.Time
+	for {
+		s.fireDue()
+		next, ok, err := s.opts.Store.NextPending()
+		switch {
+		case err != nil:
+			s.opts.Logf("chat: reading the next reminder: %v", err)
+			timer, armedID = s.opts.After(scheduleRetry), ""
+		case !ok:
+			timer, armedID = nil, ""
+		case next.ID != armedID || !next.FireAt.Equal(armedAt):
+			// A kick that left the earliest reminder alone keeps its timer.
+			timer, armedID, armedAt = s.opts.After(max(next.FireAt.Sub(s.opts.Now()), 0)), next.ID, next.FireAt
+		}
+		select {
+		case <-s.ctx.Done():
+			return
+		case <-s.rearm:
+		case <-timer:
+			timer, armedID = nil, ""
+		}
+	}
+}
+
+// fireDue posts every reminder that is due now.
+func (s *Service) fireDue() {
+	now := s.opts.Now()
+	due, err := s.opts.Store.DuePending(now)
+	if err != nil {
+		s.opts.Logf("chat: reading due reminders: %v", err)
+		return
+	}
+	for _, r := range due {
+		if s.ctx.Err() != nil {
+			return
+		}
+		s.fire(r, now)
+	}
+}
+
+// fire posts reminder r. The reminder is marked fired in the same
+// transaction as its message, so it posts at most once; a reminder that is
+// no longer pending (cancelled meanwhile) posts nothing.
+func (s *Service) fire(r Schedule, now time.Time) {
+	text := r.Text
+	if now.Sub(r.FireAt) > lateFireThreshold {
+		text += "\n\n_(late — scheduled for " + r.FireAt.Local().Format(lateTimeLayout) + ")_"
+	}
+	var fired bool
+	m, err := s.insertWith(Message{Agent: r.Agent, Direction: DirectionOut, Kind: r.Kind, Task: r.Task, RunID: r.RunID, Text: text}, func(m Message) (err error) {
+		fired, err = s.opts.Store.FireSchedule(r.ID, m, now)
+		return err
+	})
+	if err != nil {
+		s.opts.Logf("chat: firing reminder %s: %v", r.ID, err)
+		return
+	}
+	if !fired {
+		return
+	}
+	stored, err := s.opts.Store.Message(m.ID)
+	if err != nil {
+		s.opts.Logf("chat: reading fired reminder %s: %v", r.ID, err)
+		return
+	}
+	s.publish(EventMessage, messageEvent(stored))
 }

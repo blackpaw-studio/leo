@@ -135,3 +135,132 @@ func TestReminderCancelErrors(t *testing.T) {
 		t.Fatalf("fired = %v, want ErrConflict", err)
 	}
 }
+
+// recover starts the reminder loop, as the daemon does at startup.
+func (f *harnessFixture) recover(t *testing.T) {
+	t.Helper()
+	if err := f.svc.Recover(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// nextArm is the duration of the loop's next timer arm.
+func (f *harnessFixture) nextArm(t *testing.T) time.Duration {
+	t.Helper()
+	select {
+	case d := <-f.timers.got:
+		return d
+	case <-time.After(10 * time.Second):
+		t.Fatal("the reminder loop never armed a timer")
+		return 0
+	}
+}
+
+func TestReminderFiresAtItsTime(t *testing.T) {
+	f := newFixture(t)
+	f.recover(t)
+	r := f.schedule(t, "assistant", 2*time.Hour, "stand up")
+	if d := f.nextArm(t); d != 2*time.Hour {
+		t.Fatalf("armed %v, want 2h", d)
+	}
+	f.clock.Advance(2 * time.Hour)
+	f.timers.fireLast()
+
+	m := f.pub.waitMessage(t)
+	if m.Agent != "assistant" || m.Direction != DirectionOut || m.Kind != KindText || m.Text != "stand up" || m.Task != "" {
+		t.Fatalf("fired message = %+v", m)
+	}
+	if got, _ := f.store.PendingSchedules("assistant"); len(got) != 0 {
+		t.Fatalf("still pending after firing %s: %+v", r.ID, got)
+	}
+	if ms := f.thread(t, "assistant"); len(ms) != 1 {
+		t.Fatalf("thread = %+v, want the one reminder", texts(ms))
+	}
+}
+
+func TestReminderRearmsForTheEarliest(t *testing.T) {
+	f := newFixture(t)
+	f.recover(t)
+	f.schedule(t, "assistant", 2*time.Hour, "two")
+	if d := f.nextArm(t); d != 2*time.Hour {
+		t.Fatalf("first arm %v, want 2h", d)
+	}
+	soon := f.schedule(t, "assistant", time.Hour, "one")
+	if d := f.nextArm(t); d != time.Hour {
+		t.Fatalf("second arm %v, want 1h", d)
+	}
+	if err := f.svc.CancelSchedule(context.Background(), ScheduleCancelRequest{Caller: "assistant", ID: soon.ID}); err != nil {
+		t.Fatal(err)
+	}
+	if d := f.nextArm(t); d != 2*time.Hour {
+		t.Fatalf("arm after cancelling the earliest %v, want 2h", d)
+	}
+}
+
+func TestCancelledReminderNeverFires(t *testing.T) {
+	f := newFixture(t)
+	f.recover(t)
+	r := f.schedule(t, "assistant", time.Hour, "never")
+	f.nextArm(t)
+	if err := f.svc.CancelSchedule(context.Background(), ScheduleCancelRequest{Caller: "assistant", ID: r.ID}); err != nil {
+		t.Fatal(err)
+	}
+	f.clock.Advance(2 * time.Hour)
+	f.timers.fireLast() // the stale timer of the cancelled reminder
+	f.schedule(t, "assistant", 3*time.Hour, "later")
+	if d := f.nextArm(t); d != 3*time.Hour {
+		t.Fatalf("arm %v, want 3h", d)
+	}
+	if ms := f.thread(t, "assistant"); len(ms) != 0 {
+		t.Fatalf("a cancelled reminder posted: %+v", texts(ms))
+	}
+}
+
+func TestReminderFromATaskRunFiresAsATaskCard(t *testing.T) {
+	f := newFixture(t)
+	f.cfg.Tasks["build"] = config.TaskConfig{Workspace: "/src/web"}
+	f.recover(t)
+	if _, err := f.svc.Schedule(context.Background(), ScheduleRequest{Caller: "task:build", Task: "build", RunID: "r7", Text: "check the deploy", At: f.rfc3339In(time.Hour)}); err != nil {
+		t.Fatal(err)
+	}
+	f.nextArm(t)
+	f.clock.Advance(time.Hour)
+	f.timers.fireLast()
+	m := f.pub.waitMessage(t)
+	if m.Agent != "web" || m.Kind != KindTask || m.Task != "build" || m.RunID != "r7" || m.Direction != DirectionOut || m.Text != "check the deploy" {
+		t.Fatalf("fired message = %+v", m)
+	}
+}
+
+func TestRestartPostsAPastReminderOnceWithTheLateFlag(t *testing.T) {
+	for _, c := range []struct {
+		name     string
+		lateness time.Duration
+		late     bool
+	}{
+		{"30s late", 30 * time.Second, false},
+		{"exactly 60s late", 60 * time.Second, false},
+		{"61s late", 61 * time.Second, true},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			f := newFixture(t)
+			f.recover(t)
+			r := f.schedule(t, "assistant", time.Hour, "water the plants")
+			f.nextArm(t)
+			f.clock.Advance(time.Hour + c.lateness) // the daemon is down meanwhile
+
+			wantText := "water the plants"
+			if c.late {
+				wantText += "\n\n_(late — scheduled for " + r.FireAt.Local().Format("Mon 2 Jan 2006 15:04 MST") + ")_"
+			}
+			for restart := 1; restart <= 2; restart++ {
+				f.restart(t)
+				f.recover(t)
+				ms := f.thread(t, "assistant")
+				if len(ms) != 1 || ms[0].Text != wantText || ms[0].Kind != KindText {
+					t.Fatalf("after restart %d: thread = %q, want one %q", restart, texts(ms), wantText)
+				}
+			}
+		})
+	}
+}

@@ -130,7 +130,8 @@ func (s *Service) enter() error {
 func (s *Service) leave() { s.active.Done() }
 
 // Recover runs once at daemon start: prompts left open by the previous
-// daemon have no waiter any more, so they expire.
+// daemon have no waiter any more, so they expire; reminders that came due
+// while it was down fire; and the reminder loop starts.
 func (s *Service) Recover() error {
 	ids, err := s.opts.Store.ExpireOpen()
 	if err != nil {
@@ -146,6 +147,14 @@ func (s *Service) Recover() error {
 	for _, m := range pending {
 		s.recoverPending(m)
 	}
+	s.fireDue()
+	if err := s.enter(); err != nil {
+		return nil // closing: no loop to start
+	}
+	go func() {
+		defer s.leave()
+		s.runSchedules()
+	}()
 	return nil
 }
 
@@ -487,13 +496,21 @@ func (s *Service) transcribe(ctx context.Context, m Message) (transcript string,
 // link — under insertMu, taking its id and time there; taken (may be nil)
 // sees the id first.
 func (s *Service) insert(m Message, add []Attachment, link []string, taken func(id string)) (Message, error) {
+	return s.insertWith(m, func(m Message) error {
+		if taken != nil {
+			taken(m.ID)
+		}
+		return s.opts.Store.InsertMessageWith(m, add, link)
+	})
+}
+
+// insertWith gives m its id and time under insertMu and stores it with
+// write, which must store m itself (the ordering guarantee on insertMu).
+func (s *Service) insertWith(m Message, write func(Message) error) (Message, error) {
 	s.insertMu.Lock()
 	defer s.insertMu.Unlock()
 	m.ID, m.TS = s.opts.IDs.New(), s.opts.Now()
-	if taken != nil {
-		taken(m.ID)
-	}
-	if err := s.opts.Store.InsertMessageWith(m, add, link); err != nil {
+	if err := write(m); err != nil {
 		return Message{}, err
 	}
 	return m, nil
