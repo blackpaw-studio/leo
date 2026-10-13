@@ -344,9 +344,9 @@ type TaskConfig struct {
 	Silent         bool              `yaml:"silent,omitempty"`
 	Timeout        string            `yaml:"timeout,omitempty"`        // e.g. "30m", "1h" — default 30m
 	Retries        int               `yaml:"retries,omitempty"`        // number of retry attempts on failure, default 0
-	Channels       []string          `yaml:"channels,omitempty"`       // channel plugin IDs used by NotifyOnFail
+	Channels       []string          `yaml:"channels,omitempty"`       // channel plugin IDs for NotifyOnFail's channel notification
 	DevChannels    []string          `yaml:"dev_channels,omitempty"`   // loaded via --dangerously-load-development-channels
-	NotifyOnFail   bool              `yaml:"notify_on_fail,omitempty"` // spawn a child claude to notify configured channels on failure
+	NotifyOnFail   bool              `yaml:"notify_on_fail,omitempty"` // failure card in Leo Chat; also notifies configured channels
 	Env            map[string]string `yaml:"env,omitempty"`
 	Environments   []string          `yaml:"environments,omitempty"` // named environments, merged left to right
 	Runtime        string            `yaml:"runtime,omitempty"`      // "oneshot" (default) | "persistent"

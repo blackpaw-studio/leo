@@ -52,7 +52,7 @@ The effective model and max turns are resolved via the [override cascade](../con
 - Task output is logged to `<workspace>/state/<task>.log`
 - If the agent outputs `NO_REPLY`, no external message is sent
 - Otherwise, the agent delivers its final message via a configured channel plugin (e.g. Telegram, Slack) using the plugin's own MCP tool
-- If `task.notify_on_fail: true` and the task exits non-zero, Leo spawns a short child `claude` invocation asking the agent to notify the task's configured channels of the failure
+- If `task.notify_on_fail: true` and the task fails (all attempts exhausted, not interrupted), Leo posts a [failure card](../configuration/chat.md#task-failure-cards) to the task owner's Leo Chat thread, and, when the task has `channels`, also spawns a short child `claude` invocation asking the agent to notify those channels
 
 ## See Also
 

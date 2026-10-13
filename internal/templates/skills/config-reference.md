@@ -40,8 +40,8 @@ tasks:
     max_turns: <int>          # Override defaults.max_turns (optional)
     harness: <string>         # Override defaults.harness (optional)
     harness_options: {}       # Same keys as defaults.harness_options, merged over defaults (scope key wins)
-    channels: [<string>]      # Channel plugin IDs used for notify_on_fail (optional)
-    notify_on_fail: <bool>    # Spawn a child claude to notify configured channels on failure (optional)
+    channels: [<string>]      # Channel plugin IDs for the channel notification of notify_on_fail (optional)
+    notify_on_fail: <bool>    # On failure: post a Leo Chat card; also notify configured channels, if any (optional)
     enabled: <bool>           # Whether cron runs this task (default: true)
     silent: <bool>            # Suppress narration, output NO_REPLY if nothing to report (optional)
 ```
