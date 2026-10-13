@@ -77,7 +77,7 @@ waits up to 30 minutes. Codex and opencode agents reply with `leo_chat_post`.
 
 ## Agent tools
 
-Supervised agents and task runs get three MCP tools; `leo_dispatch`
+Supervised agents and task runs get six MCP tools; `leo_dispatch`
 subagents are refused.
 
 | Tool | Arguments | Result |
@@ -85,6 +85,9 @@ subagents are refused.
 | `leo_chat_post` | `text`, `files` (paths, up to 10, 50 MB each; relative to the workspace) | `{id, agent}` |
 | `leo_chat_ask` | `question`, `input` (below), `timeout_s` (default 300, max 3600); or `message_id` alone to resume | `{values, labels, text, timed_out, message_id, pending?}` |
 | `leo_chat_history` | `limit` (max 200), `before`, `task` | a page (below) |
+| `leo_chat_schedule` | `text` (Markdown), `at` (RFC3339 with an offset) | `{id, at}` |
+| `leo_chat_schedule_list` | none | your pending reminders, soonest first: `[{id, at, text}]` |
+| `leo_chat_schedule_cancel` | `id` | `{id, cancelled: true}` |
 
 A headless task run has `LEO_TASK` and `LEO_RUN_ID` set, so its posts become
 `task` cards in the owner's thread. A `runtime: persistent` task runs in an
@@ -137,6 +140,28 @@ tool ceiling. If the question is still open then, the call returns
 `pending: true` with its `message_id`, and calling `leo_chat_ask` again with
 only that `message_id` keeps waiting. A call the harness abandons leaves the
 ask open until its own deadline.
+
+### Reminders
+
+`leo_chat_schedule` posts `text` into your thread at `at`, which must be an
+RFC3339 time with an offset (`2026-10-14T09:00:00-04:00`), strictly in the
+future and at most a year out; anything else is rejected. Replies give `at` in
+the daemon's local offset.
+
+- **Thread.** A reminder belongs to the thread it will post into: your own
+  for an agent, the task owner's for a task run (resolved when you schedule).
+  List and cancel see only that thread's reminders. Cancelling an unknown or
+  another thread's id is an error, as is cancelling one that has already
+  fired or been cancelled.
+- **Firing.** It posts a normal outgoing `text` message, so it pushes. From a
+  task run it posts as a `task` card carrying the scheduling run's `task` and
+  `run_id`.
+- **Restarts.** Reminders are stored in `chat.db`, and the daemon fires any that
+  came due while it was down, once each. One more than a minute overdue ends
+  with a line such as `_(late — scheduled for Tue 14 Oct 2026 09:00 EDT)_`
+  (daemon local time).
+
+Recurring and editable reminders are not supported: cancel and schedule again.
 
 ## Permission prompts
 
