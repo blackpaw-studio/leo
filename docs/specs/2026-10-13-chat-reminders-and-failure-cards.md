@@ -21,6 +21,7 @@ into the task owner's thread, whether or not the task has `channels`.
   <error summary, first 500 chars of lastErr, single code block>
   Log: `<log path>`
   ```
+  The `Log:` line is omitted when the runner could not write a log.
 - Transport: the runner is a separate `leo run` process, so it calls a new
   daemon route over the existing socket client
   (`POST /chat/task-failure {task, run_id, attempts, error, log_path}`). The
