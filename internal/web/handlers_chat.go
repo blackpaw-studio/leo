@@ -466,6 +466,8 @@ type chatToolRequest struct {
 	Limit      int           `json:"limit"`
 	Before     string        `json:"before"`
 	Filter     string        `json:"task_filter"`
+	At         string        `json:"at"`
+	ID         string        `json:"id"`
 	Task       string        `json:"task"`
 	RunID      string        `json:"run_id"`
 	DispatchID string        `json:"dispatch_id"`

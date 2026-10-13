@@ -570,3 +570,58 @@ func TestChatTaskFailureRouteIsSocketOnly(t *testing.T) {
 		t.Errorf("tcp calls posted cards: %+v", page.Messages)
 	}
 }
+
+func TestChatScheduleToolRoutes(t *testing.T) {
+	cs := newChatServer(t)
+	post := func(verb, body string) *httptest.ResponseRecorder {
+		return chatRequest(t, cs.s, http.MethodPost, "/api/agent/assistant/chat/"+verb, testAgentToken, body)
+	}
+	at := time.Now().Add(time.Hour).UTC().Truncate(time.Second)
+	body := fmt.Sprintf(`{"text":"stand up","at":%q}`, at.Format(time.RFC3339))
+
+	for _, verb := range []string{"schedule", "schedule/list", "schedule/cancel"} {
+		if w := post(verb, `{"id":"x","text":"x","at":"x","dispatch_id":"d-1"}`); w.Code != http.StatusForbidden {
+			t.Fatalf("dispatch subagent %s = %d", verb, w.Code)
+		}
+	}
+
+	var empty []map[string]string
+	decodeChatData(t, post("schedule/list", `{}`), &empty)
+	if empty == nil || len(empty) != 0 {
+		t.Fatalf("empty list = %#v, want []", empty)
+	}
+
+	w := post("schedule", body)
+	if w.Code != http.StatusOK {
+		t.Fatalf("schedule = %d %s", w.Code, w.Body)
+	}
+	var created map[string]string
+	decodeChatData(t, w, &created)
+	if want := at.Local().Format(time.RFC3339); created["at"] != want || created["id"] == "" {
+		t.Fatalf("schedule reply = %v, want at %s in the daemon's local offset", created, want)
+	}
+
+	var listed []map[string]string
+	decodeChatData(t, post("schedule/list", `{}`), &listed)
+	if len(listed) != 1 || listed[0]["id"] != created["id"] || listed[0]["text"] != "stand up" || listed[0]["at"] != created["at"] {
+		t.Fatalf("list = %v", listed)
+	}
+
+	cancelBody := fmt.Sprintf(`{"id":%q}`, created["id"])
+	w = post("schedule/cancel", cancelBody)
+	var cancelled map[string]any
+	decodeChatData(t, w, &cancelled)
+	if cancelled["id"] != created["id"] || cancelled["cancelled"] != true {
+		t.Fatalf("cancel reply = %v", cancelled)
+	}
+	if w := post("schedule/cancel", cancelBody); w.Code != http.StatusConflict {
+		t.Fatalf("second cancel = %d %s", w.Code, w.Body)
+	}
+	if w := post("schedule/cancel", `{"id":"01AAAAAAAAAAAAAAAAAAAAAAAA"}`); w.Code != http.StatusNotFound {
+		t.Fatalf("unknown cancel = %d %s", w.Code, w.Body)
+	}
+	past := fmt.Sprintf(`{"text":"late","at":%q}`, time.Now().Add(-time.Hour).Format(time.RFC3339))
+	if w := post("schedule", past); w.Code != http.StatusBadRequest {
+		t.Fatalf("past at = %d %s", w.Code, w.Body)
+	}
+}
