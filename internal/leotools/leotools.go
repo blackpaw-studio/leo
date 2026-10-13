@@ -60,6 +60,9 @@ var Names = []string{
 	"leo_chat_post",
 	"leo_chat_ask",
 	"leo_chat_history",
+	"leo_chat_schedule",
+	"leo_chat_schedule_list",
+	"leo_chat_schedule_cancel",
 }
 
 // IsKnownTool reports whether name is a tool Leo's MCP server registers.

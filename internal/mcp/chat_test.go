@@ -74,8 +74,8 @@ func TestChatPostFromATaskRunCarriesTaskAndRun(t *testing.T) {
 func TestChatToolsRefuseDispatchSubagents(t *testing.T) {
 	d := chatDaemon(t, `{"ok":true,"data":{}}`)
 	reg := newRegistry(newDaemonClient(d.port(), ""), "assistant", leotools.Permissions{}, withDispatchID("d-1"))
-	for _, tool := range []string{"leo_chat_post", "leo_chat_ask", "leo_chat_history"} {
-		_, err := reg.call(tool, json.RawMessage(`{"text":"x","question":"q","options":["a"]}`))
+	for _, tool := range []string{"leo_chat_post", "leo_chat_ask", "leo_chat_history", "leo_chat_schedule", "leo_chat_schedule_list", "leo_chat_schedule_cancel"} {
+		_, err := reg.call(tool, json.RawMessage(`{"text":"x","question":"q","options":["a"],"at":"2026-10-14T09:00:00Z","id":"01X"}`))
 		if err == nil || !strings.Contains(err.Error(), "leo_dispatch subagent") {
 			t.Errorf("%s: err = %v", tool, err)
 		}
@@ -240,5 +240,79 @@ func TestChatHistoryPassesPaging(t *testing.T) {
 	}
 	if _, err := reg.call("leo_chat_history", json.RawMessage(`{"limit":201}`)); err == nil {
 		t.Fatal("limit over 200 accepted")
+	}
+}
+
+func TestChatScheduleToolsCallTheDaemon(t *testing.T) {
+	cases := []struct {
+		name     string
+		opts     []registryOption
+		caller   string
+		tool     string
+		args     string
+		reply    string
+		wantPath string
+		wantBody map[string]any
+	}{
+		{"schedule", nil, "assistant", "leo_chat_schedule", `{"text":"stand up","at":"2026-10-14T09:00:00-04:00"}`,
+			`{"ok":true,"data":{"id":"01X","at":"2026-10-14T09:00:00-04:00"}}`,
+			"/api/agent/assistant/chat/schedule", map[string]any{"text": "stand up", "at": "2026-10-14T09:00:00-04:00"}},
+		{"schedule from a task run", []registryOption{withTaskRun("daily", "run-7")}, "task:daily", "leo_chat_schedule", `{"text":"check","at":"2026-10-14T09:00:00Z"}`,
+			`{"ok":true,"data":{"id":"01Y","at":"2026-10-14T05:00:00-04:00"}}`,
+			"/api/agent/task:daily/chat/schedule", map[string]any{"text": "check", "at": "2026-10-14T09:00:00Z", "task": "daily", "run_id": "run-7"}},
+		{"list", nil, "assistant", "leo_chat_schedule_list", `{}`,
+			`{"ok":true,"data":[{"id":"01X","at":"2026-10-14T09:00:00-04:00","text":"stand up"}]}`,
+			"/api/agent/assistant/chat/schedule/list", map[string]any{}},
+		{"list from a task run", []registryOption{withTaskRun("daily", "run-7")}, "task:daily", "leo_chat_schedule_list", `{}`,
+			`{"ok":true,"data":[]}`,
+			"/api/agent/task:daily/chat/schedule/list", map[string]any{"task": "daily", "run_id": "run-7"}},
+		{"cancel", nil, "assistant", "leo_chat_schedule_cancel", `{"id":"01X"}`,
+			`{"ok":true,"data":{"id":"01X","cancelled":true}}`,
+			"/api/agent/assistant/chat/schedule/cancel", map[string]any{"id": "01X"}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			d := chatDaemon(t, c.reply)
+			reg := newRegistry(newDaemonClient(d.port(), ""), c.caller, leotools.Permissions{}, c.opts...)
+			out, err := reg.call(c.tool, json.RawMessage(c.args))
+			if err != nil {
+				t.Fatal(err)
+			}
+			var want struct{ Data json.RawMessage }
+			if err := json.Unmarshal([]byte(c.reply), &want); err != nil {
+				t.Fatal(err)
+			}
+			if out != string(want.Data) {
+				t.Fatalf("result = %s, want the daemon's data verbatim %s", out, want.Data)
+			}
+			path, body := lastBody(t, d)
+			if path != c.wantPath || len(body) != len(c.wantBody) {
+				t.Fatalf("call %s %v, want %s %v", path, body, c.wantPath, c.wantBody)
+			}
+			for k, v := range c.wantBody {
+				if body[k] != v {
+					t.Fatalf("body[%s] = %v, want %v (%v)", k, body[k], v, body)
+				}
+			}
+		})
+	}
+}
+
+func TestChatScheduleToolsRejectMissingArgumentsLocally(t *testing.T) {
+	d := chatDaemon(t, `{"ok":true,"data":{}}`)
+	reg := newRegistry(newDaemonClient(d.port(), ""), "assistant", leotools.Permissions{})
+	for name, c := range map[string]struct{ tool, args string }{
+		"schedule without text":      {"leo_chat_schedule", `{"at":"2026-10-14T09:00:00Z"}`},
+		"schedule without at":        {"leo_chat_schedule", `{"text":"x"}`},
+		"schedule with a numeric at": {"leo_chat_schedule", `{"text":"x","at":5}`},
+		"cancel without id":          {"leo_chat_schedule_cancel", `{}`},
+		"cancel with a numeric id":   {"leo_chat_schedule_cancel", `{"id":5}`},
+	} {
+		if _, err := reg.call(c.tool, json.RawMessage(c.args)); err == nil {
+			t.Errorf("%s: accepted", name)
+		}
+	}
+	if len(d.calls) != 0 {
+		t.Fatalf("a bad call reached the daemon: %+v", d.calls)
 	}
 }

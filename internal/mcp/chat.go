@@ -53,6 +53,8 @@ type chatToolRequest struct {
 	Filter    string       `json:"task_filter,omitempty"`
 	Task      string       `json:"task,omitempty"`
 	RunID     string       `json:"run_id,omitempty"`
+	At        string       `json:"at,omitempty"`
+	ID        string       `json:"id,omitempty"`
 }
 
 type chatOption struct {
@@ -84,7 +86,12 @@ const (
 		"Omitting input and giving top-level options asks buttons. To ask about a file, leo_chat_post it first, then ask. timeout_s defaults to 300 (max 3600). " +
 		"Returns {values, labels, text, timed_out, message_id}; on timeout values is empty and timed_out is true. " +
 		"One call waits at most 30 minutes: if the question is still open then, it returns pending: true — call leo_chat_ask again with only that message_id to keep waiting."
-	chatHistoryDescription = "Read your Leo Chat thread, newest first: limit (default 50, max 200), before (a message id, for older pages), task (only that task's cards)."
+	chatScheduleDescription = "Schedule a reminder: post text (Markdown) to the user's Leo Chat thread at a future time, even if the daemon restarts first. " +
+		"at is RFC3339 with an offset (e.g. 2026-10-14T09:00:00-04:00), strictly in the future and at most a year out. Returns {id, at}. " +
+		"From a scheduled task run the reminder posts as a task card in the task owner's thread."
+	chatScheduleListDescription   = "List your pending Leo Chat reminders, soonest first, as [{id, at, text}]."
+	chatScheduleCancelDescription = "Cancel a pending Leo Chat reminder by id (from leo_chat_schedule or leo_chat_schedule_list). Errors if it is unknown, not yours, or already fired. Returns {id, cancelled: true}."
+	chatHistoryDescription        = "Read your Leo Chat thread, newest first: limit (default 50, max 200), before (a message id, for older pages), task (only that task's cards)."
 )
 
 // registerChat adds the leo_chat_* tools. Dispatch subagents are refused in
@@ -157,6 +164,62 @@ func (r *registry) registerChat(client *daemonClient, processName string, schema
 		}
 		return client.chatCall(ctx, processName, "history", req, 0)
 	})
+	r.addContext(toolDef{
+		Name:        "leo_chat_schedule",
+		Description: chatScheduleDescription,
+		InputSchema: schema(map[string]any{
+			"text": map[string]any{"type": "string", "description": "Reminder text (Markdown)."},
+			"at":   map[string]any{"type": "string", "description": "When to post: RFC3339 with an offset, in the future."},
+		}, "text", "at"),
+	}, func(ctx context.Context, args map[string]any) (string, error) {
+		if r.dispatchID != "" {
+			return "", refuse("leo_chat_schedule")
+		}
+		req, err := r.parseChatSchedule(args)
+		if err != nil {
+			return "", err
+		}
+		return client.chatCall(ctx, processName, "schedule", req, 0)
+	})
+	r.addContext(toolDef{
+		Name:        "leo_chat_schedule_list",
+		Description: chatScheduleListDescription,
+		InputSchema: schema(map[string]any{}),
+	}, func(ctx context.Context, _ map[string]any) (string, error) {
+		if r.dispatchID != "" {
+			return "", refuse("leo_chat_schedule_list")
+		}
+		return client.chatCall(ctx, processName, "schedule/list", chatToolRequest{Task: r.task, RunID: r.runID}, 0)
+	})
+	r.addContext(toolDef{
+		Name:        "leo_chat_schedule_cancel",
+		Description: chatScheduleCancelDescription,
+		InputSchema: schema(map[string]any{
+			"id": map[string]any{"type": "string", "description": "Reminder id."},
+		}, "id"),
+	}, func(ctx context.Context, args map[string]any) (string, error) {
+		if r.dispatchID != "" {
+			return "", refuse("leo_chat_schedule_cancel")
+		}
+		id, err := stringArg(args, "id")
+		if err != nil {
+			return "", err
+		}
+		return client.chatCall(ctx, processName, "schedule/cancel", chatToolRequest{Task: r.task, RunID: r.runID, ID: id}, 0)
+	})
+}
+
+// parseChatSchedule requires text and at; the daemon validates the time.
+func (r *registry) parseChatSchedule(args map[string]any) (chatToolRequest, error) {
+	req := chatToolRequest{Task: r.task, RunID: r.runID}
+	var err error
+	if req.Text, err = stringArg(args, "text"); err != nil {
+		return req, err
+	}
+	if req.At, err = stringArg(args, "at"); err != nil {
+		return req, err
+	}
+	return req, nil
 }
 
 func chatOptionsSchema(description string) map[string]any {
