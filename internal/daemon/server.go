@@ -285,6 +285,7 @@ func New(sockPath, configPath string, processes ProcessStateProvider, opts ...Op
 	// stream open and posts acks/events back. The 0600 socket is the auth,
 	// as for every route on this mux.
 	mux.HandleFunc(chatSocketPrefix, s.handleChat)
+	mux.HandleFunc("POST "+chatTaskFailurePath, s.handleChat)
 	mux.HandleFunc("GET /api/bridge/{agent}/stream", s.handleBridgeStream)
 	mux.HandleFunc("POST /api/bridge/{agent}/report", s.handleBridgeReport)
 
