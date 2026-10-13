@@ -95,15 +95,26 @@ func (s *Store) InsertMessage(m Message) error { return s.InsertMessageWith(m, n
 // earlier uploads link (each agent's own or unassigned, and unused) in one
 // transaction: on any failure nothing is stored.
 func (s *Store) InsertMessageWith(m Message, add []Attachment, link []string) error {
-	input, meta, answer, err := encodeExtras(m)
-	if err != nil {
-		return err
-	}
 	tx, err := s.db.Begin()
 	if err != nil {
 		return fmt.Errorf("inserting chat message: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
+	if err := insertMessageTx(tx, m, add, link); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("inserting chat message: %w", err)
+	}
+	return nil
+}
+
+// insertMessageTx writes m, its new attachments and its linked uploads in tx.
+func insertMessageTx(tx *sql.Tx, m Message, add []Attachment, link []string) error {
+	input, meta, answer, err := encodeExtras(m)
+	if err != nil {
+		return err
+	}
 	_, err = tx.Exec(`INSERT INTO messages (`+messageColumns+`) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		m.ID, m.Agent, m.Direction, m.Kind, m.Text, m.Transcript, m.ReplyTo, m.Task, m.RunID, m.State, answer, input, meta, m.DeliveryRef, m.TS.UnixMilli())
 	if err != nil {
@@ -115,13 +126,7 @@ func (s *Store) InsertMessageWith(m Message, add []Attachment, link []string) er
 			return err
 		}
 	}
-	if err := linkAttachments(tx, m.ID, m.Agent, link); err != nil {
-		return err
-	}
-	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("inserting chat message: %w", err)
-	}
-	return nil
+	return linkAttachments(tx, m.ID, m.Agent, link)
 }
 
 // encodeExtras renders a message's input, meta and answer columns.

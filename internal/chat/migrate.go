@@ -68,6 +68,22 @@ ALTER TABLE messages ADD COLUMN input TEXT NOT NULL DEFAULT '';
 UPDATE messages SET input = json_object('type', 'buttons', 'options', json(options)) WHERE options != '';
 UPDATE messages SET answer = json_object('values', json_array(answer), 'text', '') WHERE answer != '';
 ALTER TABLE messages DROP COLUMN options;`},
+	// Reminders (leo_chat_schedule): a row per scheduled post, pending until
+	// it fires or is cancelled.
+	{version: 3, sql: `
+CREATE TABLE schedules (
+	id           TEXT PRIMARY KEY,
+	agent        TEXT NOT NULL,
+	kind         TEXT NOT NULL,
+	task         TEXT NOT NULL DEFAULT '',
+	run_id       TEXT NOT NULL DEFAULT '',
+	text         TEXT NOT NULL,
+	fire_at      INTEGER NOT NULL,
+	created_at   INTEGER NOT NULL,
+	fired_at     INTEGER,
+	cancelled_at INTEGER
+);
+CREATE INDEX schedules_pending ON schedules(fire_at) WHERE fired_at IS NULL AND cancelled_at IS NULL;`},
 }
 
 // schemaVersion is the user_version of a database with every migration

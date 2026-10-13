@@ -131,3 +131,16 @@ type Capture struct {
 // DefaultAgent receives task output whose owner cannot be resolved, and is
 // the pinned thread.
 const DefaultAgent = "assistant"
+
+// Schedule is a reminder: a message posted into Agent's thread at FireAt. A
+// task run's reminder (Task set) posts as a task card.
+type Schedule struct {
+	ID      string
+	Agent   string
+	Kind    string
+	Task    string
+	RunID   string
+	Text    string
+	FireAt  time.Time
+	Created time.Time
+}

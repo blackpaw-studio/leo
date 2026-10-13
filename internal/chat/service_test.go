@@ -55,12 +55,34 @@ func (f *fakeDeliverer) delivered() []string {
 type recordingPublisher struct {
 	mu     sync.Mutex
 	events []observe.Event
+	// msgs carries every EventMessage's message to waitMessage.
+	msgs chan Message
+}
+
+func newRecordingPublisher() *recordingPublisher {
+	return &recordingPublisher{msgs: make(chan Message, 256)}
 }
 
 func (p *recordingPublisher) Publish(ev observe.Event) {
 	p.mu.Lock()
-	defer p.mu.Unlock()
 	p.events = append(p.events, ev)
+	p.mu.Unlock()
+	if mp, ok := ev.Payload.(*MessagePayload); ok && ev.Type == EventMessage {
+		p.msgs <- mp.Message
+	}
+}
+
+// waitMessage returns the next unconsumed EventMessage's message, failing
+// the test if none arrives (a guard, not a wait the passing path pays).
+func (p *recordingPublisher) waitMessage(t *testing.T) Message {
+	t.Helper()
+	select {
+	case m := <-p.msgs:
+		return m
+	case <-time.After(10 * time.Second):
+		t.Fatal("no chat.message event")
+		return Message{}
+	}
 }
 
 func (p *recordingPublisher) types() []observe.EventType {
@@ -149,7 +171,7 @@ func newFixture(t *testing.T) *harnessFixture {
 	f := &harnessFixture{
 		store:   openTestStore(t),
 		deliver: &fakeDeliverer{stopped: map[string]bool{}},
-		pub:     &recordingPublisher{},
+		pub:     newRecordingPublisher(),
 		clock:   newTestClock(),
 		timers:  newManualTimers(),
 		ids:     &gatedIDs{},
@@ -160,7 +182,14 @@ func newFixture(t *testing.T) *harnessFixture {
 	}
 	f.transcript = func(context.Context, string) (string, error) { return "", errors.New("no whisper") }
 	f.ids.src = NewULIDSource(f.clock.Now, nil)
-	f.svc = NewService(Options{
+	f.svc = f.newService()
+	t.Cleanup(func() { f.svc.Close() })
+	return f
+}
+
+// newService builds a Service on the fixture's store and seams.
+func (f *harnessFixture) newService() *Service {
+	return NewService(Options{
 		Store:   f.store,
 		Files:   Files{Root: f.root},
 		Deliver: f.deliver,
@@ -181,8 +210,14 @@ func newFixture(t *testing.T) *harnessFixture {
 			return r[0], r[1], ok
 		},
 	})
-	t.Cleanup(f.svc.Close)
-	return f
+}
+
+// restart closes the service and builds a new one on the same store, as a
+// daemon restart does.
+func (f *harnessFixture) restart(t *testing.T) {
+	t.Helper()
+	f.svc.Close()
+	f.svc = f.newService()
 }
 
 func (f *harnessFixture) thread(t *testing.T, agent string) []Message {
@@ -824,12 +859,14 @@ func TestCloseCancelsAndDrainsWaitersAndDeliveries(t *testing.T) {
 	}()
 	<-f.timers.got
 	f.svc.Close()
+	// Close waits for Ask to return, but the caller goroutine's send of the
+	// result may still be a step behind: block on it, under a guard.
 	select {
 	case r := <-asked:
 		if !r.TimedOut {
 			t.Fatalf("ask after close = %+v", r)
 		}
-	default:
+	case <-time.After(10 * time.Second):
 		t.Fatal("Close returned while an ask still waited")
 	}
 	got, _ := f.store.Message(in.ID)
