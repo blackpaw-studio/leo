@@ -448,6 +448,35 @@ func TestStoreFireScheduleIsOnceAndAtomic(t *testing.T) {
 	}
 }
 
+// A failed message insert rolls the fired mark back with it: the reminder
+// stays pending and a later fire posts it exactly once.
+func TestStoreFireScheduleRollsBackWhenTheInsertFails(t *testing.T) {
+	st := openTestStore(t)
+	base := newTestClock().Now()
+	if err := st.InsertSchedule(sched("A", "assistant", base)); err != nil {
+		t.Fatal(err)
+	}
+	m := Message{ID: "M1", Agent: "assistant", Direction: DirectionOut, Kind: KindText, Text: "x", TS: base}
+	lift := failMessageInserts(t, st)
+
+	if ok, err := st.FireSchedule("A", m, base); err == nil || ok {
+		t.Fatalf("fire with a failing insert = %v, %v; want an error", ok, err)
+	}
+	if got, _ := st.PendingSchedules("assistant"); len(got) != 1 {
+		t.Fatalf("the reminder left pending by a failed fire = %+v", got)
+	}
+	lift()
+	if ok, err := st.FireSchedule("A", m, base); err != nil || !ok {
+		t.Fatalf("retry = %v, %v", ok, err)
+	}
+	if ok, _ := st.FireSchedule("A", Message{ID: "M2", Agent: "assistant", Direction: DirectionOut, Kind: KindText, TS: base}, base); ok {
+		t.Fatal("a third fire posted")
+	}
+	if msgs, _, _ := st.Messages("assistant", Page{}); len(msgs) != 1 || msgs[0].ID != "M1" {
+		t.Fatalf("messages = %q, want exactly M1", texts(msgs))
+	}
+}
+
 func TestStoreCancelScheduleErrors(t *testing.T) {
 	st := openTestStore(t)
 	base := newTestClock().Now()
