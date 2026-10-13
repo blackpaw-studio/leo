@@ -4,15 +4,29 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 )
 
 // testClock is a settable clock for the store and service.
-type testClock struct{ t time.Time }
+// The reminder loop reads Now from its own goroutine, so access is locked.
+type testClock struct {
+	mu sync.Mutex
+	t  time.Time
+}
 
-func (c *testClock) Now() time.Time          { return c.t }
-func (c *testClock) Advance(d time.Duration) { c.t = c.t.Add(d) }
+func (c *testClock) Now() time.Time {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.t
+}
+
+func (c *testClock) Advance(d time.Duration) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.t = c.t.Add(d)
+}
 
 func newTestClock() *testClock {
 	return &testClock{t: time.Date(2026, 10, 12, 18, 0, 0, 0, time.UTC)}

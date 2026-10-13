@@ -83,6 +83,8 @@ type Service struct {
 	insertMu sync.Mutex
 	// marks is each agent's last answered prompt stamp (ResolveCaptures).
 	marks *captureMarks
+	// rearm wakes the reminder loop when a reminder is added or cancelled.
+	rearm chan struct{}
 
 	// ctx ends at Close: it cancels every wait and delivery in flight.
 	ctx    context.Context
@@ -111,7 +113,7 @@ func NewService(opts Options) *Service {
 		opts.Agents = func() []AgentRef { return nil }
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	return &Service{opts: opts, queues: newSerialQueues(), waiters: newWaiters(), marks: &captureMarks{m: make(map[string]time.Time)}, ctx: ctx, cancel: cancel}
+	return &Service{opts: opts, queues: newSerialQueues(), waiters: newWaiters(), marks: &captureMarks{m: make(map[string]time.Time)}, rearm: make(chan struct{}, 1), ctx: ctx, cancel: cancel}
 }
 
 // enter admits a call unless Close has begun; an admitted call must leave.
