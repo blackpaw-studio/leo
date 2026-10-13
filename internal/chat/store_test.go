@@ -353,3 +353,111 @@ func TestStoreRepairsReadableSidecars(t *testing.T) {
 	defer func() { _ = st.Close() }()
 	assertPrivate(t, path)
 }
+
+func sched(id, agent string, fireAt time.Time) Schedule {
+	return Schedule{ID: id, Agent: agent, Kind: KindText, Text: "text " + id, FireAt: fireAt, Created: fireAt.Add(-time.Hour)}
+}
+
+func TestStoreSchedulesListOnlyPending(t *testing.T) {
+	st := openTestStore(t)
+	base := newTestClock().Now()
+	for _, s := range []Schedule{
+		sched("C", "assistant", base.Add(3*time.Hour)),
+		sched("A", "assistant", base.Add(time.Hour)),
+		sched("B", "assistant", base.Add(time.Hour)),
+		sched("X", "other", base.Add(30*time.Minute)),
+		sched("F", "assistant", base.Add(10*time.Minute)),
+		sched("K", "assistant", base.Add(20*time.Minute)),
+	} {
+		if err := st.InsertSchedule(s); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if ok, err := st.FireSchedule("F", Message{ID: "M1", Agent: "assistant", Direction: DirectionOut, Kind: KindText, Text: "x", TS: base}, base); err != nil || !ok {
+		t.Fatalf("fire F: %v %v", ok, err)
+	}
+	if err := st.CancelSchedule("K", "assistant", base); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := st.PendingSchedules("assistant")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var ids []string
+	for _, s := range got {
+		ids = append(ids, s.ID)
+	}
+	if want := []string{"A", "B", "C"}; len(ids) != 3 || ids[0] != want[0] || ids[1] != want[1] || ids[2] != want[2] {
+		t.Fatalf("pending = %v, want %v", ids, want)
+	}
+	if !got[0].FireAt.Equal(base.Add(time.Hour)) || got[0].Text != "text A" || got[0].Kind != KindText {
+		t.Fatalf("round-trip = %+v", got[0])
+	}
+
+	next, ok, err := st.NextPending()
+	if err != nil || !ok || next.ID != "X" {
+		t.Fatalf("NextPending = %+v %v %v, want X", next, ok, err)
+	}
+	due, err := st.DuePending(base.Add(time.Hour))
+	if err != nil || len(due) != 3 || due[0].ID != "X" || due[1].ID != "A" || due[2].ID != "B" {
+		t.Fatalf("DuePending = %+v %v", due, err)
+	}
+}
+
+func TestStoreFireScheduleIsOnceAndAtomic(t *testing.T) {
+	st := openTestStore(t)
+	base := newTestClock().Now()
+	for _, id := range []string{"A", "B"} {
+		if err := st.InsertSchedule(sched(id, "assistant", base)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	m := func(id string) Message {
+		return Message{ID: id, Agent: "assistant", Direction: DirectionOut, Kind: KindText, Text: "x", TS: base}
+	}
+	if ok, err := st.FireSchedule("A", m("M1"), base); err != nil || !ok {
+		t.Fatalf("first fire = %v %v", ok, err)
+	}
+	if ok, err := st.FireSchedule("A", m("M2"), base); err != nil || ok {
+		t.Fatalf("second fire = %v %v, want false", ok, err)
+	}
+	if err := st.CancelSchedule("B", "assistant", base); err != nil {
+		t.Fatal(err)
+	}
+	if ok, err := st.FireSchedule("B", m("M3"), base); err != nil || ok {
+		t.Fatalf("cancelled fire = %v %v, want false", ok, err)
+	}
+	msgs, _, _ := st.Messages("assistant", Page{})
+	if len(msgs) != 1 || msgs[0].ID != "M1" {
+		t.Fatalf("messages = %+v, want only M1", texts(msgs))
+	}
+}
+
+func TestStoreCancelScheduleErrors(t *testing.T) {
+	st := openTestStore(t)
+	base := newTestClock().Now()
+	for _, id := range []string{"A", "B"} {
+		if err := st.InsertSchedule(sched(id, "assistant", base)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := st.CancelSchedule("nope", "assistant", base); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("unknown = %v, want ErrNotFound", err)
+	}
+	if err := st.CancelSchedule("A", "other", base); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("other agent's = %v, want ErrNotFound", err)
+	}
+	if err := st.CancelSchedule("A", "assistant", base); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.CancelSchedule("A", "assistant", base); !errors.Is(err, ErrConflict) {
+		t.Fatalf("cancelled twice = %v, want ErrConflict", err)
+	}
+	if _, err := st.FireSchedule("B", Message{ID: "M", Agent: "assistant", Direction: DirectionOut, Kind: KindText, TS: base}, base); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.CancelSchedule("B", "assistant", base); !errors.Is(err, ErrConflict) {
+		t.Fatalf("fired = %v, want ErrConflict", err)
+	}
+}

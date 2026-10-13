@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 // v0490Schema is chat.db as v0.49.0 created it (user_version 1).
@@ -128,4 +129,30 @@ func userVersion(t *testing.T, st *Store) int {
 		t.Fatal(err)
 	}
 	return v
+}
+
+func TestOpenStoreUpgradesAV2DatabaseAddsSchedules(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "chat.db")
+	raw, err := sql.Open("sqlite", "file:"+path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw.SetMaxOpenConns(1)
+	if err := migrate(raw, migrations[:2]); err != nil {
+		t.Fatal(err)
+	}
+	_ = raw.Close()
+
+	st, err := OpenStore(path)
+	if err != nil {
+		t.Fatalf("upgrade: %v", err)
+	}
+	defer func() { _ = st.Close() }()
+	if v := userVersion(t, st); v != 3 {
+		t.Fatalf("user_version = %d, want 3", v)
+	}
+	at := time.Date(2026, 10, 13, 9, 0, 0, 0, time.UTC)
+	if err := st.InsertSchedule(Schedule{ID: "S1", Agent: "assistant", Kind: KindText, Text: "hi", FireAt: at, Created: at}); err != nil {
+		t.Fatalf("schedules table unusable: %v", err)
+	}
 }
