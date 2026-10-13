@@ -264,3 +264,67 @@ func TestRestartPostsAPastReminderOnceWithTheLateFlag(t *testing.T) {
 		})
 	}
 }
+
+// failMessageInserts makes every message insert abort, as a full disk would,
+// and returns the function that lifts the failure.
+func failMessageInserts(t *testing.T, st *Store) (lift func()) {
+	t.Helper()
+	if _, err := st.db.Exec(`CREATE TRIGGER fail_inserts BEFORE INSERT ON messages BEGIN SELECT RAISE(ABORT, 'disk full'); END`); err != nil {
+		t.Fatal(err)
+	}
+	return func() {
+		if _, err := st.db.Exec(`DROP TRIGGER fail_inserts`); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+// A failing fire waits out the retry interval; it must not re-arm at zero
+// and spin while the overdue reminder stays pending.
+func TestFailedFireRetriesAfterTheRetryInterval(t *testing.T) {
+	f := newFixture(t)
+	f.recover(t)
+	f.schedule(t, "assistant", time.Hour, "stand up")
+	f.nextArm(t)
+	lift := failMessageInserts(t, f.store)
+	f.clock.Advance(time.Hour)
+	f.timers.fireLast()
+
+	if d := f.nextArm(t); d != scheduleRetry {
+		t.Fatalf("armed %v after a failed fire, want the %v retry", d, scheduleRetry)
+	}
+	if got, _ := f.store.PendingSchedules("assistant"); len(got) != 1 {
+		t.Fatalf("a failed fire must leave the reminder pending: %+v", got)
+	}
+	lift()
+	f.clock.Advance(scheduleRetry)
+	f.timers.fireLast()
+
+	m := f.pub.waitMessage(t)
+	if m.Text != "stand up" {
+		t.Fatalf("retried message = %+v", m)
+	}
+	if ms := f.thread(t, "assistant"); len(ms) != 1 {
+		t.Fatalf("thread = %q, want exactly one post", texts(ms))
+	}
+}
+
+// A schedule or cancel kick wakes the loop out of its retry wait.
+func TestKickInterruptsTheRetryWait(t *testing.T) {
+	f := newFixture(t)
+	f.recover(t)
+	f.schedule(t, "assistant", time.Hour, "stand up")
+	f.nextArm(t)
+	lift := failMessageInserts(t, f.store)
+	f.clock.Advance(time.Hour)
+	f.timers.fireLast()
+	if d := f.nextArm(t); d != scheduleRetry {
+		t.Fatalf("armed %v, want the retry", d)
+	}
+	lift()
+	f.schedule(t, "assistant", 3*time.Hour, "later") // kick; the retry timer never fires
+
+	if m := f.pub.waitMessage(t); m.Text != "stand up" {
+		t.Fatalf("message = %+v", m)
+	}
+}

@@ -147,7 +147,7 @@ func (s *Service) Recover() error {
 	for _, m := range pending {
 		s.recoverPending(m)
 	}
-	s.fireDue()
+	_ = s.fireDue() // failures are logged and stay pending; the loop retries
 	if err := s.enter(); err != nil {
 		return nil // closing: no loop to start
 	}

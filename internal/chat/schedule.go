@@ -139,11 +139,15 @@ func (s *Service) runSchedules() {
 	var armedID string
 	var armedAt time.Time
 	for {
-		s.fireDue()
+		fireErr := s.fireDue()
 		next, ok, err := s.opts.Store.NextPending()
 		switch {
-		case err != nil:
-			s.opts.Logf("chat: reading the next reminder: %v", err)
+		case err != nil || fireErr != nil:
+			// A failed read or fire leaves overdue reminders pending: wait the
+			// retry interval (a kick still wakes the loop) rather than spin.
+			if err != nil {
+				s.opts.Logf("chat: reading the next reminder: %v", err)
+			}
 			timer, armedID = s.opts.After(scheduleRetry), ""
 		case !ok:
 			timer, armedID = nil, ""
@@ -161,26 +165,31 @@ func (s *Service) runSchedules() {
 	}
 }
 
-// fireDue posts every reminder that is due now.
-func (s *Service) fireDue() {
+// fireDue posts every reminder that is due now, returning the first error
+// (already logged) of a read or fire that failed: those reminders stay pending.
+func (s *Service) fireDue() error {
 	now := s.opts.Now()
 	due, err := s.opts.Store.DuePending(now)
 	if err != nil {
 		s.opts.Logf("chat: reading due reminders: %v", err)
-		return
+		return err
 	}
+	var first error
 	for _, r := range due {
 		if s.ctx.Err() != nil {
-			return
+			return first
 		}
-		s.fire(r, now)
+		if err := s.fire(r, now); err != nil && first == nil {
+			first = err
+		}
 	}
+	return first
 }
 
 // fire posts reminder r. The reminder is marked fired in the same
 // transaction as its message, so it posts at most once; a reminder that is
 // no longer pending (cancelled meanwhile) posts nothing.
-func (s *Service) fire(r Schedule, now time.Time) {
+func (s *Service) fire(r Schedule, now time.Time) error {
 	text := r.Text
 	if now.Sub(r.FireAt) > lateFireThreshold {
 		text += "\n\n_(late — scheduled for " + r.FireAt.Local().Format(lateTimeLayout) + ")_"
@@ -192,15 +201,17 @@ func (s *Service) fire(r Schedule, now time.Time) {
 	})
 	if err != nil {
 		s.opts.Logf("chat: firing reminder %s: %v", r.ID, err)
-		return
+		return err
 	}
 	if !fired {
-		return
+		return nil
 	}
+	// The reminder has fired; failing to announce it is not a fire failure.
 	stored, err := s.opts.Store.Message(m.ID)
 	if err != nil {
 		s.opts.Logf("chat: reading fired reminder %s: %v", r.ID, err)
-		return
+		return nil
 	}
 	s.publish(EventMessage, messageEvent(stored))
+	return nil
 }
