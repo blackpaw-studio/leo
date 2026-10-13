@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/blackpaw-studio/leo/internal/config"
+	"github.com/blackpaw-studio/leo/internal/daemon"
 	"github.com/blackpaw-studio/leo/internal/harness"
 	"github.com/blackpaw-studio/leo/internal/history"
 	"github.com/blackpaw-studio/leo/internal/leomcp"
@@ -536,6 +537,7 @@ func TestRunMissingPromptFile(t *testing.T) {
 // NotifyOnFail + Channels triggers a second claude invocation after the main
 // task run, and that the child invocation receives LEO_CHANNELS via the env.
 func TestRunNotifyOnFailInvokesChannelChild(t *testing.T) {
+	stubFailureCards(t, nil)
 	orig := execCommand
 	defer func() { execCommand = orig }()
 
@@ -586,6 +588,7 @@ func TestRunNotifyOnFailInvokesChannelChild(t *testing.T) {
 // TestRunNotifyOnFailSkippedWithoutChannels verifies that NotifyOnFail is a
 // no-op when the task has no channels configured.
 func TestRunNotifyOnFailSkippedWithoutChannels(t *testing.T) {
+	stubFailureCards(t, nil)
 	orig := execCommand
 	defer func() { execCommand = orig }()
 
@@ -617,6 +620,90 @@ func TestRunNotifyOnFailSkippedWithoutChannels(t *testing.T) {
 	_ = Run(cfg, "mytask", nil, leomcp.Server{})
 	if invocations != 1 {
 		t.Errorf("expected exactly 1 exec invocation (no notify without channels), got %d", invocations)
+	}
+}
+
+// stubFailureCards swaps the failure-card reporter for one that records each
+// request, returning err; it restores the real one when the test ends.
+func stubFailureCards(t *testing.T, err error) *[]daemon.TaskFailureRequest {
+	t.Helper()
+	var cards []daemon.TaskFailureRequest
+	orig := reportTaskFailure
+	reportTaskFailure = func(_ context.Context, _ string, req daemon.TaskFailureRequest) error {
+		cards = append(cards, req)
+		return err
+	}
+	t.Cleanup(func() { reportTaskFailure = orig })
+	return &cards
+}
+
+// A oneshot task that exhausts its attempts with notify_on_fail posts a chat
+// card with or without channels; the channel notification still fires when
+// channels are set, and a failing reporter never changes the run's result.
+func TestRunPostsFailureCard(t *testing.T) {
+	cases := map[string]struct {
+		notify    bool
+		channels  []string
+		reportErr error
+		wantCards int
+		wantExecs int
+	}{
+		"notify with channels":       {notify: true, channels: []string{"plugin:telegram@claude-plugins-official"}, wantCards: 1, wantExecs: 3},
+		"notify without channels":    {notify: true, wantCards: 1, wantExecs: 2},
+		"notify off":                 {wantCards: 0, wantExecs: 2},
+		"reporter failure is benign": {notify: true, reportErr: errors.New("daemon down"), wantCards: 1, wantExecs: 2},
+	}
+	for name, c := range cases {
+		t.Run(name, func(t *testing.T) {
+			cards := stubFailureCards(t, c.reportErr)
+			orig := execCommand
+			defer func() { execCommand = orig }()
+
+			dir := t.TempDir()
+			ws := filepath.Join(dir, "workspace")
+			os.MkdirAll(ws, 0755)
+			os.WriteFile(filepath.Join(ws, "task.md"), []byte("test prompt"), 0644)
+
+			var execs int
+			execCommand = func(name string, args ...string) *exec.Cmd {
+				execs++
+				if strings.Contains(strings.Join(args, " "), "--max-turns 3") {
+					return exec.Command("true") // the notify-on-fail child
+				}
+				return exec.Command("false")
+			}
+			cfg := &config.Config{
+				HomePath: dir,
+				Defaults: config.DefaultsConfig{Model: "sonnet", MaxTurns: 15},
+				Tasks: map[string]config.TaskConfig{
+					"mytask": {PromptFile: "task.md", Schedule: "0 * * * *", Enabled: true, Retries: 1, NotifyOnFail: c.notify, Channels: c.channels},
+				},
+			}
+
+			err := Run(cfg, "mytask", nil, leomcp.Server{})
+			if err == nil || !strings.Contains(err.Error(), "claude exited with error") {
+				t.Fatalf("Run err = %v, want the claude error", err)
+			}
+			if len(*cards) != c.wantCards {
+				t.Fatalf("cards = %d, want %d", len(*cards), c.wantCards)
+			}
+			// Retries: 1 means two main attempts, plus the notify child when channels are set.
+			if execs != c.wantExecs {
+				t.Errorf("execs = %d, want %d", execs, c.wantExecs)
+			}
+			if c.wantCards == 0 {
+				return
+			}
+			got := (*cards)[0]
+			logDir := filepath.Join(dir, "state", "logs")
+			if got.Task != "mytask" || !strings.HasPrefix(got.RunID, "mytask-") || got.Attempts != 2 ||
+				!strings.Contains(got.Error, "exit status 1") || filepath.Dir(got.LogPath) != logDir {
+				t.Errorf("card = %+v", got)
+			}
+			if _, statErr := os.Stat(got.LogPath); statErr != nil {
+				t.Errorf("log file: %v", statErr)
+			}
+		})
 	}
 }
 
@@ -1796,6 +1883,7 @@ func TestRunChannelInitExhaustionDoesNotClearSession(t *testing.T) {
 // is faked to hand back the channel executeCommand registers, and the test
 // pushes a synthetic os.Signal into that channel directly.
 func TestRunInterruptStopsImmediatelyWithoutRetryOrNotify(t *testing.T) {
+	cards := stubFailureCards(t, nil)
 	origExec := execCommand
 	defer func() { execCommand = origExec }()
 
@@ -1878,6 +1966,9 @@ func TestRunInterruptStopsImmediatelyWithoutRetryOrNotify(t *testing.T) {
 
 	if invocations != 1 {
 		t.Errorf("invocations = %d, want 1 (no retry after interrupt)", invocations)
+	}
+	if len(*cards) != 0 {
+		t.Errorf("an interrupted run posted %d failure cards, want 0", len(*cards))
 	}
 
 	hist := history.NewStore(cfg.HomePath)
