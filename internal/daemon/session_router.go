@@ -51,12 +51,16 @@ type PendingInvocation struct {
 	// completed is set under sessionRouter.mu once a terminal Result has been
 	// posted to Result. The janitor reaps byID entries TTL after this stamp.
 	completed time.Time
+	// turnCompleted is set under sessionQueue.mu when the agent's own turn
+	// hooks completed this invocation (see ObserveTurn).
+	turnCompleted bool
 }
 
 type sessionQueue struct {
 	mu          sync.Mutex
 	fifo        []*PendingInvocation
 	inFlight    *PendingInvocation // non-nil while one invocation is executing; nil otherwise
+	turn        *boundTurn         // the harness turn bound to inFlight by ObserveTurn; nil until its prompt is seen
 	tmuxSession string             // concrete tmux session this queue injects into
 	enqueueSig  chan struct{}      // buffered(1); fired by Enqueue
 	reportSig   chan struct{}      // buffered(1); fired by Report / pump failure
@@ -215,7 +219,7 @@ func (r *sessionRouter) queueFor(session string) *sessionQueue {
 // injectFn delivers a prompt into a session. A nil *harness.Result means
 // delivery is asynchronous — every real driver today (claude, codex,
 // opencode) pastes into its tmux-TUI pane and returns immediately; completion
-// arrives later via Report or the pump's timeout. A non-nil *harness.Result
+// arrives later via Report, ObserveTurn, or the pump's timeout. A non-nil *harness.Result
 // means the turn already ran to completion synchronously; the pump marks the
 // invocation completed immediately instead of waiting. No production driver
 // returns a non-nil Result today — the branch exists as the insertion point
@@ -428,8 +432,7 @@ func (r *sessionRouter) pump(session string, q *sessionQueue) {
 			// exec.CommandContext deep inside the driver) rather than a
 			// synchronous turn — no production driver blocks for a whole
 			// turn today. Completion for all of them still relies on the
-			// outer timer below for the async Report wait (see the
-			// KNOWN LIMITATION note further down).
+			// outer timer below for the async Report / turn-hook wait.
 			injCtx, injCancel := context.WithTimeout(context.Background(), next.Timeout)
 			res, err := r.currentInjector()(injCtx, target, next.Prompt)
 			injCancel()
@@ -448,30 +451,26 @@ func (r *sessionRouter) pump(session string, q *sessionQueue) {
 				continue
 			}
 
-			// KNOWN LIMITATION: every driver's Inject is now fire-and-forget
-			// (nil Result on success, claude parity) — including dispatched
-			// codex/opencode SESSIONS routed through this pump. Those
-			// harnesses drive a resident TUI with no Stop-hook-style Report
-			// callback, so a queued invocation here falls through to the
-			// timeout branch below and completes via the timer (abort +
-			// "timeout" result) rather than a genuine turn-done signal. This
-			// does not affect ephemeral agents (they use the direct
-			// fire-and-forget path in internal/web/handlers.go, not this
-			// router) or claude sessions (which still get a Stop-hook
-			// Report). Tracked as a follow-up: a TUI turn-completion signal
-			// for non-claude sessions. Do not "fix" this by synthesizing a
-			// delivered Result here — that's a deliberate, deferred design
-			// decision.
+			// Every driver's Inject is fire-and-forget (nil Result on
+			// success), so completion arrives asynchronously: claude's
+			// task-report Stop hook (Report) or, for every harness that
+			// reports turns, the agent's own turn hooks (ObserveTurn). A
+			// harness with neither, or an agent launched without hooks
+			// (web UI off), falls through to the timeout branch below.
 
 			// A Report may have cleared inFlight while we were inside the
 			// injector. If so, the result was already delivered; abort the
 			// turn we just started so the orphaned prompt doesn't keep
-			// running, then move on.
+			// running, then move on. A turn the agent's hooks saw run to its
+			// end is no orphan: aborting would Ctrl-C an idle TUI.
 			q.mu.Lock()
 			stillMine := q.inFlight != nil && q.inFlight.ID == next.ID
+			ranToEnd := next.turnCompleted
 			q.mu.Unlock()
 			if !stillMine {
-				_ = r.currentAborter()(target)
+				if !ranToEnd {
+					_ = r.currentAborter()(target)
+				}
 				continue
 			}
 
