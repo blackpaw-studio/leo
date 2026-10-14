@@ -16,8 +16,20 @@ type TurnEvent struct {
 // boundTurn ties the in-flight invocation to the harness turn whose
 // submitted prompt matched it.
 type boundTurn struct {
-	invID  string
-	turnID string
+	invID     string
+	turnID    string
+	sessionID string
+}
+
+// ends reports whether a Stop/Interrupt for (turnID, sessionID) closes this
+// turn. Turn ids must agree (both empty for a harness without them); a
+// differing session is a child session the turn spawned, whose end is not
+// the turn's.
+func (b *boundTurn) ends(invID string, ev TurnEvent) bool {
+	if b == nil || b.invID != invID || b.turnID != ev.TurnID {
+		return false
+	}
+	return b.sessionID == "" || ev.SessionID == "" || b.sessionID == ev.SessionID
 }
 
 // ObserveTurn completes session's in-flight invocation from its agent's own
@@ -27,9 +39,9 @@ type boundTurn struct {
 //
 // A UserPromptSubmit whose prompt matches the in-flight invocation's prompt
 // (whitespace-normalized) binds that turn. The next Stop for the same turn
-// id completes it OK; an Interrupt fails it as "interrupted". Prompts a
-// human types into the pane never match, so their turns are ignored, and a
-// session with nothing in flight drops every event.
+// id and session completes it OK; an Interrupt fails it as "interrupted".
+// Prompts a human types into the pane never match, so their turns are
+// ignored, and a session with nothing in flight drops every event.
 func (r *sessionRouter) ObserveTurn(session string, ev TurnEvent) {
 	q := r.queueFor(session)
 	if q == nil {
@@ -46,7 +58,7 @@ func (r *sessionRouter) ObserveTurn(session string, ev TurnEvent) {
 	case "UserPromptSubmit":
 		if q.turn == nil || q.turn.invID != inv.ID {
 			if normalizePrompt(ev.Prompt) == normalizePrompt(inv.Prompt) {
-				q.turn = &boundTurn{invID: inv.ID, turnID: ev.TurnID}
+				q.turn = &boundTurn{invID: inv.ID, turnID: ev.TurnID, sessionID: ev.SessionID}
 			}
 		}
 		q.mu.Unlock()
@@ -59,7 +71,7 @@ func (r *sessionRouter) ObserveTurn(session string, ev TurnEvent) {
 		q.mu.Unlock()
 		return
 	}
-	if q.turn == nil || q.turn.invID != inv.ID || q.turn.turnID != ev.TurnID {
+	if !q.turn.ends(inv.ID, ev) {
 		q.mu.Unlock()
 		return
 	}

@@ -105,15 +105,20 @@ func TestRouterIgnoresUnmatchedTurn(t *testing.T) {
 
 	// The invocation's turn is bound, but a Stop naming another turn is not
 	// its completion.
-	g.r.ObserveTurn("agent", TurnEvent{Event: "UserPromptSubmit", Prompt: turnRigPrompt, TurnID: "turn-x"})
-	g.r.ObserveTurn("agent", TurnEvent{Event: "Stop", TurnID: "turn-y", LastMessage: "other"})
+	g.r.ObserveTurn("agent", TurnEvent{Event: "UserPromptSubmit", Prompt: turnRigPrompt, TurnID: "turn-x", SessionID: "parent"})
+	g.r.ObserveTurn("agent", TurnEvent{Event: "Stop", TurnID: "turn-y", SessionID: "parent", LastMessage: "other"})
+	g.assertPending(t)
+
+	// A child session (a subagent the turn spawned) idling is not the bound
+	// turn's end, even when neither carries a turn id (opencode).
+	g.r.ObserveTurn("agent", TurnEvent{Event: "Stop", TurnID: "turn-x", SessionID: "child", LastMessage: "child done"})
 	g.assertPending(t)
 
 	// Hooks for a session with nothing in flight are dropped.
 	g.r.ObserveTurn("someone-else", TurnEvent{Event: "Stop", TurnID: "turn-x"})
 	g.assertPending(t)
 
-	g.r.ObserveTurn("agent", TurnEvent{Event: "Stop", TurnID: "turn-x", LastMessage: "OK"})
+	g.r.ObserveTurn("agent", TurnEvent{Event: "Stop", TurnID: "turn-x", SessionID: "parent", LastMessage: "OK"})
 	if res := g.result(t); !res.OK || res.FinalMessage != "OK" {
 		t.Fatalf("result = %+v, want OK with the bound turn's message", res)
 	}
