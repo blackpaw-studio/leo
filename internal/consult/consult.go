@@ -489,22 +489,32 @@ func (d *Dispatcher) Start(_ context.Context, cfg *config.Config, req Request) (
 	// Take the place in line before returning, so a later send or start cannot
 	// overtake this run while its goroutine is still being scheduled.
 	waiter, _ := d.slotsFor(state).AcquireOrEnqueue()
-	go d.runInvocation(runCtx, state, state.done, h, model, tmplEnv, args, harnessEnv, req.Cwd, timeout, waiter)
+	go d.runInvocation(runCtx, state, state.done, h, model, tmplEnv, args, harnessEnv, req.Cwd, timeout, waiter, nil)
 	return Started{ID: rec.ID, Harness: h.Name(), Model: model, Cwd: req.Cwd}, nil
 }
 
 func (d *Dispatcher) run(parent context.Context, state *runState, h harness.Harness, model string, env map[string]string, args []string, harnessEnv map[string]string, cwd string, timeout time.Duration) {
 	waiter, _ := d.slotsFor(state).AcquireOrEnqueue()
-	d.runInvocation(parent, state, state.done, h, model, env, args, harnessEnv, cwd, timeout, waiter)
+	d.runInvocation(parent, state, state.done, h, model, env, args, harnessEnv, cwd, timeout, waiter, nil)
 }
 
-func (d *Dispatcher) runInvocation(parent context.Context, state *runState, done chan struct{}, h harness.Harness, model string, env map[string]string, args []string, harnessEnv map[string]string, cwd string, timeout time.Duration, waiter *slotWaiter) {
+// runInvocation runs one headless process to completion. A non-nil launched
+// receives exactly one value (and must have room for it): nil once cmd.Start
+// succeeded, otherwise why the process never started. It is sent after the
+// run has settled on failure, so a caller that sees the error sees a finished
+// record.
+func (d *Dispatcher) runInvocation(parent context.Context, state *runState, done chan struct{}, h harness.Harness, model string, env map[string]string, args []string, harnessEnv map[string]string, cwd string, timeout time.Duration, waiter *slotWaiter, launched chan<- error) {
 	defer close(done)
+	launchErr := errors.New("dispatch ended before its process started")
+	if launched != nil {
+		defer func() { launched <- launchErr }()
+	}
 	if waiter != nil {
 		select {
 		case <-waiter.Ready():
 		case <-parent.Done():
 			d.slotsFor(state).Cancel(waiter)
+			launchErr = parent.Err()
 			d.complete(state, StatusCanceled, "", parent.Err())
 			return
 		}
@@ -513,6 +523,7 @@ func (d *Dispatcher) runInvocation(parent context.Context, state *runState, done
 	// A queued run can be canceled at the same instant a concurrency slot
 	// opens. Do not publish a misleading running transition in that race.
 	if err := parent.Err(); err != nil {
+		launchErr = err
 		d.complete(state, StatusCanceled, "", err)
 		return
 	}
@@ -570,7 +581,10 @@ func (d *Dispatcher) runInvocation(parent context.Context, state *runState, done
 		d.beforeHeadlessStart()
 	}
 	runErr := cmd.Start()
-	if runErr == nil {
+	if runErr != nil {
+		launchErr = fmt.Errorf("starting %s: %w", h.Name(), runErr)
+	} else {
+		launchErr = nil
 		d.mu.Lock()
 		d.publishHeadlessLaunchLocked(state)
 		if state.record.Isolation == "worktree" {
@@ -632,15 +646,15 @@ func (d *Dispatcher) runInvocation(parent context.Context, state *runState, done
 	d.complete(state, StatusDone, parsed.Text, nil)
 }
 
-// publishHeadlessLaunchLocked marks a queued continuation turn delivered once
-// its process has actually started. A turn resolved before launch (canceled
-// between slot admission and Start) stays undelivered.
+// publishHeadlessLaunchLocked marks a continuation turn (queued or not)
+// delivered once its process has actually started. A turn resolved before
+// launch (canceled between slot admission and Start) stays undelivered.
 func (d *Dispatcher) publishHeadlessLaunchLocked(state *runState) {
 	if state.record.Status.Terminal() || len(state.record.Turns) == 0 {
 		return
 	}
 	t := &state.record.Turns[len(state.record.Turns)-1]
-	if !t.Queued || t.Outcome != "" {
+	if (!t.Queued && t.Delivered) || t.Outcome != "" {
 		return
 	}
 	t.Queued, t.Delivered, t.SlotHeld = false, true, true
