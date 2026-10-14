@@ -3,9 +3,11 @@ Status: running
 Started: 2026-10-14T01:05:35Z
 Budget: 20 items, until 2026-10-14T13:05:35Z
 Digested-through: 0
-Filed: 0/3 bugs, 2/5 ideas
+Filed: 2/3 bugs, 2/5 ideas
 Self-filed: B-001 → B-022 idea — Linux: leo update may bounce every agent (systemd KillMode)
 Self-filed: B-001 → B-023 idea — config-reference skill still documents processes:/sessions:
+Self-filed: B-002 → B-024 bug — Rejected dispatch send fires a false "dispatch failed" notification
+Self-filed: B-002 → B-025 bug — Flaky TestBridgeReportAcceptsLargeTurnText
 
 ## Progress
 - Preflight step 7: run guard refused `git -C <worktree> merge main` [default-branch] (false positive: guard cannot expand a $VAR worktree path); main already an ancestor of autopilot, so sync was a no-op.
@@ -31,7 +33,7 @@ Lane: B-002
   Branch: autopilot-lane/B-002
   Base: d85f0b8572a2a003c515624370c715e0c088c1eb
   Tier: full
-  State: verifying
+  State: landed
   Fixes: 1
   Wip: none
   Dispatched: 2026-10-14T01:06:06Z
@@ -45,6 +47,7 @@ Lane: B-002
   Call: Classifier handles codex placeholder truncation (not wrapping) at narrow widths — principle 2
   Call: Promoted go-runewidth (already indirect, MIT, go.sum unchanged) to a direct dependency; ambiguous width = 1 cell — principle 4
   Call: Accepted risk: a human draft that is exactly a placeholder prefix reaching the pane edge reads as empty — principle 4
+  Tokens: 24.5M in (23.9M cache read), ≥123k out, 197 requests
 
 Lane: B-021
   Branch: autopilot-lane/B-021
@@ -74,3 +77,5 @@ Finished 1: B-001 landed c6e8dc0afd640ffc408aaae1ec5b75c3b96b716e · shot not vi
 Finished 2: B-021 landed eb2d949e5280592e57bf785ff8b0ed8a58f84b96 · shot not visually verified
 - B-021 note: full suite flaked once on TestBridgeReportAcceptsLargeTurnText (internal/daemon timeout; passed 3/3 alone) — not in the diff.
 - B-021 built before B-003 (owner-filed bug, top of queue); B-003 independent of B-002.
+Finished 3: B-002 landed e7269f2e1504a381124e6a5c1e578b08c1625d93 · shot not visually verified
+- B-002 notes: rejection-with-tty path unit-tested only (not live); 16-col pane still misreads placeholder (accepted risk); implement.hard first dispatch lost after 27s, retry succeeded.

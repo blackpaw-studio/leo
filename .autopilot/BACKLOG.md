@@ -17,9 +17,11 @@ Source: owner (vision, memory project_leo_update_bounces_all_agents; internal/se
 Done: 021fb4ae (merge c6e8dc0a) — already worked; e2e regression guard added
 Verified: not visually verified — CLI/tmux item; isolated-daemon kill -9 restart kept pane pids (text captures .autopilot/shots/B-001-1-before.txt, B-001-2-after.txt)
 
-## B-002 · `leo_send_dispatch` rejects "composer busy" on an idle run   [ready]
+## B-002 · `leo_send_dispatch` rejects "composer busy" on an idle run   [done]
 Accept: an idle interactive dispatch with an empty composer accepts a follow-up; a joined-away/moved pane is found by tty; failing test first.
 Source: owner (vision, issue #196; memory project_moved_pane_composer_busy)
+Done: f5088d2d, 2d560f79, 17e5fb75, bb18a32a, 9944eaad (merge e7269f2e) — codex placeholder truncation in narrow panes read as draft
+Verified: not visually verified — terminal classifier fix; real codex-cli 0.160.1 at 12–40 cols classifies empty after, draft before; isolated-daemon sends delivered
 
 ## B-003 · Persistent codex/opencode runs recorded as failures   [ready]
 Accept: a successful persistent-task turn on codex and opencode records success and fires no `notify_on_fail` card; verify first.
@@ -100,3 +102,15 @@ Source: autopilot polish (B-001)
 ## B-023 · config-reference skill still documents `processes:` and `sessions:`   [idea]
 Note: internal/templates/skills/config-reference.md lines 21-31, 49, 64-68 describe removed keys and are served via leo_skill — principle 4
 Source: autopilot polish (B-001)
+
+## B-024 · Rejected dispatch send fires a false "dispatch failed" notification   [ready (next run)]
+Type: bug
+Report: A rejected leo_send_dispatch fires a "dispatch … failed" notification for a turn that never started (issue #196) — a false outcome, principle 4
+Accept: A failing test reproduces the report; it passes after the fix; nothing else regresses.
+Source: autopilot bug (B-002)
+
+## B-025 · Flaky: TestBridgeReportAcceptsLargeTurnText times out under a loaded full suite   [ready (next run)]
+Type: bug
+Report: internal/daemon TestBridgeReportAcceptsLargeTurnText timed out in full `make test` runs in B-021 and B-002 lanes; passes alone — flaky test blocks the milestone's "no known flaky test" goal
+Accept: A failing test reproduces the report; it passes after the fix; nothing else regresses.
+Source: autopilot bug (B-002)

@@ -68,3 +68,38 @@ Why: principle 2.
 Alternatives: fake claude bridge.
 Commit: 021fb4aee10452608528b48de966ffa0159b0509
 Veto: [ ]
+
+## D-010 · 2026-10-13 · B-002: no tty-based pane lookup
+Chose: pane id %N is stable across moves; rejection errors name the tty and location instead.
+Why: principles 1, 4 (a tty fallback could paste into an unrelated pane).
+Alternatives: tty → pane lookup on send.
+Commit: f5088d2d, 2d560f79, 17e5fb75, bb18a32a, 9944eaad
+Veto: [ ]
+
+## D-011 · 2026-10-13 · B-002: prose without a composer row reads as unknown, not busy
+Chose: only a live status line or spinner means busy.
+Why: principle 4.
+Alternatives: scan whole transcript for busy words.
+Commit: f5088d2d, 2d560f79, 17e5fb75, bb18a32a, 9944eaad
+Veto: [ ]
+
+## D-012 · 2026-10-13 · B-002: dropped post-move redraw settle
+Chose: never reproduced live; truncation fix covers stale narrow frames.
+Why: principles 2, 4.
+Alternatives: poll for empty composer after rejoin.
+Commit: f5088d2d, 2d560f79, 17e5fb75, bb18a32a, 9944eaad
+Veto: [ ]
+
+## D-013 · 2026-10-13 · B-002: go-runewidth promoted to a direct dependency
+Chose: already indirect (MIT, go.sum unchanged); composer rows measured in terminal cells, ambiguous width = 1.
+Why: principle 4.
+Alternatives: count runes.
+Commit: f5088d2d, 2d560f79, 17e5fb75, bb18a32a, 9944eaad
+Veto: [ ]
+
+## D-014 · 2026-10-13 · B-002: accepted risk on placeholder-prefix drafts
+Chose: a human draft identical to a truncated placeholder prefix at the pane edge reads as empty.
+Why: principle 4.
+Alternatives: stricter match that rejects idle narrow panes.
+Commit: f5088d2d, 2d560f79, 17e5fb75, bb18a32a, 9944eaad
+Veto: [ ]
