@@ -134,6 +134,17 @@ All notable user-visible changes to Leo are documented here.
   opencode turn that ended on a provider error fails it as `turn failed`.
   Completion needs the web listener (`web.enabled`, the default).
 
+- **Headless dispatch continuations no longer report `delivered` before the
+  process starts.** `leo_send_dispatch` on a finished headless dispatch
+  returned `delivered` (and recorded the turn as delivered) before
+  `cmd.Start()` ran, so a harness that failed to launch was reported as
+  delivered while the run quietly failed. The send now returns as soon as the
+  process has started (not when it finishes): `delivered` means the process is
+  running, and a start failure is
+  returned as an error (the turn settles as undelivered and the dispatch stays
+  resumable). Continuations that queue for a slot are unchanged: they report
+  `queued` and flip to delivered when they launch.
+
 - **Follow-ups to an idle Codex dispatch in a narrow pane are no longer
   rejected.** Codex cuts its "Ask Codex to do anything" placeholder short at
   the pane's edge, and `leo_send_dispatch` read the cut-off text as a draft,

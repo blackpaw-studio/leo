@@ -161,7 +161,7 @@ func (d *Dispatcher) continueHeadless(cfg *config.Config, rec Record, message st
 		synthesizeOpeningTurn(&prospective)
 	}
 	now := d.now()
-	turn := Turn{TurnID: fmt.Sprintf("%s#%d", rec.ID, len(prospective.Turns)+1), Source: TurnSourceOrchestrator, StartedAt: now, Delivered: waiter == nil, SlotHeld: waiter == nil, Queued: waiter != nil, Text: message}
+	turn := Turn{TurnID: fmt.Sprintf("%s#%d", rec.ID, len(prospective.Turns)+1), Source: TurnSourceOrchestrator, StartedAt: now, Delivered: false, SlotHeld: waiter == nil, Queued: waiter != nil, Text: message}
 	prospective.Turns = append(prospective.Turns, turn)
 	prospective.Status, prospective.Text, prospective.Error = StatusQueued, "", ""
 	prospective.EndedAt, prospective.Cwd = time.Time{}, cwd
@@ -193,7 +193,20 @@ func (d *Dispatcher) continueHeadless(cfg *config.Config, rec Record, message st
 	d.mu.Unlock()
 	d.nestMu.Unlock()
 	nestHeld = false
-	go d.runInvocation(runCtx, state, done, h, rec.Model, tmplEnv, args, harnessEnv, cwd, rec.Timeout, waiter)
+	// A turn that holds its slot launches at once, so its start outcome is
+	// the send's outcome: delivered only after cmd.Start succeeds, and a
+	// start failure is an error. A queued turn launches whenever a slot
+	// opens; its caller learns the outcome from the turn id.
+	var launched chan error
+	if waiter == nil {
+		launched = make(chan error, 1)
+	}
+	go d.runInvocation(runCtx, state, done, h, rec.Model, tmplEnv, args, harnessEnv, cwd, rec.Timeout, waiter, launched)
+	if launched != nil {
+		if err := <-launched; err != nil {
+			return SendResult{}, fmt.Errorf("continuing dispatch %s: %w", rec.ID, err)
+		}
+	}
 	return SendResult{TurnID: turn.TurnID, Delivered: waiter == nil, Queued: waiter != nil}, nil
 }
 

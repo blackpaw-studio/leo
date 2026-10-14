@@ -75,11 +75,27 @@ Lane: B-003
 Lane: B-004
   Branch: autopilot-lane/B-004
   Base: 3de7bc265804ea9fed74353ad619c94d2d9b67d8
-  Tier: light
-  State: building
+  Tier: light→full
+  State: landed
   Fixes: 0
   Wip: none
   Dispatched: 2026-10-14T02:45:40Z
+  Reverifies: 0
+  Reviewed-tip: 950b52c0a43c915786c15ebe65e874c453fa26d9
+  Call: On start failure the run settles failed and the send returns an error; the dispatch stays resumable — principle 4
+  Call: The send returns once the process has started and is recorded, not when it finishes — principle 4
+  Call: Queued continuations unchanged: report queued, flip to delivered on launch — principle 4
+  Call: Accepted risk: cancel between cmd.Start and launch record leaves send saying delivered while the turn records undelivered/interrupted (sub-ms window) — severity bar
+  Tokens: 10.1M in (9.62M cache read), ≥59.7k out, 118 requests
+
+Lane: B-005
+  Branch: autopilot-lane/B-005
+  Base: aa83adca1155d591483c73b75d4f3ef4b10755e5
+  Tier: full
+  State: building
+  Fixes: 0
+  Wip: none
+  Dispatched: 2026-10-14T03:12:10Z
   Reverifies: 0
   Reviewed-tip: none
 
@@ -90,3 +106,5 @@ Finished 2: B-021 landed eb2d949e5280592e57bf785ff8b0ed8a58f84b96 · shot not vi
 - B-021 built before B-003 (owner-filed bug, top of queue); B-003 independent of B-002.
 Finished 3: B-002 landed e7269f2e1504a381124e6a5c1e578b08c1625d93 · shot not visually verified
 - B-002 notes: rejection-with-tty path unit-tested only (not live); 16-col pane still misreads placeholder (accepted risk); implement.hard first dispatch lost after 27s, retry succeeded.
+Finished 4: B-004 landed 32b30208e3ffc2b65e562b61359dda24c8dc8d4c · shot not visually verified
+- B-004 notes: TestCancelingABackgroundedViewerKillsItsPane failed once under load (did not recur); make lint shows stale errcheck from sibling lanes unless GOLANGCI_LINT_CACHE is fresh.
