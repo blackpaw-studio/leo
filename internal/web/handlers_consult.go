@@ -388,12 +388,24 @@ func (s *Server) handleAPIConsult(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, apiResponse{OK: true, Data: result})
 }
 
-// callerEnvironments is the effective environment list of the agent named
-// from, which its dispatches inherit; nil when from is not a known agent. A
+// callerEnvironments is the effective environment list of the agent or
+// one-shot task named from, which its dispatches inherit; nil when from names
+// neither. A
 // name that is no longer defined is passed through so the dispatch fails
 // loudly instead of silently running under another account.
 func (s *Server) callerEnvironments(cfg *config.Config, from string) []string {
-	if from == "" || s.agentSvc == nil {
+	if from == "" {
+		return nil
+	}
+	// A one-shot task's leo MCP server calls as "task:<name>" and runs under
+	// the task's environments (see config.TaskEnv).
+	if name, ok := strings.CutPrefix(from, "task:"); ok {
+		if task, ok := cfg.Tasks[name]; ok {
+			return cfg.EnvironmentNames(nil, task.Environments)
+		}
+		return nil
+	}
+	if s.agentSvc == nil {
 		return nil
 	}
 	for _, rec := range s.agentSvc.List() {

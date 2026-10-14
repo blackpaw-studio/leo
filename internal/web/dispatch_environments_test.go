@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -85,5 +86,28 @@ func TestAPIDispatchRejectsAnUnknownEnvironment(t *testing.T) {
 	w := startDispatch(t, s, `{"from":"caller","template":"coding","prompt":"work","cwd":"/tmp","mode":"headless","environments":["nope"]}`)
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("status %d, want 400: %s", w.Code, w.Body.String())
+	}
+}
+
+// A one-shot task's leo MCP server calls as "task:<name>"; its dispatches
+// inherit the task's environments like an agent's do.
+func TestAPIDispatchInheritsAOneShotTasksEnvironments(t *testing.T) {
+	s := newEnvDispatchServer(t)
+	cfgPath := s.configPath
+	raw, err := os.ReadFile(cfgPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	yaml := strings.Replace(string(raw), "    prompt_file: heartbeat.md\n", "    prompt_file: heartbeat.md\n    environments: [acct-c]\n", 1)
+	if err := os.WriteFile(cfgPath, []byte(yaml), 0600); err != nil {
+		t.Fatal(err)
+	}
+	w := startDispatch(t, s, `{"from":"task:heartbeat","template":"coding","prompt":"work","cwd":"/tmp","mode":"headless"}`)
+	if w.Code != http.StatusOK {
+		t.Fatalf("start: %d %s", w.Code, w.Body.String())
+	}
+	rec := dispatchRecord(t, s, w.Body)
+	if !reflect.DeepEqual(rec.Environments, []string{"acct-c"}) || rec.EnvironmentsSource != consult.EnvironmentsInherited {
+		t.Fatalf("environments=%v source=%q", rec.Environments, rec.EnvironmentsSource)
 	}
 }
