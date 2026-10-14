@@ -122,6 +122,68 @@ func TestSendDoesNotWait(t *testing.T) {
 	}
 }
 
+// A rejected follow-up names where the pane is, so a "composer busy" on a
+// pane someone moved can be checked against the screen without digging
+// through list-panes for it.
+func TestRejectedInjectNamesPaneTTY(t *testing.T) {
+	tests := []struct {
+		name    string
+		capture string
+		want    error
+	}{
+		{"busy", "⏺ Starting.\n\n✻ Pondering… (esc to interrupt)\n", tmux.ErrComposerBusy},
+		{"unknown", "starting harness\n", tmux.ErrComposerUnknown},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			r := NewInteractiveRuntime("x", nil, nil, "tmux", "/opt/leo")
+			var calls [][]string
+			r.ExecCommandContext = func(_ context.Context, _ string, args ...string) *exec.Cmd {
+				calls = append(calls, args)
+				switch {
+				case slices.Contains(args, "capture-pane"):
+					return exec.Command("printf", "%s", tt.capture)
+				case slices.Contains(args, "display-message"):
+					return exec.Command("printf", "%%1\t/dev/ttys009\tcaller:2\n")
+				}
+				return exec.Command("true")
+			}
+			err := r.Inject(context.Background(), "%1", "hello", nil)
+			if !errors.Is(err, tt.want) {
+				t.Fatalf("Inject() = %v, want %v", err, tt.want)
+			}
+			for _, part := range []string{"%1", "/dev/ttys009", "caller:2"} {
+				if !strings.Contains(err.Error(), part) {
+					t.Fatalf("Inject() = %q, want it to name %q", err, part)
+				}
+			}
+			want := [][]string{
+				tmux.Args("capture-pane", "-p", "-t", "%1"),
+				tmux.Args("display-message", "-p", "-t", "%1", "#{pane_id}\t#{pane_tty}\t#{session_name}:#{window_index}"),
+			}
+			if !reflect.DeepEqual(calls, want) {
+				t.Fatalf("argv = %#v, want %#v", calls, want)
+			}
+		})
+	}
+}
+
+// A pane that is gone by the time a rejection is described still reports the
+// rejection itself.
+func TestRejectedInjectWithoutPaneDetailKeepsRejection(t *testing.T) {
+	r := NewInteractiveRuntime("x", nil, nil, "tmux", "/opt/leo")
+	r.ExecCommandContext = func(_ context.Context, _ string, args ...string) *exec.Cmd {
+		if slices.Contains(args, "capture-pane") {
+			return exec.Command("printf", "%s", "starting harness\n")
+		}
+		return exec.Command("false")
+	}
+	err := r.Inject(context.Background(), "%1", "hello", nil)
+	if !errors.Is(err, tmux.ErrComposerUnknown) || err.Error() != tmux.ErrComposerUnknown.Error() {
+		t.Fatalf("Inject() = %v, want the bare rejection", err)
+	}
+}
+
 func TestInteractiveLaunchArgv(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("HOME", dir)
