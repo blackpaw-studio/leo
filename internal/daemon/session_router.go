@@ -474,34 +474,50 @@ func (r *sessionRouter) pump(session string, q *sessionQueue) {
 				continue
 			}
 
-			timer := time.NewTimer(next.Timeout)
-			select {
-			case <-r.done:
-				if !timer.Stop() {
-					<-timer.C
-				}
+			if !r.awaitCompletion(q, next, target) {
 				return
-			case <-timer.C:
-				// Re-check inFlight BEFORE aborting: a Report that landed just
-				// as the timer fired already delivered the result and moved the
-				// session on to its next turn, so aborting here would Ctrl-C a
-				// turn that legitimately completed.
-				q.mu.Lock()
-				still := q.inFlight != nil && q.inFlight.ID == next.ID
-				if still {
-					q.inFlight = nil
-				}
-				q.mu.Unlock()
-				if still {
-					_ = r.currentAborter()(target)
-					r.markCompleted(next, InvocationResult{OK: false, Err: "timeout"})
-				}
-			case <-q.reportSig:
-				if !timer.Stop() {
-					<-timer.C
-				}
-				// Report / Reset path: inFlight already cleared and result
-				// delivered. Loop to pick up the next item.
+			}
+		}
+	}
+}
+
+// awaitCompletion waits for next to complete (Report / ObserveTurn) or time
+// out, aborting the pane on timeout. Returns false when the router stopped.
+// A reportSig wake-up only counts when next is no longer in flight: the
+// signal is buffered and shared by the queue, so one left behind by a
+// completion that landed during an earlier injection must not end this
+// invocation's wait (it would drop its timeout and wedge the queue).
+func (r *sessionRouter) awaitCompletion(q *sessionQueue, next *PendingInvocation, target string) bool {
+	timer := time.NewTimer(next.Timeout)
+	defer timer.Stop()
+	for {
+		select {
+		case <-r.done:
+			return false
+		case <-timer.C:
+			// Re-check inFlight BEFORE aborting: a Report that landed just
+			// as the timer fired already delivered the result and moved the
+			// session on to its next turn, so aborting here would Ctrl-C a
+			// turn that legitimately completed.
+			q.mu.Lock()
+			still := q.inFlight != nil && q.inFlight.ID == next.ID
+			if still {
+				q.inFlight = nil
+			}
+			q.mu.Unlock()
+			if still {
+				_ = r.currentAborter()(target)
+				r.markCompleted(next, InvocationResult{OK: false, Err: "timeout"})
+			}
+			return true
+		case <-q.reportSig:
+			q.mu.Lock()
+			done := q.inFlight == nil || q.inFlight.ID != next.ID
+			q.mu.Unlock()
+			if done {
+				// Report / turn path: inFlight already cleared and result
+				// delivered. The caller loops to pick up the next item.
+				return true
 			}
 		}
 	}

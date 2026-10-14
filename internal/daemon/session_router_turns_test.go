@@ -166,3 +166,44 @@ func TestRouterHookCompletionDuringInjectDoesNotAbort(t *testing.T) {
 		t.Fatalf("aborter called %d times, want 0: a turn that completed was aborted", n)
 	}
 }
+
+func TestRouterStopFailureFailsMatchedTurn(t *testing.T) {
+	g := newTurnRig(t, nil)
+
+	g.r.ObserveTurn("agent", TurnEvent{Event: "UserPromptSubmit", Prompt: turnRigPrompt, SessionID: "ses_1"})
+	g.r.ObserveTurn("agent", TurnEvent{Event: "StopFailure", SessionID: "ses_1", Error: "ProviderAuthError: bad key"})
+
+	res := g.result(t)
+	want := InvocationResult{OK: false, SessionID: "ses_1", Err: "turn failed: ProviderAuthError: bad key"}
+	if res != want {
+		t.Fatalf("result = %+v, want %+v", res, want)
+	}
+}
+
+// A completion that lands while the pump is still inside the injector
+// must not leave a wake-up behind for the next invocation: that one would
+// take it as its own completion, drop its timeout, and wedge the queue.
+func TestRouterCompletionDuringInjectDoesNotLeakIntoNextInvocation(t *testing.T) {
+	release := make(chan struct{})
+	g := newTurnRig(t, release)
+	next, ok := g.r.Enqueue(EnqueueParams{Session: "agent", Task: "t2", Prompt: "next", QueueMax: 5, Timeout: 20 * time.Millisecond})
+	if !ok {
+		t.Fatal("enqueue rejected")
+	}
+
+	g.r.ObserveTurn("agent", TurnEvent{Event: "UserPromptSubmit", Prompt: turnRigPrompt, TurnID: "turn-x"})
+	g.r.ObserveTurn("agent", TurnEvent{Event: "Stop", TurnID: "turn-x", LastMessage: "OK"})
+	close(release)
+	if res := g.result(t); !res.OK {
+		t.Fatalf("first result = %+v, want OK", res)
+	}
+
+	select {
+	case res := <-next.Result:
+		if res.OK || res.Err != "timeout" {
+			t.Fatalf("next result = %+v, want its own timeout", res)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("next invocation never timed out: the queue is wedged")
+	}
+}
