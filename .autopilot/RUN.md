@@ -109,6 +109,11 @@ Lane: B-005
   Dispatched: 2026-10-14T03:12:10Z
   Reverifies: 0
   Reviewed-tip: none
+  Call: Two-layer fix: in-process per-name lifecycle lock plus field-diff agentstore.Patch, no on-disk format change — principle 1, stop-list format constraint
+  Call: Store mutators refuse to overwrite an unreadable agents.json; writes are atomic — principle 4
+  Call: clearFailedRestore no longer persists boot-time launch args to the record — principle 1
+  Call: Delete returns an error when removing the record fails; spawn rollback and restore log it — principle 4
+  Call: Restore skips the mail drop for a record it can't remove — principle 4
 
 Lane: B-006
   Branch: autopilot-lane/B-006
