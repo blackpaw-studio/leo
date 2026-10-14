@@ -499,16 +499,20 @@ func (d *Dispatcher) run(parent context.Context, state *runState, h harness.Harn
 }
 
 // runInvocation runs one headless process to completion. A non-nil launched
-// receives exactly one value (and must have room for it): nil once cmd.Start
-// succeeded, otherwise why the process never started. It is sent after the
-// run has settled on failure, so a caller that sees the error sees a finished
-// record.
+// receives exactly one value (and must have room for it): nil as soon as
+// cmd.Start succeeded and the launch is recorded (before the process exits),
+// otherwise why the process never started. A failure is sent after the run
+// has settled, so a caller that sees the error sees a finished record.
 func (d *Dispatcher) runInvocation(parent context.Context, state *runState, done chan struct{}, h harness.Harness, model string, env map[string]string, args []string, harnessEnv map[string]string, cwd string, timeout time.Duration, waiter *slotWaiter, launched chan<- error) {
 	defer close(done)
 	launchErr := errors.New("dispatch ended before its process started")
-	if launched != nil {
-		defer func() { launched <- launchErr }()
+	notifyLaunch := func(err error) {
+		if launched != nil {
+			launched <- err
+			launched = nil
+		}
 	}
+	defer func() { notifyLaunch(launchErr) }()
 	if waiter != nil {
 		select {
 		case <-waiter.Ready():
@@ -584,7 +588,6 @@ func (d *Dispatcher) runInvocation(parent context.Context, state *runState, done
 	if runErr != nil {
 		launchErr = fmt.Errorf("starting %s: %w", h.Name(), runErr)
 	} else {
-		launchErr = nil
 		d.mu.Lock()
 		d.publishHeadlessLaunchLocked(state)
 		if state.record.Isolation == "worktree" {
@@ -597,6 +600,7 @@ func (d *Dispatcher) runInvocation(parent context.Context, state *runState, done
 			d.persistRecordLocked(state)
 		}
 		d.mu.Unlock()
+		notifyLaunch(nil)
 		runErr = cmd.Wait()
 	}
 	parsed, parseErr := h.ParseEvents(bytes.NewReader(tee.Bytes()))

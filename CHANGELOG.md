@@ -125,8 +125,9 @@ All notable user-visible changes to Leo are documented here.
   process starts.** `leo_send_dispatch` on a finished headless dispatch
   returned `delivered` (and recorded the turn as delivered) before
   `cmd.Start()` ran, so a harness that failed to launch was reported as
-  delivered while the run quietly failed. The send now returns only after the
-  start: `delivered` means the process is running, and a start failure is
+  delivered while the run quietly failed. The send now returns as soon as the
+  process has started (not when it finishes): `delivered` means the process is
+  running, and a start failure is
   returned as an error (the turn settles as undelivered and the dispatch stays
   resumable). Continuations that queue for a slot are unchanged: they report
   `queued` and flip to delivered when they launch.
