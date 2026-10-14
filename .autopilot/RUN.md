@@ -65,19 +65,19 @@ Lane: B-003
   Branch: autopilot-lane/B-003
   Base: e36ee832f8eb22bf1385826b7063db0759e879b5
   Tier: full
-  State: building
-  Fixes: 0
+  State: verifying
+  Fixes: 1
   Wip: none
   Dispatched: 2026-10-14T02:16:30Z
   Reverifies: 0
-  Reviewed-tip: none
+  Reviewed-tip: f979868c2e2b2db269afe09873b3329293f4163c
 
 Lane: B-004
   Branch: autopilot-lane/B-004
   Base: 3de7bc265804ea9fed74353ad619c94d2d9b67d8
   Tier: light→full
   State: landed
-  Fixes: 0
+  Fixes: 1
   Wip: none
   Dispatched: 2026-10-14T02:45:40Z
   Reverifies: 0
@@ -87,6 +87,11 @@ Lane: B-004
   Call: Queued continuations unchanged: report queued, flip to delivered on launch — principle 4
   Call: Accepted risk: cancel between cmd.Start and launch record leaves send saying delivered while the turn records undelivered/interrupted (sub-ms window) — severity bar
   Tokens: 10.1M in (9.62M cache read), ≥59.7k out, 118 requests
+  Call: Turn hooks are the completion signal for codex and opencode, with no per-harness special case in the core path — principle 3
+  Call: Interrupt on the matched turn fails the run as interrupted; an errored opencode turn reports StopFailure → 'turn failed: <err>' — principle 4
+  Call: Opencode leo plugin POSTs to /api/agent/hook, loaded from Env() for supervised non-dispatched agents; plugin file written to ~/Library/Caches/leo/opencode/ (plan deviation) — principle 3
+  Call: Child-session guard: a subagent session's idle no longer completes the parent's run — principle 4
+  Call: Accepted risk: a human typing the identical task prompt during the injection wait binds their own turn (documented in persistent-tasks.md) — severity bar
 
 Lane: B-005
   Branch: autopilot-lane/B-005
