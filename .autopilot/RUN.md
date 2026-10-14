@@ -88,6 +88,17 @@ Lane: B-004
   Call: Accepted risk: cancel between cmd.Start and launch record leaves send saying delivered while the turn records undelivered/interrupted (sub-ms window) — severity bar
   Tokens: 10.1M in (9.62M cache read), ≥59.7k out, 118 requests
 
+Lane: B-005
+  Branch: autopilot-lane/B-005
+  Base: aa83adca1155d591483c73b75d4f3ef4b10755e5
+  Tier: full
+  State: building
+  Fixes: 0
+  Wip: none
+  Dispatched: 2026-10-14T03:12:10Z
+  Reverifies: 0
+  Reviewed-tip: none
+
 Finished 1: B-001 landed c6e8dc0afd640ffc408aaae1ec5b75c3b96b716e · shot not visually verified
 - B-001 notes: verify.md restart line uses pkill (SIGTERM) → false bounce; should be kill -9. Fixed port 8391 can collide across parallel lanes. First review/verify dispatches came back lost after ~30s; retries succeeded. Memory note project_leo_update_bounces_all_agents is stale.
 Finished 2: B-021 landed eb2d949e5280592e57bf785ff8b0ed8a58f84b96 · shot not visually verified
