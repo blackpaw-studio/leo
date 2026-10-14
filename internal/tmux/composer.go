@@ -3,7 +3,8 @@ package tmux
 import (
 	"regexp"
 	"strings"
-	"unicode/utf8"
+
+	"github.com/mattn/go-runewidth"
 )
 
 // ComposerState is the visible state of a harness's interactive composer.
@@ -384,17 +385,27 @@ func isCodexPlaceholderRow(lines []string, i int, content string) bool {
 	if i+1 < len(lines) && strings.TrimSpace(lines[i+1]) != "" {
 		return false
 	}
-	return utf8.RuneCountInString(strings.TrimRight(lines[i], " ")) >= captureWidth(lines)-1
+	return cellWidth(lines[i]) >= captureWidth(lines)-1
 }
 
-// captureWidth is the widest row of a capture, in runes. In a pane too narrow
-// for Codex's footer the footer is truncated to the full pane width.
+// captureWidth is the widest row of a capture, in terminal cells. In a pane
+// too narrow for Codex's footer the footer is truncated to the full pane width.
 func captureWidth(lines []string) int {
 	width := 0
 	for _, line := range lines {
-		width = max(width, utf8.RuneCountInString(strings.TrimRight(line, " ")))
+		width = max(width, cellWidth(line))
 	}
 	return width
+}
+
+// cells measures rows as a terminal lays them out: combining marks take no
+// cell and East Asian wide characters two. Ambiguous-width runes (›, •, …)
+// count as one, as they render in Codex's footer, whatever the daemon's
+// locale says.
+var cells = &runewidth.Condition{EastAsianWidth: false, StrictEmojiNeutral: true}
+
+func cellWidth(line string) int {
+	return cells.StringWidth(strings.TrimRight(line, " "))
 }
 
 func isClaudePlaceholder(content string) bool {

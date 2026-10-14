@@ -2,6 +2,7 @@ package tmux
 
 import (
 	"os"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -714,5 +715,40 @@ func TestComposerClassifiersNoComposerProseIsNotBusy(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+// Rows are measured in terminal cells, not runes: a decomposed accent takes no
+// cell and a CJK character takes two.
+func TestCodexComposerClassifierMeasuresRowsInCells(t *testing.T) {
+	t.Parallel()
+
+	fixture, err := os.ReadFile("testdata/codex_idle_narrow_w20.txt")
+	if err != nil {
+		t.Fatalf("ReadFile() error = %v", err)
+	}
+	lines := strings.Split(string(fixture), "\n")
+	first := slices.IndexFunc(lines, func(line string) bool { return strings.TrimSpace(line) != "" })
+	// 20 cells, 24 runes: each é is e + U+0301.
+	lines[first] = "• Référence vérifiée"
+	decomposed := strings.Join(lines, "\n")
+
+	tests := []struct {
+		name    string
+		capture string
+		want    ComposerState
+	}{
+		{"decomposed-accents-keep-the-placeholder-empty", decomposed, ComposerEmpty},
+		// The widest row is 8 cells but only 5 runes, so a 5-cell draft is
+		// well short of the edge.
+		{"wide-chars-keep-a-short-draft-a-draft", "• 測試測\n› Ask\n\n  ? f\n", ComposerDraft},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			if got := CodexComposerClassifier(tt.capture); got != tt.want {
+				t.Fatalf("CodexComposerClassifier() = %s, want %s", got, tt.want)
+			}
+		})
 	}
 }
