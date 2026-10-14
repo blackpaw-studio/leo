@@ -632,3 +632,87 @@ func TestClaudeComposerClassifierIgnoresIndentedSpinnerGlyphs(t *testing.T) {
 		t.Fatalf("ClaudeComposerClassifier() = %s, want %s", got, ComposerEmpty)
 	}
 }
+
+// Captured live from Codex 0.160.1 in idle panes 12, 20 and 24 columns wide.
+// Codex truncates its placeholder at the pane's right margin (it wraps only
+// real drafts), and the footer ends in "…".
+func TestCodexComposerClassifierTruncatedPlaceholderIsEmpty(t *testing.T) {
+	t.Parallel()
+
+	for _, fixture := range []string{
+		"testdata/codex_idle_narrow_w12.txt",
+		"testdata/codex_idle_narrow_w20.txt",
+		"testdata/codex_idle_narrow_w24.txt",
+	} {
+		t.Run(fixture, func(t *testing.T) {
+			t.Parallel()
+			capture, err := os.ReadFile(fixture)
+			if err != nil {
+				t.Fatalf("ReadFile() error = %v", err)
+			}
+			if got := CodexComposerClassifier(string(capture)); got != ComposerEmpty {
+				t.Fatalf("CodexComposerClassifier() = %s, want %s", got, ComposerEmpty)
+			}
+		})
+	}
+}
+
+func TestCodexComposerClassifierPlaceholderPrefixDraftStaysDraft(t *testing.T) {
+	t.Parallel()
+
+	const narrowFooter = "\n  GPT-6-Luna medium…\n  ? for s  ⚠ 3 · f2\n"
+	tests := []struct {
+		name    string
+		capture string
+	}{
+		{"wide-pane", "› Ask Codex to do\n\n  gpt-5.6-luna default · ~/work · Context 4% used · weekly 96% left\n"},
+		{"wrapped-draft-at-the-edge", "› Ask Codex to do a\n  something else\n" + narrowFooter},
+		{"short-of-the-edge", "› Ask Codex\n" + narrowFooter},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			if got := CodexComposerClassifier(tt.capture); got != ComposerDraft {
+				t.Fatalf("CodexComposerClassifier() = %s, want %s", got, ComposerDraft)
+			}
+		})
+	}
+}
+
+// With no composer row on screen, only a live status line or spinner is
+// evidence of a turn in progress. Transcript prose is not, whatever it says:
+// the honest answer for a screen without a composer is "unknown".
+func TestComposerClassifiersNoComposerProseIsNotBusy(t *testing.T) {
+	t.Parallel()
+
+	classifiers := []struct {
+		name     string
+		classify ComposerClassifier
+	}{
+		{"codex", CodexComposerClassifier},
+		{"claude", ClaudeComposerClassifier},
+	}
+	tests := []struct {
+		name    string
+		capture string
+		want    ComposerState
+	}{
+		{"prose-running", "• Running the suite now.\n\n  gpt-5.6-luna default · ~/work\n", ComposerUnknown},
+		{"prose-still-working", "• Still working on it\n", ComposerUnknown},
+		{"prose-thinking", "⏺ I was thinking about the generating step.\n", ComposerUnknown},
+		{"indented-spinner-glyph", "⏺ Summary:\n  ✳ Cogitating… is what the spinner said\n", ComposerUnknown},
+		{"codex-status-line", "• Working (12s • esc to interrupt)\n\n  gpt-5.6-luna default · ~/work\n", ComposerBusy},
+		{"codex-wrapped-status-line", "• Working (12s •\n  esc to interrupt)\n", ComposerBusy},
+		{"claude-spinner", "⏺ Starting.\n\n✻ Pondering… (esc to interrupt)\n", ComposerBusy},
+	}
+	for _, c := range classifiers {
+		for _, tt := range tests {
+			t.Run(c.name+"/"+tt.name, func(t *testing.T) {
+				t.Parallel()
+				if got := c.classify(tt.capture); got != tt.want {
+					t.Fatalf("classify() = %s, want %s", got, tt.want)
+				}
+			})
+		}
+	}
+}

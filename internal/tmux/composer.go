@@ -3,6 +3,7 @@ package tmux
 import (
 	"regexp"
 	"strings"
+	"unicode/utf8"
 )
 
 // ComposerState is the visible state of a harness's interactive composer.
@@ -43,7 +44,7 @@ var (
 // empty-composer placeholder on the same line as the marker.
 func CodexComposerClassifier(capture string) ComposerState {
 	// capture-pane drops the trailing space from a bare `› ` input line.
-	return classifyComposer(capture, "›", isCodexPlaceholder)
+	return classifyComposer(capture, "›", isCodexPlaceholderRow)
 }
 
 // ClaudeComposerClassifier identifies Claude Code's ❯ composer. Claude
@@ -57,7 +58,7 @@ func ClaudeComposerClassifier(capture string) ComposerState {
 	lines := strings.Split(capture, "\n")
 	top, composerLine, bottom, ok := claudeComposerBox(lines)
 	if !ok {
-		if hasBusyIndicator(capture) {
+		if hasLiveStatus(lines) {
 			return ComposerBusy
 		}
 		return ComposerUnknown
@@ -171,7 +172,11 @@ func isClaudeInProgressLine(line string) bool {
 		strings.ContainsAny(trimmed, "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏")
 }
 
-func classifyComposer(capture, marker string, placeholder func(string) bool) ComposerState {
+// placeholderRow reports whether row i of lines, whose text after the composer
+// marker is content, is the harness's empty-composer placeholder.
+type placeholderRow func(lines []string, i int, content string) bool
+
+func classifyComposer(capture, marker string, placeholder placeholderRow) ComposerState {
 	if strings.TrimSpace(capture) == "" || isComposerDialog(capture) {
 		return ComposerUnknown
 	}
@@ -188,16 +193,46 @@ func classifyComposer(capture, marker string, placeholder func(string) bool) Com
 			return ComposerBusy
 		}
 		content := strings.TrimSpace(line[len(marker):])
-		if content == "" || placeholder(content) {
+		if content == "" || placeholder(lines, i, content) {
 			return ComposerEmpty
 		}
 		return ComposerDraft
 	}
 
-	if hasBusyIndicator(capture) {
+	if hasLiveStatus(lines) {
 		return ComposerBusy
 	}
 	return ComposerUnknown
+}
+
+// hasLiveStatus is the busy evidence for a capture with no composer on
+// screen: Codex's live status header (joined with its wrapped rows) or
+// Claude's unindented spinner frame. Transcript prose never counts, whatever
+// words it contains; without one of these the composer's state is unknown.
+func hasLiveStatus(lines []string) bool {
+	for i, line := range lines {
+		if isClaudeSpinnerLine(line) && isClaudeBusyLine(line) {
+			return true
+		}
+		if strings.HasPrefix(strings.TrimSpace(line), "•") && codexStatusLinePattern.MatchString(joinWrappedRows(lines, i)) {
+			return true
+		}
+	}
+	return false
+}
+
+// joinWrappedRows joins row i with the indented rows a narrow pane wrapped it
+// onto, stopping at a blank row or the next entry, with whitespace collapsed.
+func joinWrappedRows(lines []string, i int) string {
+	rows := []string{lines[i]}
+	for _, next := range lines[i+1:] {
+		trimmed := strings.TrimSpace(next)
+		if trimmed == "" || trimmed == next || strings.HasPrefix(trimmed, "•") || strings.HasPrefix(trimmed, "›") {
+			break
+		}
+		rows = append(rows, next)
+	}
+	return strings.Join(strings.Fields(strings.Join(rows, " ")), " ")
 }
 
 // codexStatusLinePattern is Codex's live status header: a short title whose
@@ -332,8 +367,34 @@ func hasComposerDialogTitleBefore(lines []string, footer int) bool {
 	return false
 }
 
-func isCodexPlaceholder(content string) bool {
-	return content == "Ask Codex to do anything"
+const codexPlaceholder = "Ask Codex to do anything"
+
+// isCodexPlaceholderRow recognizes Codex's placeholder, including the prefix
+// of it a pane narrower than the placeholder shows: Codex truncates it at the
+// right margin, one column short of the pane's widest row, where a draft would
+// wrap onto an indented row instead. A draft typed as exactly such a prefix,
+// ending at the margin with nothing wrapped, reads as empty; that is accepted.
+func isCodexPlaceholderRow(lines []string, i int, content string) bool {
+	if content == codexPlaceholder {
+		return true
+	}
+	if !strings.HasPrefix(codexPlaceholder, content) {
+		return false
+	}
+	if i+1 < len(lines) && strings.TrimSpace(lines[i+1]) != "" {
+		return false
+	}
+	return utf8.RuneCountInString(strings.TrimRight(lines[i], " ")) >= captureWidth(lines)-1
+}
+
+// captureWidth is the widest row of a capture, in runes. In a pane too narrow
+// for Codex's footer the footer is truncated to the full pane width.
+func captureWidth(lines []string) int {
+	width := 0
+	for _, line := range lines {
+		width = max(width, utf8.RuneCountInString(strings.TrimRight(line, " ")))
+	}
+	return width
 }
 
 func isClaudePlaceholder(content string) bool {
