@@ -28,17 +28,19 @@ func TestFileStoreRoundTrip(t *testing.T) {
 		t.Errorf("mode = %o, want 0600", got)
 	}
 
-	got, ok, err := store.Take()
+	got, ok, err := store.Read()
 	if err != nil || !ok {
-		t.Fatalf("Take = ok %v, err %v", ok, err)
+		t.Fatalf("Read = ok %v, err %v", ok, err)
 	}
 	want := in
 	want.Version = PendingResumeVersion
 	if !reflect.DeepEqual(got, want) {
-		t.Errorf("Take = %+v, want %+v", got, want)
+		t.Errorf("Read = %+v, want %+v", got, want)
 	}
-	if _, err := os.Stat(filepath.Join(dir, "pending-resume.json")); !os.IsNotExist(err) {
-		t.Errorf("file still present after Take: %v", err)
+	// Reading is not consuming: the file is the resume obligation until
+	// Resume has handled every agent.
+	if _, err := os.Stat(filepath.Join(dir, "pending-resume.json")); err != nil {
+		t.Errorf("file gone after Read: %v", err)
 	}
 }
 
@@ -60,30 +62,30 @@ func TestFileStoreWriteEnforces0600OnExistingFile(t *testing.T) {
 	}
 }
 
-func TestFileStoreTakeMissingFile(t *testing.T) {
-	_, ok, err := NewFileStore(t.TempDir()).Take()
+func TestFileStoreReadMissingFile(t *testing.T) {
+	_, ok, err := NewFileStore(t.TempDir()).Read()
 	if ok || err != nil {
-		t.Fatalf("Take on missing file = ok %v, err %v; want false, nil", ok, err)
+		t.Fatalf("Read on missing file = ok %v, err %v; want false, nil", ok, err)
 	}
 }
 
-func TestFileStoreTakeCorruptFileQuarantines(t *testing.T) {
+func TestFileStoreReadCorruptFileQuarantines(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "pending-resume.json")
 	if err := os.WriteFile(path, []byte("not json"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	store := NewFileStore(dir)
-	if _, _, err := store.Take(); err == nil {
-		t.Fatal("Take on corrupt file returned nil error")
+	if _, _, err := store.Read(); err == nil {
+		t.Fatal("Read on corrupt file returned nil error")
 	}
 	matches, _ := filepath.Glob(filepath.Join(dir, "pending-resume.json.corrupt-*"))
 	if len(matches) != 1 {
 		t.Fatalf("corrupt siblings = %v, want exactly one", matches)
 	}
-	_, ok, err := store.Take()
+	_, ok, err := store.Read()
 	if ok || err != nil {
-		t.Fatalf("second Take = ok %v, err %v; want false, nil", ok, err)
+		t.Fatalf("second Read = ok %v, err %v; want false, nil", ok, err)
 	}
 }
 
@@ -102,7 +104,7 @@ func TestFileStoreRemoveDeletesFile(t *testing.T) {
 	if err := store.Remove(); err != nil {
 		t.Fatalf("Remove: %v", err)
 	}
-	if _, ok, _ := store.Take(); ok {
+	if _, ok, _ := store.Read(); ok {
 		t.Fatal("file survived Remove")
 	}
 }

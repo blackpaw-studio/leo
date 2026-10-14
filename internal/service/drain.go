@@ -39,17 +39,18 @@ const resumeBridgeWait = 60 * time.Second
 // pendingResumeDeps are runPendingResume's collaborators.
 type pendingResumeDeps struct {
 	store interface {
-		Take() (drain.PendingResume, bool, error)
+		Read() (drain.PendingResume, bool, error)
 	}
 	resume drain.ResumeDeps
 	logf   func(format string, args ...any)
 }
 
 // runPendingResume resumes the agents a graceful restart drained, if the
-// previous daemon left a pending-resume file. A file that cannot be read is
-// logged and the daemon boots normally.
+// previous daemon left a pending-resume file. The file is read, not taken:
+// drain.Resume discharges it agent by agent as each resume goes out. A file
+// that cannot be read is logged and the daemon boots normally.
 func runPendingResume(ctx context.Context, d pendingResumeDeps) {
-	p, ok, err := d.store.Take()
+	p, ok, err := d.store.Read()
 	if err != nil {
 		d.logf("drain: pending resume: %v", err)
 		return
@@ -93,9 +94,11 @@ func awaitAgentBridge(sup *Supervisor, hub *bridge.Hub) func(context.Context, st
 // startPendingResume resumes drained agents in the background once agent
 // restore has finished.
 func startPendingResume(ctx context.Context, srv *daemon.Server, sup *Supervisor, hub *bridge.Hub, homePath string) {
+	store := drain.NewFileStore(filepath.Join(homePath, "state"))
 	go runPendingResume(ctx, pendingResumeDeps{
-		store: drain.NewFileStore(filepath.Join(homePath, "state")),
+		store: store,
 		resume: drain.ResumeDeps{
+			Store:       store,
 			Exists:      agentRecordExists(homePath),
 			AwaitBridge: awaitAgentBridge(sup, hub),
 			Notifier:    srv.DrainNotifier(),

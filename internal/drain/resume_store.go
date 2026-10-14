@@ -68,10 +68,12 @@ func (s *FileStore) Remove() error {
 	return nil
 }
 
-// Take reads and deletes the file. ok is false when there is none. A file
-// that does not decode is renamed to pending-resume.json.corrupt-<unix> so
-// it is reported once and never retried.
-func (s *FileStore) Take() (PendingResume, bool, error) {
+// Read returns the file's contents without consuming it: the file stays
+// the resume obligation until Resume has handled every agent. ok is false
+// when there is none. A file that does not decode is renamed to
+// pending-resume.json.corrupt-<unix> so it is reported once and never
+// retried.
+func (s *FileStore) Read() (PendingResume, bool, error) {
 	storeMu.Lock()
 	defer storeMu.Unlock()
 	data, err := os.ReadFile(s.path)
@@ -92,9 +94,6 @@ func (s *FileStore) Take() (PendingResume, bool, error) {
 			return PendingResume{}, false, fmt.Errorf("decoding %s: %w (quarantine failed: %v)", pendingResumeFile, decodeErr, err)
 		}
 		return PendingResume{}, false, fmt.Errorf("decoding %s (moved to %s): %w", pendingResumeFile, filepath.Base(quarantine), decodeErr)
-	}
-	if err := os.Remove(s.path); err != nil {
-		return PendingResume{}, false, fmt.Errorf("removing %s: %w", pendingResumeFile, err)
 	}
 	return p, true, nil
 }

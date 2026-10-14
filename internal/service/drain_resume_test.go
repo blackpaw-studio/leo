@@ -27,9 +27,14 @@ func (l *resumeLog) logf(format string, args ...any) {
 type countingNotifier struct {
 	mu   sync.Mutex
 	sent []string
+	// onMessage runs before each message is recorded.
+	onMessage func(name string)
 }
 
 func (n *countingNotifier) Message(_ context.Context, name, text, _ string) (drain.Delivery, error) {
+	if n.onMessage != nil {
+		n.onMessage(name)
+	}
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	n.sent = append(n.sent, name+": "+text)
@@ -40,9 +45,11 @@ func (*countingNotifier) Holds(string, string) (bool, error) { return false, nil
 
 func pendingResumeFixture(t *testing.T, homePath string, n *countingNotifier, log *resumeLog) pendingResumeDeps {
 	t.Helper()
+	store := drain.NewFileStore(filepath.Join(homePath, "state"))
 	return pendingResumeDeps{
-		store: drain.NewFileStore(filepath.Join(homePath, "state")),
+		store: store,
 		resume: drain.ResumeDeps{
+			Store:    store,
 			Exists:   agentRecordExists(homePath),
 			Notifier: n,
 			RunTasks: func([]string) {},
@@ -90,11 +97,19 @@ func TestRunPendingResumeMessagesRecordedAgents(t *testing.T) {
 		t.Fatal(err)
 	}
 	n, log := &countingNotifier{}, &resumeLog{}
+	// The obligation is only discharged after delivery: a crash while the
+	// message is in flight must leave alpha for the next boot.
+	n.onMessage = func(name string) {
+		p, ok, err := store.Read()
+		if err != nil || !ok || !strings.Contains(strings.Join(p.Agents, ","), name) {
+			t.Errorf("while messaging %s the file holds %+v (ok %v, err %v); want it still listed", name, p, ok, err)
+		}
+	}
 	runPendingResume(context.Background(), pendingResumeFixture(t, home, n, log))
 	if want := []string{"alpha: " + drain.ResumeText}; strings.Join(n.sent, "|") != strings.Join(want, "|") {
 		t.Fatalf("sent %q, want %q", n.sent, want)
 	}
-	if _, ok, _ := store.Take(); ok {
+	if _, ok, _ := store.Read(); ok {
 		t.Fatal("pending-resume.json survived the resume")
 	}
 }

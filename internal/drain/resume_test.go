@@ -43,8 +43,23 @@ func (n recordingNotifier) Message(_ context.Context, name, text, id string) (De
 
 func (recordingNotifier) Holds(string, string) (bool, error) { return false, nil }
 
+// recordingStore logs each persisted state of the obligation into the same
+// event stream as the messages, so tests see their order.
+type recordingStore struct{ rec *resumeRecorder }
+
+func (s recordingStore) Write(p PendingResume) error {
+	s.rec.add(fmt.Sprintf("write agents=%v tasks=%v", p.Agents, p.DeferredTasks))
+	return nil
+}
+
+func (s recordingStore) Remove() error {
+	s.rec.add("remove")
+	return nil
+}
+
 func resumeDeps(rec *resumeRecorder, exists map[string]bool, fail map[string]error) ResumeDeps {
 	return ResumeDeps{
+		Store:       recordingStore{rec},
 		Exists:      func(name string) bool { return exists[name] },
 		AwaitBridge: func(_ context.Context, name string) { rec.add("await " + name) },
 		Notifier:    recordingNotifier{rec: rec, fail: fail},
@@ -59,8 +74,12 @@ func TestResumeMessagesExistingAgentsThenRunsDeferredTasks(t *testing.T) {
 	Resume(context.Background(), p, resumeDeps(rec, map[string]bool{"a": true, "b": true}, nil))
 	want := []string{
 		"await a", "message a: " + ResumeText + " id=",
+		"write agents=[ghost b] tasks=[heartbeat news]",
+		"write agents=[b] tasks=[heartbeat news]",
 		"await b", "message b: " + ResumeText + " id=",
+		"write agents=[] tasks=[heartbeat news]",
 		"run heartbeat,news",
+		"remove",
 	}
 	if !reflect.DeepEqual(rec.events, want) {
 		t.Fatalf("events = %q, want %q", rec.events, want)
@@ -75,7 +94,12 @@ func TestResumeContinuesPastANotifierError(t *testing.T) {
 	p := PendingResume{Agents: []string{"a", "b"}}
 	deps := resumeDeps(rec, map[string]bool{"a": true, "b": true}, map[string]error{"a": errors.New("no such agent")})
 	Resume(context.Background(), p, deps)
-	want := []string{"await a", "await b", "message b: " + ResumeText + " id="}
+	// a's resume failed: it stays the next boot's obligation.
+	want := []string{
+		"await a",
+		"await b", "message b: " + ResumeText + " id=",
+		"write agents=[a] tasks=[]",
+	}
 	if !reflect.DeepEqual(rec.events, want) {
 		t.Fatalf("events = %q, want %q", rec.events, want)
 	}
@@ -96,7 +120,7 @@ func TestResumeMessagesAfterAwaitBridgeGivesUp(t *testing.T) {
 		rec.add("await timed out")
 	}
 	Resume(context.Background(), PendingResume{Agents: []string{"a"}}, deps)
-	want := []string{"await timed out", "message a: " + ResumeText + " id="}
+	want := []string{"await timed out", "message a: " + ResumeText + " id=", "write agents=[] tasks=[]", "remove"}
 	if !reflect.DeepEqual(rec.events, want) {
 		t.Fatalf("events = %q, want %q", rec.events, want)
 	}
@@ -105,7 +129,19 @@ func TestResumeMessagesAfterAwaitBridgeGivesUp(t *testing.T) {
 func TestResumeWithoutDeferredTasksSkipsRunTasks(t *testing.T) {
 	rec := &resumeRecorder{}
 	Resume(context.Background(), PendingResume{}, resumeDeps(rec, nil, nil))
-	if len(rec.events) != 0 {
-		t.Fatalf("events = %q, want none", rec.events)
+	if want := []string{"remove"}; !reflect.DeepEqual(rec.events, want) {
+		t.Fatalf("events = %q, want %q", rec.events, want)
+	}
+}
+
+// Deferred tasks that ran leave the file even when an agent's resume
+// failed, so the next boot does not run them twice.
+func TestResumeDropsRunTasksButKeepsFailedAgents(t *testing.T) {
+	rec := &resumeRecorder{}
+	p := PendingResume{DrainID: "d1", Agents: []string{"a"}, DeferredTasks: []string{"heartbeat"}}
+	Resume(context.Background(), p, resumeDeps(rec, map[string]bool{"a": true}, map[string]error{"a": errors.New("busy")}))
+	want := []string{"await a", "run heartbeat", "write agents=[a] tasks=[]"}
+	if !reflect.DeepEqual(rec.events, want) {
+		t.Fatalf("events = %q, want %q", rec.events, want)
 	}
 }
