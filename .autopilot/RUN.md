@@ -103,7 +103,7 @@ Lane: B-005
   Branch: autopilot-lane/B-005
   Base: aa83adca1155d591483c73b75d4f3ef4b10755e5
   Tier: full
-  State: building
+  State: shelved
   Fixes: 0
   Wip: none
   Dispatched: 2026-10-14T03:12:10Z
@@ -114,6 +114,7 @@ Lane: B-005
   Call: clearFailedRestore no longer persists boot-time launch args to the record — principle 1
   Call: Delete returns an error when removing the record fails; spawn rollback and restore log it — principle 4
   Call: Restore skips the mail drop for a record it can't remove — principle 4
+  Tokens: 18.9M in (18.4M cache read), ≥100k out, 144 requests
 
 Lane: B-006
   Branch: autopilot-lane/B-006
@@ -137,3 +138,6 @@ Finished 4: B-004 landed 32b30208e3ffc2b65e562b61359dda24c8dc8d4c · shot not vi
 - B-004 notes: TestCancelingABackgroundedViewerKillsItsPane failed once under load (did not recur); make lint shows stale errcheck from sibling lanes unless GOLANGCI_LINT_CACHE is fresh.
 Finished 5: B-003 landed 59b11c21c7b560486d25ec71ed17c84dadb7cfea · shot not visually verified
 - B-003 notes: NEVER-LIST BREACH (accidental): an implementer live check used a nonexistent LM Studio model id, opencode fell back to a paid OpenAI model and spent one tiny turn; verifier told not to repeat. Opencode error path (StopFailure) unit-tested only. Plugin file written to ~/Library/Caches/leo/opencode/.
+Finished 6: B-005 blocked
+- EARLY STOP: B-005 runner reported Error: review.concurrency (codex-reviewer) failed twice with "interactive composer not ready" (d-bff4ca8845f1, d-cf18cc4018c5; turn rejected, undelivered, ~60s each). Treated as a failed dispatch per the Loop: no new lanes; B-006 drains.
+- Early stop (failed dispatch) at 2026-10-14T03:54:54Z

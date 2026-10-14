@@ -35,9 +35,11 @@ Source: owner (vision, issue #236)
 Done: 950b52c0, 34437dfc (merge 32b30208) — delivered only after cmd.Start; start failure errors
 Verified: not visually verified — daemon behavior; isolated daemon: delivered in 0.04s while running, missing binary → error + delivered:false
 
-## B-005 · agentstore Stop/Start read-modify-write race   [ready]
+## B-005 · agentstore Stop/Start read-modify-write race   [blocked]
 Accept: concurrent Stop/Start on one record can't lose an update; `-race` test reproduces it first.
 Source: owner (vision, issue #160)
+Question: Built, tested and live-verified, but the concurrency review never ran: review.concurrency (codex-reviewer) failed twice with "interactive composer not ready". I'd pick: retry next run once the codex-reviewer route works (or route review.concurrency to a claude reviewer). Work kept on autopilot-shelved/B-005.
+Answer:
 
 ## B-006 · `leo update` stale-agent check races the daemon restart   [ready]
 Accept: the post-update check waits for the new daemon before judging agents stale; no false warning.
