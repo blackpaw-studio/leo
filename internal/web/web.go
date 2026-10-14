@@ -212,6 +212,9 @@ type Server struct {
 	// It backs both the snapshot's attention field and the agent hook
 	// callback. nil leaves attention absent everywhere.
 	attention *observe.AttentionStore
+	// turnObserver receives every turn hook of a supervised agent (see
+	// WithTurnObserver); nil drops them.
+	turnObserver func(agent string, turn AgentTurn)
 	// chat is Leo Chat; nil when the daemon has no chat store.
 	chat *chat.Service
 
@@ -324,6 +327,13 @@ func WithActivityProvider(p observe.ActivityProvider) Option {
 // written by POST /api/agent/hook. Optional.
 func WithAttention(a *observe.AttentionStore) Option {
 	return func(s *Server) { s.attention = a }
+}
+
+// WithTurnObserver hands every turn hook POST /api/agent/hook accepts for a
+// supervised agent to fn, keyed by the agent the hook's token belongs to:
+// the daemon completes persistent-task invocations from them. Optional.
+func WithTurnObserver(fn func(agent string, turn AgentTurn)) Option {
+	return func(s *Server) { s.turnObserver = fn }
 }
 
 // WithBridgeFeed wires the bridge feed GET /api/v1/state merges per-agent

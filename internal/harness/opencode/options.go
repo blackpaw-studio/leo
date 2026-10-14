@@ -101,8 +101,8 @@ func permissionOption(val any) (map[string]any, error) {
 }
 
 // Env builds the launch env overlay: OPENCODE_CONFIG_CONTENT (the leo MCP
-// server entry when wired, plus the user's permission map). Returns nil when
-// there is nothing to inject.
+// server entry when wired, the user's permission map, and leo's turn plugin
+// for a supervised agent). Returns nil when there is nothing to inject.
 func (Opencode) Env(spec harness.LaunchSpec) (map[string]string, error) {
 	opts, ok := spec.Options.(Options)
 	if !ok {
@@ -117,8 +117,12 @@ func (Opencode) Env(spec harness.LaunchSpec) (map[string]string, error) {
 		}
 		permission["task"] = "deny"
 	}
-	if opts.LeoMCP != nil || len(permission) > 0 {
+	plugin := turnPluginEntry(spec)
+	if opts.LeoMCP != nil || len(permission) > 0 || plugin != "" {
 		cfg := map[string]any{}
+		if plugin != "" {
+			cfg["plugin"] = []string{plugin}
+		}
 		if opts.LeoMCP != nil {
 			leo := map[string]any{
 				"type":        "local",

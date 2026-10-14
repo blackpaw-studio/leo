@@ -12,6 +12,7 @@ import (
 	"github.com/blackpaw-studio/leo/internal/config"
 	"github.com/blackpaw-studio/leo/internal/daemon"
 	"github.com/blackpaw-studio/leo/internal/harness"
+	"github.com/blackpaw-studio/leo/internal/history"
 	"github.com/blackpaw-studio/leo/internal/leomcp"
 	"github.com/blackpaw-studio/leo/internal/observe"
 	"github.com/blackpaw-studio/leo/internal/session"
@@ -553,5 +554,49 @@ func TestRunPersistentCarriesItsRunToTheDaemon(t *testing.T) {
 	}
 	if _, _, ok := srv.TaskRun("worker"); ok {
 		t.Fatal("a finished run is no longer in flight")
+	}
+}
+
+// TestRunPersistentRecordsSuccessPerHarness pins that a completed
+// persistent turn on a non-claude harness is recorded as a success with no
+// failure notice, whatever completed it on the daemon side (B-003: codex
+// and opencode runs used to time out and record a failure).
+func TestRunPersistentRecordsSuccessPerHarness(t *testing.T) {
+	for _, tc := range []struct{ harness, model string }{
+		{"codex", "gpt-5.6-luna"},
+		{"opencode", "lmstudio/qwen/qwen3.6-35b-a3b"},
+	} {
+		t.Run(tc.harness, func(t *testing.T) {
+			home := shortTempDir(t)
+			ws := filepath.Join(home, "ws")
+			promptFile := writePromptFile(t, ws)
+			newTestDaemon(t, home, fakeEnsurer(func(context.Context, daemon.EnsureSpec) error { return nil }))
+			prev := enqueueFollowUp
+			t.Cleanup(func() { enqueueFollowUp = prev })
+			var followUps int
+			enqueueFollowUp = func(context.Context, string, daemon.EnqueueRequest) { followUps++ }
+
+			cfg := &config.Config{
+				HomePath: home,
+				Tasks: map[string]config.TaskConfig{
+					"nightly": {Runtime: "persistent", Workspace: ws, PromptFile: promptFile, Template: "worker",
+						Harness: tc.harness, Model: tc.model, NotifyOnFail: true},
+				},
+				Templates: map[string]config.TemplateConfig{
+					"worker": {Workspace: ws, Harness: tc.harness, Model: tc.model},
+				},
+			}
+
+			if err := runPersistent(cfg, "nightly"); err != nil {
+				t.Fatalf("runPersistent: %v", err)
+			}
+			got := history.NewStore(home).Get("nightly")
+			if got == nil || got.ExitCode != 0 || got.Reason != history.ReasonSuccess {
+				t.Fatalf("history = %+v, want exit 0 %q", got, history.ReasonSuccess)
+			}
+			if followUps != 0 {
+				t.Fatalf("failure notice enqueued %d times, want 0", followUps)
+			}
+		})
 	}
 }

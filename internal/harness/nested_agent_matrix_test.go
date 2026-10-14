@@ -44,20 +44,20 @@ func TestNestedAgentRestrictionMatrix(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if !tt.dispatched {
-				if env != nil {
-					t.Fatalf("opencode env = %#v, want nil", env)
-				}
-				return
-			}
 			var cfg struct {
 				Permission map[string]string `json:"permission"`
 			}
-			if err := json.Unmarshal([]byte(env["OPENCODE_CONFIG_CONTENT"]), &cfg); err != nil {
-				t.Fatal(err)
+			if raw, ok := env["OPENCODE_CONFIG_CONTENT"]; ok {
+				if err := json.Unmarshal([]byte(raw), &cfg); err != nil {
+					t.Fatal(err)
+				}
 			}
-			if !reflect.DeepEqual(cfg.Permission, map[string]string{"task": "deny"}) {
-				t.Fatalf("opencode permission = %#v", cfg.Permission)
+			var want map[string]string
+			if tt.dispatched {
+				want = map[string]string{"task": "deny"}
+			}
+			if !reflect.DeepEqual(cfg.Permission, want) {
+				t.Fatalf("opencode permission = %#v, want %#v", cfg.Permission, want)
 			}
 		})
 	}

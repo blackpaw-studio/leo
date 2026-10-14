@@ -69,10 +69,10 @@ func wrapPromptForPersistent(invID, body string, channels []string) string {
 // branching on the task's harness. claude keeps wrapPromptForPersistent's
 // marker+footer wrap byte-identical (completion arrives later via the
 // Stop-hook Report path, which needs the marker to correlate). Non-claude
-// harnesses enqueue the bare assembled prompt: their driver's Inject runs
-// the turn to completion synchronously and returns a *harness.Result
-// directly to the router, so there is no async callback to correlate and no
-// marker to strip from the model's context. Channels are never non-empty
+// harnesses enqueue the bare assembled prompt: the daemon completes them
+// from the agent's own turn hooks, matching the submitted prompt text
+// against this one, so there is no marker to correlate and none to put in
+// the model's context. Channels are never non-empty
 // here for a non-claude task — SupportsChannels()==false is enforced at
 // config validation — so there is no delivery footer to omit either.
 func promptForPersistent(cfg *config.Config, task config.TaskConfig, invID, body string) string {
