@@ -30,3 +30,4 @@ Lane: B-002
   Reverifies: 0
   Reviewed-tip: none
 - 2026-10-14T01:46:46Z: stall — runners ended turns awaiting nested-dispatch notifications that never arrive; nudged both via leo_send_dispatch to collect with leo_wait in-turn.
+- Inbox applied: B-021 (nested-dispatch notification bug)
