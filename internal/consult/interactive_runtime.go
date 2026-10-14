@@ -141,7 +141,7 @@ func (r *TmuxInteractiveRuntime) Launch(ctx context.Context, req LaunchRequest) 
 	if err != nil {
 		return "", "", err
 	}
-	tmplEnv, err := cfg.TemplateEnv(tmpl, r.Env)
+	tmplEnv, err := cfg.DispatchEnv(tmpl, req.Environments, r.Env)
 	if err != nil {
 		return "", "", fmt.Errorf("template %q: %w", req.Template, err)
 	}
@@ -227,6 +227,15 @@ func (r *TmuxInteractiveRuntime) Launch(ctx context.Context, req LaunchRequest) 
 	if h.Name() == "codex" {
 		if err := codex.EnsureWorkspaceTrusted(codex.CodexHome(env), req.Cwd); err != nil {
 			return "", "", err
+		}
+	}
+	// The pane splits inside the caller's tmux session, whose session env
+	// shows through for any key not given here. Every key leo itself could
+	// have put there that this child does not set gets the daemon's own
+	// value (or blank), exactly what a headless child starts from.
+	for _, k := range cfg.EnvironmentKeys() {
+		if _, ok := env[k]; !ok {
+			env[k] = os.Getenv(k)
 		}
 	}
 	// The leo MCP env is leo's: applied over any template env, and the token

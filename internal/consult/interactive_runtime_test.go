@@ -1014,3 +1014,40 @@ func containsSeq(args []string, a, b string) bool {
 	}
 	return false
 }
+
+func TestInteractiveDispatchInheritsEnvironmentsAndBlanksTheRest(t *testing.T) {
+	t.Setenv("CLAUDE_CONFIG_DIR", "")
+	tmplDir, callerDir, cwd := t.TempDir(), t.TempDir(), t.TempDir()
+	cfg := &config.Config{
+		HomePath: t.TempDir(),
+		Environments: map[string]map[string]string{
+			"tmpl":   {"CLAUDE_CONFIG_DIR": tmplDir},
+			"caller": {"CLAUDE_CONFIG_DIR": callerDir},
+			"unused": {"ANTHROPIC_BASE_URL": "http://elsewhere"},
+		},
+		Templates: map[string]config.TemplateConfig{"claude": {Harness: "claude", Model: "sonnet", Environments: []string{"tmpl"}}},
+	}
+	r := NewInteractiveRuntime("/tmp/leo.yaml", func() (*config.Config, error) { return cfg, nil }, nil, "tmux", "/opt/leo")
+	var launch []string
+	r.ExecCommandContext = func(_ context.Context, _ string, args ...string) *exec.Cmd {
+		if slices.Contains(args, "new-window") {
+			launch = append([]string(nil), args...)
+			return exec.Command("echo", "%42")
+		}
+		if slices.Contains(args, "has-session") {
+			return exec.Command("false")
+		}
+		return exec.Command("true")
+	}
+	if _, _, err := r.Launch(context.Background(), LaunchRequest{ID: "d-inh", Template: "claude", Cwd: cwd, Dispatched: true, Environments: []string{"caller"}}); err != nil {
+		t.Fatal(err)
+	}
+	if !containsSeq(launch, "-e", "CLAUDE_CONFIG_DIR="+callerDir) {
+		t.Fatalf("launch argv lacks the inherited environment: %v", launch)
+	}
+	// A key leo could have put in the caller's tmux session, which the child
+	// does not set, is blanked so the session env cannot show through.
+	if !containsSeq(launch, "-e", "ANTHROPIC_BASE_URL=") {
+		t.Fatalf("launch argv does not blank ANTHROPIC_BASE_URL: %v", launch)
+	}
+}

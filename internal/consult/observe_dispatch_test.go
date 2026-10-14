@@ -105,10 +105,11 @@ func TestDispatchesMapsTheRecord(t *testing.T) {
 	rec := agentDispatch("d1", "alpha", StatusDone)
 	rec.EndedAt = ended
 	rec.InputTokens, rec.OutputTokens, rec.CostUSD = ptr(int64(100)), ptr(int64(20)), ptr(0.25)
+	rec.Environments, rec.EnvironmentsSource = []string{"tmpl", "work"}, EnvironmentsInherited
 	h := newObserveHarness(rec)
 
 	got := h.obs.Dispatches(stateNow)
-	want := []observe.Dispatch{{ID: "d1", Name: "n-d1", Role: "implement", Template: "codex", Model: "gpt", Status: "done", CallerAgent: "alpha", StartedAt: rec.StartedAt, EndedAt: &ended, TokensIn: 100, TokensOut: 20, CostUSD: 0.25}}
+	want := []observe.Dispatch{{ID: "d1", Name: "n-d1", Role: "implement", Template: "codex", Model: "gpt", Environments: []string{"tmpl", "work"}, EnvironmentsSource: "inherited", Status: "done", CallerAgent: "alpha", StartedAt: rec.StartedAt, EndedAt: &ended, TokensIn: 100, TokensOut: 20, CostUSD: 0.25}}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("got %+v\nwant %+v", got, want)
 	}

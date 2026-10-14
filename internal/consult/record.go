@@ -167,6 +167,13 @@ type Record struct {
 	// nested dispatch (headless parents included). Records written before it
 	// existed name their parent only through CallerBridgeKey.
 	ParentDispatchID string `json:"parent_dispatch_id,omitempty"`
+	// Environments is the run's effective ordered environment names (the
+	// template's, then the inherited layer), never values; a nested dispatch
+	// inherits it. EnvironmentsSource says where the inherited layer came
+	// from, and InheritedEnvironments is that layer, reused on continuation.
+	Environments          []string `json:"environments,omitempty"`
+	EnvironmentsSource    string   `json:"environments_source,omitempty"`
+	InheritedEnvironments []string `json:"inherited_environments,omitempty"`
 	// SlotExempt marks a run started under a live dispatch: it takes no slot
 	// from the shared pool (its parent holds its own while it waits), and is
 	// bounded by the per-root descendant cap instead.

@@ -204,3 +204,60 @@ func (c *Config) EnvironmentWarnings(x Expander) []string {
 func (c *Config) TemplateEnv(tmpl TemplateConfig, x Expander) (map[string]string, error) {
 	return c.ResolveEnv(c.EnvironmentNames(nil, tmpl.Environments), tmpl.Env, nil, x)
 }
+
+// DispatchEnvironmentNames is the effective ordered environment list of a
+// dispatch of tmpl: the template's (or defaults') list, then the inherited
+// list (the caller's, or an explicit per-dispatch override) on top. A name in
+// both keeps its later, inherited position, so the caller's layer still wins.
+func (c *Config) DispatchEnvironmentNames(tmpl TemplateConfig, inherited []string) []string {
+	names := append(c.EnvironmentNames(nil, tmpl.Environments), inherited...)
+	out := make([]string, 0, len(names))
+	for i, n := range names {
+		if !slices.Contains(names[i+1:], n) {
+			out = append(out, n)
+		}
+	}
+	return out
+}
+
+// DispatchEnv is the environment a dispatch of tmpl runs with: TemplateEnv
+// (the template's named environments beneath its literal `env:`), with the
+// inherited named environments layered on top, so the caller wins any key
+// both set. With no inherited names it equals TemplateEnv.
+func (c *Config) DispatchEnv(tmpl TemplateConfig, inherited []string, x Expander) (map[string]string, error) {
+	base, err := c.TemplateEnv(tmpl, x)
+	if err != nil {
+		return nil, err
+	}
+	top, err := c.ResolveNamed(inherited, x)
+	if err != nil {
+		return nil, err
+	}
+	if len(top) == 0 {
+		return base, nil
+	}
+	out := maps.Clone(base)
+	if out == nil {
+		out = map[string]string{}
+	}
+	maps.Copy(out, top)
+	return out, nil
+}
+
+// EnvironmentKeys lists, sorted, every variable a named environment or a
+// template's literal `env:` can set: the keys a leo agent's tmux session may
+// carry that a dispatch child must not pick up implicitly.
+func (c *Config) EnvironmentKeys() []string {
+	keys := map[string]bool{}
+	for _, env := range c.Environments {
+		for k := range env {
+			keys[k] = true
+		}
+	}
+	for _, tmpl := range c.Templates {
+		for k := range tmpl.Env {
+			keys[k] = true
+		}
+	}
+	return slices.Sorted(maps.Keys(keys))
+}

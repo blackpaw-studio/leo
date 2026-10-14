@@ -49,6 +49,12 @@ type Request struct {
 	// finishes and its result reached the caller. Nil resolves from the role
 	// (see ResolveReleaseOnFinish).
 	ReleaseOnFinish *bool
+	// Environments, when non-nil, replaces the inherited environment layer
+	// for this dispatch (an empty list inherits nothing). Nil inherits.
+	Environments []string
+	// CallerEnvironments is the requesting agent's effective environment
+	// list, inherited when there is no override and no parent dispatch.
+	CallerEnvironments []string
 }
 
 type Result struct {

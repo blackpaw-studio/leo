@@ -75,7 +75,7 @@ func (d *Dispatcher) continueHeadless(cfg *config.Config, rec Record, message st
 	if err != nil {
 		return SendResult{}, fmt.Errorf("template %q harness_options: %w", rec.Template, err)
 	}
-	tmplEnv, err := cfg.TemplateEnv(tmpl, d.Env)
+	tmplEnv, err := cfg.DispatchEnv(tmpl, rec.InheritedEnvironments, d.Env)
 	if err != nil {
 		return SendResult{}, fmt.Errorf("template %q: %w", rec.Template, err)
 	}

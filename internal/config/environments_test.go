@@ -150,3 +150,69 @@ func TestValidateEnvironments(t *testing.T) {
 		t.Fatalf("valid config rejected: %v", err)
 	}
 }
+
+func TestDispatchEnvironmentNames(t *testing.T) {
+	c := envCfg()
+	tests := []struct {
+		name      string
+		tmpl      []string
+		inherited []string
+		want      []string
+	}{
+		{"template only (defaults)", nil, nil, []string{"base"}},
+		{"inherited after template", []string{"acct-b"}, []string{"base"}, []string{"acct-b", "base"}},
+		{"duplicate keeps the later (caller) position", []string{"base", "acct-b"}, []string{"base"}, []string{"acct-b", "base"}},
+		{"empty template, inherited only", []string{}, []string{"acct-b"}, []string{"acct-b"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := c.DispatchEnvironmentNames(TemplateConfig{Environments: tt.tmpl}, tt.inherited)
+			if !reflect.DeepEqual(got, tt.want) {
+				t.Fatalf("got %#v, want %#v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestDispatchEnvCallerWinsOverTemplate(t *testing.T) {
+	c := envCfg()
+	tmpl := TemplateConfig{Environments: []string{"base"}, Env: map[string]string{"SHARED": "literal", "CLAUDE_CONFIG_DIR": "/tmpl", "LIT": "1"}}
+	got, err := c.DispatchEnv(tmpl, []string{"acct-b"}, Expander{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]string{"FOO": "base", "SHARED": "b", "CLAUDE_CONFIG_DIR": "/b", "LIT": "1"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("got %v, want %v", got, want)
+	}
+}
+
+func TestDispatchEnvNoInheritedIsTemplateEnv(t *testing.T) {
+	c := envCfg()
+	tmpl := TemplateConfig{Env: map[string]string{"LIT": "1"}}
+	got, err := c.DispatchEnv(tmpl, nil, Expander{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want, _ := c.TemplateEnv(tmpl, Expander{})
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("got %v, want %v", got, want)
+	}
+}
+
+func TestDispatchEnvUnknownInherited(t *testing.T) {
+	_, err := envCfg().DispatchEnv(TemplateConfig{}, []string{"gone"}, Expander{})
+	var unknown *UnknownEnvironmentError
+	if !errors.As(err, &unknown) || unknown.Name != "gone" {
+		t.Fatalf("want UnknownEnvironmentError{gone}, got %v", err)
+	}
+}
+
+func TestEnvironmentKeys(t *testing.T) {
+	c := envCfg()
+	c.Templates = map[string]TemplateConfig{"t": {Env: map[string]string{"LIT": "1", "FOO": "x"}}}
+	want := []string{"CLAUDE_CONFIG_DIR", "FOO", "LIT", "SHARED"}
+	if got := c.EnvironmentKeys(); !reflect.DeepEqual(got, want) {
+		t.Fatalf("got %#v, want %#v", got, want)
+	}
+}

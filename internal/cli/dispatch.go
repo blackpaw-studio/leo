@@ -90,6 +90,7 @@ func dispatchCallerFields(getenv func(string) string) map[string]any {
 func newDispatchRunCmd() *cobra.Command {
 	var model, effort, role, cwd, name, host, mode string
 	var isolation string
+	var environments []string
 	var notify, releaseOnFinish bool
 	var timeout time.Duration
 	cmd := &cobra.Command{Use: "run <template> <prompt> | run --role <role> <prompt>", Args: func(_ *cobra.Command, args []string) error {
@@ -150,6 +151,9 @@ func newDispatchRunCmd() *cobra.Command {
 		if isolation != "" {
 			body["isolation"] = isolation
 		}
+		if cmd.Flags().Changed("environment") {
+			body["environments"] = append([]string{}, environments...)
+		}
 		if pane := dispatchCallerPane(os.Environ()); pane != "" {
 			body["caller_pane_id"] = pane
 		}
@@ -194,6 +198,7 @@ func newDispatchRunCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&notify, "notify", true, "notify the caller when the dispatch completes")
 	cmd.Flags().BoolVar(&releaseOnFinish, "release-on-finish", false, "interactive only: release the pane once the first turn finishes and its result was read (default on for the explore, plan and review roles, off otherwise; --release-on-finish=false opts out)")
 	cmd.Flags().StringVar(&isolation, "isolation", "", "execution isolation (worktree)")
+	cmd.Flags().StringSliceVar(&environments, "environment", nil, "named environments to run under, layered over the template's; replaces the inherited (caller's) list, and --environment= inherits nothing")
 	addHostFlag(cmd, &host)
 	return cmd
 }

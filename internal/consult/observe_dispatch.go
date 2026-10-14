@@ -2,6 +2,7 @@ package consult
 
 import (
 	"maps"
+	"reflect"
 	"slices"
 	"sync"
 	"time"
@@ -230,6 +231,7 @@ func observedDispatchShown(rec, shown Record, now time.Time) observe.Dispatch {
 	d := observe.Dispatch{
 		ID: rec.ID, Name: rec.Name, Role: rec.Role, Template: rec.Template, Model: rec.Model,
 		Effort: rec.Effort, ObservedEffort: rec.ObservedEffort,
+		Environments: slices.Clone(rec.Environments), EnvironmentsSource: rec.EnvironmentsSource,
 		Status: string(shown.Status), Stalled: isStalled(rec, now), Pending: shown.PendingWork.Summary(),
 		CallerAgent: rec.Caller, ParentDispatchID: parentDispatchID(rec), StartedAt: rec.StartedAt,
 		Attachable: Attachable(rec),
@@ -258,7 +260,7 @@ func Attachable(rec Record) bool {
 func sameDispatch(a, b observe.Dispatch) bool {
 	aEnd, bEnd := a.EndedAt, b.EndedAt
 	a.EndedAt, b.EndedAt = nil, nil
-	if a != b || (aEnd == nil) != (bEnd == nil) {
+	if !reflect.DeepEqual(a, b) || (aEnd == nil) != (bEnd == nil) {
 		return false
 	}
 	return aEnd == nil || aEnd.Equal(*bEnd)

@@ -333,7 +333,11 @@ func (d *Dispatcher) Start(_ context.Context, cfg *config.Config, req Request) (
 	if err != nil {
 		return Started{}, invalidf("template %q harness_options: %v", req.Template, err)
 	}
-	tmplEnv, err := cfg.TemplateEnv(tmpl, d.Env)
+	inherited, envSource, err := dispatchEnvironments(cfg, req, d.parentRecord(req.ParentDispatchID))
+	if err != nil {
+		return Started{}, err
+	}
+	tmplEnv, err := cfg.DispatchEnv(tmpl, inherited, d.Env)
 	if err != nil {
 		return Started{}, invalidf("template %q: %v", req.Template, err)
 	}
@@ -390,7 +394,8 @@ func (d *Dispatcher) Start(_ context.Context, cfg *config.Config, req Request) (
 		ReleaseOnFinish: mode == ModeInteractive && kind == "dispatch" && ResolveReleaseOnFinish(req.Role, req.ReleaseOnFinish),
 		CallerPaneID:    req.CallerPaneID, CallerHarness: req.CallerHarness, CallerSessionID: req.CallerSessionID, CallerWindowID: req.CallerWindowID,
 		CallerBridgeKey: req.CallerBridgeKey, CallerBridgeLaunch: req.CallerBridgeLaunch,
-		SlotExempt: exempt,
+		SlotExempt:   exempt,
+		Environments: cfg.DispatchEnvironmentNames(tmpl, inherited), EnvironmentsSource: envSource, InheritedEnvironments: inherited,
 	}
 	handle, err := d.recorder.Open(rec)
 	if err != nil {
