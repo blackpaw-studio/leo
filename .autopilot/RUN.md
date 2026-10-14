@@ -39,5 +39,16 @@ Lane: B-002
   Reviewed-tip: none
 - 2026-10-14T01:46:46Z: stall — runners ended turns awaiting nested-dispatch notifications that never arrive; nudged both via leo_send_dispatch to collect with leo_wait in-turn.
 - Inbox applied: B-021 (nested-dispatch notification bug)
+Lane: B-021
+  Branch: autopilot-lane/B-021
+  Base: 3e34c7645fdba14303882f42f34e82bee164f89a
+  Tier: light
+  State: building
+  Fixes: 0
+  Wip: none
+  Dispatched: 2026-10-14T01:54:54Z
+  Reverifies: 0
+  Reviewed-tip: none
+
 Finished 1: B-001 landed c6e8dc0afd640ffc408aaae1ec5b75c3b96b716e · shot not visually verified
 - B-001 notes: verify.md restart line uses pkill (SIGTERM) → false bounce; should be kill -9. Fixed port 8391 can collide across parallel lanes. First review/verify dispatches came back lost after ~30s; retries succeeded. Memory note project_leo_update_bounces_all_agents is stale.
