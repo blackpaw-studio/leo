@@ -231,3 +231,16 @@ func TestDelegationRenderers(t *testing.T) {
 		}
 	}
 }
+
+// The block lets agents override model and effort per dispatch; the old
+// "do not pick models" wording survives only for matching legacy blocks.
+func TestDelegationBlockAllowsModelAndEffortOverrides(t *testing.T) {
+	cfg := delegationFixture()
+	block := RenderDelegationInstructions(cfg)
+	if !strings.Contains(block, "override `model` and `effort`") || strings.Contains(block, "or models yourself") {
+		t.Fatalf("block does not allow model/effort overrides: %s", block)
+	}
+	if legacy := RenderLegacyDelegationInstructions(cfg); !strings.Contains(legacy, "do not pick templates or models yourself") {
+		t.Fatalf("legacy block lost its frozen wording: %s", legacy)
+	}
+}

@@ -315,6 +315,17 @@ func (c *Config) validateDelegation() []string {
 
 // RenderDelegationInstructions returns the profile-independent prompt block.
 func RenderDelegationInstructions(cfg *Config) string {
+	return renderDelegationInstructions(cfg, delegationDispatchLine)
+}
+
+// RenderLegacyDelegationInstructions renders the block with the dispatch line
+// leo used before model/effort overrides were allowed, as persisted agent
+// records still carry it undelimited; only for recognizing that block.
+func RenderLegacyDelegationInstructions(cfg *Config) string {
+	return renderDelegationInstructions(cfg, legacyDelegationDispatchLine)
+}
+
+func renderDelegationInstructions(cfg *Config, dispatchLine string) string {
 	if cfg == nil || !cfg.Delegation.IsEnabled() {
 		return ""
 	}
@@ -336,7 +347,7 @@ func RenderDelegationInstructions(cfg *Config) string {
 		}
 		b.WriteByte('\n')
 	}
-	b.WriteString("Dispatch with `leo_dispatch(role: …)`; do not pick templates or models yourself.\n")
+	b.WriteString(dispatchLine)
 	b.WriteString("Call `leo_delegation` if a role you expect is missing.\n")
 	return b.String()
 }
@@ -418,3 +429,10 @@ func IsReadOnlyRole(role string) bool {
 	}
 	return strings.HasPrefix(role, "review.")
 }
+
+// delegationDispatchLine is how the rendered block tells an agent to dispatch.
+// legacyDelegationDispatchLine is the line every undelimited (pre-delimiter)
+// block was rendered with; frozen so those blocks can still be matched.
+const legacyDelegationDispatchLine = "Dispatch with `leo_dispatch(role: …)`; do not pick templates or models yourself.\n"
+
+const delegationDispatchLine = "Dispatch with `leo_dispatch(role: …)`; you may override `model` and `effort` per dispatch when the task warrants it, but pick a template directly only when the user names one.\n"

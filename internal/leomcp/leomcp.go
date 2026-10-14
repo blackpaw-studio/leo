@@ -189,7 +189,7 @@ func legacyDelegationBlock(cfg *config.Config) string {
 	delegation := *cfg.Delegation
 	delegation.SetEnabled(true)
 	on.Delegation = &delegation
-	return config.RenderDelegationInstructions(&on)
+	return config.RenderLegacyDelegationInstructions(&on)
 }
 
 // stripLegacyDelegationBlock removes an exact legacy block standing at the
