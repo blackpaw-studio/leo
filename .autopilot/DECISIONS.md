@@ -131,3 +131,38 @@ Why: severity bar.
 Alternatives: lock across Start.
 Commit: 950b52c0, 34437dfc
 Veto: [ ]
+
+## D-019 · 2026-10-13 · B-003: turn hooks are the persistent-task completion signal for codex and opencode
+Chose: no per-harness special case in the core path.
+Why: principle 3.
+Alternatives: per-harness output scraping.
+Commit: e440002a, 630d4404, 5cb121a4, 3dfcafe6, 6840cb80, 5acf1eb7, 98662fe8, bf7d23f3
+Veto: [ ]
+
+## D-020 · 2026-10-13 · B-003: interrupted/errored matched turns fail the run
+Chose: Interrupt → 'interrupted'; opencode error → StopFailure → 'turn failed: <err>'.
+Why: principle 4.
+Alternatives: await timeout.
+Commit: e440002a, 630d4404, 5cb121a4, 3dfcafe6, 6840cb80, 5acf1eb7, 98662fe8, bf7d23f3
+Veto: [ ]
+
+## D-021 · 2026-10-13 · B-003: opencode leo plugin relays turn boundaries
+Chose: plugin POSTs to /api/agent/hook, loaded via Env() for supervised non-dispatched agents; file written to ~/Library/Caches/leo/opencode/.
+Why: principle 3.
+Alternatives: argv-based loading (AttentionFn can't set env).
+Commit: e440002a, 630d4404, 5cb121a4, 3dfcafe6, 6840cb80, 5acf1eb7, 98662fe8, bf7d23f3
+Veto: [ ]
+
+## D-022 · 2026-10-13 · B-003: child-session guard
+Chose: a subagent session's idle no longer completes the parent's run.
+Why: principle 4.
+Alternatives: accept any Stop.
+Commit: e440002a, 630d4404, 5cb121a4, 3dfcafe6, 6840cb80, 5acf1eb7, 98662fe8, bf7d23f3
+Veto: [ ]
+
+## D-023 · 2026-10-13 · B-003: accepted risk — human types the identical task prompt during injection wait
+Chose: documented in docs/configuration/persistent-tasks.md.
+Why: severity bar.
+Alternatives: nonce in prompt.
+Commit: e440002a, 630d4404, 5cb121a4, 3dfcafe6, 6840cb80, 5acf1eb7, 98662fe8, bf7d23f3
+Veto: [ ]

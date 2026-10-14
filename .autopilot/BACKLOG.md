@@ -23,9 +23,11 @@ Source: owner (vision, issue #196; memory project_moved_pane_composer_busy)
 Done: f5088d2d, 2d560f79, 17e5fb75, bb18a32a, 9944eaad (merge e7269f2e) — codex placeholder truncation in narrow panes read as draft
 Verified: not visually verified — terminal classifier fix; real codex-cli 0.160.1 at 12–40 cols classifies empty after, draft before; isolated-daemon sends delivered
 
-## B-003 · Persistent codex/opencode runs recorded as failures   [ready]
+## B-003 · Persistent codex/opencode runs recorded as failures   [done]
 Accept: a successful persistent-task turn on codex and opencode records success and fires no `notify_on_fail` card; verify first.
 Source: owner (vision, memory project_uniform_tui_drivers)
+Done: e440002a, 630d4404, 5cb121a4, 3dfcafe6, 6840cb80, 5acf1eb7, 98662fe8, bf7d23f3 (merge 59b11c21) — completion via turn hooks; opencode plugin relays turn boundaries
+Verified: not visually verified — no UI; isolated daemon: codex/opencode recorded exit 1 before, exit 0 after (shots B-003-*)
 
 ## B-004 · Headless continuations report Delivered before start   [done]
 Accept: `delivered` is reported only after `cmd.Start()` succeeds; a start failure surfaces as an error.
@@ -116,3 +118,21 @@ Type: bug
 Report: internal/daemon TestBridgeReportAcceptsLargeTurnText timed out in full `make test` runs in B-021 and B-002 lanes; passes alone — flaky test blocks the milestone's "no known flaky test" goal
 Accept: A failing test reproduces the report; it passes after the fix; nothing else regresses.
 Source: autopilot bug (B-002)
+
+## B-026 · Persistent-task injection waits ~75s on the composer probe   [ready (next run)]
+Type: bug
+Report: Injection waits ~75s on the composer probe before the prompt is sent, so every successful persistent run takes ~75s — slow, hard-to-trust persistent-task turns
+Accept: A failing test reproduces the report; it passes after the fix; nothing else regresses.
+Source: autopilot bug (B-003)
+
+## B-027 · Cold first opencode `leo run` times out at 150s and records a failure   [idea]
+Note: a false "failed" on cold start (principle 4); second run may only be queued behind the first (unconfirmed)
+Source: autopilot bug (B-003)
+
+## B-028 · Failed persistent task with notify_on_fail and no channels posts no Leo Chat card   [idea]
+Note: oneshot does (internal/run/runner.go:376); persistent path doesn't — principle 4
+Source: autopilot bug (B-003)
+
+## B-029 · Fresh codex home via symlinked path shows "Hooks need review" trust dialogs   [idea]
+Note: first-launch dialog blocks injection — principle 1
+Source: autopilot polish (B-003)

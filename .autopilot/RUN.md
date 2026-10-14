@@ -3,11 +3,16 @@ Status: running
 Started: 2026-10-14T01:05:35Z
 Budget: 20 items, until 2026-10-14T13:05:35Z
 Digested-through: 0
-Filed: 2/3 bugs, 2/5 ideas
+Filed: 3/3 bugs, 5/5 ideas
 Self-filed: B-001 → B-022 idea — Linux: leo update may bounce every agent (systemd KillMode)
 Self-filed: B-001 → B-023 idea — config-reference skill still documents processes:/sessions:
 Self-filed: B-002 → B-024 bug — Rejected dispatch send fires a false "dispatch failed" notification
 Self-filed: B-002 → B-025 bug — Flaky TestBridgeReportAcceptsLargeTurnText
+Self-filed: B-003 → B-026 bug — Persistent-task injection waits ~75s on the composer probe
+Self-filed: B-003 → B-027 idea — Cold first opencode leo run times out at 150s (bug over cap)
+Self-filed: B-003 → B-028 idea — Failed persistent task posts no Leo Chat card (bug over cap)
+Self-filed: B-003 → B-029 idea — codex "Hooks need review" dialogs on symlinked home
+Self-filed: B-003 → dropped (over cap) — concurrent leo run history-file rename race
 
 ## Progress
 - Preflight step 7: run guard refused `git -C <worktree> merge main` [default-branch] (false positive: guard cannot expand a $VAR worktree path); main already an ancestor of autopilot, so sync was a no-op.
@@ -65,7 +70,7 @@ Lane: B-003
   Branch: autopilot-lane/B-003
   Base: e36ee832f8eb22bf1385826b7063db0759e879b5
   Tier: full
-  State: verifying
+  State: landed
   Fixes: 1
   Wip: none
   Dispatched: 2026-10-14T02:16:30Z
@@ -92,6 +97,7 @@ Lane: B-004
   Call: Opencode leo plugin POSTs to /api/agent/hook, loaded from Env() for supervised non-dispatched agents; plugin file written to ~/Library/Caches/leo/opencode/ (plan deviation) — principle 3
   Call: Child-session guard: a subagent session's idle no longer completes the parent's run — principle 4
   Call: Accepted risk: a human typing the identical task prompt during the injection wait binds their own turn (documented in persistent-tasks.md) — severity bar
+  Tokens: 46.6M in (45.8M cache read), ≥176k out, 319 requests
 
 Lane: B-005
   Branch: autopilot-lane/B-005
@@ -113,3 +119,5 @@ Finished 3: B-002 landed e7269f2e1504a381124e6a5c1e578b08c1625d93 · shot not vi
 - B-002 notes: rejection-with-tty path unit-tested only (not live); 16-col pane still misreads placeholder (accepted risk); implement.hard first dispatch lost after 27s, retry succeeded.
 Finished 4: B-004 landed 32b30208e3ffc2b65e562b61359dda24c8dc8d4c · shot not visually verified
 - B-004 notes: TestCancelingABackgroundedViewerKillsItsPane failed once under load (did not recur); make lint shows stale errcheck from sibling lanes unless GOLANGCI_LINT_CACHE is fresh.
+Finished 5: B-003 landed 59b11c21c7b560486d25ec71ed17c84dadb7cfea · shot not visually verified
+- B-003 notes: NEVER-LIST BREACH (accidental): an implementer live check used a nonexistent LM Studio model id, opencode fell back to a paid OpenAI model and spent one tiny turn; verifier told not to repeat. Opencode error path (StopFailure) unit-tested only. Plugin file written to ~/Library/Caches/leo/opencode/.
