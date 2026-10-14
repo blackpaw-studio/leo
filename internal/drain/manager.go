@@ -44,6 +44,9 @@ const (
 	defaultPollInterval = 2 * time.Second
 	defaultLeaseTTL     = 60 * time.Second
 	defaultSettlePolls  = 2
+	// noticeTimeout bounds one pause or cancel notice. It runs on its own
+	// context: the IPC request that started it may already have returned.
+	noticeTimeout = 2 * time.Minute
 )
 
 // MemberStatus is one drain-set agent as Status reports it.
@@ -73,6 +76,10 @@ type Deps struct {
 	Clock    Clock
 	Logf     func(format string, args ...any)
 
+	// Go runs a pause or cancel notice off the caller's goroutine (default:
+	// a new goroutine); tests make it synchronous.
+	Go func(func())
+
 	PollInterval time.Duration
 	// LeaseTTL cancels a drain nobody has asked about for this long: the
 	// CLI driving it was killed or lost its connection.
@@ -84,6 +91,9 @@ type member struct {
 	name      string
 	transport string
 	state     MemberState
+	// sending: a pause notice is in flight; nothing else is sent until it
+	// settles.
+	sending bool
 	// pauseSent: the pause notice was delivered or is queued in the
 	// agent's outbox, so a cancel must follow it.
 	pauseSent bool
@@ -106,8 +116,9 @@ type activeDrain struct {
 }
 
 // Manager runs at most one drain at a time. opMu serializes the operations
-// that do I/O (Begin, Tick, Commit, Cancel); mu guards the state those
-// operations and Status read, so Status never waits on a probe.
+// that probe (Begin, Tick, Commit, Cancel); mu guards all drain and member
+// state, which notices in flight also update, so Status never waits on a
+// probe and no operation waits on a notice.
 type Manager struct {
 	deps Deps
 	opMu sync.Mutex
@@ -133,11 +144,16 @@ func New(deps Deps) *Manager {
 	if deps.Logf == nil {
 		deps.Logf = func(string, ...any) {}
 	}
+	if deps.Go == nil {
+		deps.Go = func(f func()) { go f() }
+	}
 	return &Manager{deps: deps, wake: make(chan struct{}, 1)}
 }
 
 // Begin starts a drain over the agents that are busy now, holds cron, and
-// sends the pause notice to bridge members. An empty set is done at once.
+// starts the pause notices to bridge members without waiting on them: one
+// delivery can take seconds, and Begin answers an IPC call. An empty set is
+// done at once.
 func (m *Manager) Begin(ctx context.Context, timeout time.Duration) (Status, error) {
 	m.opMu.Lock()
 	defer m.opMu.Unlock()
@@ -158,15 +174,20 @@ func (m *Manager) Begin(ctx context.Context, timeout time.Duration) (Status, err
 	}
 	sort.Slice(d.members, func(i, j int) bool { return d.members[i].name < d.members[j].name })
 	m.deps.Cron.Hold()
+	var bridged []*member
 	m.mu.Lock()
 	m.cur = d
-	m.mu.Unlock()
 	for _, mem := range d.members {
 		if mem.transport == TransportBridge {
-			m.sendPause(ctx, d, mem)
+			mem.sending = true
+			bridged = append(bridged, mem)
 		}
 	}
+	m.mu.Unlock()
 	m.deps.Logf("drain %s: began with %d busy agent(s)", d.id, len(d.members))
+	for _, mem := range bridged {
+		m.sendPause(d, mem)
+	}
 	select {
 	case m.wake <- struct{}{}:
 	default:
@@ -203,7 +224,7 @@ func (m *Manager) Status() Status {
 }
 
 // Tick runs one poll: it expires a lapsed lease, and while draining it
-// probes each member, delivers pending pause notices and advances states.
+// probes each member, starts pending pause notices and advances states.
 func (m *Manager) Tick(ctx context.Context) {
 	m.opMu.Lock()
 	defer m.opMu.Unlock()
@@ -253,12 +274,13 @@ func (m *Manager) Commit(ctx context.Context, force bool) error {
 }
 
 // Cancel ends the drain without a restart: members that got the pause
-// notice are told to resume, cron is released and any persisted set is
-// removed. It is valid while committed, for a restart that failed.
-func (m *Manager) Cancel(ctx context.Context, reason string) error {
+// notice are told to resume (in the background, like the pause), cron is
+// released and any persisted set is removed. It is valid while committed,
+// for a restart that failed.
+func (m *Manager) Cancel(_ context.Context, reason string) error {
 	m.opMu.Lock()
 	defer m.opMu.Unlock()
-	return m.cancelLocked(ctx, reason)
+	return m.cancelLocked(reason)
 }
 
 // Run ticks every PollInterval while a drain is active, until ctx ends.
@@ -299,25 +321,29 @@ func (m *Manager) tickLocked(ctx context.Context) {
 	m.mu.Unlock()
 	if expired {
 		m.deps.Logf("drain %s: lease expired", d.id)
-		_ = m.cancelLocked(ctx, "lease expired")
+		_ = m.cancelLocked("lease expired")
 		return
 	}
 	if phase != PhaseDraining {
 		return
 	}
 	for _, mem := range d.members {
-		if mem.state == StateGone {
-			continue
-		}
 		m.pollMember(ctx, d, mem)
 	}
 }
 
-// pollMember advances one member by one poll. d's members are only mutated
-// under opMu; mu is taken for each write so Status reads a consistent view.
+// pollMember advances one member by one poll. The outbox check and the
+// probe run unlocked; every read and write of member state holds mu,
+// because a notice in flight may settle at any moment.
 func (m *Manager) pollMember(ctx context.Context, d *activeDrain, mem *member) {
+	m.mu.Lock()
+	gone, queued := mem.state == StateGone, mem.queued
+	m.mu.Unlock()
+	if gone {
+		return
+	}
 	notifiedNow := false
-	if mem.queued {
+	if queued {
 		held, err := m.deps.Notifier.Holds(mem.name, pauseID(d, mem))
 		if err != nil {
 			m.deps.Logf("drain %s: outbox check for %s: %v", d.id, mem.name, err)
@@ -333,85 +359,116 @@ func (m *Manager) pollMember(ctx context.Context, d *activeDrain, mem *member) {
 			return // no information this poll
 		}
 	}
-	if !probe.Exists {
-		m.update(func() { mem.state = StateGone })
-		return
+	m.mu.Lock()
+	startPause := m.applyProbe(d, mem, probe, notifiedNow)
+	m.mu.Unlock()
+	if startPause {
+		m.sendPause(d, mem)
 	}
-	m.update(func() { mem.transport = probe.Transport })
+}
+
+// applyProbe advances mem from one probe and reports whether to start its
+// pause notice (mem.sending is then already set). Caller holds mu.
+func (m *Manager) applyProbe(d *activeDrain, mem *member, probe Probe, notifiedNow bool) (startPause bool) {
+	if !probe.Exists {
+		mem.state = StateGone
+		return false
+	}
+	mem.transport = probe.Transport
 	if probe.Busy {
-		m.update(func() {
-			mem.idleTicks = 0
-			if mem.state == StateDrained {
-				mem.state = StateNotified
-			}
-		})
-		return
+		mem.idleTicks = 0
+		if mem.state == StateDrained {
+			mem.state = StateNotified
+		}
+		return false
 	}
 	switch {
 	case d.waitOnly:
-	case mem.state == StateWaiting && !mem.pauseSent:
-		// First idle poll: deliver the pause. The poll that delivers it is
-		// not an idle poll after notification, unless the drain just fell
-		// back to waiting only.
-		m.sendPause(ctx, d, mem)
-		if !d.waitOnly {
-			return
-		}
+	case mem.state == StateWaiting && !mem.pauseSent && !mem.sending:
+		// First idle poll: start the pause. Polls count toward settling
+		// only once it has landed.
+		mem.sending = true
+		return true
 	case mem.state == StateWaiting, notifiedNow:
-		// The pause is still queued, or landed this poll.
-		return
+		// The pause is in flight or still queued, or landed this poll.
+		return false
 	}
-	m.update(func() {
-		mem.idleTicks++
-		if mem.idleTicks >= m.deps.SettlePolls {
-			mem.state = StateDrained
-		}
-	})
+	mem.idleTicks++
+	if mem.idleTicks >= m.deps.SettlePolls {
+		mem.state = StateDrained
+	}
+	return false
 }
 
-// sendPause delivers the pause notice to mem. A queued delivery is notified
-// later, once the outbox lets it go; a failed one is retried on the next
-// idle poll. Without a message path the whole drain falls back to waiting.
-func (m *Manager) sendPause(ctx context.Context, d *activeDrain, mem *member) {
-	delivery, err := m.deps.Notifier.Message(ctx, mem.name, PauseText(d.timeout), pauseID(d, mem))
-	switch {
-	case errors.Is(err, ErrNotifierUnavailable):
-		m.update(func() {
+// sendPause delivers the pause notice to mem through deps.Go; the caller
+// has set mem.sending. A delivered notice notifies mem; a queued one
+// notifies it once the outbox lets it go; a failed one is retried on the
+// next idle poll. Without a message path the whole drain falls back to
+// waiting. A notice that lands after its drain was cancelled is followed
+// by a cancel, since Cancel could not know it would land.
+func (m *Manager) sendPause(d *activeDrain, mem *member) {
+	text, id := PauseText(d.timeout), pauseID(d, mem)
+	m.deps.Go(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), noticeTimeout)
+		defer cancel()
+		delivery, err := m.deps.Notifier.Message(ctx, mem.name, text, id)
+		m.mu.Lock()
+		mem.sending = false
+		cancelled := m.cur != d
+		switch {
+		case errors.Is(err, ErrNotifierUnavailable):
 			d.waitOnly = true
 			d.warning = "agent messaging is unavailable (web server disabled): waiting for busy agents to go idle without telling them to pause"
-		})
-		m.deps.Logf("drain %s: %v; waiting only", d.id, err)
-		return
-	case err != nil:
-		m.deps.Logf("drain %s: pause notice to %s: %v (will retry)", d.id, mem.name, err)
-		return
-	}
-	m.update(func() {
-		mem.pauseSent = true
-		if delivery.Queued {
-			mem.queued = true
-			return
+		case err == nil:
+			mem.pauseSent = true
+			if delivery.Queued {
+				mem.queued = true
+			} else {
+				mem.state = StateNotified
+			}
 		}
-		mem.state = StateNotified
+		m.mu.Unlock()
+		switch {
+		case errors.Is(err, ErrNotifierUnavailable):
+			m.deps.Logf("drain %s: %v; waiting only", d.id, err)
+		case err != nil:
+			m.deps.Logf("drain %s: pause notice to %s: %v (will retry)", d.id, mem.name, err)
+		case cancelled:
+			m.sendCancel(d.id, mem.name)
+		}
 	})
 }
 
-func (m *Manager) cancelLocked(ctx context.Context, reason string) error {
+// sendCancel tells name the restart is off, through deps.Go.
+func (m *Manager) sendCancel(drainID, name string) {
+	m.deps.Go(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), noticeTimeout)
+		defer cancel()
+		if _, err := m.deps.Notifier.Message(ctx, name, CancelText, ""); err != nil {
+			m.deps.Logf("drain %s: cancel notice to %s: %v", drainID, name, err)
+		}
+	})
+}
+
+func (m *Manager) cancelLocked(reason string) error {
 	m.mu.Lock()
 	d := m.cur
 	m.cur = nil
+	var notify []string
+	if d != nil {
+		for _, mem := range d.members {
+			if mem.pauseSent && mem.state != StateGone {
+				notify = append(notify, mem.name)
+			}
+		}
+	}
 	m.mu.Unlock()
 	if d == nil {
 		return ErrNoDrain
 	}
 	m.deps.Logf("drain %s: cancelled (%s)", d.id, reason)
-	for _, mem := range d.members {
-		if !mem.pauseSent || mem.state == StateGone {
-			continue
-		}
-		if _, err := m.deps.Notifier.Message(ctx, mem.name, CancelText, ""); err != nil {
-			m.deps.Logf("drain %s: cancel notice to %s: %v", d.id, mem.name, err)
-		}
+	for _, name := range notify {
+		m.sendCancel(d.id, name)
 	}
 	m.deps.Cron.Release()
 	if err := m.deps.Store.Remove(); err != nil {

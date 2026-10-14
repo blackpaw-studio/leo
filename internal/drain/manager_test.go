@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"reflect"
+	"sync"
 	"testing"
 	"time"
 )
@@ -33,6 +34,9 @@ func newHarness(t *testing.T, probes ...Probe) *harness {
 		Store:    h.store,
 		Clock:    h.clock,
 		Logf:     t.Logf,
+		// Notices go out synchronously so each test reads their effect
+		// right after the call that sent them.
+		Go: func(f func()) { f() },
 	})
 	return h
 }
@@ -383,3 +387,161 @@ func TestLeaseExpiresWhileCommitted(t *testing.T) {
 		t.Fatalf("released %d, removes %d; want the committed drain cancelled", h.cron.released, h.store.removes)
 	}
 }
+
+// slowNotifier holds every send until release closes, reporting each one
+// as it starts.
+type slowNotifier struct {
+	started chan string
+	release chan struct{}
+}
+
+func (n slowNotifier) Message(_ context.Context, name, _, _ string) (Delivery, error) {
+	n.started <- name
+	<-n.release
+	return Delivery{Transport: TransportBridge}, nil
+}
+
+func (slowNotifier) Holds(string, string) (bool, error) { return false, nil }
+
+// Each bridge delivery can block for seconds; Begin answers an IPC call
+// with its own timeout, so it must not wait on them, and the notices go
+// out side by side rather than one after another.
+func TestBeginDoesNotWaitOnPauseNotices(t *testing.T) {
+	names := []string{"a", "b", "c", "d", "e"}
+	var probes []Probe
+	for _, n := range names {
+		probes = append(probes, bridgeBusy(n))
+	}
+	slow := slowNotifier{started: make(chan string, len(names)), release: make(chan struct{})}
+	var inFlight sync.WaitGroup
+	m := New(Deps{
+		Prober:   newFakeProber(probes...),
+		Notifier: slow,
+		Cron:     &fakeCron{},
+		Store:    &fakeStore{},
+		Clock:    newFakeClock(),
+		Logf:     t.Logf,
+		Go: func(f func()) {
+			inFlight.Add(1)
+			go func() {
+				defer inFlight.Done()
+				f()
+			}()
+		},
+	})
+	t.Cleanup(func() {
+		select {
+		case <-slow.release:
+		default:
+			close(slow.release)
+		}
+		inFlight.Wait()
+	})
+
+	st := beginWithin(t, m)
+	guard := time.NewTimer(5 * time.Second)
+	defer guard.Stop()
+	for _, mem := range st.Members {
+		if mem.State != StateWaiting {
+			t.Fatalf("%s is %s before its notice landed, want waiting", mem.Name, mem.State)
+		}
+	}
+	for range names { // all five are in flight at once
+		select {
+		case <-slow.started:
+		case <-guard.C:
+			t.Fatal("pause notices were not sent concurrently")
+		}
+	}
+	close(slow.release)
+	inFlight.Wait()
+	for _, mem := range m.Status().Members {
+		if mem.State != StateNotified {
+			t.Fatalf("%s is %s after its notice landed, want notified", mem.Name, mem.State)
+		}
+	}
+}
+
+// A drain cancelled while a pause notice is in flight still owes that
+// agent a cancel once the notice lands.
+func TestCancelWhilePauseInFlightSendsCancelAfterIt(t *testing.T) {
+	slow := slowNotifier{started: make(chan string, 2), release: make(chan struct{})}
+	rec := newFakeNotifier()
+	var inFlight sync.WaitGroup
+	m := New(Deps{
+		Prober:   newFakeProber(bridgeBusy("a")),
+		Notifier: &switchNotifier{first: slow, then: rec},
+		Cron:     &fakeCron{},
+		Store:    &fakeStore{},
+		Clock:    newFakeClock(),
+		Go: func(f func()) {
+			inFlight.Add(1)
+			go func() {
+				defer inFlight.Done()
+				f()
+			}()
+		},
+	})
+	t.Cleanup(func() {
+		select {
+		case <-slow.release:
+		default:
+			close(slow.release)
+		}
+	})
+	beginWithin(t, m)
+	<-slow.started
+	if err := m.Cancel(context.Background(), "aborted"); err != nil {
+		t.Fatal(err)
+	}
+	close(slow.release)
+	inFlight.Wait()
+	got := rec.messages()
+	if len(got) != 1 || got[0].name != "a" || got[0].text != CancelText {
+		t.Fatalf("after the in-flight pause landed: %+v, want one cancel to a", got)
+	}
+}
+
+// beginWithin starts a drain and fails the test if Begin blocks on the
+// notices it sends (the guard only fires on that failure).
+func beginWithin(t *testing.T, m *Manager) Status {
+	t.Helper()
+	begun := make(chan Status, 1)
+	go func() {
+		st, err := m.Begin(context.Background(), 10*time.Minute)
+		if err != nil {
+			t.Errorf("Begin: %v", err)
+		}
+		begun <- st
+	}()
+	guard := time.NewTimer(5 * time.Second)
+	defer guard.Stop()
+	select {
+	case st := <-begun:
+		return st
+	case <-guard.C:
+		t.Fatal("Begin waited on the pause notices")
+		return Status{}
+	}
+}
+
+// switchNotifier sends the first message through first and the rest
+// through then.
+type switchNotifier struct {
+	mu    sync.Mutex
+	used  bool
+	first Notifier
+	then  Notifier
+}
+
+func (s *switchNotifier) Message(ctx context.Context, name, text, id string) (Delivery, error) {
+	s.mu.Lock()
+	n := s.then
+	if !s.used {
+		s.used, n = true, s.first
+	}
+	s.mu.Unlock()
+	return n.Message(ctx, name, text, id)
+}
+
+func (s *switchNotifier) Holds(name, id string) (bool, error) { return s.then.Holds(name, id) }
