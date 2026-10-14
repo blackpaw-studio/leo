@@ -228,6 +228,9 @@ type interactiveOptions struct {
 	delayMS     int
 	stripLocale bool
 	daemonEnv   []string
+	// extraConfig returns YAML appended to the generated leo.yaml (e.g. a
+	// tasks: block) for the test's workspace, which is also the leo home.
+	extraConfig func(ws string) string
 }
 
 func newInteractiveE2E(t *testing.T) *interactiveE2E {
@@ -284,6 +287,9 @@ templates:
       FAKECLAUDE_DISPATCH_INTERACTIVE: "1"
       FAKECLAUDE_ARGLOG: %s
 `, port, ws, ws, delayMS, ws, ws, filepath.Join(ws, "caller-args.json"))
+	if opts.extraConfig != nil {
+		cfg += opts.extraConfig(ws)
+	}
 	if err := os.WriteFile(cfgPath, []byte(cfg), 0o600); err != nil {
 		t.Fatal(err)
 	}

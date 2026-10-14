@@ -30,6 +30,11 @@ All notable user-visible changes to Leo are documented here.
 
 ### Changed
 
+- **Persistent-task agents are covered by a daemon-restart regression test.**
+  An e2e now SIGKILLs the daemon (as `leo update` does) after a
+  `runtime: persistent` task spawned its agent and checks the restarted daemon
+  adopts the live tmux session, with an unchanged pane pid, instead of
+  relaunching it.
 - **Dispatches are interactive by default.** An omitted `mode` on
   `leo_dispatch`, `POST /api/dispatch`, and `leo dispatch run` now resolves to
   `interactive` for every role (the daemon resolves it in one place); pass
