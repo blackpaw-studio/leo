@@ -63,6 +63,7 @@ func (Opencode) Driver() harness.SessionDriver {
 		RecoverFn:     recoverQuickExitArgs,
 		RefreshArgsFn: refreshSessionArgs,
 		DiscoverIDFn:  discoverSessionID,
+		AttentionFn:   attentionLaunch,
 	})
 }
 
