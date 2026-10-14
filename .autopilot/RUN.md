@@ -2,7 +2,7 @@
 Status: running
 Started: 2026-10-14T01:05:35Z
 Budget: 20 items, until 2026-10-14T13:05:35Z
-Digested-through: 0
+Digested-through: 5
 Filed: 3/3 bugs, 5/5 ideas
 Self-filed: B-001 → B-022 idea — Linux: leo update may bounce every agent (systemd KillMode)
 Self-filed: B-001 → B-023 idea — config-reference skill still documents processes:/sessions:
