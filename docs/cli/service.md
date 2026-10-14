@@ -61,7 +61,85 @@ Shows whether the daemon is currently running.
 
 ### `leo service restart`
 
-Restarts the daemon.
+Restarts the daemon. If agents are mid-turn, leo can let them reach a safe
+stopping point first (a *graceful restart*) and tell them to resume afterwards.
+
+1. **Busy check.** leo asks the daemon which agents are working: a bridged
+   agent by its mod's busy flag, any other agent by reading its composer the
+   way message delivery does. With no busy agents the restart proceeds at
+   once, as before.
+2. **Prompt.** Otherwise it asks:
+
+   ```
+   3 agents are working (assistant, chronicle, plex). Graceful restart? [Y/n]
+   ```
+
+   `--graceful` and `--no-graceful` answer it in advance. A non-interactive
+   run without either flag restarts at once, as before.
+3. **Drain.** Each busy agent gets an urgent `[leo]` message asking it to stop
+   starting new work, save or commit what it has, note where it is, and end
+   its turn. A bridged agent receives it at its next turn boundary; any other
+   agent once its composer frees up (retried until delivered). Agents that
+   were not busy are left alone. Cron firings due during the drain are
+   deferred, not dropped: they run once each after the restart (or right away
+   if the restart is cancelled).
+4. **Wait.** leo polls until every drained agent has received the message and
+   gone idle, printing each agent's progress (`notified`, `drained`). An agent
+   that goes busy again is waited on again.
+5. **Restart.** leo restarts the daemon. Before it dies, the daemon writes the
+   drain set to `state/pending-resume.json` (mode 0600). The new daemon, once
+   it has restored its agents, sends each one still around
+   `[leo] Daemon restarted. Resume where you left off.` and deletes the file.
+   The daemon owns this step, so resume happens even if the CLI died
+   mid-restart.
+
+When `--drain-timeout` (default `10m`) runs out, an interactive run lists the
+agents still working and offers `[r]estart anyway / [w]ait another 10m /
+[a]bort`. A non-interactive run aborts with a non-zero exit, unless `--force`
+is set, which restarts anyway (`--force` also skips the interactive question).
+Aborting, pressing Ctrl-C, or a restart that fails cancels the drain: the
+paused agents get `[leo] Restart cancelled. Resume your work.`, deferred cron
+firings run, and `pending-resume.json` is removed. If the CLI disappears
+without cancelling (killed, or its SSH session dropped), the daemon cancels
+the drain itself after a minute without a status poll.
+
+The web UI's restart button always drains: it runs
+`leo service restart --graceful --force`, so it never blocks on a prompt.
+
+A daemon older than this feature has no drain support; restarting it (for
+example on the first `leo update` to a version that has it) prints a warning
+and restarts at once.
+If no daemon is running there is nothing to drain, and leo restarts at once.
+If the busy check fails for any other reason, `--graceful` aborts with a
+non-zero exit rather than restart without draining (add `--force` to restart
+anyway), an interactive run without a flag asks before restarting, and
+`--no-graceful` or an unattended run without a flag restart with a warning.
+
+A single turn longer than the timeout always reaches it: the pause message
+cannot cut a running turn short, only stop the agent from starting new work
+once it ends. Dispatch runs are neither messaged nor waited on; the calling
+agent's drain covers the parent turn.
+
+**Flags:**
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--graceful` | `false` | Drain busy agents without asking. |
+| `--no-graceful` | `false` | Restart at once even if agents are busy, without asking. |
+| `--drain-timeout` | `10m` | How long to wait for busy agents to pause (at most `24h`). |
+| `--force` | `false` | When the drain times out, restart anyway instead of asking (interactive) or aborting (non-interactive). |
+
+```bash
+$ leo service restart --graceful
+Asked 2 busy agent(s) to pause; waiting up to 10m.
+  assistant: waiting
+  plex: notified
+  plex: drained
+  assistant: notified
+  assistant: drained
+Restarting daemon (waiting for agents to restore)...
+Daemon restarted (running (pid 41022)).
+```
 
 ### `leo service reparent`
 

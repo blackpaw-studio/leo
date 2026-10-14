@@ -6,7 +6,9 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/signal"
 	"strconv"
+	"syscall"
 
 	"github.com/blackpaw-studio/leo/internal/daemon"
 	"github.com/blackpaw-studio/leo/internal/prompt"
@@ -48,6 +50,7 @@ func newUpdateCmd() *cobra.Command {
 	var prNumber int
 	var pinnedVersion string
 	var unstable bool
+	var gopts gracefulOptions
 
 	cmd := &cobra.Command{
 		Use:   "update",
@@ -73,17 +76,20 @@ func newUpdateCmd() *cobra.Command {
 			if selected > 1 {
 				return fmt.Errorf("--pr, --unstable, and --version are mutually exclusive")
 			}
+			if err := gopts.validate(); err != nil {
+				return err
+			}
 			if prNumber > 0 {
-				return runPrereleaseUpdateByPR(prNumber, allowUnsigned)
+				return runPrereleaseUpdateByPR(prNumber, allowUnsigned, gopts)
 			}
 			if unstable {
-				return runUnstableUpdate(allowUnsigned)
+				return runUnstableUpdate(allowUnsigned, gopts)
 			}
 			if update.IsPrereleaseVersion(pinnedVersion) {
-				return runPrereleaseUpdateByVersion(pinnedVersion, allowUnsigned)
+				return runPrereleaseUpdateByVersion(pinnedVersion, allowUnsigned, gopts)
 			}
 			if update.IsMainVersion(pinnedVersion) {
-				return runUnstableUpdateByVersion(pinnedVersion, allowUnsigned)
+				return runUnstableUpdateByVersion(pinnedVersion, allowUnsigned, gopts)
 			}
 			if pinnedVersion != "" {
 				return fmt.Errorf("--version currently supports prerelease tags only (pr-<n>-<sha> or main-<sha>); to install a tagged release, omit --version and let leo find the latest")
@@ -152,7 +158,7 @@ func newUpdateCmd() *cobra.Command {
 
 			// Offer to restart the daemon so the new binary takes effect —
 			// the restart also re-syncs workspace templates.
-			return maybeRestartDaemon()
+			return maybeRestartDaemon(gopts)
 		},
 	}
 
@@ -168,6 +174,7 @@ func newUpdateCmd() *cobra.Command {
 		"pin to a specific version, e.g. --version pr-42-a1b2c3d or --version main-a1b2c3d")
 	// Advertise the env-var equivalent without cluttering --help.
 	_ = cmd.Flags().MarkHidden("allow-unsigned")
+	addGracefulFlags(cmd, &gopts)
 
 	return cmd
 }
@@ -175,7 +182,7 @@ func newUpdateCmd() *cobra.Command {
 // runPrereleaseUpdateByPR resolves the latest passing prerelease run on
 // the given PR, then verifies + installs its artifact. Shared restart
 // prompt at the end mirrors the stable path.
-func runPrereleaseUpdateByPR(prNumber int, allowUnsigned bool) error {
+func runPrereleaseUpdateByPR(prNumber int, allowUnsigned bool, gopts gracefulOptions) error {
 	opts := prereleaseOptions(allowUnsigned)
 	info.Printf("Installing latest prerelease build for PR #%d...\n", prNumber)
 	path, version, err := update.DownloadAndReplacePR(context.Background(), prNumber, opts)
@@ -183,11 +190,11 @@ func runPrereleaseUpdateByPR(prNumber int, allowUnsigned bool) error {
 		return fmt.Errorf("installing PR #%d build: %w", prNumber, err)
 	}
 	success.Printf("Updated %s to %s\n", path, version)
-	return maybeRestartDaemon()
+	return maybeRestartDaemon(gopts)
 }
 
 // runPrereleaseUpdateByVersion installs a specific pr-<n>-<sha> build.
-func runPrereleaseUpdateByVersion(version string, allowUnsigned bool) error {
+func runPrereleaseUpdateByVersion(version string, allowUnsigned bool, gopts gracefulOptions) error {
 	opts := prereleaseOptions(allowUnsigned)
 	info.Printf("Installing prerelease build %s...\n", version)
 	path, installedVersion, err := update.DownloadAndReplacePRVersion(context.Background(), version, opts)
@@ -195,11 +202,11 @@ func runPrereleaseUpdateByVersion(version string, allowUnsigned bool) error {
 		return fmt.Errorf("installing %s: %w", version, err)
 	}
 	success.Printf("Updated %s to %s\n", path, installedVersion)
-	return maybeRestartDaemon()
+	return maybeRestartDaemon(gopts)
 }
 
 // runUnstableUpdate installs the latest passing main build.
-func runUnstableUpdate(allowUnsigned bool) error {
+func runUnstableUpdate(allowUnsigned bool, gopts gracefulOptions) error {
 	opts := prereleaseOptions(allowUnsigned)
 	info.Println("Installing latest main build...")
 	path, version, err := update.DownloadAndReplaceMain(context.Background(), opts)
@@ -207,11 +214,11 @@ func runUnstableUpdate(allowUnsigned bool) error {
 		return fmt.Errorf("installing main build: %w", err)
 	}
 	success.Printf("Updated %s to %s\n", path, version)
-	return maybeRestartDaemon()
+	return maybeRestartDaemon(gopts)
 }
 
 // runUnstableUpdateByVersion installs a specific main-<sha> build.
-func runUnstableUpdateByVersion(version string, allowUnsigned bool) error {
+func runUnstableUpdateByVersion(version string, allowUnsigned bool, gopts gracefulOptions) error {
 	opts := prereleaseOptions(allowUnsigned)
 	info.Printf("Installing main build %s...\n", version)
 	path, installedVersion, err := update.DownloadAndReplaceMainVersion(context.Background(), version, opts)
@@ -219,7 +226,7 @@ func runUnstableUpdateByVersion(version string, allowUnsigned bool) error {
 		return fmt.Errorf("installing %s: %w", version, err)
 	}
 	success.Printf("Updated %s to %s\n", path, installedVersion)
-	return maybeRestartDaemon()
+	return maybeRestartDaemon(gopts)
 }
 
 func prereleaseOptions(allowUnsigned bool) update.PrereleaseOptions {
@@ -233,8 +240,9 @@ func prereleaseOptions(allowUnsigned bool) update.PrereleaseOptions {
 
 // maybeRestartDaemon offers to bounce the daemon after a binary swap so
 // the new binary actually serves new requests. Same prompt the stable
-// update path uses — factored out so both paths stay in sync.
-func maybeRestartDaemon() error {
+// update path uses — factored out so both paths stay in sync. The restart
+// itself goes through gracefulRestart, so busy agents can pause first.
+func maybeRestartDaemon(gopts gracefulOptions) error {
 	cfg, err := loadConfig()
 	if err != nil || cfg.IsClientOnly() {
 		return nil
@@ -242,20 +250,15 @@ func maybeRestartDaemon() error {
 	if !daemon.IsRunning(cfg.HomePath) {
 		return nil
 	}
-	// Without a terminal there is nobody to answer the prompt, and the
-	// empty read would silently accept the "yes" default — restarting the
-	// daemon out from under an unattended update. Leave the restart to
-	// the operator instead.
-	if !prompt.IsInteractive() {
-		info.Println("\nDaemon is still running the previous binary. Restart it when ready with: leo service restart")
+	confirm := func() bool {
+		return prompt.YesNo(bufio.NewReader(os.Stdin), "\nDaemon is running. Restart it now?", true)
+	}
+	if !restartConsent(gopts, prompt.IsInteractive(), confirm) {
 		return nil
 	}
-	reader := bufio.NewReader(os.Stdin)
-	if !prompt.YesNo(reader, "\nDaemon is running. Restart it now?", true) {
-		return nil
-	}
-	info.Println("Restarting daemon (waiting for agents to restore)...")
-	err = restartDaemonAndWait(context.Background(), cfg.HomePath, defaultDaemonRestartDeps)
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM, syscall.SIGHUP)
+	defer stop()
+	err = gracefulRestart(ctx, gopts, newGracefulDeps(cfg.HomePath))
 	if errors.Is(err, errDaemonNotReady) {
 		success.Println("Daemon restarted")
 		warn.Printf("Could not check agents for pending changes: %v\n", err)
@@ -273,4 +276,20 @@ func maybeRestartDaemon() error {
 	// asking a pre-restart daemon would answer with the old binary's logic.
 	maybeRestartStaleAgents(context.Background(), cfg.HomePath)
 	return nil
+}
+
+// restartConsent asks whether to restart the daemon after an update.
+// Without a terminal there is nobody to answer, and the empty read would
+// silently accept the "yes" default — restarting the daemon out from under
+// an unattended update — so only an explicit --graceful or --no-graceful
+// counts as consent there.
+func restartConsent(gopts gracefulOptions, interactive bool, confirm func() bool) bool {
+	if interactive {
+		return confirm()
+	}
+	if gopts.explicit() {
+		return true
+	}
+	info.Println("\nDaemon is still running the previous binary. Restart it when ready with: leo service restart")
+	return false
 }

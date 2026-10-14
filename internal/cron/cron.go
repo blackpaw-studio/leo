@@ -31,6 +31,16 @@ type Scheduler struct {
 	leoPath string
 	cfgPath string
 	runFn   func(leoPath, cfgPath, taskName string)
+	// spawn starts a released or run-now task off the caller's goroutine,
+	// as robfig does for scheduled firings; tests make it synchronous.
+	spawn func(func())
+
+	// holdMu guards the drain hold: while held, firings are recorded in
+	// heldTasks (once per task, first-fire order) instead of run. It is
+	// separate from mu so a firing never waits on Install.
+	holdMu    sync.Mutex
+	held      bool
+	heldTasks []string
 }
 
 // New creates a new Scheduler. Call Start() to begin firing.
@@ -43,6 +53,7 @@ func New(leoPath, cfgPath string) *Scheduler {
 		cfgPath: cfgPath,
 	}
 	s.runFn = defaultRunTask
+	s.spawn = func(f func()) { go f() }
 	return s
 }
 
@@ -134,6 +145,9 @@ func (s *Scheduler) addLocked(name string, task config.TaskConfig) error {
 	runFn := s.runFn
 
 	id, err := s.cron.AddFunc(spec, func() {
+		if s.deferFiring(taskName) {
+			return
+		}
 		runFn(leoPath, cfgPath, taskName)
 	})
 	if err != nil {
@@ -143,6 +157,65 @@ func (s *Scheduler) addLocked(name string, task config.TaskConfig) error {
 	s.entries[name] = id
 	s.tasks[name] = task
 	return nil
+}
+
+// Hold defers cron firings until Release. The hold is independent of the
+// schedule, so it survives Install (config reload).
+func (s *Scheduler) Hold() {
+	s.holdMu.Lock()
+	defer s.holdMu.Unlock()
+	s.held = true
+}
+
+// Release ends a hold and runs each deferred task that is still scheduled,
+// once.
+func (s *Scheduler) Release() {
+	s.holdMu.Lock()
+	deferred := s.heldTasks
+	s.held, s.heldTasks = false, nil
+	s.holdMu.Unlock()
+	s.RunNow(deferred)
+}
+
+// Held returns the tasks whose firings the current hold deferred, once
+// each, in first-fire order.
+func (s *Scheduler) Held() []string {
+	s.holdMu.Lock()
+	defer s.holdMu.Unlock()
+	return append([]string(nil), s.heldTasks...)
+}
+
+// RunNow runs each named task that is still scheduled; unknown names are
+// skipped. A new daemon uses it for firings its predecessor deferred.
+func (s *Scheduler) RunNow(names []string) {
+	s.mu.Lock()
+	runFn, leoPath, cfgPath := s.runFn, s.leoPath, s.cfgPath
+	var due []string
+	for _, name := range names {
+		if _, ok := s.tasks[name]; ok {
+			due = append(due, name)
+		}
+	}
+	s.mu.Unlock()
+	for _, name := range due {
+		s.spawn(func() { runFn(leoPath, cfgPath, name) })
+	}
+}
+
+// deferFiring records taskName's firing and reports true while held.
+func (s *Scheduler) deferFiring(taskName string) bool {
+	s.holdMu.Lock()
+	defer s.holdMu.Unlock()
+	if !s.held {
+		return false
+	}
+	for _, name := range s.heldTasks {
+		if name == taskName {
+			return true
+		}
+	}
+	s.heldTasks = append(s.heldTasks, taskName)
+	return true
 }
 
 func defaultRunTask(leoPath, cfgPath, taskName string) {

@@ -260,3 +260,25 @@ func TestAgentsRestart_KeepsFlagOnFailure(t *testing.T) {
 		t.Errorf("expected failure count in flash; body = %q", body)
 	}
 }
+
+// The restart button always drains busy agents first, and never blocks on
+// a question: --graceful skips the busy prompt and --force the timeout one.
+func TestServiceRestart_RunsGracefulForcedRestart(t *testing.T) {
+	s, _ := newTestServer(t)
+	var got []string
+	s.execCommand = func(name string, args ...string) *exec.Cmd {
+		got = append([]string{name}, args...)
+		return exec.Command("true")
+	}
+
+	w := httptest.NewRecorder()
+	s.handleServiceRestart(w, httptest.NewRequest(http.MethodPost, "/web/service/restart", nil))
+
+	want := []string{s.leoPath, "service", "restart", "--graceful", "--force", "--config", s.configPath}
+	if strings.Join(got, "\x00") != strings.Join(want, "\x00") {
+		t.Fatalf("argv = %q, want %q", got, want)
+	}
+	if !strings.Contains(w.Body.String(), "Busy agents get up to 10 minutes to pause first") {
+		t.Fatalf("flash = %s", w.Body.String())
+	}
+}

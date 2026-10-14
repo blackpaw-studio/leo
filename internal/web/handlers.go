@@ -496,7 +496,9 @@ func findTmuxPath() string {
 }
 
 func (s *Server) handleServiceRestart(w http.ResponseWriter, r *http.Request) {
-	cmd := s.execCommand(s.leoPath, "service", "restart", "--config", s.configPath)
+	// Always drain busy agents first, and never wait on a question nobody
+	// can answer: --graceful skips the busy prompt, --force the timeout one.
+	cmd := s.execCommand(s.leoPath, "service", "restart", "--graceful", "--force", "--config", s.configPath)
 	if err := cmd.Start(); err != nil {
 		s.renderFlash(w, "error", fmt.Sprintf("Failed to restart: %v", err))
 		return
@@ -504,7 +506,7 @@ func (s *Server) handleServiceRestart(w http.ResponseWriter, r *http.Request) {
 	go cmd.Wait() //nolint:errcheck
 
 	s.serviceRestartNeeded.Store(false)
-	s.renderFlash(w, "success", "Service restarting...")
+	s.renderFlash(w, "success", "Service restarting. Busy agents get up to 10 minutes to pause first.")
 }
 
 // handleAgentsRestart bounces every running agent in place (see

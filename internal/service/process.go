@@ -714,6 +714,17 @@ func (s *Supervisor) EphemeralAgents() map[string]daemon.ProcessStateInfo {
 	return result
 }
 
+// HarnessOf returns name's harness adapter name ("" means claude, and an
+// unknown name).
+func (s *Supervisor) HarnessOf(name string) string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if id, ok := s.identities[name]; ok {
+		return id.harness
+	}
+	return ""
+}
+
 // Start spawns a supervised leo service process in the background and writes a PID file.
 func Start(sc ServiceConfig) error {
 	pidFile := PidPath(sc.WorkDir)
@@ -969,6 +980,9 @@ func defaultSupervisedExec(opts RunSupervisedOptions) error {
 	// references — e.g. a Start/Restart cleared OpeningBriefID after
 	// rebuilding ClaudeArgs fresh (see agent.resolveOpeningPrompt).
 	agent.SweepOpeningPromptBriefs(homePath)
+	// Graceful restart: the CLI drains busy agents through the socket's
+	// /drain routes before it restarts the daemon.
+	srv.SetDrain(newDrainManager(srv, supervisor, tmuxPath, homePath))
 	if err := srv.Start(); err != nil {
 		fmt.Fprintf(os.Stderr, "warning: daemon server failed to start: %v\n", err)
 	} else {
@@ -1021,6 +1035,10 @@ func defaultSupervisedExec(opts RunSupervisedOptions) error {
 	// `leo update` and `leo service restart` wait on this before asking the
 	// daemon about agents (daemon.WaitReady).
 	srv.MarkReady()
+	// After restore, so every drained agent is back (or knowably gone)
+	// before it is told to resume; the daemon owns this step, so it runs
+	// even if the CLI that restarted it died.
+	startPendingResume(ctx, srv, supervisor, bridgeHub, homePath)
 
 	// opencode has no per-invocation system-prompt flag, so Leo's nudge is
 	// delivered via opencode's global AGENTS.md instead. Only touch that

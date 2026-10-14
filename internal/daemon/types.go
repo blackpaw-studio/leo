@@ -31,6 +31,10 @@ const (
 	ErrorCodeAgentNotStopped     = "agent_not_stopped"
 	ErrorCodeAgentAlreadyRunning = "agent_already_running"
 	ErrorCodeAgentNotRunning     = "agent_not_running"
+	ErrorCodeDrainUnavailable    = "drain_unavailable"
+	ErrorCodeDrainInProgress     = "drain_in_progress"
+	ErrorCodeDrainNotDrained     = "drain_not_drained"
+	ErrorCodeDrainNone           = "drain_none"
 )
 
 // TaskAddRequest is the body for POST /task/add.
