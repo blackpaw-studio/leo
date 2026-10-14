@@ -33,9 +33,9 @@ Teardown (never `leo service stop|restart`; those hit PRODUCTION launchd regardl
 pkill -f "supervised --config $H/leo.yaml"; trash $H
 ```
 - `-c $H/leo.yaml` is required on every CLI call: `LEO_HOME` does not isolate the CLI.
-- Pick a free port if 8391 is taken; never 8370 (production).
+- Pick a free port if 8391 is taken (parallel lanes: always pick a free one); never 8370 (production).
 - Agents spawned here run real claude/codex in `$HOME`; use a throwaway workspace under `$H` and cheap models. A new workspace shows claude's trust dialog: send `Down Enter` (bare Enter quits).
-- Daemon restart test (B-001): `pkill` the daemon PID only, start it again with the same command, compare `tmux -S … list-panes -F '#{pane_pid}'` before/after.
+- Daemon restart test (B-001): `kill -9` the daemon PID only (SIGKILL, as `kickstart -k` does; SIGTERM shuts down gracefully and kills every session by design), start it again with the same command, compare `tmux -S … list-panes -F '#{pane_pid}'` before/after.
 
 ## Key flows
 - Agent lifecycle: `L agent spawn <template> …`, `L agent list`, `L agent stop <name>`, kill + restart the daemon → agent adopted, pane PID unchanged.
