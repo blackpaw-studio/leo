@@ -714,6 +714,17 @@ func (s *Supervisor) EphemeralAgents() map[string]daemon.ProcessStateInfo {
 	return result
 }
 
+// HarnessOf returns name's harness adapter name ("" means claude, and an
+// unknown name).
+func (s *Supervisor) HarnessOf(name string) string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if id, ok := s.identities[name]; ok {
+		return id.harness
+	}
+	return ""
+}
+
 // Start spawns a supervised leo service process in the background and writes a PID file.
 func Start(sc ServiceConfig) error {
 	pidFile := PidPath(sc.WorkDir)
