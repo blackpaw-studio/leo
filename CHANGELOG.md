@@ -121,6 +121,18 @@ All notable user-visible changes to Leo are documented here.
 
 ### Fixed
 
+- **Persistent codex and opencode tasks no longer fail every run.** Only
+  claude reported a finished turn, so a codex or opencode persistent task
+  waited out its `timeout` even when the agent answered in seconds, recorded
+  a failure, and then sent Escape and Ctrl-C into the idle pane, which exited
+  the agent until the supervisor restarted it. The daemon now completes a
+  firing from the agent's own turn hooks: codex's existing hooks, and a new
+  leo plugin for opencode loaded through `OPENCODE_CONFIG_CONTENT`. It binds
+  the turn whose submitted prompt matches the firing and finishes on that
+  turn's end, so success is recorded and `notify_on_fail` stays quiet. An
+  interrupted turn fails the firing as `interrupted` right away. Completion
+  needs the web listener (`web.enabled`, the default).
+
 - **Nested dispatches now wake their parent when they finish.** A dispatch that
   called `leo_dispatch` and ended its turn to await the child's completion
   notification sat idle forever: the child's caller is a dispatch with no agent

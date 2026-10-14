@@ -94,7 +94,9 @@ Each agent has its own FIFO queue. `queue_max` (default 5) caps how many pending
 
 **`claude`:** a leo-managed Stop hook, merged into the workspace's `.claude/settings.local.json`, reports back through `leo internal task-report` when a turn ends — a real, positive completion signal (see [How it works](#how-it-works)).
 
-**`codex` / `opencode`:** there is currently no equivalent turn-done signal. Completion is inferred from a timeout instead of a hook, which means every firing — even a successful one — is presently recorded as a failed run. See [Harness notes](#harness-notes) for the full explanation and its consequences for `notify_on_fail`.
+**`codex` / `opencode`:** the agent's own turn hooks are the completion signal. Leo launches every supervised agent with attention hooks (codex: home-level hooks running `leo dispatch report`; opencode: a leo plugin loaded through `OPENCODE_CONFIG_CONTENT`). The daemon binds the turn whose submitted prompt matches the firing's prompt and completes the firing on that turn's end. See [Harness notes](#harness-notes).
+
+Turn hooks reach the daemon through the web listener, so codex and opencode persistent tasks need `web.enabled: true` (the default). With the web UI off, a firing still runs but is only completed by its `timeout`, and is recorded as failed.
 
 ## Channel delivery
 
@@ -153,31 +155,25 @@ in tmux exactly like claude (see
 [Harnesses → Session driver semantics](harnesses.md#session-driver-semantics)),
 but completion detection is different:
 
-- **No Stop hook, no invocation marker.** Both are claude-specific machinery
-  (a `.claude/settings.local.json` hook and a transcript-JSONL sentinel) that
-  don't exist for either non-claude harness. Nothing is written into the
-  agent's workspace to detect turn completion.
+- **No task-report Stop hook, no invocation marker.** Both are claude-specific
+  machinery (a `.claude/settings.local.json` hook and a transcript-JSONL
+  sentinel). Nothing is written into the agent's workspace; the prompt is
+  delivered bare.
 - **Delivery is fire-and-forget, same as claude.** The daemon pastes the
   prompt into the agent's tmux pane and the injector call returns almost
   immediately — it does not wait for the turn to finish.
-- **Known limitation: no genuine turn-done signal for non-claude agents.**
-  Because there's no Stop hook (or any TUI event leo currently listens for)
-  to report completion, a codex/opencode persistent-task invocation
-  routed through this same pump falls through to the pump's outer timeout
-  and completes via the timer (abort + `"timeout"` result) rather than a
-  real signal that the turn actually finished. In practice this means every
-  firing of a persistent `codex`/`opencode` task — even one where the
-  turn actually succeeded — is currently recorded as a failed run
-  (`"task: timeout"`, `handlePersistentFailure` in `internal/run/persistent.go`),
-  which triggers a false `notify_on_fail` alarm if configured, and the pump
-  sends its abort sequence (Escape, then Ctrl-C) into the live tmux pane on
-  every one of these timeouts (see the `KNOWN LIMITATION` comments in
-  `internal/daemon/session_router.go`). This does not affect ephemeral
-  agents dispatched directly (outside the task-delivery path), which deliver
-  messages and don't go through this completion-tracking pump, and does not
-  affect `claude`, which has a real Stop-hook signal. A TUI-native
-  turn-completion signal for non-claude agents is a deferred follow-up, not
-  yet implemented.
+- **Completion comes from the agent's turn hooks.** The same hooks that
+  drive an agent's attention state (`POST /api/agent/hook`) are handed to the
+  pump. A `UserPromptSubmit` whose prompt matches the in-flight firing's
+  prompt (whitespace-normalized) binds that turn; the same turn's `Stop`
+  completes the firing as a success with the turn's last message, and an
+  `Interrupt` fails it as `interrupted`. Codex correlates by `turn_id`;
+  opencode turns carry none, so a `Stop` from another session (a subagent
+  the turn spawned) is ignored. A prompt someone types into the pane never
+  matches, so it can't complete a firing. An agent launched without hooks
+  (web UI off, or a hook install failure logged as `attention hooks
+  unavailable`) falls back to the `timeout`: the firing is recorded as failed
+  and the pump sends Escape then Ctrl-C into the pane.
 - **`codex` has no resident session id until after the first turn.** Each
   firing targets the resident TUI (fresh on first launch, `codex resume
   <session-id>` afterward); leo discovers the session id post-hoc by
@@ -190,5 +186,5 @@ for the exact argv and attach behavior of each driver.
 
 ## Known limitations
 
-- `codex`/`opencode` persistent tasks are recorded as failed on every firing due to the timeout-based completion detection described above — see [Harness notes](#harness-notes).
+- `codex`/`opencode` persistent tasks need the web listener (`web.enabled`) to report completion; without it every firing ends at its `timeout` and is recorded as failed — see [Harness notes](#harness-notes).
 - Context-fill recovery is manual via `leo agent reset <name>` (no auto-compaction).
