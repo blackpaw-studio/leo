@@ -12,10 +12,10 @@ import (
 )
 
 // turnPluginSource is the opencode plugin that relays a supervised agent's
-// turn boundaries (chat.message → UserPromptSubmit, session.idle → Stop, an
-// aborted message → Interrupt) to the daemon's agent hook endpoint. opencode
-// has no command hooks, so this is its equivalent of claude's and codex's
-// `leo dispatch report` hooks.
+// turn boundaries (chat.message → UserPromptSubmit; a turn's end → Stop,
+// Interrupt when aborted, StopFailure when it errored) to the daemon's agent
+// hook endpoint. opencode has no command hooks, so this is its equivalent of
+// claude's and codex's `leo dispatch report` hooks.
 //
 //go:embed plugin/leo-turns.js
 var turnPluginSource []byte

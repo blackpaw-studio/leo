@@ -1,6 +1,7 @@
 package web
 
 import (
+	"bytes"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -23,6 +24,26 @@ type agentHookPayload struct {
 	Prompt string `json:"prompt"`
 	// TurnID is the harness's turn id (codex sends one on every turn hook).
 	TurnID string `json:"turn_id"`
+	// Error is why the turn failed, on a StopFailure hook. Raw so a
+	// harness that sends an object instead of a string is not a 400.
+	Error json.RawMessage `json:"error"`
+}
+
+// hookError renders a hook's error field: a JSON string as its value, any
+// other JSON as compact text.
+func hookError(raw json.RawMessage) string {
+	if len(raw) == 0 || string(raw) == "null" {
+		return ""
+	}
+	var s string
+	if json.Unmarshal(raw, &s) == nil {
+		return s
+	}
+	var buf bytes.Buffer
+	if json.Compact(&buf, raw) != nil {
+		return string(raw)
+	}
+	return buf.String()
 }
 
 // AgentTurn is the turn-relevant part of one supervised agent hook, handed
@@ -33,6 +54,7 @@ type AgentTurn struct {
 	TurnID      string // the harness's turn id, when it has one
 	SessionID   string
 	LastMessage string // Stop: the turn's final assistant message
+	Error       string // StopFailure: why the turn failed
 }
 
 // agentHookRequest is what `leo dispatch report` POSTs for a supervised
@@ -59,7 +81,7 @@ func attentionForHook(p agentHookPayload) (hookTransition, bool) {
 		// A tool ran, so a permission prompt or elicitation was answered.
 		// Only that clears; any other state is left alone, unbumped.
 		return hookTransition{state: observe.AttentionWorking, from: []observe.AttentionState{observe.AttentionNeedsInput}}, true
-	case "Stop", "Interrupt":
+	case "Stop", "Interrupt", "StopFailure":
 		return hookTransition{state: observe.AttentionFinished}, true
 	case "Notification":
 		switch p.NotificationType {
@@ -113,6 +135,7 @@ func (s *Server) handleAPIAgentHook(w http.ResponseWriter, r *http.Request) {
 				TurnID:      payload.TurnID,
 				SessionID:   payload.SessionID,
 				LastMessage: payload.LastAssistantMessage,
+				Error:       hookError(payload.Error),
 			})
 		}
 	}

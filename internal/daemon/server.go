@@ -672,6 +672,7 @@ func (s *Server) observeAgentTurn(agent string, turn web.AgentTurn) {
 		TurnID:      turn.TurnID,
 		SessionID:   turn.SessionID,
 		LastMessage: turn.LastMessage,
+		Error:       turn.Error,
 	})
 }
 

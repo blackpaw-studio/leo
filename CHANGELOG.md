@@ -130,8 +130,9 @@ All notable user-visible changes to Leo are documented here.
   leo plugin for opencode loaded through `OPENCODE_CONFIG_CONTENT`. It binds
   the turn whose submitted prompt matches the firing and finishes on that
   turn's end, so success is recorded and `notify_on_fail` stays quiet. An
-  interrupted turn fails the firing as `interrupted` right away. Completion
-  needs the web listener (`web.enabled`, the default).
+  interrupted turn fails the firing as `interrupted` right away, and an
+  opencode turn that ended on a provider error fails it as `turn failed`.
+  Completion needs the web listener (`web.enabled`, the default).
 
 - **Follow-ups to an idle Codex dispatch in a narrow pane are no longer
   rejected.** Codex cuts its "Ask Codex to do anything" placeholder short at

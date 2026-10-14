@@ -50,6 +50,7 @@ func TestAgentHookTransitions(t *testing.T) {
 		{"prompt submit", "tok-a", "leo-a", `{"hook_event_name":"UserPromptSubmit","session_id":"sid-a"}`, observe.AttentionWorking},
 		{"stop", "tok-a", "leo-a", `{"hook_event_name":"Stop","session_id":"sid-a"}`, observe.AttentionFinished},
 		{"codex interrupt", "tok-a", "leo-a", `{"hook_event_name":"Interrupt","session_id":"sid-a"}`, observe.AttentionFinished},
+		{"stop failure", "tok-a", "leo-a", `{"hook_event_name":"StopFailure","session_id":"sid-a","error":"boom"}`, observe.AttentionFinished},
 		{"permission prompt", "tok-a", "leo-a", `{"hook_event_name":"Notification","notification_type":"permission_prompt","session_id":"sid-a"}`, observe.AttentionNeedsInput},
 		{"elicitation", "tok-a", "leo-a", `{"hook_event_name":"Notification","notification_type":"elicitation_dialog"}`, observe.AttentionNeedsInput},
 		{"idle notification", "tok-a", "leo-a", `{"hook_event_name":"Notification","notification_type":"idle_prompt"}`, ""},
@@ -196,6 +197,10 @@ func TestAgentHookForwardsTurnToObserver(t *testing.T) {
 			[]observed{{"leo-b", AgentTurn{Event: "UserPromptSubmit", SessionID: "s1", TurnID: "t1", Prompt: "reply OK"}}}},
 		{"stop", "tok-b", `{"hook_event_name":"Stop","session_id":"s1","turn_id":"t1","last_assistant_message":"OK"}`,
 			[]observed{{"leo-b", AgentTurn{Event: "Stop", SessionID: "s1", TurnID: "t1", LastMessage: "OK"}}}},
+		{"stop failure", "tok-b", `{"hook_event_name":"StopFailure","session_id":"s1","error":"ProviderAuthError: bad key"}`,
+			[]observed{{"leo-b", AgentTurn{Event: "StopFailure", SessionID: "s1", Error: "ProviderAuthError: bad key"}}}},
+		{"stop failure with a structured error", "tok-b", `{"hook_event_name":"StopFailure","session_id":"s1","error":{"type":"rate_limit"}}`,
+			[]observed{{"leo-b", AgentTurn{Event: "StopFailure", SessionID: "s1", Error: `{"type":"rate_limit"}`}}}},
 		{"unknown token", "tok-nope", `{"hook_event_name":"Stop","session_id":"s1","turn_id":"t1"}`, nil},
 		{"foreign session", "tok-a", `{"hook_event_name":"Stop","session_id":"child-sid","turn_id":"t1"}`, nil},
 	} {

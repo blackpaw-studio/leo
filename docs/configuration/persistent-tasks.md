@@ -166,11 +166,13 @@ but completion detection is different:
   drive an agent's attention state (`POST /api/agent/hook`) are handed to the
   pump. A `UserPromptSubmit` whose prompt matches the in-flight firing's
   prompt (whitespace-normalized) binds that turn; the same turn's `Stop`
-  completes the firing as a success with the turn's last message, and an
-  `Interrupt` fails it as `interrupted`. Codex correlates by `turn_id`;
+  completes the firing as a success with the turn's last message, an
+  `Interrupt` fails it as `interrupted`, and a `StopFailure` (opencode: the
+  provider call errored) fails it as `turn failed: <error>`. Codex correlates by `turn_id`;
   opencode turns carry none, so a `Stop` from another session (a subagent
   the turn spawned) is ignored. A prompt someone types into the pane never
-  matches, so it can't complete a firing. An agent launched without hooks
+  matches, so it can't complete a firing, unless someone types the firing's
+  exact prompt while it waits to be pasted. An agent launched without hooks
   (web UI off, or a hook install failure logged as `attention hooks
   unavailable`) falls back to the `timeout`: the firing is recorded as failed
   and the pump sends Escape then Ctrl-C into the pane.

@@ -89,53 +89,50 @@ func TestOpencodeTurnPluginOnlyForSupervisedAgents(t *testing.T) {
 
 // TestOpencodeTurnPluginRelaysTurnHooks runs the embedded plugin under node
 // against a fake fetch and opencode client, and checks the exact hook
-// payloads it posts to the daemon.
+// payloads it posts to the daemon for each way a turn can end.
 func TestOpencodeTurnPluginRelaysTurnHooks(t *testing.T) {
-	node, err := exec.LookPath("node")
-	if err != nil {
-		t.Skip("node not installed")
-	}
-	dir := t.TempDir()
-	plugin := filepath.Join(dir, "leo-turns.mjs")
-	if err := os.WriteFile(plugin, turnPluginSource, 0o600); err != nil {
-		t.Fatal(err)
-	}
-	cmd := exec.Command(node, filepath.Join("testdata", "turn_plugin_harness.mjs"), plugin)
-	cmd.Env = append(os.Environ(), "LEO_ATTENTION_TOKEN=tok-1", "LEO_WEB_PORT=8399", "LEO_API_TOKEN=api-1", "LEO_DISPATCH_ID=")
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		t.Fatalf("plugin harness: %v\n%s", err, out)
-	}
-	var got []struct {
-		URL     string            `json:"url"`
-		Headers map[string]string `json:"headers"`
-		Body    struct {
-			Token   string            `json:"token"`
-			Payload map[string]string `json:"payload"`
-		} `json:"body"`
-	}
-	if err := json.Unmarshal(out, &got); err != nil {
-		t.Fatalf("harness output is not JSON: %v\n%s", err, out)
-	}
-	want := []map[string]string{
-		{"hook_event_name": "UserPromptSubmit", "session_id": "ses_1", "prompt": "reply OK\nplease"},
-		{"hook_event_name": "Stop", "session_id": "ses_1", "last_assistant_message": "OK"},
-		{"hook_event_name": "Interrupt", "session_id": "ses_1"},
-	}
-	if len(got) != len(want) {
-		t.Fatalf("posted %d hooks, want %d:\n%s", len(got), len(want), out)
-	}
-	for i, post := range got {
-		if post.URL != "http://127.0.0.1:8399/api/agent/hook" || post.Headers["Authorization"] != "Bearer api-1" || post.Body.Token != "tok-1" {
-			t.Errorf("post %d routed to %s auth=%q token=%q", i, post.URL, post.Headers["Authorization"], post.Body.Token)
-		}
-		if !reflect.DeepEqual(post.Body.Payload, want[i]) {
-			t.Errorf("post %d payload = %v, want %v", i, post.Body.Payload, want[i])
-		}
+	submit := map[string]string{"hook_event_name": "UserPromptSubmit", "session_id": "ses_1", "prompt": "reply OK\nplease"}
+	for _, tc := range []struct {
+		scenario string
+		want     []map[string]string
+	}{
+		{"turn", []map[string]string{submit, {"hook_event_name": "Stop", "session_id": "ses_1", "last_assistant_message": "OK"}}},
+		{"abort", []map[string]string{submit, {"hook_event_name": "Interrupt", "session_id": "ses_1"}}},
+		{"session-error", []map[string]string{submit, {"hook_event_name": "StopFailure", "session_id": "ses_1", "error": "UnknownError: boom"}}},
+		{"message-error", []map[string]string{submit, {"hook_event_name": "StopFailure", "session_id": "ses_1", "error": "ProviderAuthError: bad key"}}},
+	} {
+		t.Run(tc.scenario, func(t *testing.T) {
+			out := runTurnPlugin(t, tc.scenario, "LEO_ATTENTION_TOKEN=tok-1", "LEO_WEB_PORT=8399", "LEO_API_TOKEN=api-1", "LEO_DISPATCH_ID=")
+			var got []struct {
+				URL     string            `json:"url"`
+				Headers map[string]string `json:"headers"`
+				Body    struct {
+					Token   string            `json:"token"`
+					Payload map[string]string `json:"payload"`
+				} `json:"body"`
+			}
+			if err := json.Unmarshal(out, &got); err != nil {
+				t.Fatalf("harness output is not JSON: %v\n%s", err, out)
+			}
+			if len(got) != len(tc.want) {
+				t.Fatalf("posted %d hooks, want %d:\n%s", len(got), len(tc.want), out)
+			}
+			for i, post := range got {
+				if post.URL != "http://127.0.0.1:8399/api/agent/hook" || post.Headers["Authorization"] != "Bearer api-1" || post.Body.Token != "tok-1" {
+					t.Errorf("post %d routed to %s auth=%q token=%q", i, post.URL, post.Headers["Authorization"], post.Body.Token)
+				}
+				if !reflect.DeepEqual(post.Body.Payload, tc.want[i]) {
+					t.Errorf("post %d payload = %v, want %v", i, post.Body.Payload, tc.want[i])
+				}
+			}
+		})
 	}
 }
 
-func TestOpencodeTurnPluginInertOutsideSupervisedAgents(t *testing.T) {
+// runTurnPlugin runs the embedded plugin through one harness scenario under
+// node with env added, returning what it posted (skips without node).
+func runTurnPlugin(t *testing.T, scenario string, env ...string) []byte {
+	t.Helper()
 	node, err := exec.LookPath("node")
 	if err != nil {
 		t.Skip("node not installed")
@@ -144,17 +141,21 @@ func TestOpencodeTurnPluginInertOutsideSupervisedAgents(t *testing.T) {
 	if err := os.WriteFile(plugin, turnPluginSource, 0o600); err != nil {
 		t.Fatal(err)
 	}
+	cmd := exec.Command(node, filepath.Join("testdata", "turn_plugin_harness.mjs"), plugin, scenario)
+	cmd.Env = append(os.Environ(), env...)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("plugin harness: %v\n%s", err, out)
+	}
+	return out
+}
+
+func TestOpencodeTurnPluginInertOutsideSupervisedAgents(t *testing.T) {
 	for name, env := range map[string][]string{
 		"no attention token": {"LEO_ATTENTION_TOKEN=", "LEO_WEB_PORT=8399"},
 		"inside a dispatch":  {"LEO_ATTENTION_TOKEN=tok-1", "LEO_WEB_PORT=8399", "LEO_DISPATCH_ID=d-1"},
 	} {
-		cmd := exec.Command(node, filepath.Join("testdata", "turn_plugin_harness.mjs"), plugin)
-		cmd.Env = append(os.Environ(), env...)
-		out, err := cmd.CombinedOutput()
-		if err != nil {
-			t.Fatalf("%s: plugin harness: %v\n%s", name, err, out)
-		}
-		if string(bytes.TrimSpace(out)) != "[]" {
+		if out := runTurnPlugin(t, "turn", env...); string(bytes.TrimSpace(out)) != "[]" {
 			t.Errorf("%s: posted %s, want nothing", name, out)
 		}
 	}
