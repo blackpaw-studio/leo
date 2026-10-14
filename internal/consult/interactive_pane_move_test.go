@@ -520,3 +520,30 @@ func (r *layoutRuntime) ReapplyLayout(target string) error {
 	})
 	return r.movingRuntime.ReapplyLayout(target)
 }
+
+// A hidden pane the user joined into another window of the caller's session
+// (its own window gone with it) is still found by its stable %N: the send
+// rejoins it from where it is now and injects into the same pane.
+func TestSendReachesPaneJoinedIntoAnotherWindow(t *testing.T) {
+	f := newLiveFixture(t)
+	started := f.start(nil)
+	f.idle(started.ID)
+	rec, _ := f.d.Get(started.ID)
+	if rec.ViewerKind != viewerHidden || rec.ViewerWindowID != "@9" {
+		t.Fatalf("record kind=%q window=%q, want hidden in @9", rec.ViewerKind, rec.ViewerWindowID)
+	}
+	joined := inCallerWindow(2)
+	joined.WindowID = "@5"
+	f.rt.place(started.Pane, joined)
+
+	if _, err := f.d.Send(context.Background(), started.ID, "next"); err != nil {
+		t.Fatalf("Send() = %v", err)
+	}
+	events := f.rt.log()
+	if tail := events[len(events)-2:]; !reflect.DeepEqual(tail, []string{"show " + started.Pane + " %0 @1", "inject " + started.Pane}) {
+		t.Fatalf("events = %v, want a rejoin from @5 then an inject into %s", events, started.Pane)
+	}
+	if f.pinned(started.ID) || f.kind(started.ID) != "split" || f.pane(started.ID) != started.Pane {
+		t.Fatalf("pinned=%v kind=%q pane=%q, want an unpinned split keeping %s", f.pinned(started.ID), f.kind(started.ID), f.pane(started.ID), started.Pane)
+	}
+}

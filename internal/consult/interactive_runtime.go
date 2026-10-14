@@ -447,7 +447,30 @@ func (r *TmuxInteractiveRuntime) inject(ctx context.Context, paneID, text string
 	command := func(ctx context.Context, _ string, args ...string) *exec.Cmd {
 		return r.commandArgs(ctx, args...)
 	}
-	return tmux.InjectIntoWith(ctx, r.tmuxPath, paneID, r.classifier(paneID), text, arm, tmux.CommandFunc(command))
+	err := tmux.InjectIntoWith(ctx, r.tmuxPath, paneID, r.classifier(paneID), text, arm, tmux.CommandFunc(command))
+	if errors.Is(err, tmux.ErrComposerBusy) || errors.Is(err, tmux.ErrComposerUnknown) {
+		return r.describeRejection(ctx, paneID, err)
+	}
+	return err
+}
+
+// paneDetailFormat names a pane by id, tty and where it is now, which is what
+// a human needs to find it after it was moved.
+const paneDetailFormat = "#{pane_id}\t#{pane_tty}\t#{session_name}:#{window_index}"
+
+// describeRejection adds the pane's tty and current location to a composer
+// rejection. It runs only on the reject path, so a delivered send's argv is
+// unchanged; a pane tmux can no longer describe keeps the bare rejection.
+func (r *TmuxInteractiveRuntime) describeRejection(ctx context.Context, paneID string, rejection error) error {
+	out, err := r.output(ctx, "display-message", "-p", "-t", paneID, paneDetailFormat)
+	if err != nil {
+		return rejection
+	}
+	f := strings.Split(strings.TrimSpace(string(out)), "\t")
+	if len(f) != 3 || f[0] != paneID {
+		return rejection
+	}
+	return fmt.Errorf("%w: pane %s (tty %s) in %s", rejection, f[0], f[1], f[2])
 }
 func (r *TmuxInteractiveRuntime) Alive(paneID string) bool {
 	presence, _ := r.PanePresence(paneID)
