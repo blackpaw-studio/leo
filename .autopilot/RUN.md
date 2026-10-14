@@ -75,13 +75,17 @@ Lane: B-003
 Lane: B-004
   Branch: autopilot-lane/B-004
   Base: 3de7bc265804ea9fed74353ad619c94d2d9b67d8
-  Tier: light
-  State: building
+  Tier: light→full
+  State: verifying
   Fixes: 0
   Wip: none
   Dispatched: 2026-10-14T02:45:40Z
   Reverifies: 0
-  Reviewed-tip: none
+  Reviewed-tip: 950b52c0a43c915786c15ebe65e874c453fa26d9
+  Call: On start failure the run settles failed and the send returns an error; the dispatch stays resumable — principle 4
+  Call: The send returns once the process has started and is recorded, not when it finishes — principle 4
+  Call: Queued continuations unchanged: report queued, flip to delivered on launch — principle 4
+  Call: Accepted risk: cancel between cmd.Start and launch record leaves send saying delivered while the turn records undelivered/interrupted (sub-ms window) — severity bar
 
 Finished 1: B-001 landed c6e8dc0afd640ffc408aaae1ec5b75c3b96b716e · shot not visually verified
 - B-001 notes: verify.md restart line uses pkill (SIGTERM) → false bounce; should be kill -9. Fixed port 8391 can collide across parallel lanes. First review/verify dispatches came back lost after ~30s; retries succeeded. Memory note project_leo_update_bounces_all_agents is stale.
