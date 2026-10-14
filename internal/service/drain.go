@@ -75,19 +75,21 @@ func agentRecordExists(homePath string) func(string) bool {
 	}
 }
 
-// awaitAgentBridge waits up to resumeBridgeWait for name's mod to
-// reconnect, when its launch uses the bridge; otherwise it returns at once.
-func awaitAgentBridge(sup *Supervisor, hub *bridge.Hub) func(context.Context, string) {
+// awaitAgentBridge waits up to settle for name's launch to settle (see
+// awaitTaskBridge): its bridge route decided and, for a bridged launch,
+// its mod connected. A restored agent decides its route on its supervise
+// goroutine, after restore returns, so an undecided route is waited on,
+// not read as "no bridge".
+func awaitAgentBridge(route func(string) BridgeRoute, hub *bridge.Hub, settle time.Duration) func(context.Context, string) {
 	return func(ctx context.Context, name string) {
-		key, ok := sup.BridgeKey(name)
-		if !ok || hub == nil {
+		if hub == nil {
 			return
 		}
-		ctx, cancel := context.WithTimeout(ctx, resumeBridgeWait)
-		defer cancel()
-		if _, err := hub.WaitFor(ctx, key, func(st bridge.State) bool { return st.Connected }); err != nil {
-			drainLogf("drain: %s's bridge did not reconnect (%v); resuming it without the bridge", name, err)
+		target, settled, err := awaitTaskBridge(ctx, hub, route, name, settle)
+		if settled || err != nil || (target.Key == "" && route(name).Planned) {
+			return
 		}
+		drainLogf("drain: %s's bridge did not settle within %s; resuming it without the bridge", name, settle)
 	}
 }
 
@@ -100,7 +102,7 @@ func startPendingResume(ctx context.Context, srv *daemon.Server, sup *Supervisor
 		resume: drain.ResumeDeps{
 			Store:       store,
 			Exists:      agentRecordExists(homePath),
-			AwaitBridge: awaitAgentBridge(sup, hub),
+			AwaitBridge: awaitAgentBridge(sup.BridgeRouteOf, hub, resumeBridgeWait),
 			Notifier:    srv.DrainNotifier(),
 			RunTasks:    srv.Scheduler().RunNow,
 			Logf:        drainLogf,

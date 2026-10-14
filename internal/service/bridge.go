@@ -85,6 +85,18 @@ func (s *Supervisor) BridgeKey(name string) (string, bool) {
 	return key, key != ""
 }
 
+// BridgeRouteOf returns how name's live launch uses the bridge. An unknown
+// name has nothing to wait for: a planned legacy route.
+func (s *Supervisor) BridgeRouteOf(name string) BridgeRoute {
+	s.mu.RLock()
+	id, ok := s.identities[name]
+	s.mu.RUnlock()
+	if !ok {
+		return BridgeRoute{Planned: true}
+	}
+	return id.BridgeRoute()
+}
+
 // BridgeRouteForSession returns how the launch of the agent running in tmux
 // session uses the bridge. A session leo does not supervise has nothing to
 // wait for: a planned legacy route.
