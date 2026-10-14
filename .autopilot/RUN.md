@@ -72,6 +72,17 @@ Lane: B-003
   Reverifies: 0
   Reviewed-tip: none
 
+Lane: B-004
+  Branch: autopilot-lane/B-004
+  Base: 3de7bc265804ea9fed74353ad619c94d2d9b67d8
+  Tier: light
+  State: building
+  Fixes: 0
+  Wip: none
+  Dispatched: 2026-10-14T02:45:40Z
+  Reverifies: 0
+  Reviewed-tip: none
+
 Finished 1: B-001 landed c6e8dc0afd640ffc408aaae1ec5b75c3b96b716e · shot not visually verified
 - B-001 notes: verify.md restart line uses pkill (SIGTERM) → false bounce; should be kill -9. Fixed port 8391 can collide across parallel lanes. First review/verify dispatches came back lost after ~30s; retries succeeded. Memory note project_leo_update_bounces_all_agents is stale.
 Finished 2: B-021 landed eb2d949e5280592e57bf785ff8b0ed8a58f84b96 · shot not visually verified
