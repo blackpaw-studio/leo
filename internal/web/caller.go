@@ -14,7 +14,7 @@ var canonicalPaneID = regexp.MustCompile(`^%[0-9]+$`)
 
 type dispatchCaller struct{ PaneID, SessionID, WindowID, Harness string }
 
-func (s *Server) resolveDispatchCaller(caller, pane string) (dispatchCaller, error) {
+func (s *Server) resolveDispatchCaller(caller, pane, parentDispatchID string) (dispatchCaller, error) {
 	session := ""
 	if caller != "" && s.processes != nil {
 		state, ok := s.processes.States()[caller]
@@ -59,6 +59,9 @@ func (s *Server) resolveDispatchCaller(caller, pane string) (dispatchCaller, err
 		}
 	}
 	if harness == "" {
+		harness = s.parentDispatchHarness(parentDispatchID, pane)
+	}
+	if harness == "" {
 		command, err := s.execCommand(findTmuxPath(), tmux.Args("display-message", "-p", "-t", pane, "#{pane_current_command}")...).Output()
 		if err == nil {
 			switch strings.ToLower(filepath.Base(strings.TrimSpace(string(command)))) {
@@ -72,4 +75,19 @@ func (s *Server) resolveDispatchCaller(caller, pane string) (dispatchCaller, err
 		windowID = fields[2]
 	}
 	return dispatchCaller{PaneID: pane, SessionID: fields[1], WindowID: windowID, Harness: harness}, nil
+}
+
+// parentDispatchHarness names the harness of the dispatch that owns pane. A
+// nested dispatch's caller is that dispatch: it has no agent name, and its
+// pane's process name is not reliably the harness, so the parent's record is
+// the authority. A parent that does not own the pane is not trusted.
+func (s *Server) parentDispatchHarness(parentDispatchID, pane string) string {
+	if parentDispatchID == "" || s.consults == nil {
+		return ""
+	}
+	parent, err := s.consults.Get(parentDispatchID)
+	if err != nil || parent.PaneID != pane {
+		return ""
+	}
+	return parent.Harness
 }

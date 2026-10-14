@@ -30,6 +30,11 @@ All notable user-visible changes to Leo are documented here.
 
 ### Changed
 
+- **Persistent-task agents are covered by a daemon-restart regression test.**
+  An e2e now SIGKILLs the daemon (as `leo update` does) after a
+  `runtime: persistent` task spawned its agent and checks the restarted daemon
+  adopts the live tmux session, with an unchanged pane pid, instead of
+  relaunching it.
 - **Dispatches are interactive by default.** An omitted `mode` on
   `leo_dispatch`, `POST /api/dispatch`, and `leo dispatch run` now resolves to
   `interactive` for every role (the daemon resolves it in one place); pass
@@ -124,6 +129,14 @@ All notable user-visible changes to Leo are documented here.
   "running" or "working"; it is `composer unknown`. Every rejection now names
   the pane, its tty and where it is now (`composer busy: pane %2 (tty
   /dev/ttys055) in caller:1`), so a moved pane is easy to find.
+
+- **Nested dispatches now wake their parent when they finish.** A dispatch that
+  called `leo_dispatch` and ended its turn to await the child's completion
+  notification sat idle forever: the child's caller is a dispatch with no agent
+  name, its pane's process name is not reliably the harness, so the caller
+  harness resolved empty and the notification was suppressed. The daemon now
+  takes the harness from the parent dispatch's record (when the parent owns the
+  calling pane).
 
 - **Unknown web/API routes now return 404 instead of a misleading 405.** The
   dashboard redirect was registered as `GET /`, which under Go's ServeMux is a

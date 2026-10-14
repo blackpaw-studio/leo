@@ -26,7 +26,7 @@ func TestResolveDispatchCallerUsesPrimaryPaneAndExactTmuxArgv(t *testing.T) {
 		}
 		return exec.Command("printf", "leo-caller $9 @3\\n")
 	}
-	got, err := s.resolveDispatchCaller("caller", "")
+	got, err := s.resolveDispatchCaller("caller", "", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -80,7 +80,7 @@ func TestResolveDispatchCallerRejectsPaneOutsideNamedSession(t *testing.T) {
 	s, _, _ := newTestServerWithAgents(t)
 	s.processes = &mockProcesses{states: map[string]ProcessStateInfo{"caller": {Name: "caller", Status: "running"}}}
 	s.execCommand = func(_ string, _ ...string) *exec.Cmd { return exec.Command("printf", "leo-other $2 @2\\n") }
-	if _, err := s.resolveDispatchCaller("caller", "%8"); err == nil || !strings.Contains(err.Error(), "does not belong") {
+	if _, err := s.resolveDispatchCaller("caller", "%8", ""); err == nil || !strings.Contains(err.Error(), "does not belong") {
 		t.Fatalf("error = %v", err)
 	}
 }
@@ -89,14 +89,14 @@ func TestResolveDispatchCallerRequiresCanonicalPaneID(t *testing.T) {
 	s, _, _ := newTestServerWithAgents(t)
 	called := false
 	s.execCommand = func(_ string, _ ...string) *exec.Cmd { called = true; return exec.Command("true") }
-	if _, err := s.resolveDispatchCaller("", "leo-caller:0.0"); err == nil || !strings.Contains(err.Error(), "canonical %N pane id") {
+	if _, err := s.resolveDispatchCaller("", "leo-caller:0.0", ""); err == nil || !strings.Contains(err.Error(), "canonical %N pane id") {
 		t.Fatalf("dynamic target error = %v", err)
 	}
 	if called {
 		t.Fatal("tmux lookup called for dynamic target")
 	}
 	s.execCommand = func(_ string, _ ...string) *exec.Cmd { return exec.Command("printf", "leo-caller $2 @2\\n") }
-	got, err := s.resolveDispatchCaller("", "%8")
+	got, err := s.resolveDispatchCaller("", "%8", "")
 	if err != nil || got.PaneID != "%8" {
 		t.Fatalf("canonical pane result = %#v, %v", got, err)
 	}
@@ -112,7 +112,7 @@ func TestResolveDispatchCallerDerivesHarnessFromExplicitPaneCommandExactArgv(t *
 		}
 		return exec.Command("printf", "opencode\\n")
 	}
-	got, err := s.resolveDispatchCaller("", "%8")
+	got, err := s.resolveDispatchCaller("", "%8", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -122,6 +122,47 @@ func TestResolveDispatchCallerDerivesHarnessFromExplicitPaneCommandExactArgv(t *
 	want := []string{"-L", "leo", "display-message", "-p", "-t", "%8", "#{pane_current_command}"}
 	if !reflect.DeepEqual(calls[1], want) {
 		t.Fatalf("argv=%q want=%q", calls[1], want)
+	}
+}
+
+// A nested dispatch's caller is itself a dispatch: no agent name, and its pane
+// runs a TUI whose process name need not be the harness (claude reports its
+// version). The parent record is the authority on the harness, or the child's
+// completion notification is suppressed for an unknown caller harness.
+func TestResolveDispatchCallerTakesHarnessFromParentDispatch(t *testing.T) {
+	state := t.TempDir()
+	recorder := consult.NewFileRecorder(state)
+	if err := os.MkdirAll(consult.Dir(state), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	for _, rec := range []consult.Record{
+		{ID: "d-parent", Kind: "dispatch", Mode: consult.ModeInteractive, Status: consult.StatusRunning, Harness: "claude", PaneID: "%8"},
+		{ID: "d-other", Kind: "dispatch", Mode: consult.ModeInteractive, Status: consult.StatusRunning, Harness: "codex", PaneID: "%99"},
+	} {
+		if err := recorder.PersistRecord(rec); err != nil {
+			t.Fatal(err)
+		}
+	}
+	s, _, _ := newTestServerWithAgents(t)
+	s.consults = consult.NewDispatcher(recorder)
+	s.execCommand = func(_ string, args ...string) *exec.Cmd {
+		if args[len(args)-1] == "#{pane_current_command}" {
+			return exec.Command("printf", "2.1.140\\n")
+		}
+		return exec.Command("printf", "leo-dispatch $4 @4\\n")
+	}
+	for _, tc := range []struct{ name, parent, wantHarness string }{
+		{"parent owns the pane", "d-parent", "claude"},
+		{"parent owns a different pane", "d-other", ""},
+		{"unknown parent", "d-missing", ""},
+	} {
+		got, err := s.resolveDispatchCaller("", "%8", tc.parent)
+		if err != nil {
+			t.Fatalf("%s: %v", tc.name, err)
+		}
+		if got.Harness != tc.wantHarness {
+			t.Fatalf("%s: harness = %q, want %q", tc.name, got.Harness, tc.wantHarness)
+		}
 	}
 }
 

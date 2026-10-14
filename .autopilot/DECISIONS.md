@@ -33,3 +33,38 @@ Why: owner call.
 Alternatives: features first.
 Commit:
 Veto: n/a (owner)
+
+## D-005 · 2026-10-13 · B-001: no production change — adoption already works
+Chose: persistent-task targets are ordinary agents since #115 and RestoreAgents adopts surviving sessions; added an e2e regression guard with a mutation proof instead.
+Why: BACKLOG "verify first"; principle 2.
+Alternatives: rewrite the restore path.
+Commit: 021fb4aee10452608528b48de966ffa0159b0509
+Veto: [ ]
+
+## D-006 · 2026-10-13 · B-001: config `processes:` criterion treated as met
+Chose: the key was folded into agents in #112, so nothing remains to adopt.
+Why: scope cut (AUTONOMY: small scope cuts).
+Alternatives: reintroduce processes.
+Commit: 021fb4aee10452608528b48de966ffa0159b0509
+Veto: [ ]
+
+## D-007 · 2026-10-13 · B-001: CHANGELOG entry for a test-only item
+Chose: one-line [Unreleased] entry.
+Why: D-001.
+Alternatives: no entry.
+Commit: 021fb4aee10452608528b48de966ffa0159b0509
+Veto: [ ]
+
+## D-008 · 2026-10-13 · B-001: restart checks use kill -9, not SIGTERM
+Chose: SIGKILL is what kickstart -k does; SIGTERM shuts down gracefully and kills sessions by design.
+Why: principle 2.
+Alternatives: pkill (SIGTERM) as verify.md says.
+Commit: 021fb4aee10452608528b48de966ffa0159b0509
+Veto: [ ]
+
+## D-009 · 2026-10-13 · B-001: e2e uses the fake codex harness
+Chose: a claude-bridge relaunch could change pane_pid for reasons unrelated to adoption.
+Why: principle 2.
+Alternatives: fake claude bridge.
+Commit: 021fb4aee10452608528b48de966ffa0159b0509
+Veto: [ ]

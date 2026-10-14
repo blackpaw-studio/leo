@@ -90,7 +90,7 @@ func (s *Server) handleAPIDispatch(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, apiResponse{Error: "mode must be headless or interactive"})
 		return
 	}
-	caller, err := s.resolveDispatchCaller(req.From, req.CallerPaneID)
+	caller, err := s.resolveDispatchCaller(req.From, req.CallerPaneID, req.ParentDispatchID)
 	if err != nil {
 		writeJSON(w, http.StatusBadRequest, apiResponse{Error: err.Error()})
 		return
