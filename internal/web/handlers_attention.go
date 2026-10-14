@@ -19,6 +19,20 @@ type agentHookPayload struct {
 	NotificationType string `json:"notification_type"`
 	// LastAssistantMessage is the turn's final message, on a Stop hook.
 	LastAssistantMessage string `json:"last_assistant_message"`
+	// Prompt is the submitted text, on a UserPromptSubmit hook.
+	Prompt string `json:"prompt"`
+	// TurnID is the harness's turn id (codex sends one on every turn hook).
+	TurnID string `json:"turn_id"`
+}
+
+// AgentTurn is the turn-relevant part of one supervised agent hook, handed
+// to the turn observer (see WithTurnObserver).
+type AgentTurn struct {
+	Event       string // hook_event_name
+	Prompt      string // UserPromptSubmit: the submitted text
+	TurnID      string // the harness's turn id, when it has one
+	SessionID   string
+	LastMessage string // Stop: the turn's final assistant message
 }
 
 // agentHookRequest is what `leo dispatch report` POSTs for a supervised
@@ -92,6 +106,15 @@ func (s *Server) handleAPIAgentHook(w http.ResponseWriter, r *http.Request) {
 	}
 	if ours {
 		s.chatHook(name, req.Payload)
+		if s.turnObserver != nil {
+			s.turnObserver(name, AgentTurn{
+				Event:       payload.HookEventName,
+				Prompt:      payload.Prompt,
+				TurnID:      payload.TurnID,
+				SessionID:   payload.SessionID,
+				LastMessage: payload.LastAssistantMessage,
+			})
+		}
 	}
 	writeJSON(w, http.StatusOK, apiResponse{OK: true})
 }

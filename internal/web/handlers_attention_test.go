@@ -3,6 +3,7 @@ package web
 import (
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -177,6 +178,36 @@ func TestAgentHookStopCarriesTheLastMessageAsPreview(t *testing.T) {
 			att, ok := s.attention.Get("leo-a")
 			if !ok || att.State != observe.AttentionFinished || att.Preview != tc.want {
 				t.Fatalf("attention = %+v, %v; want finished with preview %q", att, ok, tc.want)
+			}
+		})
+	}
+}
+
+func TestAgentHookForwardsTurnToObserver(t *testing.T) {
+	type observed struct {
+		agent string
+		turn  AgentTurn
+	}
+	for _, tc := range []struct {
+		name, token, body string
+		want              []observed
+	}{
+		{"prompt submit", "tok-b", `{"hook_event_name":"UserPromptSubmit","session_id":"s1","turn_id":"t1","prompt":"reply OK"}`,
+			[]observed{{"leo-b", AgentTurn{Event: "UserPromptSubmit", SessionID: "s1", TurnID: "t1", Prompt: "reply OK"}}}},
+		{"stop", "tok-b", `{"hook_event_name":"Stop","session_id":"s1","turn_id":"t1","last_assistant_message":"OK"}`,
+			[]observed{{"leo-b", AgentTurn{Event: "Stop", SessionID: "s1", TurnID: "t1", LastMessage: "OK"}}}},
+		{"unknown token", "tok-nope", `{"hook_event_name":"Stop","session_id":"s1","turn_id":"t1"}`, nil},
+		{"foreign session", "tok-a", `{"hook_event_name":"Stop","session_id":"child-sid","turn_id":"t1"}`, nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := newHookServer(t)
+			var got []observed
+			s.turnObserver = func(agent string, turn AgentTurn) { got = append(got, observed{agent, turn}) }
+
+			postHook(t, s, tc.token, tc.body)
+
+			if !reflect.DeepEqual(got, tc.want) {
+				t.Fatalf("observed %+v, want %+v", got, tc.want)
 			}
 		})
 	}

@@ -451,6 +451,9 @@ func (s *Server) StartWeb(cfg *config.Config, agentSvc web.AgentService) error {
 	if s.leoVersion != "" {
 		observeOpts = append(observeOpts, web.WithVersion(s.leoVersion))
 	}
+	// Supervised agents' turn hooks complete their in-flight persistent-task
+	// invocations, whatever the harness (see sessionRouter.ObserveTurn).
+	observeOpts = append(observeOpts, web.WithTurnObserver(s.observeAgentTurn))
 	s.webServer = web.New(s.configPath, &processAdapter{inner: s.processes}, s.scheduler, s, agentSvc, web.Options{
 		ConfigWriter:   s.configWriter,
 		Port:           port,
@@ -658,6 +661,18 @@ func (s *Server) handleTaskEnqueue(w http.ResponseWriter, r *http.Request) {
 	}
 	s.router.StartPump(req.Session)
 	writeJSON(w, http.StatusOK, taskEnqueueResp{Accepted: true, InvocationID: inv.ID})
+}
+
+// observeAgentTurn relays one supervised agent's turn hook to the router,
+// whose queues are keyed by agent name.
+func (s *Server) observeAgentTurn(agent string, turn web.AgentTurn) {
+	s.router.ObserveTurn(agent, TurnEvent{
+		Event:       turn.Event,
+		Prompt:      turn.Prompt,
+		TurnID:      turn.TurnID,
+		SessionID:   turn.SessionID,
+		LastMessage: turn.LastMessage,
+	})
 }
 
 // TaskRun returns the persistent task and run whose turn is running in
