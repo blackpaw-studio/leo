@@ -116,6 +116,15 @@ All notable user-visible changes to Leo are documented here.
 
 ### Fixed
 
+- **Follow-ups to an idle Codex dispatch in a narrow pane are no longer
+  rejected.** Codex cuts its "Ask Codex to do anything" placeholder short at
+  the pane's edge, and `leo_send_dispatch` read the cut-off text as a draft,
+  refusing every send with `composer unknown`. A screen with no composer on
+  it no longer reads as `composer busy` because the transcript mentions
+  "running" or "working"; it is `composer unknown`. Every rejection now names
+  the pane, its tty and where it is now (`composer busy: pane %2 (tty
+  /dev/ttys055) in caller:1`), so a moved pane is easy to find.
+
 - **Unknown web/API routes now return 404 instead of a misleading 405.** The
   dashboard redirect was registered as `GET /`, which under Go's ServeMux is a
   *prefix* pattern matching every path — so a POST to a route that did not
