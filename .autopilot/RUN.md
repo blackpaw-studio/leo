@@ -31,14 +31,21 @@ Lane: B-002
   Branch: autopilot-lane/B-002
   Base: d85f0b8572a2a003c515624370c715e0c088c1eb
   Tier: full
-  State: building
-  Fixes: 0
+  State: verifying
+  Fixes: 1
   Wip: none
   Dispatched: 2026-10-14T01:06:06Z
   Reverifies: 0
-  Reviewed-tip: none
+  Reviewed-tip: f5088d2dc09521f6b6166c14a54123311ab9042d
 - 2026-10-14T01:46:46Z: stall — runners ended turns awaiting nested-dispatch notifications that never arrive; nudged both via leo_send_dispatch to collect with leo_wait in-turn.
 - Inbox applied: B-021 (nested-dispatch notification bug)
+  Call: No tty-based pane lookup; %N is stable across moves and a tty fallback could paste into an unrelated pane; rejections name the tty instead — principles 1, 4
+  Call: Prose never means busy when no composer row is visible; classifier says unknown — principle 4
+  Call: Dropped the planned post-move redraw settle (never reproduced live) — principles 2, 4
+  Call: Classifier handles codex placeholder truncation (not wrapping) at narrow widths — principle 2
+  Call: Promoted go-runewidth (already indirect, MIT, go.sum unchanged) to a direct dependency; ambiguous width = 1 cell — principle 4
+  Call: Accepted risk: a human draft that is exactly a placeholder prefix reaching the pane edge reads as empty — principle 4
+
 Lane: B-021
   Branch: autopilot-lane/B-021
   Base: 3e34c7645fdba14303882f42f34e82bee164f89a
