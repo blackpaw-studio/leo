@@ -51,7 +51,19 @@ Lane: B-021
   Reviewed-tip: faa26c203ad4e728d01e94c25493b2be1c899c7d
   Tokens: 6.07M in (5.84M cache read), ≥29k out, 69 requests
 
+Lane: B-003
+  Branch: autopilot-lane/B-003
+  Base: e36ee832f8eb22bf1385826b7063db0759e879b5
+  Tier: full
+  State: building
+  Fixes: 0
+  Wip: none
+  Dispatched: 2026-10-14T02:16:30Z
+  Reverifies: 0
+  Reviewed-tip: none
+
 Finished 1: B-001 landed c6e8dc0afd640ffc408aaae1ec5b75c3b96b716e · shot not visually verified
 - B-001 notes: verify.md restart line uses pkill (SIGTERM) → false bounce; should be kill -9. Fixed port 8391 can collide across parallel lanes. First review/verify dispatches came back lost after ~30s; retries succeeded. Memory note project_leo_update_bounces_all_agents is stale.
 Finished 2: B-021 landed eb2d949e5280592e57bf785ff8b0ed8a58f84b96 · shot not visually verified
 - B-021 note: full suite flaked once on TestBridgeReportAcceptsLargeTurnText (internal/daemon timeout; passed 3/3 alone) — not in the diff.
+- B-021 built before B-003 (owner-filed bug, top of queue); B-003 independent of B-002.
