@@ -76,21 +76,46 @@ func agentRecordExists(homePath string) func(string) bool {
 }
 
 // awaitAgentBridge waits up to settle for name's launch to settle (see
-// awaitTaskBridge): its bridge route decided and, for a bridged launch,
-// its mod connected. A restored agent decides its route on its supervise
-// goroutine, after restore returns, so an undecided route is waited on,
-// not read as "no bridge".
+// awaitResumeBridge), logging a launch that does not.
 func awaitAgentBridge(route func(string) BridgeRoute, hub *bridge.Hub, settle time.Duration) func(context.Context, string) {
 	return func(ctx context.Context, name string) {
 		if hub == nil {
 			return
 		}
-		target, settled, err := awaitTaskBridge(ctx, hub, route, name, settle)
-		if settled || err != nil || (target.Key == "" && route(name).Planned) {
-			return
+		if err := awaitResumeBridge(ctx, route, hub, name, settle); err != nil {
+			drainLogf("drain: %s's bridge did not reconnect (%v); resuming it without the bridge", name, err)
 		}
-		drainLogf("drain: %s's bridge did not settle within %s; resuming it without the bridge", name, settle)
 	}
+}
+
+// awaitResumeBridge waits up to settle for name's launch to settle: its
+// bridge route decided and, for a bridged launch, its mod's stream up. A
+// restored agent decides its route on its supervise goroutine, after
+// restore returns, so an undecided route is waited on, not read as "no
+// bridge". The web routes a message over the bridge only to a live
+// stream, so a mod that has only said hello is waited on too. It errors
+// when the launch has not settled by then.
+func awaitResumeBridge(ctx context.Context, route func(string) BridgeRoute, hub *bridge.Hub, name string, settle time.Duration) error {
+	ctx, cancel := context.WithTimeout(ctx, settle)
+	defer cancel()
+	// A short settle (tests) polls proportionally faster.
+	poll := max(min(taskBridgePoll, settle/10), time.Millisecond)
+	r := route(name)
+	for !r.Planned {
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("its launch has not decided on the bridge: %w", ctx.Err())
+		case <-time.After(poll):
+		}
+		r = route(name)
+	}
+	if r.Target.Key == "" {
+		return nil // a legacy launch: nothing to wait for
+	}
+	_, err := hub.WaitFor(ctx, r.Target.Key, func(st bridge.State) bool {
+		return st.Connected && st.Gen == r.Target.Gen
+	})
+	return err
 }
 
 // startPendingResume resumes drained agents in the background once agent
