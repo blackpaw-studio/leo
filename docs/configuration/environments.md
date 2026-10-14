@@ -59,7 +59,12 @@ leo agent set-environment fetch                      # clear the override → te
 - **MCP:** `leo_spawn_agent` takes `environments`; `leo_set_agent_environments` switches an existing agent. The switch tool honors `deny_tools`, and the caller's `can_spawn` must cover the target agent's template (otherwise a narrowed spawner could move an agent onto credentials it was never given).
 - **Observability API:** `GET /api/v1/environments`, `GET /api/v1/templates`, the agent `environments` fields and `POST /api/v1/agents/spawn` / `POST /api/v1/agents/{name}/environments` (names only; see the [observability spec](../specs/2026-07-31-observability-api.md#named-environments)).
 - **Web UI:** the *Environments* page edits the map (delete is refused while anything still names an environment); the Agents page has an environments field on the spawn form and a per-agent *Set env* action.
-- **Dispatches and consults** run under their template's resolved environments. Per-dispatch environment selection is not implemented.
+- **Dispatches and consults** inherit their caller's environments. The child resolves its template's environments (and literal `env:`) first, then layers the inherited list on top, so the caller wins any key both set: an agent running under `work` dispatches under `work` too. The inherited list is, in order of precedence:
+  1. an explicit `environments` on the dispatch (`leo_dispatch`'s `environments`, `leo dispatch --environment`, or `environments` in `POST /api/dispatch`), which replaces the inherited list; `[]` (or `--environment=`) inherits nothing, so only the template's environments apply;
+  2. for a dispatch started by another dispatch, the parent run's effective list;
+  3. the calling agent's effective list (its own override, else its template's, else `defaults.environments`).
+
+  A caller with no environments, such as a plain `leo dispatch` from your shell, gives only the template's. The run records its effective names and their source (`inherited`, `override` or `template`), shown in `leo dispatch show` and `/api/v1` dispatches. Follow-ups through `leo_send_dispatch` reuse the recorded list. An interactive dispatch's pane resets every key that leo's environments or template `env:` could set and that the child does not set, so the caller's tmux session env cannot leak into it.
 
 The agent record stores the override **names**, never resolved values, so editing an environment's variables takes effect when the agent next restarts. If a saved name no longer exists in config, `restart`, `start` and a template switch fail with `unknown environment "…"` before stopping anything, and the stale-agent check reports it. Agents spawned from a template with no override always follow the template's current list.
 
@@ -90,4 +95,4 @@ Leo does not manage logins. Prepare a second config dir yourself:
 - Implicit persistent-task agents (a persistent task with no `template:`) keep their stored env across restarts; they do not re-resolve environments.
 - `--env K=V` pairs given at spawn are not expanded.
 - Resume across Claude config dirs needs a shared `projects` directory.
-- Environments are not selectable per dispatch or per delegation profile.
+- Environments are not selectable per delegation profile.

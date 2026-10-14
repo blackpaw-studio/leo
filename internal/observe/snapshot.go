@@ -193,8 +193,13 @@ type Dispatch struct {
 	Model          string `json:"model,omitempty"`
 	Effort         string `json:"effort,omitempty"`
 	ObservedEffort string `json:"observed_effort,omitempty"`
-	Status         string `json:"status"`
-	Stalled        bool   `json:"stalled"`
+	// Environments are the dispatch's effective environment names (never
+	// values); EnvironmentsSource is where its inherited layer came from:
+	// "inherited" (caller or parent dispatch), "override", or "template".
+	Environments       []string `json:"environments,omitempty"`
+	EnvironmentsSource string   `json:"environments_source,omitempty"`
+	Status             string   `json:"status"`
+	Stalled            bool     `json:"stalled"`
 	// Pending summarizes the background work a waiting dispatch is paused
 	// on, e.g. "1 shell · 1 monitor"; empty otherwise.
 	Pending          string     `json:"pending,omitempty"`

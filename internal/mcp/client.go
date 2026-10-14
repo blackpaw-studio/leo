@@ -269,6 +269,9 @@ func (c *daemonClient) dispatch(ctx context.Context, request consult.Request) (c
 	if request.Isolation != "" {
 		body["isolation"] = request.Isolation
 	}
+	if request.Environments != nil {
+		body["environments"] = request.Environments
+	}
 	if request.CallerPaneID != "" {
 		body["caller_pane_id"] = request.CallerPaneID
 	}

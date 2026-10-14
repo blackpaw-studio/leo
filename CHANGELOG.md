@@ -4,6 +4,24 @@ All notable user-visible changes to Leo are documented here.
 
 ## [Unreleased]
 
+### Changed
+
+- **Dispatches inherit their caller's environments.** A `leo_dispatch` (or
+  consult) child used to run under its template's environments only, so a
+  dispatch from an agent on another account ran on the default account. It
+  now layers the caller's effective environments over the template's (the
+  caller wins any key both set). Nested dispatches inherit from their parent
+  run, and continuations keep the run's list. Interactive panes no longer pick
+  up leo-injected keys from the caller's tmux session implicitly. To restore
+  the old behavior for one call, pass `environments: []`.
+
+### Added
+
+- **Per-dispatch `environments`.** `leo_dispatch`, `leo dispatch --environment`
+  and `POST /api/dispatch` accept an ordered environment list that replaces
+  the inherited one. `/api/v1` dispatches report `environments` and
+  `environments_source`.
+
 ### Security
 
 - **Env values no longer travel to agents through listings.** `leo_list_agents`

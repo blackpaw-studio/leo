@@ -13,6 +13,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/blackpaw-studio/leo/internal/agent"
+
 	"github.com/blackpaw-studio/leo/internal/config"
 	"github.com/blackpaw-studio/leo/internal/consult"
 )
@@ -33,6 +35,9 @@ func (s *Server) handleAPIDispatch(w http.ResponseWriter, r *http.Request) {
 		CallerPaneID                                           string       `json:"caller_pane_id"`
 		CallerBridgeKey                                        string       `json:"caller_bridge_key"`
 		ParentDispatchID                                       string       `json:"parent_dispatch_id"`
+		// Environments overrides the inherited environment layer: absent or
+		// null inherits, [] inherits nothing.
+		Environments []string `json:"environments"`
 	}
 	if err := decodeDispatchJSON(r, &req); err != nil {
 		writeJSON(w, http.StatusBadRequest, apiResponse{Error: fmt.Sprintf("invalid request: %v", err)})
@@ -95,7 +100,7 @@ func (s *Server) handleAPIDispatch(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, apiResponse{Error: err.Error()})
 		return
 	}
-	dispatchReq := consult.Request{Caller: req.From, Template: req.Template, Model: req.Model, Effort: req.Effort, Role: req.Role, Profile: profile, Prompt: req.Prompt, Cwd: req.Cwd, Name: req.Name, Timeout: timeout, Mode: mode, Notify: req.Notify, ReleaseOnFinish: req.ReleaseOnFinish, Isolation: req.Isolation, CallerPaneID: caller.PaneID, CallerSessionID: caller.SessionID, CallerWindowID: caller.WindowID, CallerHarness: caller.Harness, CallerBridgeKey: req.CallerBridgeKey, CallerBridgeLaunch: s.bridgeLaunchID(req.CallerBridgeKey), ParentDispatchID: req.ParentDispatchID}
+	dispatchReq := consult.Request{Caller: req.From, Template: req.Template, Model: req.Model, Effort: req.Effort, Role: req.Role, Profile: profile, Prompt: req.Prompt, Cwd: req.Cwd, Name: req.Name, Timeout: timeout, Mode: mode, Notify: req.Notify, ReleaseOnFinish: req.ReleaseOnFinish, Isolation: req.Isolation, CallerPaneID: caller.PaneID, CallerSessionID: caller.SessionID, CallerWindowID: caller.WindowID, CallerHarness: caller.Harness, CallerBridgeKey: req.CallerBridgeKey, CallerBridgeLaunch: s.bridgeLaunchID(req.CallerBridgeKey), ParentDispatchID: req.ParentDispatchID, Environments: req.Environments, CallerEnvironments: s.callerEnvironments(cfg, req.From)}
 	started, err := s.consults.Start(r.Context(), cfg, dispatchReq)
 	var validationErr *consult.ValidationError
 	if err != nil && req.Mode == "" && mode == consult.ModeInteractive && !errors.As(err, &validationErr) && !errors.Is(err, context.Canceled) {
@@ -364,6 +369,7 @@ func (s *Server) handleAPIConsult(w http.ResponseWriter, r *http.Request) {
 	result, err := s.consults.Consult(r.Context(), cfg, consult.Request{
 		Template: req.Template, Model: req.Model, Prompt: req.Prompt,
 		Cwd: workspace, Caller: req.From, ParentDispatchID: req.ParentDispatchID,
+		CallerEnvironments: s.callerEnvironments(cfg, req.From),
 	})
 	if err != nil {
 		status := http.StatusBadGateway
@@ -380,4 +386,21 @@ func (s *Server) handleAPIConsult(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, apiResponse{OK: true, Data: result})
+}
+
+// callerEnvironments is the effective environment list of the agent named
+// from, which its dispatches inherit; nil when from is not a known agent. A
+// name that is no longer defined is passed through so the dispatch fails
+// loudly instead of silently running under another account.
+func (s *Server) callerEnvironments(cfg *config.Config, from string) []string {
+	if from == "" || s.agentSvc == nil {
+		return nil
+	}
+	for _, rec := range s.agentSvc.List() {
+		if rec.Name == from {
+			names, _, _ := agent.ResolveAgentEnvironments(cfg, rec.Name, rec.Template, rec.Environments)
+			return names
+		}
+	}
+	return nil
 }
