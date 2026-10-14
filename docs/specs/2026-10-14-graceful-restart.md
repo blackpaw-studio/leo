@@ -23,7 +23,7 @@ Before a restart, let busy agents reach a safe stopping point. After the restart
    - In non-interactive runs without a flag, the CLI restarts immediately. This is today's behavior.
    - The web restart button always drains. It passes `--graceful --force`, so the restart is never blocked on a prompt.
 3. **Drain.** The daemon enters a draining state and records the busy set as the drain set. While draining:
-   - The daemon sends each agent in the drain set this message through the normal `messageAgent` path: `[leo] Daemon restart pending. Reach a safe stopping point, note where you are, and end your turn. You'll get a resume message after the restart.`
+   - The daemon sends each agent in the drain set this message through the normal `messageAgent` path: `[leo] URGENT: the leo daemon restarts in {N} minutes and this session may be killed. Stop now: do not start new steps, tool calls, or dispatches. Finish or abandon the current step, save or commit work in progress, write a short note of where you are and what's next, then end your turn immediately. Anything unsaved when the restart happens may be lost. You'll get a resume message afterward.` Here `{N}` is the drain timeout in whole minutes.
    - Bridge agents receive it through the outbox at the turn boundary. Legacy agents receive it when the composer frees up, retried until delivered.
    - Cron task firings are deferred until the drain ends. They are not dropped.
    - Agents outside the drain set are unaffected. An agent in the set that goes busy again is waited on again.
