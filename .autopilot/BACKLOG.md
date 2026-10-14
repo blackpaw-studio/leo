@@ -9,9 +9,11 @@ Accept: A failing test reproduces the report; it passes after the fix; nothing e
 Source: owner (/issue, 2026-10-13)
 Inbox: 20261014T014703194176Z-99571247#1
 
-## B-001 · Persistent-task sessions and config processes survive `leo update`   [ready]
+## B-001 · Persistent-task sessions and config processes survive `leo update`   [done]
 Accept: a daemon restart adopts surviving tmux sessions for config `processes:` and `runtime: persistent` task agents, as it already does for ephemeral agents; shown on the isolated daemon (start, kill daemon PID, restart, session pane PID unchanged).
 Source: owner (vision, memory project_leo_update_bounces_all_agents; internal/service superviseloop)
+Done: 021fb4ae (merge c6e8dc0a) — already worked; e2e regression guard added
+Verified: not visually verified — CLI/tmux item; isolated-daemon kill -9 restart kept pane pids (text captures .autopilot/shots/B-001-1-before.txt, B-001-2-after.txt)
 
 ## B-002 · `leo_send_dispatch` rejects "composer busy" on an idle run   [ready]
 Accept: an idle interactive dispatch with an empty composer accepts a follow-up; a joined-away/moved pane is found by tty; failing test first.
@@ -88,3 +90,11 @@ Source: owner (vision, issue #238)
 ## B-020 · Push bodies: full permission command, question length   [ready]
 Accept: permission pushes show the command (truncated at a byte budget, not the first word); the question cap is measured against APNs limits and tested.
 Source: owner (vision, memory project_ios_daemon_surface)
+
+## B-022 · Linux: `leo update` may bounce every agent (systemd KillMode)   [idea]
+Note: the systemd unit sets no KillMode, so `systemctl --user restart` SIGTERMs the whole cgroup including the tmux server (internal/service/daemon_linux.go:202); unverified; a fix changes the unit on existing installs and needs Evan's sign-off — principle 1
+Source: autopilot polish (B-001)
+
+## B-023 · config-reference skill still documents `processes:` and `sessions:`   [idea]
+Note: internal/templates/skills/config-reference.md lines 21-31, 49, 64-68 describe removed keys and are served via leo_skill — principle 4
+Source: autopilot polish (B-001)
