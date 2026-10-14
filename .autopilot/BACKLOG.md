@@ -27,9 +27,11 @@ Verified: not visually verified — terminal classifier fix; real codex-cli 0.16
 Accept: a successful persistent-task turn on codex and opencode records success and fires no `notify_on_fail` card; verify first.
 Source: owner (vision, memory project_uniform_tui_drivers)
 
-## B-004 · Headless continuations report Delivered before start   [ready]
+## B-004 · Headless continuations report Delivered before start   [done]
 Accept: `delivered` is reported only after `cmd.Start()` succeeds; a start failure surfaces as an error.
 Source: owner (vision, issue #236)
+Done: 950b52c0, 34437dfc (merge 32b30208) — delivered only after cmd.Start; start failure errors
+Verified: not visually verified — daemon behavior; isolated daemon: delivered in 0.04s while running, missing binary → error + delivered:false
 
 ## B-005 · agentstore Stop/Start read-modify-write race   [ready]
 Accept: concurrent Stop/Start on one record can't lose an update; `-race` test reproduces it first.

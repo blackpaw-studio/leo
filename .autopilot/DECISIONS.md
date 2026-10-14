@@ -103,3 +103,31 @@ Why: principle 4.
 Alternatives: stricter match that rejects idle narrow panes.
 Commit: f5088d2d, 2d560f79, 17e5fb75, bb18a32a, 9944eaad
 Veto: [ ]
+
+## D-015 · 2026-10-13 · B-004: start failure settles the run failed and the send errors
+Chose: the dispatch stays resumable.
+Why: principle 4.
+Alternatives: report delivered then fail later.
+Commit: 950b52c0, 34437dfc
+Veto: [ ]
+
+## D-016 · 2026-10-13 · B-004: send returns once the process started and is recorded
+Chose: not when the turn finishes.
+Why: principle 4.
+Alternatives: block until run end.
+Commit: 950b52c0, 34437dfc
+Veto: [ ]
+
+## D-017 · 2026-10-13 · B-004: queued continuations unchanged
+Chose: report queued, flip to delivered on launch.
+Why: principle 4.
+Alternatives: block queued sends.
+Commit: 950b52c0, 34437dfc
+Veto: [ ]
+
+## D-018 · 2026-10-13 · B-004: accepted risk — cancel between Start and launch record
+Chose: sub-ms window; the process really did start.
+Why: severity bar.
+Alternatives: lock across Start.
+Commit: 950b52c0, 34437dfc
+Veto: [ ]
