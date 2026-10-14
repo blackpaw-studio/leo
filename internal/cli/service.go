@@ -5,7 +5,9 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
+	"syscall"
 
 	"github.com/blackpaw-studio/leo/internal/config"
 	"github.com/blackpaw-studio/leo/internal/daemon"
@@ -192,10 +194,17 @@ installed OS service (launchd/systemd).`,
 }
 
 func newServiceRestartCmd() *cobra.Command {
+	var gopts gracefulOptions
 	cmd := &cobra.Command{
 		Use:   "restart",
 		Short: "Restart daemon",
+		Long: `Restart the daemon. If agents are mid-turn, leo first offers a graceful
+restart: busy agents are asked to pause, the restart waits until they are
+idle (up to --drain-timeout), and they are told to resume afterwards.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if err := gopts.validate(); err != nil {
+				return err
+			}
 			if err := gateCommand(cmd, "leo_stop_agent"); err != nil {
 				return err
 			}
@@ -204,8 +213,9 @@ func newServiceRestartCmd() *cobra.Command {
 				return err
 			}
 
-			fmt.Println("Restarting daemon (waiting for agents to restore)...")
-			err = restartDaemonAndWait(cmd.Context(), cfg.HomePath, defaultDaemonRestartDeps)
+			ctx, stop := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM, syscall.SIGHUP)
+			defer stop()
+			err = gracefulRestart(ctx, gopts, newGracefulDeps(cfg.HomePath))
 			if errors.Is(err, errDaemonNotReady) {
 				warn.Printf("%v\n", err)
 			} else if err != nil {
@@ -218,6 +228,7 @@ func newServiceRestartCmd() *cobra.Command {
 			return nil
 		},
 	}
+	addGracefulFlags(cmd, &gopts)
 
 	return cmd
 }
