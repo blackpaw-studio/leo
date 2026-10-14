@@ -126,12 +126,7 @@ func gracefulRestart(ctx context.Context, opts gracefulOptions, d gracefulDeps) 
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
-		if errors.Is(err, daemon.ErrDrainUnsupported) {
-			fmt.Fprintln(d.out, "Warning: the running daemon predates graceful restart; restarting without draining.")
-		} else {
-			fmt.Fprintf(d.out, "Warning: could not check for busy agents (%v); restarting without draining.\n", err)
-		}
-		return d.restart(ctx)
+		return busyCheckFailed(ctx, opts, err, d)
 	}
 	if len(busy) == 0 {
 		return d.restart(ctx)
@@ -144,6 +139,41 @@ func gracefulRestart(ctx context.Context, opts gracefulOptions, d gracefulDeps) 
 		return d.restart(ctx)
 	}
 	return drainThenRestart(ctx, opts, d)
+}
+
+// busyCheckFailed decides a restart whose busy check failed. Without a
+// daemon, or with one that cannot drain, there is nothing to drain and the
+// restart goes ahead as before. Any other failure would silently skip a
+// drain that may be needed: a run that would never drain (--no-graceful,
+// or unattended without a flag) and --force restart with a warning,
+// --graceful aborts, and an interactive run asks.
+func busyCheckFailed(ctx context.Context, opts gracefulOptions, err error, d gracefulDeps) error {
+	switch {
+	case errors.Is(err, daemon.ErrDrainUnsupported):
+		fmt.Fprintln(d.out, "Warning: the running daemon predates graceful restart; restarting without draining.")
+		return d.restart(ctx)
+	case errors.Is(err, daemon.ErrDaemonUnreachable):
+		fmt.Fprintln(d.out, "The daemon is not running; nothing to drain.")
+		return d.restart(ctx)
+	case opts.noGraceful || opts.force || (!opts.graceful && !d.isInteractive()):
+		fmt.Fprintf(d.out, "Warning: could not check for busy agents (%v); restarting without draining.\n", err)
+		return d.restart(ctx)
+	case opts.graceful:
+		return fmt.Errorf("could not check for busy agents, so they cannot be drained: %w (pass --force to restart without draining)", err)
+	}
+	fmt.Fprintf(d.out, "Could not check for busy agents: %v\n", err)
+	for {
+		answer, askErr := d.ask(ctx, "Restart without draining? Busy agents would be cut off mid-turn. [y/N] ")
+		if askErr != nil {
+			return askErr
+		}
+		switch strings.ToLower(strings.TrimSpace(answer)) {
+		case "y", "yes":
+			return d.restart(ctx)
+		case "", "n", "no":
+			return fmt.Errorf("could not check for busy agents: %w; the daemon was not restarted", err)
+		}
+	}
 }
 
 func chooseDrain(ctx context.Context, opts gracefulOptions, busy []drain.Probe, d gracefulDeps) (bool, error) {

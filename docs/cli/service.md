@@ -109,6 +109,11 @@ The web UI's restart button always drains: it runs
 A daemon older than this feature has no drain support; restarting it (for
 example on the first `leo update` to a version that has it) prints a warning
 and restarts at once.
+If no daemon is running there is nothing to drain, and leo restarts at once.
+If the busy check fails for any other reason, `--graceful` aborts with a
+non-zero exit rather than restart without draining (add `--force` to restart
+anyway), an interactive run without a flag asks before restarting, and
+`--no-graceful` or an unattended run without a flag restart with a warning.
 
 A single turn longer than the timeout always reaches it: the pause message
 cannot cut a running turn short, only stop the agent from starting new work

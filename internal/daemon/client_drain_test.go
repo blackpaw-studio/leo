@@ -74,3 +74,34 @@ func TestDrainClientRoundTrip(t *testing.T) {
 		t.Fatalf("second DrainCancel err = %v, want drain.ErrNoDrain", err)
 	}
 }
+
+// Nothing can be drained when no daemon answers the socket: the caller may
+// restart as before. Any other failure is not this error.
+func TestDrainClientUnreachableDaemon(t *testing.T) {
+	t.Run("missing socket", func(t *testing.T) {
+		if _, err := DrainBusy(context.Background(), tmpWorkDir(t)); !errors.Is(err, ErrDaemonUnreachable) {
+			t.Fatalf("err = %v, want ErrDaemonUnreachable", err)
+		}
+	})
+	t.Run("stale socket", func(t *testing.T) {
+		workDir := tmpWorkDir(t)
+		ln, err := net.Listen("unix", SockPath(workDir))
+		if err != nil {
+			t.Fatal(err)
+		}
+		ln.(*net.UnixListener).SetUnlinkOnClose(false)
+		_ = ln.Close()
+		if _, err := DrainBusy(context.Background(), workDir); !errors.Is(err, ErrDaemonUnreachable) {
+			t.Fatalf("err = %v, want ErrDaemonUnreachable", err)
+		}
+	})
+	t.Run("server error is not unreachable", func(t *testing.T) {
+		workDir := serveSocket(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			writeError(w, http.StatusInternalServerError, "probe exploded")
+		}))
+		_, err := DrainBusy(context.Background(), workDir)
+		if err == nil || errors.Is(err, ErrDaemonUnreachable) || errors.Is(err, ErrDrainUnsupported) {
+			t.Fatalf("err = %v, want a plain failure", err)
+		}
+	})
+}

@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"syscall"
 	"time"
 
 	"github.com/blackpaw-studio/leo/internal/drain"
@@ -16,6 +17,10 @@ import (
 // ErrDrainUnsupported means the running daemon predates graceful restart
 // (it has no /drain routes) or runs without a drain manager.
 var ErrDrainUnsupported = errors.New("the running daemon does not support graceful restart")
+
+// ErrDaemonUnreachable means no daemon answers the socket (it is missing,
+// or nothing listens on it), so there is nothing to drain.
+var ErrDaemonUnreachable = errors.New("no daemon is listening on the socket")
 
 // DrainBusy asks the daemon which agents are busy now.
 func DrainBusy(ctx context.Context, workDir string) ([]drain.Probe, error) {
@@ -113,6 +118,9 @@ func sendRaw(ctx context.Context, client *http.Client, method, url string, paylo
 	}
 	resp, err := client.Do(req)
 	if err != nil {
+		if errors.Is(err, syscall.ENOENT) || errors.Is(err, syscall.ECONNREFUSED) {
+			return 0, nil, fmt.Errorf("%w: %w", ErrDaemonUnreachable, err)
+		}
 		return 0, nil, fmt.Errorf("connecting to daemon: %w", err)
 	}
 	defer resp.Body.Close()

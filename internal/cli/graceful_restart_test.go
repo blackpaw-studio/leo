@@ -498,3 +498,44 @@ func TestUpdateRestartConsent(t *testing.T) {
 		})
 	}
 }
+
+// A busy check that fails for a reason other than "no daemon" or "old
+// daemon" must not silently skip a drain the operator asked for.
+func TestGracefulRestartBusyCheckFailure(t *testing.T) {
+	probeErr := errors.New("decoding GET /drain/busy response (status 500)")
+	for _, tc := range []struct {
+		name        string
+		err         error
+		opts        gracefulOptions
+		interactive bool
+		answers     []string
+		wantLog     []string
+		wantErr     bool
+	}{
+		{"unreachable daemon restarts", fmt.Errorf("%w: refused", daemon.ErrDaemonUnreachable), gracefulOptions{graceful: true}, false, nil, []string{"busy", "restart"}, false},
+		{"--graceful aborts", probeErr, gracefulOptions{graceful: true}, false, nil, []string{"busy"}, true},
+		{"--graceful interactive aborts", probeErr, gracefulOptions{graceful: true}, true, nil, []string{"busy"}, true},
+		{"--graceful --force restarts", probeErr, gracefulOptions{graceful: true, force: true}, false, nil, []string{"busy", "restart"}, false},
+		{"--no-graceful restarts", probeErr, gracefulOptions{noGraceful: true}, true, nil, []string{"busy", "restart"}, false},
+		{"unattended without a flag restarts as before", probeErr, gracefulOptions{}, false, nil, []string{"busy", "restart"}, false},
+		{"interactive without a flag declines by default", probeErr, gracefulOptions{}, true, []string{""}, []string{"busy"}, true},
+		{"interactive without a flag restarts on yes", probeErr, gracefulOptions{}, true, []string{"y"}, []string{"busy", "restart"}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newGracefulFixture(tc.interactive, "a")
+			f.drain.busyErr = tc.err
+			f.answers = tc.answers
+			err := f.run(t, tc.opts)
+			if (err != nil) != tc.wantErr {
+				t.Fatalf("err = %v, wantErr %v\noutput:\n%s", err, tc.wantErr, f.out.String())
+			}
+			if err != nil && !strings.Contains(err.Error(), "busy") {
+				t.Fatalf("err = %v, want it to say the busy check failed", err)
+			}
+			f.wantLog(t, tc.wantLog...)
+			if len(f.answers) != 0 {
+				t.Fatalf("unanswered questions left: %q", f.answers)
+			}
+		})
+	}
+}
