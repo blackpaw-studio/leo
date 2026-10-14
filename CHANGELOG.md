@@ -17,6 +17,18 @@ All notable user-visible changes to Leo are documented here.
 
 ### Added
 
+- **Graceful daemon restart.** `leo service restart` and `leo update` check
+  for agents that are mid-turn and offer to let them pause first
+  (`N agents are working (...). Graceful restart? [Y/n]`). Busy agents get an
+  urgent message to save their work and end their turn; the restart waits
+  until they are idle (up to `--drain-timeout`, default 10m), and the new
+  daemon tells them to resume. Cron firings due during the drain are deferred,
+  not dropped. `--graceful` / `--no-graceful` answer the prompt in advance,
+  and `--force` restarts anyway at the timeout. Unattended runs without a flag
+  restart at once, as before; an unattended `leo update` with an explicit flag
+  now counts as consent to restart. The web UI's restart button always drains
+  (`--graceful --force`). A daemon older than this release restarts at once
+  with a warning.
 - **Per-dispatch `environments`.** `leo_dispatch`, `leo dispatch --environment`
   and `POST /api/dispatch` accept an ordered environment list that replaces
   the inherited one. `/api/v1` dispatches report `environments` and

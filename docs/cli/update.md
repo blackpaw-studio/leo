@@ -22,6 +22,8 @@ Operational instructions/skills are served on demand via the `leo_skill` MCP too
 
 After the swap, `leo update` offers to restart the daemon so the new binary actually serves requests.
 
+The restart is a [graceful restart](service.md#leo-service-restart): if agents are mid-turn, leo asks whether to let them pause first, and accepts the same `--graceful`, `--no-graceful`, `--drain-timeout` and `--force` flags as `leo service restart`. Run without a terminal, `leo update` normally leaves the daemon on the old binary, since nobody can answer "Restart it now?"; passing `--graceful` or `--no-graceful` explicitly counts as consent to restart. The first update to a version with graceful restart talks to a daemon that predates it, so that one restart happens at once, with a warning.
+
 Restarting the daemon is not enough on its own: restoring agents respawns them from the args and env stored in their records, so a change delivered through either — a new harness env var, an edited template — does not reach a running agent by itself. Once the daemon is back, `leo update` therefore asks it which running agents would actually change if restarted, and offers to bounce exactly those:
 
 ```
@@ -37,7 +39,7 @@ Restart them now? [Y/n]
 
 - "Would change if restarted" is measured, not guessed: leo re-resolves each agent from the current config and diffs the result against its stored record, so `leo.yaml` and template edits are reported alongside binary upgrades, and an agent whose wiring is already current is never listed.
 - Nothing free-form is printed. Env drift shows key **names** only (`+` added, `~` changed, `-` removed), since an agent's env holds live credentials; argv drift is summarized per flag, echoing a value only when it's short and single-line (`--model sonnet -> opus`) and eliding it otherwise (`--append-system-prompt changed`).
-- Restarting preserves the conversation (it resumes, like [`leo agent restart`](agent.md)), but interrupts whatever turn the agent is mid-way through.
+- Restarting preserves the conversation (it resumes, like [`leo agent restart`](agent.md)), but interrupts whatever turn the agent is mid-way through. This offer comes right after the daemon restart, when agents drained by a graceful restart may have just started their resume turn; bouncing one interrupts that turn.
 - Agents whose template was deleted, or whose harness changed, are never listed — leo cannot re-resolve them, so a restart would not change anything.
 - With no drift, nothing is printed.
 - Non-interactively, the agents are listed with the remedy (`leo agent restart --all`) and nothing is bounced.
@@ -52,6 +54,10 @@ Suspended agents need no prompt: resuming one re-resolves its wiring the same wa
 | `--pr <n>` | Install the most recent successful prerelease build for PR `n`. Needs a GitHub token (see below). |
 | `--unstable` | Install the most recent passing build of the `main` branch. Needs a GitHub token (see below). |
 | `--version <tag>` | Pin to a specific version. Supports `pr-<n>-<sha>` for PR builds and `main-<sha>` for main builds; stable releases are still installed via the default no-flag form. |
+| `--graceful` | Drain busy agents before the daemon restart without asking. Without a terminal, also consents to the restart. |
+| `--no-graceful` | Restart the daemon at once even if agents are busy. Without a terminal, also consents to the restart. |
+| `--drain-timeout <d>` | How long a graceful restart waits for busy agents (default `10m`, at most `24h`). |
+| `--force` | When the drain times out, restart anyway instead of asking or aborting. |
 
 An `--allow-unsigned` escape hatch exists for releases published without a cosign signature (SHA-256 checksum only). It is hidden from `--help` and should only be used when explicitly advised; the same behavior can be toggled with the equivalent env var.
 
@@ -105,6 +111,9 @@ leo update --unstable
 
 # Pin to a specific main build
 leo update --version main-a1b2c3d
+
+# Unattended: update and restart, letting busy agents pause first
+leo update --graceful --force
 ```
 
 ## See Also
