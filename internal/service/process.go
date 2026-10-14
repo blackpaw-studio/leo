@@ -980,6 +980,9 @@ func defaultSupervisedExec(opts RunSupervisedOptions) error {
 	// references — e.g. a Start/Restart cleared OpeningBriefID after
 	// rebuilding ClaudeArgs fresh (see agent.resolveOpeningPrompt).
 	agent.SweepOpeningPromptBriefs(homePath)
+	// Graceful restart: the CLI drains busy agents through the socket's
+	// /drain routes before it restarts the daemon.
+	srv.SetDrain(newDrainManager(srv, supervisor, tmuxPath, filepath.Join(homePath, "state")))
 	if err := srv.Start(); err != nil {
 		fmt.Fprintf(os.Stderr, "warning: daemon server failed to start: %v\n", err)
 	} else {

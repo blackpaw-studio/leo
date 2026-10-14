@@ -20,6 +20,7 @@ import (
 	"github.com/blackpaw-studio/leo/internal/consult"
 	"github.com/blackpaw-studio/leo/internal/cron"
 	"github.com/blackpaw-studio/leo/internal/devices"
+	"github.com/blackpaw-studio/leo/internal/drain"
 	"github.com/blackpaw-studio/leo/internal/harness"
 	"github.com/blackpaw-studio/leo/internal/harness/claude/bridgemod"
 	"github.com/blackpaw-studio/leo/internal/leomcp"
@@ -136,6 +137,11 @@ type Server struct {
 	chatStore          *chat.Store
 	chatAttachmentsDir string
 	chatPublisher      observe.Publisher
+	// drain is the graceful-restart drain manager (see SetDrain) and
+	// drainNotifier the web server's agent messenger it reaches agents
+	// through, set by StartWeb.
+	drain         atomic.Pointer[drain.Manager]
+	drainNotifier atomic.Pointer[drainNotifierHolder]
 	// webSources are the web server's bridge feed and dispatch counts,
 	// merged into the local /state rows; set by StartWeb.
 	webSources atomic.Pointer[web.AgentSources]
@@ -242,6 +248,11 @@ func New(sockPath, configPath string, processes ProcessStateProvider, opts ...Op
 	mux.HandleFunc("POST /task/disable", s.handleTaskDisable)
 	mux.HandleFunc("GET /task/list", s.handleTaskList)
 	mux.HandleFunc("POST /config/reload", s.handleConfigReload)
+	mux.HandleFunc("GET /drain/busy", s.handleDrainBusy)
+	mux.HandleFunc("POST /drain", s.handleDrainBegin)
+	mux.HandleFunc("GET /drain", s.handleDrainStatus)
+	mux.HandleFunc("POST /drain/commit", s.handleDrainCommit)
+	mux.HandleFunc("POST /drain/cancel", s.handleDrainCancel)
 
 	// Task-run observability: a `leo run` subprocess (cron, web run-now, or
 	// manual invocation) has no in-process access to the daemon's RunLog, so
@@ -476,6 +487,7 @@ func (s *Server) StartWeb(cfg *config.Config, agentSvc web.AgentService) error {
 		Chat:       web.ChatOptions{Store: s.chatStore, AttachmentsDir: s.chatAttachmentsDir, Publisher: s.chatPublisher, TaskRun: s.TaskRun},
 	}, observeOpts...)
 	s.setControl(s.webServer.ControlHandler())
+	s.setDrainNotifier(s.webServer.DrainNotifier())
 	if s.chatStore != nil {
 		s.webServer.StartChat(s.parentContext)
 		s.setChat(s.webServer.ChatHandler())

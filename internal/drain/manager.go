@@ -174,6 +174,12 @@ func (m *Manager) Begin(ctx context.Context, timeout time.Duration) (Status, err
 	return m.Status(), nil
 }
 
+// BusyAgents reports the agents that are busy now, without starting a
+// drain.
+func (m *Manager) BusyAgents(ctx context.Context) ([]Probe, error) {
+	return m.deps.Prober.BusyAgents(ctx)
+}
+
 // Status returns a snapshot and renews the drain's lease.
 func (m *Manager) Status() Status {
 	m.mu.Lock()
