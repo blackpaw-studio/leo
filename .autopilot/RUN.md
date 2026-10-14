@@ -120,12 +120,13 @@ Lane: B-006
   Branch: autopilot-lane/B-006
   Base: 8835d669cedd3308eed39190e2957acceed86f41
   Tier: light
-  State: building
+  State: shelved
   Fixes: 0
   Wip: none
   Dispatched: 2026-10-14T03:53:18Z
   Reverifies: 0
   Reviewed-tip: none
+  Tokens: 2.79M in (2.61M cache read), ≥15.6k out, 36 requests
 
 Finished 1: B-001 landed c6e8dc0afd640ffc408aaae1ec5b75c3b96b716e · shot not visually verified
 - B-001 notes: verify.md restart line uses pkill (SIGTERM) → false bounce; should be kill -9. Fixed port 8391 can collide across parallel lanes. First review/verify dispatches came back lost after ~30s; retries succeeded. Memory note project_leo_update_bounces_all_agents is stale.
@@ -141,3 +142,5 @@ Finished 5: B-003 landed 59b11c21c7b560486d25ec71ed17c84dadb7cfea · shot not vi
 Finished 6: B-005 blocked
 - EARLY STOP: B-005 runner reported Error: review.concurrency (codex-reviewer) failed twice with "interactive composer not ready" (d-bff4ca8845f1, d-cf18cc4018c5; turn rejected, undelivered, ~60s each). Treated as a failed dispatch per the Loop: no new lanes; B-006 drains.
 - Early stop (failed dispatch) at 2026-10-14T03:54:54Z
+Finished 7: B-006 done (no code change)
+- B-006: already fixed by 85e9c5e3 (PR #223, v0.35.0); no CHANGELOG entry (would misdate a shipped fix). Issue #175 still open — closing is Evan's call.

@@ -41,9 +41,11 @@ Source: owner (vision, issue #160)
 Question: Built, tested and live-verified, but the concurrency review never ran: review.concurrency (codex-reviewer) failed twice with "interactive composer not ready". I'd pick: retry next run once the codex-reviewer route works (or route review.concurrency to a claude reviewer). Work kept on autopilot-shelved/B-005.
 Answer:
 
-## B-006 · `leo update` stale-agent check races the daemon restart   [ready]
+## B-006 · `leo update` stale-agent check races the daemon restart   [done]
 Accept: the post-update check waits for the new daemon before judging agents stale; no false warning.
 Source: owner (vision, issue #175)
+Done: no code change — already fixed by 85e9c5e3 (PR #223, v0.35.0): restartDaemonAndWait → daemon.WaitReady requires a new PID with ready=true before maybeRestartStaleAgents
+Verified: not visually verified — no diff; isolated daemon /health went old PID ready → gap → new PID ready
 
 ## B-007 · Dispatch viewer close retried every 10 s forever   [ready]
 Accept: a stale record whose viewer is already gone is closed once and not retried; log noise stops.
