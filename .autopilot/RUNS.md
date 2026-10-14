@@ -12,7 +12,7 @@ Shipped
 • B-004 Headless continuations delivered only after Start (not visually verified) · light→full
 • B-003 Persistent codex/opencode no longer recorded as failures — turn hooks + opencode leo plugin (not visually verified) · full
 • B-006 done, no code change — fixed in v0.35.0 (#223); issue #175 still open
-• B-021, B-003, B-004 built before B-003/B-005 order (independent)
+• B-021 built first (your bug, top of queue); B-003 built alongside B-002 (independent)
 Calls I made — reply "veto D-0xx"
 • D-005 B-001 no production change · D-013 go-runewidth direct dep · D-018 accepted cancel-race window · D-019 hooks as completion signal · D-021 opencode plugin in ~/Library/Caches/leo/opencode/ (D-005–D-024 in DECISIONS)
 Needs you
