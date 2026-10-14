@@ -2,12 +2,14 @@
 
 Ranked. Milestone: reliability (VISION.md "Done looks like"). Items sourced from memory notes say "verify first": reproduce on current main before fixing; if it no longer reproduces, mark done with the evidence.
 
-## B-021 · Nested dispatch completion notifications never wake the parent…   [ready]
+## B-021 · Nested dispatch completion notifications never wake the parent…   [done]
 Type: bug
 Report: Nested dispatch completion notifications never wake the parent dispatch: an implement dispatch that calls leo_dispatch and ends its turn to await the child's notification (the documented default) sits idle forever after the child finishes. Seen 2026-10-13 in autopilot runners d-6daead1ca329 (planner d-968f0cca86f6 done, runner idle 35 min) and d-3628f831baf4 (implementer d-dcbef2370461 done, runner idle); only an explicit leo_send_dispatch nudge + leo_wait recovered them. Either deliver child notifications to dispatch sessions or have leo_dispatch tell dispatch callers to collect with leo_wait.
 Accept: A failing test reproduces the report; it passes after the fix; nothing else regresses.
 Source: owner (/issue, 2026-10-13)
 Inbox: 20261014T014703194176Z-99571247#1
+Done: 0ac8ed48 (merge eb2d949e) — caller harness resolved from the parent dispatch record
+Verified: not visually verified — daemon-only change; isolated daemon showed child notification suppressed on base, pending on lane
 
 ## B-001 · Persistent-task sessions and config processes survive `leo update`   [done]
 Accept: a daemon restart adopts surviving tmux sessions for config `processes:` and `runtime: persistent` task agents, as it already does for ephemeral agents; shown on the isolated daemon (start, kill daemon PID, restart, session pane PID unchanged).
