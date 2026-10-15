@@ -452,18 +452,17 @@ func validAnswer(m Message, answer Answer) error {
 	return validAnswerFor(*m.Input, answer)
 }
 
-// WithdrawRequest is leo_chat_ask_withdraw. Caller, Task and RunID are as
+// WithdrawRequest is leo_chat_ask_withdraw. Caller is the calling process, as
 // in AskRequest.
 type WithdrawRequest struct {
 	Caller    string
-	Task      string
-	RunID     string
 	MessageID string
 }
 
 // WithdrawAsk closes the caller's own open ask: it expires as withdrawn and
-// whatever waits on it wakes. Another caller's ask is refused, and one that
-// is no longer open conflicts.
+// whatever waits on it wakes. Ownership is the asker recorded with the ask,
+// not the caller's current task context. Another caller's ask is refused, and
+// one that is no longer open conflicts.
 func (s *Service) WithdrawAsk(_ context.Context, req WithdrawRequest) (Message, error) {
 	if err := s.enter(); err != nil {
 		return Message{}, err
@@ -472,13 +471,8 @@ func (s *Service) WithdrawAsk(_ context.Context, req WithdrawRequest) (Message, 
 	if !validID(req.MessageID) {
 		return Message{}, fmt.Errorf("%w: message_id must be a message id", ErrInvalid)
 	}
-	task, _ := s.withRun(req.Caller, req.Task, req.RunID)
-	agent, _, err := s.thread(req.Caller, task)
-	if err != nil {
-		return Message{}, err
-	}
 	m, err := s.opts.Store.Message(req.MessageID)
-	if err != nil || m.Agent != agent || m.Kind != KindAsk || m.Asker != req.Caller {
+	if err != nil || m.Kind != KindAsk || m.Asker == "" || m.Asker != req.Caller {
 		return Message{}, fmt.Errorf("%w: %s is not your ask", ErrInvalid, req.MessageID)
 	}
 	if m.State != StateOpen || !s.closeAsk(m.ID, ClosedWithdrawn) {

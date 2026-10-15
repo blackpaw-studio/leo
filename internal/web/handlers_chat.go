@@ -549,7 +549,7 @@ func (s *Server) handleAgentChatAsk(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, apiResponse{OK: true, Data: res})
 }
 
-// POST /api/agent/{name}/chat/ask/withdraw {message_id, task, run_id}
+// POST /api/agent/{name}/chat/ask/withdraw {message_id}
 func (s *Server) handleAgentChatAskWithdraw(w http.ResponseWriter, r *http.Request) {
 	if !s.chatAvailable(w) {
 		return
@@ -558,7 +558,7 @@ func (s *Server) handleAgentChatAskWithdraw(w http.ResponseWriter, r *http.Reque
 	if !ok {
 		return
 	}
-	m, err := s.chat.WithdrawAsk(r.Context(), chat.WithdrawRequest{Caller: r.PathValue("name"), Task: req.Task, RunID: req.RunID, MessageID: req.MessageID})
+	m, err := s.chat.WithdrawAsk(r.Context(), chat.WithdrawRequest{Caller: r.PathValue("name"), MessageID: req.MessageID})
 	if err != nil {
 		writeChatError(w, err)
 		return

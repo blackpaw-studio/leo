@@ -265,7 +265,7 @@ without a token for the Mac app.
 | `POST /api/v1/chat/{agent}/read` | `{up_to}` | |
 
 The agent tools use `POST /api/agent/{name}/chat/{post,ask,ask/withdraw,history}`
-(agent token); `ask/withdraw` takes `{message_id, task?, run_id?}` and answers
+(agent token); `ask/withdraw` takes `{message_id}` and answers
 `{message_id, withdrawn: true}`, with `400` for another agent's ask and `409`
 for one that is no longer open.
 

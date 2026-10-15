@@ -1452,3 +1452,17 @@ func TestCloseAsksOfClosesOnlyThatAgentsAsks(t *testing.T) {
 		t.Fatalf("delivered %q", got)
 	}
 }
+
+// Who may withdraw an ask is who asked it, as recorded when it was posted: an
+// agent now running a persistent task owned by another agent still owns the
+// ask it made in its own thread.
+func TestWithdrawWorksFromAnotherTasksContext(t *testing.T) {
+	f := newFixture(t)
+	ask := abandonedAsk(t, f, 0)
+	f.cfg.Tasks["digest"] = config.TaskConfig{Runtime: "persistent", Template: "assistant", Owner: "web"}
+	f.runs["assistant"] = [2]string{"digest", "run-7"}
+	got, err := f.svc.WithdrawAsk(context.Background(), WithdrawRequest{Caller: "assistant", MessageID: ask.ID})
+	if err != nil || got.State != StateExpired || got.ClosedReason != ClosedWithdrawn {
+		t.Fatalf("withdraw = %s/%q, %v", got.State, got.ClosedReason, err)
+	}
+}
