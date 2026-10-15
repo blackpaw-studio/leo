@@ -164,8 +164,8 @@ type AskRequest struct {
 	RunID    string
 	Question string
 	// Options (legacy: buttons) and Input are alternatives; give one.
-	Options   []Option
-	Input     *Input
+	Options []Option
+	Input   *Input
 	// Timeout is the ask's deadline; 0 means none (except for an ask with no
 	// agent to deliver a late answer to, which gets DefaultAskTimeout).
 	Timeout   time.Duration
@@ -313,8 +313,13 @@ func (s *Service) waitAsk(ctx context.Context, id string, wt *waiter, window tim
 	case <-ctx.Done():
 	case <-s.ctx.Done():
 	}
-	if s.waiters.leave(wt) && ctx.Err() == nil {
-		return s.askOutcome(id)
+	if s.waiters.leave(wt) {
+		if ctx.Err() == nil {
+			return s.askOutcome(id)
+		}
+		// The answer landed while this call counted as its reader, but the
+		// caller is gone: nobody else will take it.
+		s.deliverStoredAnswer(id)
 	}
 	res := noAnswer(id)
 	res.Pending = true
@@ -394,9 +399,48 @@ func (s *Service) Answer(agent, id string, answer Answer) (Message, error) {
 	if !ok {
 		return Message{}, ErrConflict
 	}
-	_ = s.waiters.settle(id, &answer)
+	blocked := s.waiters.settle(id, &answer)
 	s.publishUpdated(id, ChangeAnswer)
-	return s.opts.Store.Message(id)
+	stored, err := s.opts.Store.Message(id)
+	if err != nil {
+		return Message{}, err
+	}
+	if blocked == 0 {
+		s.deliverAnswer(stored)
+	}
+	return stored, nil
+}
+
+// deliverStoredAnswer hands ask id's stored answer to its agent.
+func (s *Service) deliverStoredAnswer(id string) {
+	ask, err := s.opts.Store.Message(id)
+	if err != nil {
+		s.opts.Logf("chat: reading ask %s for late delivery: %v", id, err)
+		return
+	}
+	s.deliverAnswer(ask)
+}
+
+// deliverAnswer delivers an answer no call was blocked on to the agent that
+// asked, as an inbound chat message replying to the ask: through the usual
+// delivery, so a suspended agent resumes for it. An ask with no agent to
+// hand it to (a task run's) is skipped; a resume still returns the answer.
+func (s *Service) deliverAnswer(ask Message) {
+	if ask.Kind != KindAsk || ask.State != StateAnswered || ask.Answer == nil || ask.Asker != ask.Agent {
+		return
+	}
+	reply, err := s.insert(Message{Agent: ask.Agent, Direction: DirectionIn, Kind: KindText, Text: answerText(ask), ReplyTo: ask.ID, State: StatePending}, nil, nil, nil)
+	if err != nil {
+		s.opts.Logf("chat: storing the late answer to %s: %v", ask.ID, err)
+		return
+	}
+	stored, err := s.opts.Store.Message(reply.ID)
+	if err != nil {
+		s.opts.Logf("chat: reading the late answer to %s: %v", ask.ID, err)
+		return
+	}
+	s.publish(EventMessage, messageEvent(stored))
+	s.queues.enqueue(ask.Agent, func() { s.deliver(stored) })
 }
 
 // validAnswer checks answer against the input of an ask or permission
