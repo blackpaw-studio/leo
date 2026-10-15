@@ -13,7 +13,9 @@ gets to later are simply lost.
 ## Behavior
 
 1. **No deadline by default.** An ask with `timeout_s` omitted (or 0) stays
-   `open` until it is answered, withdrawn, or its agent is gone. A positive
+   `open` until it is answered, withdrawn, or its agent is gone. Exception:
+   an ask with no late-delivery target (a oneshot task run, or a persistent
+   task whose owner isn't the running agent) keeps the old 300 s default. A positive
    `timeout_s` keeps today's semantics, including the 1 h cap. The per-call
    `wait` still only bounds the call, which returns `pending` as today.
 2. **Late answers are delivered.** When an ask is answered and no call is
@@ -45,10 +47,9 @@ gets to later are simply lost.
 
 ## Clients
 
-- Web UI: an open ask with no deadline renders as answerable with no
-  countdown. An expired ask shows its `closed_reason`.
-- iOS lives outside this repo. A follow-up note goes to the iOS
-  project to handle a missing deadline and `closed_reason`.
+- `internal/web` has no chat view, so nothing changes there.
+- iOS, the Mac app, and leoterm live outside this repo. A follow-up note goes to those
+  clients: handle a missing `deadline` and the new `closed_reason`.
 
 ## Docs
 
