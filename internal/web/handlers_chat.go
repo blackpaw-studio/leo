@@ -75,16 +75,25 @@ func (s *Server) setupChat(opts ChatOptions) {
 	})
 }
 
-// StartChat expires prompts the previous daemon left open and starts
-// attachment retention, until ctx ends.
+// StartChat recovers the asks and prompts the previous daemon left open and
+// starts attachment retention, until ctx ends.
 func (s *Server) StartChat(ctx context.Context) {
 	if s.chat == nil {
 		return
 	}
 	if err := s.chat.Recover(); err != nil {
-		fmt.Fprintf(os.Stderr, "chat: expiring stale prompts: %v\n", err)
+		fmt.Fprintf(os.Stderr, "chat: recovering asks and prompts: %v\n", err)
 	}
 	go s.chat.Run(ctx)
+}
+
+// CloseChatAsksOf closes a gone agent's open chat asks. Nil-safe: with chat
+// off there are none.
+func (s *Server) CloseChatAsksOf(name string) {
+	if s == nil || s.chat == nil {
+		return
+	}
+	s.chat.CloseAsksOf(name)
 }
 
 // chatAgents lists every agent record, running or stopped.

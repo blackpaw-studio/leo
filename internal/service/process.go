@@ -1015,6 +1015,9 @@ func defaultSupervisedExec(opts RunSupervisedOptions) error {
 		if cfg, err := config.Load(configPath); err == nil {
 			if err := srv.StartWeb(cfg, agentMgr); err != nil {
 				fmt.Fprintf(os.Stderr, "warning: web UI failed to start: %v\n", err)
+			} else {
+				// An operator stop or delete ends the agent's open chat asks.
+				agentMgr.SetGoneHook(srv.CloseChatAsksOf)
 			}
 		}
 	}
