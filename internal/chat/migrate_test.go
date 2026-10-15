@@ -58,7 +58,8 @@ func TestOpenStoreUpgradesAV0490Database(t *testing.T) {
 		t.Fatalf("migrated answer = %+v", a.Answer)
 	}
 	b, _ := st.Message("01B")
-	if b.Answer != nil || b.State != StateOpen || b.Input == nil {
+	// The v4 step expires an ask left open by a crash.
+	if b.Answer != nil || b.State != StateExpired || b.Input == nil {
 		t.Fatalf("open ask = %+v", b)
 	}
 	c, _ := st.Message("01C")
@@ -148,11 +149,51 @@ func TestOpenStoreUpgradesAV2DatabaseAddsSchedules(t *testing.T) {
 		t.Fatalf("upgrade: %v", err)
 	}
 	defer func() { _ = st.Close() }()
-	if v := userVersion(t, st); v != 3 {
-		t.Fatalf("user_version = %d, want 3", v)
+	if v := userVersion(t, st); v != schemaVersion {
+		t.Fatalf("user_version = %d, want %d", v, schemaVersion)
 	}
 	at := time.Date(2026, 10, 13, 9, 0, 0, 0, time.UTC)
 	if err := st.InsertSchedule(Schedule{ID: "S1", Agent: "assistant", Kind: KindText, Text: "hi", FireAt: at, Created: at}); err != nil {
 		t.Fatalf("schedules table unusable: %v", err)
+	}
+}
+
+func TestOpenStoreUpgradesAV3DatabaseAddsAskColumns(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "chat.db")
+	raw, err := sql.Open("sqlite", "file:"+path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw.SetMaxOpenConns(1)
+	if err := migrate(raw, migrations[:3]); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := raw.Exec(`INSERT INTO messages (id, agent, direction, kind, text, state, ts) VALUES
+		('01A', 'assistant', 'out', 'ask', 'Open one', 'open', 1000),
+		('01B', 'assistant', 'out', 'ask', 'Done one', 'answered', 2000),
+		('01C', 'assistant', 'out', 'permission', 'Bash: ls', 'open', 3000)`); err != nil {
+		t.Fatal(err)
+	}
+	_ = raw.Close()
+
+	st, err := OpenStore(path)
+	if err != nil {
+		t.Fatalf("upgrade: %v", err)
+	}
+	defer func() { _ = st.Close() }()
+	if v := userVersion(t, st); v != 4 {
+		t.Fatalf("user_version = %d, want 4", v)
+	}
+	open, _ := st.Message("01A")
+	if open.State != StateExpired || open.ClosedReason != ClosedTimeout {
+		t.Fatalf("pre-v4 open ask = %s/%q, want expired/timeout", open.State, open.ClosedReason)
+	}
+	done, _ := st.Message("01B")
+	if done.State != StateAnswered || done.ClosedReason != "" {
+		t.Fatalf("answered ask changed: %s/%q", done.State, done.ClosedReason)
+	}
+	perm, _ := st.Message("01C")
+	if perm.State != StateOpen {
+		t.Fatalf("open permission prompt changed to %s", perm.State)
 	}
 }

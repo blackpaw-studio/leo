@@ -654,6 +654,7 @@ func New(configPath string, processes ProcessStateProvider, scheduler SchedulerP
 	apiMux.HandleFunc("POST /api/agent/permission", s.handleAPIPermission)
 	apiMux.HandleFunc("POST /api/agent/{name}/chat/post", s.handleAgentChatPost)
 	apiMux.HandleFunc("POST /api/agent/{name}/chat/ask", s.handleAgentChatAsk)
+	apiMux.HandleFunc("POST /api/agent/{name}/chat/ask/withdraw", s.handleAgentChatAskWithdraw)
 	apiMux.HandleFunc("POST /api/agent/{name}/chat/history", s.handleAgentChatHistory)
 	apiMux.HandleFunc("POST /api/agent/{name}/chat/schedule", s.handleAgentChatSchedule)
 	apiMux.HandleFunc("POST /api/agent/{name}/chat/schedule/list", s.handleAgentChatScheduleList)

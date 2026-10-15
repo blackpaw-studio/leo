@@ -115,8 +115,9 @@ func insertMessageTx(tx *sql.Tx, m Message, add []Attachment, link []string) err
 	if err != nil {
 		return err
 	}
-	_, err = tx.Exec(`INSERT INTO messages (`+messageColumns+`) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		m.ID, m.Agent, m.Direction, m.Kind, m.Text, m.Transcript, m.ReplyTo, m.Task, m.RunID, m.State, answer, input, meta, m.DeliveryRef, m.TS.UnixMilli())
+	_, err = tx.Exec(`INSERT INTO messages (`+messageColumns+`) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		m.ID, m.Agent, m.Direction, m.Kind, m.Text, m.Transcript, m.ReplyTo, m.Task, m.RunID, m.State, answer, input, meta, m.DeliveryRef, m.TS.UnixMilli(),
+		millisOrZero(m.Deadline), m.ClosedReason, m.Asker)
 	if err != nil {
 		return fmt.Errorf("inserting chat message: %w", err)
 	}
@@ -164,16 +165,28 @@ func encodeAnswer(a *Answer) (string, error) {
 	return string(b), nil
 }
 
-const messageColumns = `id, agent, direction, kind, text, transcript, reply_to, task, run_id, state, answer, input, meta, delivery_ref, ts`
+const messageColumns = `id, agent, direction, kind, text, transcript, reply_to, task, run_id, state, answer, input, meta, delivery_ref, ts, deadline, closed_reason, asker`
+
+// millisOrZero stores a zero time as 0 (no deadline) rather than the
+// year-1 millisecond count.
+func millisOrZero(t time.Time) int64 {
+	if t.IsZero() {
+		return 0
+	}
+	return t.UnixMilli()
+}
 
 func scanMessage(row interface{ Scan(...any) error }) (Message, error) {
 	var m Message
 	var input, answer, meta string
-	var ts int64
-	if err := row.Scan(&m.ID, &m.Agent, &m.Direction, &m.Kind, &m.Text, &m.Transcript, &m.ReplyTo, &m.Task, &m.RunID, &m.State, &answer, &input, &meta, &m.DeliveryRef, &ts); err != nil {
+	var ts, deadline int64
+	if err := row.Scan(&m.ID, &m.Agent, &m.Direction, &m.Kind, &m.Text, &m.Transcript, &m.ReplyTo, &m.Task, &m.RunID, &m.State, &answer, &input, &meta, &m.DeliveryRef, &ts, &deadline, &m.ClosedReason, &m.Asker); err != nil {
 		return Message{}, err
 	}
 	m.TS = time.UnixMilli(ts).UTC()
+	if deadline != 0 {
+		m.Deadline = time.UnixMilli(deadline).UTC()
+	}
 	if input != "" {
 		m.Input = new(Input)
 		if err := json.Unmarshal([]byte(input), m.Input); err != nil {
@@ -379,6 +392,57 @@ func (s *Store) Transition(id string, from []string, state string, answer *Answe
 	return n == 1, nil
 }
 
+// CloseAsk moves an open ask to expired with reason. It reports false,
+// without error, when id is not an open ask — someone else settled it first.
+func (s *Store) CloseAsk(id, reason string) (bool, error) {
+	res, err := s.db.Exec(`UPDATE messages SET state = ?, closed_reason = ? WHERE id = ? AND kind = ? AND state = ?`,
+		StateExpired, reason, id, KindAsk, StateOpen)
+	if err != nil {
+		return false, fmt.Errorf("closing chat ask: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return false, fmt.Errorf("closing chat ask: %w", err)
+	}
+	return n == 1, nil
+}
+
+// CloseAsksOf moves every open ask posted by asker to expired with reason,
+// returning their ids.
+func (s *Store) CloseAsksOf(asker, reason string) ([]string, error) {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return nil, fmt.Errorf("closing chat asks: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	rows, err := tx.Query(`SELECT id FROM messages WHERE kind = ? AND state = ? AND asker = ? ORDER BY id`, KindAsk, StateOpen, asker)
+	if err != nil {
+		return nil, fmt.Errorf("closing chat asks: %w", err)
+	}
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			_ = rows.Close()
+			return nil, fmt.Errorf("closing chat asks: %w", err)
+		}
+		ids = append(ids, id)
+	}
+	err = rows.Err()
+	_ = rows.Close()
+	if err != nil {
+		return nil, fmt.Errorf("closing chat asks: %w", err)
+	}
+	if _, err := tx.Exec(`UPDATE messages SET state = ?, closed_reason = ? WHERE kind = ? AND state = ? AND asker = ?`,
+		StateExpired, reason, KindAsk, StateOpen, asker); err != nil {
+		return nil, fmt.Errorf("closing chat asks: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("closing chat asks: %w", err)
+	}
+	return ids, nil
+}
+
 // SetTranscript records a voice message's transcript.
 func (s *Store) SetTranscript(id, transcript string) error {
 	if _, err := s.db.Exec(`UPDATE messages SET transcript = ? WHERE id = ?`, transcript, id); err != nil {
@@ -405,10 +469,10 @@ func (s *Store) OpenMessages(agent, kind, state string) ([]Message, error) {
 	return out, rows.Err()
 }
 
-// ExpireOpen moves every open message to expired: their waiters died with
-// the previous daemon. It returns the ids it moved.
-func (s *Store) ExpireOpen() ([]string, error) {
-	moved, err := s.moveAll(StateOpen, StateExpired)
+// ExpireOpen moves every open message of kind to expired. It returns the ids
+// it moved.
+func (s *Store) ExpireOpen(kind string) ([]string, error) {
+	moved, err := s.moveAll(kind, StateOpen, StateExpired)
 	if err != nil {
 		return nil, fmt.Errorf("expiring open messages: %w", err)
 	}
@@ -445,15 +509,15 @@ func (s *Store) MessagesInState(state string) ([]Message, error) {
 	return out, rows.Err()
 }
 
-// moveAll moves every message in state from to state to, returning their
-// ids and agents.
-func (s *Store) moveAll(from, to string) ([]Message, error) {
+// moveAll moves every message of kind in state from to state to, returning
+// their ids and agents.
+func (s *Store) moveAll(kind, from, to string) ([]Message, error) {
 	tx, err := s.db.Begin()
 	if err != nil {
 		return nil, err
 	}
 	defer func() { _ = tx.Rollback() }()
-	rows, err := tx.Query(`SELECT id, agent FROM messages WHERE state = ? ORDER BY id`, from)
+	rows, err := tx.Query(`SELECT id, agent FROM messages WHERE kind = ? AND state = ? ORDER BY id`, kind, from)
 	if err != nil {
 		return nil, err
 	}
@@ -471,7 +535,7 @@ func (s *Store) moveAll(from, to string) ([]Message, error) {
 	if err != nil {
 		return nil, err
 	}
-	if _, err := tx.Exec(`UPDATE messages SET state = ? WHERE state = ?`, to, from); err != nil {
+	if _, err := tx.Exec(`UPDATE messages SET state = ? WHERE kind = ? AND state = ?`, to, kind, from); err != nil {
 		return nil, err
 	}
 	return moved, tx.Commit()

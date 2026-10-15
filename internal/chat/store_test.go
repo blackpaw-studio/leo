@@ -504,3 +504,88 @@ func TestStoreCancelScheduleErrors(t *testing.T) {
 		t.Fatalf("fired = %v, want ErrConflict", err)
 	}
 }
+
+func TestStoreRoundTripsAskDeadlineReasonAndAsker(t *testing.T) {
+	st := openTestStore(t)
+	clock := newTestClock()
+	ids := NewULIDSource(clock.Now, nil)
+	m := msg(ids, clock, "assistant", DirectionOut, KindAsk, "Ship?")
+	m.State = StateOpen
+	m.Deadline = clock.Now().Add(10 * time.Minute)
+	m.Asker = "task:build"
+	m.ClosedReason = ClosedWithdrawn
+	mustInsert(t, st, m)
+	got, err := st.Message(m.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !got.Deadline.Equal(m.Deadline) || got.Asker != "task:build" || got.ClosedReason != ClosedWithdrawn {
+		t.Fatalf("round trip = deadline %v asker %q reason %q", got.Deadline, got.Asker, got.ClosedReason)
+	}
+	plain := msg(ids, clock, "assistant", DirectionOut, KindText, "hi")
+	mustInsert(t, st, plain)
+	got, _ = st.Message(plain.ID)
+	if !got.Deadline.IsZero() {
+		t.Fatalf("no deadline must scan to the zero time, got %v", got.Deadline)
+	}
+}
+
+func TestCloseAskClosesOnlyAnOpenAsk(t *testing.T) {
+	st := openTestStore(t)
+	clock := newTestClock()
+	ids := NewULIDSource(clock.Now, nil)
+	open := msg(ids, clock, "assistant", DirectionOut, KindAsk, "q")
+	open.State = StateOpen
+	answered := msg(ids, clock, "assistant", DirectionOut, KindAsk, "q")
+	answered.State = StateAnswered
+	perm := msg(ids, clock, "assistant", DirectionOut, KindPermission, "Bash")
+	perm.State = StateOpen
+	for _, m := range []Message{open, answered, perm} {
+		mustInsert(t, st, m)
+	}
+	for _, c := range []struct {
+		id   string
+		want bool
+	}{{open.ID, true}, {open.ID, false}, {answered.ID, false}, {perm.ID, false}} {
+		ok, err := st.CloseAsk(c.id, ClosedWithdrawn)
+		if err != nil || ok != c.want {
+			t.Fatalf("CloseAsk(%s) = %v, %v; want %v", c.id, ok, err, c.want)
+		}
+	}
+	got, _ := st.Message(open.ID)
+	if got.State != StateExpired || got.ClosedReason != ClosedWithdrawn {
+		t.Fatalf("closed ask = %s/%q", got.State, got.ClosedReason)
+	}
+	if p, _ := st.Message(perm.ID); p.State != StateOpen {
+		t.Fatalf("permission prompt = %s", p.State)
+	}
+}
+
+func TestCloseAsksOfClosesOnlyThatAskersOpenAsks(t *testing.T) {
+	st := openTestStore(t)
+	clock := newTestClock()
+	ids := NewULIDSource(clock.Now, nil)
+	mine := msg(ids, clock, "assistant", DirectionOut, KindAsk, "q")
+	mine.State, mine.Asker = StateOpen, "assistant"
+	other := msg(ids, clock, "web", DirectionOut, KindAsk, "q")
+	other.State, other.Asker = StateOpen, "web"
+	done := msg(ids, clock, "assistant", DirectionOut, KindAsk, "q")
+	done.State, done.Asker = StateAnswered, "assistant"
+	for _, m := range []Message{mine, other, done} {
+		mustInsert(t, st, m)
+	}
+	closed, err := st.CloseAsksOf("assistant", ClosedAgentGone)
+	if err != nil || len(closed) != 1 || closed[0] != mine.ID {
+		t.Fatalf("CloseAsksOf = %v, %v; want [%s]", closed, err, mine.ID)
+	}
+	got, _ := st.Message(mine.ID)
+	if got.State != StateExpired || got.ClosedReason != ClosedAgentGone {
+		t.Fatalf("closed ask = %s/%q", got.State, got.ClosedReason)
+	}
+	if o, _ := st.Message(other.ID); o.State != StateOpen {
+		t.Fatalf("another asker's ask = %s", o.State)
+	}
+	if d, _ := st.Message(done.ID); d.State != StateAnswered {
+		t.Fatalf("answered ask = %s", d.State)
+	}
+}

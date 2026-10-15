@@ -59,6 +59,7 @@ var Names = []string{
 	"leo_release",
 	"leo_chat_post",
 	"leo_chat_ask",
+	"leo_chat_ask_withdraw",
 	"leo_chat_history",
 	"leo_chat_schedule",
 	"leo_chat_schedule_list",

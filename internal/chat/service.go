@@ -129,16 +129,21 @@ func (s *Service) enter() error {
 
 func (s *Service) leave() { s.active.Done() }
 
-// Recover runs once at daemon start: prompts left open by the previous
-// daemon have no waiter any more, so they expire; reminders that came due
-// while it was down fire; and the reminder loop starts.
+// Recover runs once at daemon start. Permission prompts left open by the
+// previous daemon have no hook waiting on them any more, so they expire.
+// Open asks outlive the daemon: each gets its waiter back, and its deadline,
+// if it has one, re-armed (or applied at once if it has passed). Reminders
+// that came due while it was down fire, and the reminder loop starts.
 func (s *Service) Recover() error {
-	ids, err := s.opts.Store.ExpireOpen()
+	ids, err := s.opts.Store.ExpireOpen(KindPermission)
 	if err != nil {
 		return err
 	}
 	for _, id := range ids {
 		s.publishUpdated(id, ChangeState)
+	}
+	if err := s.recoverAsks(); err != nil {
+		return err
 	}
 	pending, err := s.opts.Store.MessagesInState(StatePending)
 	if err != nil {
@@ -155,6 +160,36 @@ func (s *Service) Recover() error {
 		defer s.leave()
 		s.runSchedules()
 	}()
+	return nil
+}
+
+// recoverAsks gives every open ask a waiter again, and re-arms or applies
+// its deadline. It runs inside an admission, so Close cannot start between
+// the check and the timers it adds.
+func (s *Service) recoverAsks() error {
+	if err := s.enter(); err != nil {
+		return nil // closing: the next daemon recovers them
+	}
+	defer s.leave()
+	open, err := s.opts.Store.MessagesInState(StateOpen)
+	if err != nil {
+		return fmt.Errorf("reading open asks: %w", err)
+	}
+	now := s.opts.Now()
+	for _, m := range open {
+		switch {
+		case m.Kind != KindAsk:
+		case m.Deadline.IsZero():
+			s.waiters.add(m.ID)
+		case !m.Deadline.After(now):
+			s.waiters.add(m.ID)
+			s.closeAsk(m.ID, ClosedTimeout)
+		default:
+			wt := s.waiters.add(m.ID)
+			s.active.Add(1)
+			go s.expireAsk(m.ID, wt, s.opts.After(m.Deadline.Sub(now)))
+		}
+	}
 	return nil
 }
 

@@ -526,6 +526,14 @@ func (s *Server) ReloadConfig() error {
 	return s.scheduler.Install(cfg)
 }
 
+// CloseChatAsksOf closes a gone (stopped or deleted) agent's open chat asks.
+// A no-op until StartWeb has run, and with chat off.
+func (s *Server) CloseChatAsksOf(name string) {
+	if s.webServer != nil {
+		s.webServer.CloseChatAsksOf(name)
+	}
+}
+
 // Shutdown gracefully stops the server and removes the socket file.
 func (s *Server) Shutdown() error {
 	s.scheduler.Stop()

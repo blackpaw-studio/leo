@@ -21,10 +21,13 @@ type waiters struct {
 }
 
 // waiter is one open message's: done closes once it is settled, with value
-// (the answer; nil when it ended without one).
+// (the answer; nil when it ended without one). blocked counts the calls
+// waiting on it, guarded by waiters.mu.
 type waiter struct {
-	done  chan struct{}
-	value *Answer
+	done    chan struct{}
+	value   *Answer
+	blocked int
+	settled bool
 }
 
 func newWaiters() *waiters { return &waiters{m: map[string]*waiter{}} }
@@ -50,21 +53,42 @@ func (w *waiters) remove(id string) {
 	delete(w.m, id)
 }
 
-// settle settles id's waiter with value, if it has one not yet settled.
-// Never blocks.
-func (w *waiters) settle(id string, value *Answer) {
+// join counts a call as blocked on wt. It reports false when wt is already
+// settled, which the call then reads from the store instead.
+func (w *waiters) join(wt *waiter) bool {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if wt.settled {
+		return false
+	}
+	wt.blocked++
+	return true
+}
+
+// leave uncounts a call joined to wt and reports whether wt was settled
+// while it was counted.
+func (w *waiters) leave(wt *waiter) (settled bool) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	wt.blocked--
+	return wt.settled
+}
+
+// settle settles id's waiter with value, removes it, and returns how many
+// calls were blocked on it: an answer nobody is blocked on is late. It
+// returns 0 when id has no waiter or it was already settled. Never blocks.
+func (w *waiters) settle(id string, value *Answer) (blocked int) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	wt, ok := w.m[id]
-	if !ok {
-		return
+	if !ok || wt.settled {
+		return 0
 	}
-	select {
-	case <-wt.done:
-	default:
-		wt.value = value
-		close(wt.done)
-	}
+	wt.settled = true
+	wt.value = value
+	close(wt.done)
+	delete(w.m, id)
+	return wt.blocked
 }
 
 // awaitEnd says what an ended wait means for the message: the state and

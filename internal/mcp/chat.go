@@ -16,18 +16,18 @@ import (
 // Leo Chat tool limits. The daemon re-validates every one of them; checking
 // here too turns a bad call into a precise error before a long-poll starts.
 const (
-	maxChatAskOptions     = 12
-	defaultChatAskTimeout = 300 * time.Second
-	maxChatAskTimeout     = time.Hour
-	maxChatHistoryLimit   = 200
-	maxChatPostFiles      = 10
+	maxChatAskOptions   = 12
+	maxChatAskTimeout   = time.Hour
+	maxChatHistoryLimit = 200
+	maxChatPostFiles    = 10
 	// chatAskHTTPMargin lets the daemon answer a timed-out ask before the
 	// HTTP client gives up on it.
 	chatAskHTTPMargin = time.Minute
 	// chatAskCallWindow is the longest one leo_chat_ask call waits: its
 	// HTTP deadline stays under leo's MCP tool ceiling, past which the
 	// harness kills the call. A longer ask comes back pending and is
-	// resumed by message_id; its own deadline lives in the daemon.
+	// resumed by message_id; its own deadline, if it has one, lives in the
+	// daemon.
 	chatAskCallWindow = leomcp.ToolTimeout - 2*chatAskHTTPMargin
 )
 
@@ -83,9 +83,13 @@ const (
 		"input says how it is answered: {type: buttons|radio|checkboxes|text, options, allow_text, min, max, placeholder}. " +
 		"buttons submit on tap; radio picks one; checkboxes pick min–max (default 0 to all); text takes free text. " +
 		"options (1–12 strings or {value, label} objects) are required for buttons/radio/checkboxes and forbidden for text; allow_text adds a free-text answer to a choice type. " +
-		"Omitting input and giving top-level options asks buttons. To ask about a file, leo_chat_post it first, then ask. timeout_s defaults to 300 (max 3600). " +
-		"Returns {values, labels, text, timed_out, message_id}; on timeout values is empty and timed_out is true. " +
-		"One call waits at most 30 minutes: if the question is still open then, it returns pending: true — call leo_chat_ask again with only that message_id to keep waiting."
+		"Omitting input and giving top-level options asks buttons. To ask about a file, leo_chat_post it first, then ask. " +
+		"The question has no deadline: it stays open until it is answered, you withdraw it, or you are stopped. Set timeout_s (1–3600) only if the answer is worthless after that long. " +
+		"Returns {values, labels, text, timed_out, closed_reason, message_id}; if it closed without an answer, values is empty, timed_out is true and closed_reason says why (timeout, withdrawn, agent_gone). " +
+		"One call waits at most 30 minutes: if the question is still open then, it returns pending: true. You do not need to keep calling: an answer that arrives later is delivered to you as a [Leo Chat] message replying to the ask, naming its message_id. " +
+		"Call leo_chat_ask again with only that message_id to wait on it again. Withdraw a question that no longer matters with leo_chat_ask_withdraw."
+	chatAskWithdrawDescription = "Withdraw your own open Leo Chat question (message_id from leo_chat_ask): it closes as withdrawn, so a late answer is neither accepted nor delivered. " +
+		"Errors if it is not your ask or no longer open. Returns {message_id, withdrawn: true}."
 	chatScheduleDescription = "Schedule a reminder: post text (Markdown) to the user's Leo Chat thread at a future time, even if the daemon restarts first. " +
 		"at is RFC3339 with an offset (e.g. 2026-10-14T09:00:00-04:00), strictly in the future and at most a year out. Returns {id, at}. " +
 		"From a scheduled task run the reminder posts as a task card in the task owner's thread."
@@ -133,7 +137,7 @@ func (r *registry) registerChat(client *daemonClient, processName string, schema
 				"max":         map[string]any{"type": "integer", "minimum": 1, "description": "Checkboxes: most choices (default all)."},
 				"placeholder": map[string]any{"type": "string", "description": "Hint in the text field."},
 			}, "required": []string{"type"}},
-			"timeout_s": map[string]any{"type": "integer", "minimum": 1, "maximum": int(maxChatAskTimeout.Seconds()), "description": "Seconds the question stays open (default 300)."},
+			"timeout_s": map[string]any{"type": "integer", "minimum": 0, "maximum": int(maxChatAskTimeout.Seconds()), "description": "Seconds the question stays open. Omit or 0: no deadline."},
 		}),
 	}, func(ctx context.Context, args map[string]any) (string, error) {
 		if r.dispatchID != "" {
@@ -145,6 +149,22 @@ func (r *registry) registerChat(client *daemonClient, processName string, schema
 		}
 		wait := time.Duration(req.WaitS) * time.Second
 		return client.chatCall(ctx, processName, "ask", req, chatAskHTTPTimeout(wait))
+	})
+	r.addContext(toolDef{
+		Name:        "leo_chat_ask_withdraw",
+		Description: chatAskWithdrawDescription,
+		InputSchema: schema(map[string]any{
+			"message_id": map[string]any{"type": "string", "description": "The ask to withdraw."},
+		}, "message_id"),
+	}, func(ctx context.Context, args map[string]any) (string, error) {
+		if r.dispatchID != "" {
+			return "", refuse("leo_chat_ask_withdraw")
+		}
+		id, err := stringArg(args, "message_id")
+		if err != nil {
+			return "", err
+		}
+		return client.chatCall(ctx, processName, "ask/withdraw", chatToolRequest{Task: r.task, RunID: r.runID, MessageID: id}, 0)
 	})
 	r.addContext(toolDef{
 		Name:        "leo_chat_history",
@@ -286,16 +306,18 @@ func (r *registry) parseChatAsk(args map[string]any) (chatToolRequest, error) {
 	if err := parseChatAskInput(args, &req); err != nil {
 		return req, err
 	}
-	timeout := defaultChatAskTimeout
 	if v, ok := args["timeout_s"]; ok {
 		n, ok := v.(float64)
-		if !ok || n != math.Trunc(n) || n < 1 || n > maxChatAskTimeout.Seconds() {
-			return req, fmt.Errorf("timeout_s must be an integer from 1 to %d", int(maxChatAskTimeout.Seconds()))
+		if !ok || n != math.Trunc(n) || n < 0 || n > maxChatAskTimeout.Seconds() {
+			return req, fmt.Errorf("timeout_s must be an integer from 0 to %d", int(maxChatAskTimeout.Seconds()))
 		}
-		timeout = time.Duration(n) * time.Second
+		// 0 is "no deadline", the same as leaving it out: the daemon is told
+		// only of a real one.
+		if timeout := time.Duration(n) * time.Second; timeout > 0 {
+			req.TimeoutS = timeout.Seconds()
+			req.WaitS = min(timeout, chatAskCallWindow).Seconds()
+		}
 	}
-	req.TimeoutS = timeout.Seconds()
-	req.WaitS = min(timeout, chatAskCallWindow).Seconds()
 	return req, nil
 }
 

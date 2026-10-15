@@ -57,10 +57,13 @@ type recordingPublisher struct {
 	events []observe.Event
 	// msgs carries every EventMessage's message to waitMessage.
 	msgs chan Message
+	// upds carries every EventUpdated payload to waitUpdate; a full buffer
+	// drops, as no test that waits on it publishes that many.
+	upds chan UpdatedPayload
 }
 
 func newRecordingPublisher() *recordingPublisher {
-	return &recordingPublisher{msgs: make(chan Message, 256)}
+	return &recordingPublisher{msgs: make(chan Message, 256), upds: make(chan UpdatedPayload, 256)}
 }
 
 func (p *recordingPublisher) Publish(ev observe.Event) {
@@ -69,6 +72,25 @@ func (p *recordingPublisher) Publish(ev observe.Event) {
 	p.mu.Unlock()
 	if mp, ok := ev.Payload.(*MessagePayload); ok && ev.Type == EventMessage {
 		p.msgs <- mp.Message
+	}
+	if up, ok := ev.Payload.(*UpdatedPayload); ok && ev.Type == EventUpdated {
+		select {
+		case p.upds <- *up:
+		default:
+		}
+	}
+}
+
+// waitUpdate returns the next unconsumed chat.updated payload, failing the
+// test if none arrives (a guard, not a wait the passing path pays).
+func (p *recordingPublisher) waitUpdate(t *testing.T) UpdatedPayload {
+	t.Helper()
+	select {
+	case u := <-p.upds:
+		return u
+	case <-time.After(10 * time.Second):
+		t.Fatal("no chat.updated event")
+		return UpdatedPayload{}
 	}
 }
 
@@ -451,7 +473,7 @@ func TestChatToolsDuringAPersistentRunCarryItsTaskAndRun(t *testing.T) {
 		open, _ := f.store.OpenMessages("assistant", KindAsk, StateOpen)
 		_, _ = f.svc.Answer("assistant", open[0].ID, Answer{Values: []string{"y"}})
 	}()
-	res, err := f.svc.Ask(context.Background(), AskRequest{Caller: "assistant", Question: "Publish?", Options: []Option{{Value: "y"}}})
+	res, err := f.svc.Ask(context.Background(), AskRequest{Caller: "assistant", Question: "Publish?", Options: []Option{{Value: "y"}}, Wait: 30 * time.Minute})
 	if err != nil || len(res.Values) != 1 || res.Values[0] != "y" {
 		t.Fatalf("ask = %+v, %v", res, err)
 	}
@@ -579,11 +601,11 @@ func TestAskTimesOutAndExpires(t *testing.T) {
 	f := newFixture(t)
 	done := make(chan AskResult, 1)
 	go func() {
-		r, _ := f.svc.Ask(context.Background(), AskRequest{Caller: "assistant", Question: "?", Options: []Option{{Value: "a", Label: "a"}}})
+		r, _ := f.svc.Ask(context.Background(), AskRequest{Caller: "assistant", Question: "?", Options: []Option{{Value: "a", Label: "a"}}, Timeout: 5 * time.Minute})
 		done <- r
 	}()
-	if d := <-f.timers.got; d != DefaultAskTimeout {
-		t.Fatalf("default timeout = %s", d)
+	if d := <-f.timers.got; d != 5*time.Minute {
+		t.Fatalf("timeout = %s", d)
 	}
 	f.timers.fireLast()
 	if r := <-done; !r.TimedOut {
@@ -601,11 +623,12 @@ func TestAskValidation(t *testing.T) {
 		many[i] = Option{Value: string(rune('a' + i)), Label: "x"}
 	}
 	for name, req := range map[string]AskRequest{
-		"no options":   {Caller: "assistant", Question: "?"},
-		"too many":     {Caller: "assistant", Question: "?", Options: many},
-		"no question":  {Caller: "assistant", Options: []Option{{Value: "a"}}},
-		"long timeout": {Caller: "assistant", Question: "?", Options: []Option{{Value: "a"}}, Timeout: 2 * time.Hour},
-		"dup values":   {Caller: "assistant", Question: "?", Options: []Option{{Value: "a"}, {Value: "a"}}},
+		"no options":       {Caller: "assistant", Question: "?"},
+		"too many":         {Caller: "assistant", Question: "?", Options: many},
+		"no question":      {Caller: "assistant", Options: []Option{{Value: "a"}}},
+		"long timeout":     {Caller: "assistant", Question: "?", Options: []Option{{Value: "a"}}, Timeout: 2 * time.Hour},
+		"negative timeout": {Caller: "assistant", Question: "?", Options: []Option{{Value: "a"}}, Timeout: -time.Second},
+		"dup values":       {Caller: "assistant", Question: "?", Options: []Option{{Value: "a"}, {Value: "a"}}},
 	} {
 		if _, err := f.svc.Ask(context.Background(), req); !errors.Is(err, ErrInvalid) {
 			t.Errorf("%s: err = %v", name, err)
@@ -637,6 +660,10 @@ func TestPermissionAnsweredFromChat(t *testing.T) {
 	}
 	if got := <-done; got != "allow" {
 		t.Fatalf("decision = %q", got)
+	}
+	f.svc.Flush()
+	if got := f.deliver.delivered(); len(got) != 0 {
+		t.Fatalf("a permission answer was delivered as a chat message: %q", got)
 	}
 }
 
@@ -741,18 +768,24 @@ func TestStopHookAfterToolPostInATwoPromptTurnPostsNothing(t *testing.T) {
 	}
 }
 
-func TestStartupExpiresOpenPrompts(t *testing.T) {
+func TestStartupExpiresOpenPermissionPrompts(t *testing.T) {
 	f := newFixture(t)
-	m := Message{ID: NewULIDSource(f.clock.Now, nil).New(), Agent: "assistant", Direction: DirectionOut, Kind: KindAsk, State: StateOpen, TS: f.clock.Now()}
-	if err := f.store.InsertMessage(m); err != nil {
-		t.Fatal(err)
+	ids := NewULIDSource(f.clock.Now, nil)
+	perm := Message{ID: ids.New(), Agent: "assistant", Direction: DirectionOut, Kind: KindPermission, State: StateOpen, TS: f.clock.Now()}
+	ask := Message{ID: ids.New(), Agent: "assistant", Direction: DirectionOut, Kind: KindAsk, State: StateOpen, Asker: "assistant", TS: f.clock.Now()}
+	for _, m := range []Message{perm, ask} {
+		if err := f.store.InsertMessage(m); err != nil {
+			t.Fatal(err)
+		}
 	}
 	if err := f.svc.Recover(); err != nil {
 		t.Fatal(err)
 	}
-	got, _ := f.store.Message(m.ID)
-	if got.State != StateExpired {
-		t.Fatalf("state = %s", got.State)
+	if got, _ := f.store.Message(perm.ID); got.State != StateExpired {
+		t.Fatalf("permission prompt = %s, want expired: its hook died with the daemon", got.State)
+	}
+	if got, _ := f.store.Message(ask.ID); got.State != StateOpen {
+		t.Fatalf("deadline-free ask = %s, want open", got.State)
 	}
 }
 
@@ -854,7 +887,7 @@ func TestCloseCancelsAndDrainsWaitersAndDeliveries(t *testing.T) {
 	<-started
 	asked := make(chan AskResult, 1)
 	go func() {
-		r, _ := f.svc.Ask(context.Background(), AskRequest{Caller: "assistant", Question: "?", Options: []Option{{Value: "a"}}})
+		r, _ := f.svc.Ask(context.Background(), AskRequest{Caller: "assistant", Question: "?", Options: []Option{{Value: "a"}}, Wait: 30 * time.Minute})
 		asked <- r
 	}()
 	<-f.timers.got
@@ -863,11 +896,15 @@ func TestCloseCancelsAndDrainsWaitersAndDeliveries(t *testing.T) {
 	// result may still be a step behind: block on it, under a guard.
 	select {
 	case r := <-asked:
-		if !r.TimedOut {
-			t.Fatalf("ask after close = %+v", r)
+		if !r.Pending || r.TimedOut {
+			t.Fatalf("ask after close = %+v, want pending", r)
 		}
 	case <-time.After(10 * time.Second):
 		t.Fatal("Close returned while an ask still waited")
+	}
+	// Shutdown leaves the ask open: the next daemon still answers it.
+	if m := f.thread(t, "assistant")[0]; m.Kind != KindAsk || m.State != StateOpen {
+		t.Fatalf("ask after close = %s/%s, want open", m.Kind, m.State)
 	}
 	got, _ := f.store.Message(in.ID)
 	notes, _ := f.store.OpenMessages("assistant", KindSystem, "")
@@ -961,5 +998,471 @@ func TestAskResumeChecksTheMessage(t *testing.T) {
 		if _, err := f.svc.Ask(context.Background(), req); !errors.Is(err, ErrInvalid) {
 			t.Errorf("%s: err = %v", name, err)
 		}
+	}
+}
+
+// An ask with no timeout has no deadline: only its call's window ends, and
+// a resume days later still finds it open.
+func TestAskWithoutTimeoutNeverExpires(t *testing.T) {
+	f := newFixture(t)
+	done := make(chan AskResult, 1)
+	go func() {
+		r, _ := f.svc.Ask(context.Background(), AskRequest{Caller: "assistant", Question: "?", Options: []Option{{Value: "a"}}, Wait: 30 * time.Minute})
+		done <- r
+	}()
+	if d := <-f.timers.got; d != 30*time.Minute {
+		t.Fatalf("first timer = %s, want only the call window", d)
+	}
+	select {
+	case d := <-f.timers.got:
+		t.Fatalf("a deadline timer of %s was armed for a deadline-free ask", d)
+	default:
+	}
+	f.timers.fireLast()
+	if r := <-done; !r.Pending || r.TimedOut {
+		t.Fatalf("first call = %+v", r)
+	}
+	open := f.thread(t, "assistant")[0]
+	if open.State != StateOpen || !open.Deadline.IsZero() {
+		t.Fatalf("ask = %s, deadline %v", open.State, open.Deadline)
+	}
+	f.clock.Advance(72 * time.Hour)
+	resumed := make(chan AskResult, 1)
+	go func() {
+		r, _ := f.svc.Ask(context.Background(), AskRequest{Caller: "assistant", MessageID: open.ID, Wait: 30 * time.Minute})
+		resumed <- r
+	}()
+	<-f.timers.got
+	f.timers.fireLast()
+	if r := <-resumed; !r.Pending || r.TimedOut {
+		t.Fatalf("resumed = %+v, want pending", r)
+	}
+}
+
+func TestAskWithTimeoutPersistsItsDeadline(t *testing.T) {
+	f := newFixture(t)
+	done := make(chan AskResult, 1)
+	go func() {
+		r, _ := f.svc.Ask(context.Background(), AskRequest{Caller: "assistant", Question: "?", Options: []Option{{Value: "a"}}, Timeout: 10 * time.Minute})
+		done <- r
+	}()
+	<-f.timers.got
+	open := f.thread(t, "assistant")[0]
+	if want := open.TS.Add(10 * time.Minute); !open.Deadline.Equal(want) {
+		t.Fatalf("deadline = %v, want %v", open.Deadline, want)
+	}
+	f.timers.fireLast()
+	r := <-done
+	if !r.TimedOut || r.ClosedReason != ClosedTimeout {
+		t.Fatalf("result = %+v", r)
+	}
+	if m, _ := f.store.Message(open.ID); m.State != StateExpired || m.ClosedReason != ClosedTimeout {
+		t.Fatalf("message = %s/%q", m.State, m.ClosedReason)
+	}
+}
+
+// A task run's ask has no agent to hand a late answer to, so it keeps the
+// default deadline rather than staying open forever.
+func TestAskFromATaskRunKeepsTheDefaultDeadline(t *testing.T) {
+	f := newFixture(t)
+	f.cfg.Tasks["build"] = config.TaskConfig{Workspace: "/src/web"}
+	done := make(chan AskResult, 1)
+	go func() {
+		r, _ := f.svc.Ask(context.Background(), AskRequest{Caller: "task:build", Task: "build", RunID: "r1", Question: "?", Options: []Option{{Value: "a"}}})
+		done <- r
+	}()
+	if d := <-f.timers.got; d != DefaultAskTimeout {
+		t.Fatalf("task-run ask deadline = %s, want %s", d, DefaultAskTimeout)
+	}
+	f.timers.fireLast()
+	if r := <-done; !r.TimedOut || r.ClosedReason != ClosedTimeout {
+		t.Fatalf("result = %+v", r)
+	}
+	if m := f.thread(t, "web")[0]; m.State != StateExpired || m.Asker != "task:build" {
+		t.Fatalf("message = %s asker %q", m.State, m.Asker)
+	}
+}
+
+// pendingAsk posts a deadline-free ask, lets its call window end, and
+// returns the open ask: the state a late answer arrives in.
+func pendingAsk(t *testing.T, f *harnessFixture, caller string) Message {
+	t.Helper()
+	done := make(chan AskResult, 1)
+	go func() {
+		r, _ := f.svc.Ask(context.Background(), AskRequest{Caller: caller, Question: "Ship it?", Options: []Option{{Value: "y", Label: "Yes"}, {Value: "n", Label: "No"}}, Wait: 30 * time.Minute})
+		done <- r
+	}()
+	<-f.timers.got
+	f.timers.fireLast()
+	if r := <-done; !r.Pending {
+		t.Fatalf("call = %+v, want pending", r)
+	}
+	agent := caller
+	if caller == "task:build" {
+		agent = "web"
+	}
+	open, _ := f.store.OpenMessages(agent, KindAsk, StateOpen)
+	if len(open) != 1 {
+		t.Fatalf("open asks = %d", len(open))
+	}
+	return open[0]
+}
+
+func lateAnswerPrompt(ask Message) string {
+	return "[Leo Chat] Yes\nIn reply to your leo_chat_ask " + ask.ID + " (" + ask.TS.UTC().Format(time.RFC3339) + "): Ship it?\n" +
+		`Answer: {"message_id":"` + ask.ID + `","values":["y"],"labels":["Yes"],"text":""}`
+}
+
+func TestLateAnswerIsDeliveredOnce(t *testing.T) {
+	f := newFixture(t)
+	ask := pendingAsk(t, f, "assistant")
+	if _, err := f.svc.Answer("assistant", ask.ID, Answer{Values: []string{"y"}}); err != nil {
+		t.Fatal(err)
+	}
+	f.svc.Flush()
+	if got := f.deliver.delivered(); len(got) != 1 || got[0] != lateAnswerPrompt(ask) {
+		t.Fatalf("delivered %q\nwant %q", got, lateAnswerPrompt(ask))
+	}
+	var replies []Message
+	for _, m := range f.thread(t, "assistant") {
+		if m.Direction == DirectionIn {
+			replies = append(replies, m)
+		}
+	}
+	if len(replies) != 1 || replies[0].Kind != KindText || replies[0].ReplyTo != ask.ID || replies[0].State != StateDelivered || replies[0].Text != "Yes" {
+		t.Fatalf("inbound replies = %+v", replies)
+	}
+	r, err := f.svc.Ask(context.Background(), AskRequest{Caller: "assistant", MessageID: ask.ID})
+	if err != nil || len(r.Values) != 1 || r.Values[0] != "y" {
+		t.Fatalf("resume = %+v, %v", r, err)
+	}
+	f.svc.Flush()
+	if got := f.deliver.delivered(); len(got) != 1 {
+		t.Fatalf("a resume must not deliver again: %q", got)
+	}
+}
+
+func TestAnswerWhileACallWaitsIsNotDelivered(t *testing.T) {
+	f := newFixture(t)
+	done := make(chan AskResult, 1)
+	go func() {
+		r, _ := f.svc.Ask(context.Background(), AskRequest{Caller: "assistant", Question: "?", Options: []Option{{Value: "y", Label: "Yes"}}, Wait: 30 * time.Minute})
+		done <- r
+	}()
+	<-f.timers.got
+	open := f.thread(t, "assistant")[0]
+	if _, err := f.svc.Answer("assistant", open.ID, Answer{Values: []string{"y"}}); err != nil {
+		t.Fatal(err)
+	}
+	if r := <-done; len(r.Values) != 1 || r.Values[0] != "y" {
+		t.Fatalf("call = %+v", r)
+	}
+	f.svc.Flush()
+	if got := f.deliver.delivered(); len(got) != 0 {
+		t.Fatalf("the blocked call took the answer, yet it was delivered: %q", got)
+	}
+	for _, m := range f.thread(t, "assistant") {
+		if m.Direction == DirectionIn {
+			t.Fatalf("inbound message %+v", m)
+		}
+	}
+}
+
+// The caller leaves, then the answer lands: whichever of the call's exit and
+// the answer is noticed first, the answer is delivered exactly once.
+func TestAnswerAfterTheCallerLeftIsDeliveredOnce(t *testing.T) {
+	f := newFixture(t)
+	for i := 1; i <= 25; i++ {
+		ctx, cancel := context.WithCancel(context.Background())
+		done := make(chan AskResult, 1)
+		go func() {
+			r, _ := f.svc.Ask(ctx, AskRequest{Caller: "assistant", Question: "Ship it?", Options: []Option{{Value: "y", Label: "Yes"}}, Wait: 30 * time.Minute})
+			done <- r
+		}()
+		<-f.timers.got
+		open, _ := f.store.OpenMessages("assistant", KindAsk, StateOpen)
+		cancel()
+		if _, err := f.svc.Answer("assistant", open[0].ID, Answer{Values: []string{"y"}}); err != nil {
+			t.Fatal(err)
+		}
+		if r := <-done; !r.Pending {
+			t.Fatalf("iteration %d: the departed call = %+v, want pending", i, r)
+		}
+		f.svc.Flush()
+		if got := f.deliver.delivered(); len(got) != i {
+			t.Fatalf("iteration %d: %d deliveries in all, want %d", i, len(got), i)
+		}
+	}
+}
+
+func TestLateAnswerWakesASuspendedAgent(t *testing.T) {
+	f := newFixture(t)
+	ask := pendingAsk(t, f, "assistant")
+	f.deliver.stopped["assistant"] = true
+	if _, err := f.svc.Answer("assistant", ask.ID, Answer{Values: []string{"y"}}); err != nil {
+		t.Fatal(err)
+	}
+	f.svc.Flush()
+	var starting bool
+	for _, m := range f.thread(t, "assistant") {
+		starting = starting || (m.Kind == KindSystem && strings.Contains(m.Text, "Starting assistant"))
+	}
+	if !starting {
+		t.Fatalf("no starting note: %q", texts(f.thread(t, "assistant")))
+	}
+	if got := f.deliver.delivered(); len(got) != 1 {
+		t.Fatalf("delivered %q", got)
+	}
+}
+
+// A task run's ask has no agent to hand the answer to; the stored answer is
+// still there for a resume.
+func TestLateAnswerToATaskRunAskIsNotDelivered(t *testing.T) {
+	f := newFixture(t)
+	f.cfg.Tasks["build"] = config.TaskConfig{Workspace: "/src/web"}
+	done := make(chan AskResult, 1)
+	go func() {
+		r, _ := f.svc.Ask(context.Background(), AskRequest{Caller: "task:build", Task: "build", RunID: "r1", Question: "Ship it?", Options: []Option{{Value: "y", Label: "Yes"}}, Timeout: time.Hour, Wait: 30 * time.Minute})
+		done <- r
+	}()
+	<-f.timers.got
+	<-f.timers.got
+	f.timers.fireLast()
+	if r := <-done; !r.Pending {
+		t.Fatalf("call = %+v", r)
+	}
+	open := f.thread(t, "web")[0]
+	if _, err := f.svc.Answer("web", open.ID, Answer{Values: []string{"y"}}); err != nil {
+		t.Fatal(err)
+	}
+	f.svc.Flush()
+	if got := f.deliver.delivered(); len(got) != 0 {
+		t.Fatalf("delivered to a task run: %q", got)
+	}
+	r, err := f.svc.Ask(context.Background(), AskRequest{Caller: "task:build", Task: "build", MessageID: open.ID})
+	if err != nil || len(r.Values) != 1 || r.Values[0] != "y" {
+		t.Fatalf("resume = %+v, %v", r, err)
+	}
+}
+
+// abandonedAsk posts an ask whose call goes away at once, and returns it
+// open: what a daemon restart finds in the store.
+func abandonedAsk(t *testing.T, f *harnessFixture, timeout time.Duration) Message {
+	t.Helper()
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan AskResult, 1)
+	go func() {
+		r, _ := f.svc.Ask(ctx, AskRequest{Caller: "assistant", Question: "Ship it?", Options: []Option{{Value: "y", Label: "Yes"}}, Timeout: timeout, Wait: 30 * time.Minute})
+		done <- r
+	}()
+	if timeout > 0 {
+		<-f.timers.got
+	}
+	<-f.timers.got
+	cancel()
+	if r := <-done; !r.Pending {
+		t.Fatalf("abandoned call = %+v", r)
+	}
+	open, _ := f.store.OpenMessages("assistant", KindAsk, StateOpen)
+	if len(open) != 1 {
+		t.Fatalf("open asks = %d", len(open))
+	}
+	return open[0]
+}
+
+// updateOf returns the last chat.updated payload published for message id.
+func updateOf(f *harnessFixture, id string) (UpdatedPayload, bool) {
+	f.pub.mu.Lock()
+	defer f.pub.mu.Unlock()
+	var out UpdatedPayload
+	var found bool
+	for _, ev := range f.pub.events {
+		if p, ok := ev.Payload.(*UpdatedPayload); ok && ev.Type == EventUpdated && p.Message.ID == id {
+			out, found = *p, true
+		}
+	}
+	return out, found
+}
+
+func TestRestartKeepsADeadlineFreeAskOpen(t *testing.T) {
+	f := newFixture(t)
+	ask := abandonedAsk(t, f, 0)
+	f.restart(t)
+	f.recover(t)
+	if got, _ := f.store.Message(ask.ID); got.State != StateOpen {
+		t.Fatalf("ask after restart = %s", got.State)
+	}
+	if _, err := f.svc.Answer("assistant", ask.ID, Answer{Values: []string{"y"}}); err != nil {
+		t.Fatal(err)
+	}
+	f.svc.Flush()
+	if got := f.deliver.delivered(); len(got) != 1 || got[0] != lateAnswerPrompt(ask) {
+		t.Fatalf("delivered %q", got)
+	}
+}
+
+func TestRestartExpiresAnAskPastItsDeadline(t *testing.T) {
+	f := newFixture(t)
+	ask := abandonedAsk(t, f, 10*time.Minute)
+	f.clock.Advance(11 * time.Minute)
+	f.restart(t)
+	f.recover(t)
+	got, _ := f.store.Message(ask.ID)
+	if got.State != StateExpired || got.ClosedReason != ClosedTimeout {
+		t.Fatalf("ask = %s/%q", got.State, got.ClosedReason)
+	}
+	if u, ok := updateOf(f, ask.ID); !ok || u.Message.ClosedReason != ClosedTimeout {
+		t.Fatalf("update event = %+v, %v", u, ok)
+	}
+}
+
+func TestRestartRearmsTheRemainingDeadline(t *testing.T) {
+	f := newFixture(t)
+	ask := abandonedAsk(t, f, 10*time.Minute)
+	f.clock.Advance(4 * time.Minute)
+	f.restart(t)
+	f.recover(t)
+	if d := <-f.timers.got; d != 6*time.Minute {
+		t.Fatalf("re-armed for %s, want 6m", d)
+	}
+	f.timers.fireLast()
+	u := f.pub.waitUpdate(t)
+	if u.Message.ID != ask.ID || u.Message.State != StateExpired || u.Message.ClosedReason != ClosedTimeout {
+		t.Fatalf("update = %+v", u)
+	}
+}
+
+// After a restart there is no call to resume into: the store decides. An
+// open ask is pending, never timed out.
+func TestResumeAfterRestartReturnsTheStoredAnswerOrPending(t *testing.T) {
+	f := newFixture(t)
+	answered := abandonedAsk(t, f, 0)
+	if _, err := f.svc.Answer("assistant", answered.ID, Answer{Values: []string{"y"}}); err != nil {
+		t.Fatal(err)
+	}
+	open := abandonedAsk(t, f, 0)
+	f.restart(t)
+	f.recover(t)
+	r, err := f.svc.Ask(context.Background(), AskRequest{Caller: "assistant", MessageID: answered.ID})
+	if err != nil || len(r.Values) != 1 || r.Values[0] != "y" || r.Pending || r.TimedOut {
+		t.Fatalf("answered resume = %+v, %v", r, err)
+	}
+	done := make(chan AskResult, 1)
+	go func() {
+		r, _ := f.svc.Ask(context.Background(), AskRequest{Caller: "assistant", MessageID: open.ID, Wait: 30 * time.Minute})
+		done <- r
+	}()
+	<-f.timers.got
+	f.timers.fireLast()
+	if r := <-done; !r.Pending || r.TimedOut {
+		t.Fatalf("open resume = %+v, want pending", r)
+	}
+}
+
+func TestWithdrawClosesTheCallersAsk(t *testing.T) {
+	f := newFixture(t)
+	done := make(chan AskResult, 1)
+	go func() {
+		r, _ := f.svc.Ask(context.Background(), AskRequest{Caller: "assistant", Question: "?", Options: []Option{{Value: "y", Label: "Yes"}}, Wait: 30 * time.Minute})
+		done <- r
+	}()
+	<-f.timers.got
+	open := f.thread(t, "assistant")[0]
+	got, err := f.svc.WithdrawAsk(context.Background(), WithdrawRequest{Caller: "assistant", MessageID: open.ID})
+	if err != nil || got.State != StateExpired || got.ClosedReason != ClosedWithdrawn {
+		t.Fatalf("withdraw = %s/%q, %v", got.State, got.ClosedReason, err)
+	}
+	if r := <-done; !r.TimedOut || r.ClosedReason != ClosedWithdrawn || r.Pending {
+		t.Fatalf("the blocked call = %+v", r)
+	}
+	if u, ok := updateOf(f, open.ID); !ok || u.Message.ClosedReason != ClosedWithdrawn || u.Change != ChangeState {
+		t.Fatalf("update event = %+v, %v", u, ok)
+	}
+	if _, err := f.svc.Answer("assistant", open.ID, Answer{Values: []string{"y"}}); !errors.Is(err, ErrConflict) {
+		t.Fatalf("answering a withdrawn ask: %v", err)
+	}
+	f.svc.Flush()
+	if got := f.deliver.delivered(); len(got) != 0 {
+		t.Fatalf("delivered %q", got)
+	}
+}
+
+func TestWithdrawRefusesAnotherAgentsAsk(t *testing.T) {
+	f := newFixture(t)
+	ask := abandonedAsk(t, f, 0)
+	_, err := f.svc.WithdrawAsk(context.Background(), WithdrawRequest{Caller: "web", MessageID: ask.ID})
+	if !errors.Is(err, ErrInvalid) {
+		t.Fatalf("another agent's withdraw = %v", err)
+	}
+	if got, _ := f.store.Message(ask.ID); got.State != StateOpen {
+		t.Fatalf("ask = %s", got.State)
+	}
+}
+
+func TestWithdrawOfASettledAskConflicts(t *testing.T) {
+	f := newFixture(t)
+	ask := abandonedAsk(t, f, 0)
+	if _, err := f.svc.Answer("assistant", ask.ID, Answer{Values: []string{"y"}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.svc.WithdrawAsk(context.Background(), WithdrawRequest{Caller: "assistant", MessageID: ask.ID}); !errors.Is(err, ErrConflict) {
+		t.Fatalf("withdrawing an answered ask = %v", err)
+	}
+	open := abandonedAsk(t, f, 0)
+	if _, err := f.svc.WithdrawAsk(context.Background(), WithdrawRequest{Caller: "assistant", MessageID: open.ID}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.svc.WithdrawAsk(context.Background(), WithdrawRequest{Caller: "assistant", MessageID: open.ID}); !errors.Is(err, ErrConflict) {
+		t.Fatalf("a second withdraw = %v", err)
+	}
+	if _, err := f.svc.WithdrawAsk(context.Background(), WithdrawRequest{Caller: "assistant", MessageID: "nope"}); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("malformed id = %v", err)
+	}
+}
+
+func TestCloseAsksOfClosesOnlyThatAgentsAsks(t *testing.T) {
+	f := newFixture(t)
+	gone := make(chan AskResult, 1)
+	go func() {
+		r, _ := f.svc.Ask(context.Background(), AskRequest{Caller: "assistant", Question: "?", Options: []Option{{Value: "y"}}, Wait: 30 * time.Minute})
+		gone <- r
+	}()
+	go func() {
+		_, _ = f.svc.Ask(context.Background(), AskRequest{Caller: "web", Question: "?", Options: []Option{{Value: "y"}}, Wait: 30 * time.Minute})
+	}()
+	<-f.timers.got
+	<-f.timers.got
+	mine, _ := f.store.OpenMessages("assistant", KindAsk, StateOpen)
+	other, _ := f.store.OpenMessages("web", KindAsk, StateOpen)
+	f.svc.CloseAsksOf("assistant")
+	if r := <-gone; !r.TimedOut || r.ClosedReason != ClosedAgentGone {
+		t.Fatalf("the agent's call = %+v", r)
+	}
+	if got, _ := f.store.Message(mine[0].ID); got.State != StateExpired || got.ClosedReason != ClosedAgentGone {
+		t.Fatalf("agent's ask = %s/%q", got.State, got.ClosedReason)
+	}
+	if got, _ := f.store.Message(other[0].ID); got.State != StateOpen {
+		t.Fatalf("another agent's ask = %s", got.State)
+	}
+	if u, ok := updateOf(f, mine[0].ID); !ok || u.Message.ClosedReason != ClosedAgentGone {
+		t.Fatalf("update event = %+v, %v", u, ok)
+	}
+	f.svc.Flush()
+	if got := f.deliver.delivered(); len(got) != 0 {
+		t.Fatalf("delivered %q", got)
+	}
+}
+
+// Who may withdraw an ask is who asked it, as recorded when it was posted: an
+// agent now running a persistent task owned by another agent still owns the
+// ask it made in its own thread.
+func TestWithdrawWorksFromAnotherTasksContext(t *testing.T) {
+	f := newFixture(t)
+	ask := abandonedAsk(t, f, 0)
+	f.cfg.Tasks["digest"] = config.TaskConfig{Runtime: "persistent", Template: "assistant", Owner: "web"}
+	f.runs["assistant"] = [2]string{"digest", "run-7"}
+	got, err := f.svc.WithdrawAsk(context.Background(), WithdrawRequest{Caller: "assistant", MessageID: ask.ID})
+	if err != nil || got.State != StateExpired || got.ClosedReason != ClosedWithdrawn {
+		t.Fatalf("withdraw = %s/%q, %v", got.State, got.ClosedReason, err)
 	}
 }

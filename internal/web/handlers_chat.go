@@ -75,16 +75,25 @@ func (s *Server) setupChat(opts ChatOptions) {
 	})
 }
 
-// StartChat expires prompts the previous daemon left open and starts
-// attachment retention, until ctx ends.
+// StartChat recovers the asks and prompts the previous daemon left open and
+// starts attachment retention, until ctx ends.
 func (s *Server) StartChat(ctx context.Context) {
 	if s.chat == nil {
 		return
 	}
 	if err := s.chat.Recover(); err != nil {
-		fmt.Fprintf(os.Stderr, "chat: expiring stale prompts: %v\n", err)
+		fmt.Fprintf(os.Stderr, "chat: recovering asks and prompts: %v\n", err)
 	}
 	go s.chat.Run(ctx)
+}
+
+// CloseChatAsksOf closes a gone agent's open chat asks. Nil-safe: with chat
+// off there are none.
+func (s *Server) CloseChatAsksOf(name string) {
+	if s == nil || s.chat == nil {
+		return
+	}
+	s.chat.CloseAsksOf(name)
 }
 
 // chatAgents lists every agent record, running or stopped.
@@ -510,8 +519,9 @@ func (s *Server) handleAgentChatPost(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, apiResponse{OK: true, Data: map[string]string{"id": m.ID, "agent": m.Agent}})
 }
 
-// POST /api/agent/{name}/chat/ask — blocks until answered, timed out, or
-// wait_s passes (pending: resume with message_id).
+// POST /api/agent/{name}/chat/ask — blocks until answered, closed, or wait_s
+// passes (pending: resume with message_id, or wait for the late answer that
+// the daemon delivers to the agent). An ask with no timeout_s has no deadline.
 func (s *Server) handleAgentChatAsk(w http.ResponseWriter, r *http.Request) {
 	if !s.chatAvailable(w) {
 		return
@@ -537,6 +547,23 @@ func (s *Server) handleAgentChatAsk(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, apiResponse{OK: true, Data: res})
+}
+
+// POST /api/agent/{name}/chat/ask/withdraw {message_id}
+func (s *Server) handleAgentChatAskWithdraw(w http.ResponseWriter, r *http.Request) {
+	if !s.chatAvailable(w) {
+		return
+	}
+	req, ok := decodeChatTool(w, r)
+	if !ok {
+		return
+	}
+	m, err := s.chat.WithdrawAsk(r.Context(), chat.WithdrawRequest{Caller: r.PathValue("name"), MessageID: req.MessageID})
+	if err != nil {
+		writeChatError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, apiResponse{OK: true, Data: map[string]any{"message_id": m.ID, "withdrawn": true}})
 }
 
 // POST /api/agent/{name}/chat/history

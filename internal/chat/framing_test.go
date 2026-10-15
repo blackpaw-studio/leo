@@ -60,3 +60,46 @@ func TestFramePromptAttachmentsOnly(t *testing.T) {
 		t.Fatalf("got %q", got)
 	}
 }
+
+func TestFramePromptReplyToAnAnsweredAsk(t *testing.T) {
+	ask := Message{
+		ID: "01JABC", Kind: KindAsk, Text: "Ship it?", State: StateAnswered,
+		Input:  &Input{Type: InputButtons, Options: []Option{{Value: "y", Label: "Yes"}, {Value: "n", Label: "No"}}},
+		Answer: &Answer{Values: []string{"y"}},
+		TS:     time.Date(2026, 10, 15, 18, 0, 0, 0, time.UTC),
+	}
+	got := FramePrompt(Delivery{Text: "Yes", ReplyTo: &ask})
+	want := "[Leo Chat] Yes\n" +
+		"In reply to your leo_chat_ask 01JABC (2026-10-15T18:00:00Z): Ship it?\n" +
+		`Answer: {"message_id":"01JABC","values":["y"],"labels":["Yes"],"text":""}`
+	if got != want {
+		t.Fatalf("got %q\nwant %q", got, want)
+	}
+}
+
+func TestFramePromptReplyToAnOpenAskHasNoAnswerLine(t *testing.T) {
+	ask := Message{ID: "01JABC", Kind: KindAsk, Text: "Ship it?", State: StateOpen, TS: time.Date(2026, 10, 15, 18, 0, 0, 0, time.UTC)}
+	got := FramePrompt(Delivery{Text: "not yet", ReplyTo: &ask})
+	want := "[Leo Chat] not yet\nIn reply to your leo_chat_ask 01JABC (2026-10-15T18:00:00Z): Ship it?"
+	if got != want {
+		t.Fatalf("got %q\nwant %q", got, want)
+	}
+}
+
+func TestAnswerTextNamesLabelsThenFreeText(t *testing.T) {
+	in := &Input{Type: InputCheckboxes, Options: []Option{{Value: "a", Label: "Alpha"}, {Value: "b", Label: "Beta"}}}
+	for name, c := range map[string]struct {
+		ans  Answer
+		want string
+	}{
+		"labels":       {Answer{Values: []string{"a", "b"}}, "Alpha, Beta"},
+		"text only":    {Answer{Text: "neither"}, "neither"},
+		"both":         {Answer{Values: []string{"b"}, Text: "because"}, "Beta\nbecause"},
+		"no selection": {Answer{}, "(no selection)"},
+	} {
+		ask := Message{Input: in, Answer: &c.ans}
+		if got := answerText(ask); got != c.want {
+			t.Errorf("%s: got %q want %q", name, got, c.want)
+		}
+	}
+}

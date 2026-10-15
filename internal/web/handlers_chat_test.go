@@ -479,7 +479,7 @@ func TestShutdownClosesChatFirst(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("the held ask was never answered")
 	}
-	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"timed_out":true`) {
+	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"pending":true`) {
 		t.Fatalf("held ask = %d %s", w.Code, w.Body.String())
 	}
 	if w := chatRequest(t, cs.s, "POST", "/api/v1/chat/assistant/messages", testAPIToken, `{"text":"late"}`); w.Code != http.StatusServiceUnavailable {
@@ -624,4 +624,92 @@ func TestChatScheduleToolRoutes(t *testing.T) {
 	if w := post("schedule", past); w.Code != http.StatusBadRequest {
 		t.Fatalf("past at = %d %s", w.Code, w.Body)
 	}
+}
+
+// holdAsk posts an ask over the agent route and returns the open message and
+// the channel its held response arrives on.
+func holdAsk(t *testing.T, cs chatServer, body string) (chat.Message, chan *httptest.ResponseRecorder) {
+	t.Helper()
+	held := make(chan *httptest.ResponseRecorder, 1)
+	go func() {
+		held <- chatRequest(t, cs.s, http.MethodPost, "/api/agent/assistant/chat/ask", testAgentToken, body)
+	}()
+	return waitEvent(t, cs.events, chat.KindAsk), held
+}
+
+func TestAgentChatAskWithdrawRoute(t *testing.T) {
+	cs := newChatServer(t)
+	ask, held := holdAsk(t, cs, `{"question":"?","options":[{"value":"a","label":"a"}]}`)
+	withdraw := func(agent, id string) *httptest.ResponseRecorder {
+		return chatRequest(t, cs.s, http.MethodPost, "/api/agent/"+agent+"/chat/ask/withdraw", testAgentToken, `{"message_id":"`+id+`"}`)
+	}
+	if w := withdraw("web", ask.ID); w.Code != http.StatusBadRequest {
+		t.Fatalf("another agent's withdraw = %d %s", w.Code, w.Body)
+	}
+	w := withdraw("assistant", ask.ID)
+	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"withdrawn":true`) || !strings.Contains(w.Body.String(), `"message_id":"`+ask.ID+`"`) {
+		t.Fatalf("withdraw = %d %s", w.Code, w.Body)
+	}
+	got := <-held
+	if got.Code != http.StatusOK || !strings.Contains(got.Body.String(), `"timed_out":true`) || !strings.Contains(got.Body.String(), `"closed_reason":"withdrawn"`) {
+		t.Fatalf("the held ask = %d %s", got.Code, got.Body)
+	}
+	if w := withdraw("assistant", ask.ID); w.Code != http.StatusConflict {
+		t.Fatalf("a second withdraw = %d %s", w.Code, w.Body)
+	}
+}
+
+func TestChatPayloadsCarryClosedReasonAndDeadline(t *testing.T) {
+	cs := newChatServer(t)
+	timed, heldTimed := holdAsk(t, cs, `{"question":"timed?","options":[{"value":"a","label":"a"}],"timeout_s":3600}`)
+	free, heldFree := holdAsk(t, cs, `{"question":"free?","options":[{"value":"a","label":"a"}]}`)
+	if timed.Deadline.IsZero() || !free.Deadline.IsZero() {
+		t.Fatalf("published deadlines: timed %v, free %v", timed.Deadline, free.Deadline)
+	}
+	w := chatRequest(t, cs.s, http.MethodPost, "/api/agent/assistant/chat/ask/withdraw", testAgentToken, `{"message_id":"`+free.ID+`"}`)
+	if w.Code != http.StatusOK {
+		t.Fatalf("withdraw = %d %s", w.Code, w.Body)
+	}
+	<-heldFree
+
+	var page struct {
+		Messages []map[string]any `json:"messages"`
+	}
+	decodeChatData(t, chatRequest(t, cs.s, http.MethodGet, "/api/v1/chat/assistant/messages", testAPIToken, ""), &page)
+	byID := map[string]map[string]any{}
+	for _, m := range page.Messages {
+		byID[m["id"].(string)] = m
+	}
+	if _, ok := byID[timed.ID]["deadline"]; !ok {
+		t.Errorf("a timed ask has no deadline: %v", byID[timed.ID])
+	}
+	if _, ok := byID[free.ID]["deadline"]; ok {
+		t.Errorf("a deadline-free ask carries a deadline: %v", byID[free.ID])
+	}
+	if byID[free.ID]["state"] != "expired" || byID[free.ID]["closed_reason"] != "withdrawn" {
+		t.Errorf("withdrawn ask = %v", byID[free.ID])
+	}
+	if _, ok := byID[timed.ID]["closed_reason"]; ok {
+		t.Errorf("an open ask carries a closed_reason: %v", byID[timed.ID])
+	}
+
+	var sawUpdate bool
+	for drained := false; !drained; {
+		select {
+		case ev := <-cs.events:
+			if p, ok := ev.Payload.(*chat.UpdatedPayload); ok && p.Message.ID == free.ID {
+				b, _ := json.Marshal(p)
+				sawUpdate = strings.Contains(string(b), `"closed_reason":"withdrawn"`)
+			}
+		default:
+			drained = true
+		}
+	}
+	if !sawUpdate {
+		t.Error("no chat.updated event carried closed_reason")
+	}
+
+	// Release the held timed ask.
+	chatRequest(t, cs.s, http.MethodPost, "/api/v1/chat/assistant/messages/"+timed.ID+"/answer", testAPIToken, `{"values":["a"]}`)
+	<-heldTimed
 }

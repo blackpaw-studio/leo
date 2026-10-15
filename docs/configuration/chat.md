@@ -61,6 +61,10 @@ Attachments: /abs/path/a.png, /abs/path/b.pdf
 In reply to task daily-news run <run id> (<time>): <card text, up to 1500 characters>
 ```
 
+A reply to an ask reads `In reply to your leo_chat_ask <id> (<time>): <question>`
+instead, followed by an `Answer: {…}` line once the ask is answered (see
+[Ask lifecycle](#ask-lifecycle)).
+
 On success the message is `delivered`; on failure it is `failed`, with a
 system note saying why. A message still `pending` when the daemon restarts
 is `delivered` if it waits in the agent's bridge outbox, which delivers it
@@ -77,13 +81,14 @@ waits up to 30 minutes. Codex and opencode agents reply with `leo_chat_post`.
 
 ## Agent tools
 
-Supervised agents and task runs get six MCP tools; `leo_dispatch`
+Supervised agents and task runs get seven MCP tools; `leo_dispatch`
 subagents are refused.
 
 | Tool | Arguments | Result |
 |------|-----------|--------|
 | `leo_chat_post` | `text`, `files` (paths, up to 10, 50 MB each; relative to the workspace) | `{id, agent}` |
-| `leo_chat_ask` | `question`, `input` (below), `timeout_s` (default 300, max 3600); or `message_id` alone to resume | `{values, labels, text, timed_out, message_id, pending?}` |
+| `leo_chat_ask` | `question`, `input` (below), `timeout_s` (optional, no default, max 3600); or `message_id` alone to resume | `{values, labels, text, timed_out, closed_reason?, message_id, pending?}` |
+| `leo_chat_ask_withdraw` | `message_id` | `{message_id, withdrawn: true}` |
 | `leo_chat_history` | `limit` (max 200), `before`, `task` | a page (below) |
 | `leo_chat_schedule` | `text` (Markdown), `at` (RFC3339 with an offset) | `{id, at}` |
 | `leo_chat_schedule_list` | none | your pending reminders, soonest first: `[{id, at, text}]` |
@@ -131,15 +136,54 @@ An answer is `{values, text}`:
 - `text` is at most 4000 characters, and refused on a choice type without
   `allow_text`.
 
-The tool returns `values` with their `labels` (same order) and the `text`;
-on timeout `values` is empty and `timed_out` is true.
+The tool returns `values` with their `labels` (same order) and the `text`.
+An ask that closed without an answer returns empty `values`, `timed_out: true`
+and a `closed_reason`.
 
-An ask's `timeout_s` deadline is kept by the daemon, not by the tool call.
-One `leo_chat_ask` call waits at most 30 minutes, under Leo's 32-minute MCP
-tool ceiling. If the question is still open then, the call returns
-`pending: true` with its `message_id`, and calling `leo_chat_ask` again with
-only that `message_id` keeps waiting. A call the harness abandons leaves the
-ask open until its own deadline.
+### Ask lifecycle
+
+An ask is `open` until it is answered, withdrawn, times out, or its agent is
+gone. Asks from an agent have **no deadline** by default: omit `timeout_s` (or
+pass `0`) and the question waits for as long as it takes. A positive
+`timeout_s` (at most 3600) sets a deadline the daemon keeps, not the tool call:
+the ask `expires` when it passes. An ask from a headless `runtime: oneshot` task
+run, or from a persistent task whose owner is a different agent, has no agent
+to hand a late answer to, so without `timeout_s` it keeps a 300-second deadline.
+
+- **The call window.** One `leo_chat_ask` call waits at most 30 minutes, under
+  Leo's 32-minute MCP tool ceiling. If the question is still open then, the
+  call returns `pending: true` with its `message_id`, and calling
+  `leo_chat_ask` again with only that `message_id` keeps waiting. The agent
+  does not have to: a call the harness abandons leaves the ask open.
+- **Late answers.** When an ask is answered and no `leo_chat_ask` call is
+  blocked on it, the daemon delivers the answer to the asking agent as an
+  ordinary inbound chat message that replies to the ask, through the usual
+  [delivery](#delivery) (a suspended agent resumes for it). The agent sees:
+
+  ```
+  [Leo Chat] Yes
+  In reply to your leo_chat_ask 01JABC… (2026-10-15T18:00:00Z): Ship it?
+  Answer: {"message_id":"01JABC…","values":["y"],"labels":["Yes"],"text":""}
+  ```
+
+  The first line is the chosen labels, then any free text (`(no selection)` if
+  there is neither). A resume with the `message_id` still returns the stored
+  answer, so an agent that both resumes and receives the delivery may see an
+  answer twice. Asks from a task run are not delivered; resuming returns them.
+- **Withdraw.** `leo_chat_ask_withdraw` closes your own open ask. It is
+  refused for another agent's ask and conflicts when the ask is no longer open.
+  A blocked call returns at once.
+- **Closed reasons.** A timed-out, withdrawn or agent-gone ask is `expired`,
+  with `closed_reason` `timeout`, `withdrawn` or `agent_gone`. Existing clients
+  that read only `state` keep working.
+- **Agent gone.** `leo agent stop` and removing an agent close its open asks as
+  `agent_gone`. Idle suspension, a crash restart, a graceful restart and a
+  daemon restart do not.
+- **Restarts.** Open asks survive a daemon restart. One with a deadline gets it
+  re-armed for the time left, or expires at once if the deadline passed while
+  the daemon was down. A resume after a restart reads the store: the answer,
+  or `pending: true` while the ask is open. A permission prompt is different:
+  its hook dies with the daemon, so it expires.
 
 ### Reminders
 
@@ -175,7 +219,8 @@ up meanwhile, so either side can answer:
 - Answered in the terminal: Claude ends the hook and runs or skips the tool;
   the message becomes `answered` with answer `{values: ["terminal"]}`.
 - No answer in time: the hook returns no decision, the dialog stays, and the
-  message becomes `expired`.
+  message becomes `expired`. Unlike an ask, a permission prompt always has this
+  deadline, because a tool call is blocked on it.
 
 Agents with `bypass_permissions` never ask.
 
@@ -219,6 +264,11 @@ without a token for the Mac app.
 | `POST /api/v1/chat/{agent}/messages/{id}/answer` | `{values, text?}` | `Message`; `400` when the answer does not fit the message's `input`, `409` once settled |
 | `POST /api/v1/chat/{agent}/read` | `{up_to}` | |
 
+The agent tools use `POST /api/agent/{name}/chat/{post,ask,ask/withdraw,history}`
+(agent token); `ask/withdraw` takes `{message_id}` and answers
+`{message_id, withdrawn: true}`, with `400` for another agent's ask and `409`
+for one that is no longer open.
+
 The socket also serves `POST /chat/task-failure`
 `{task, run_id, attempts, error, log_path}` → `{id, agent}`, which `leo run`
 uses to report a failed run for a [failure card](#task-failure-cards). It is
@@ -229,9 +279,11 @@ Audio uploads make that message a `voice` note.
 
 **Message:** `{id, agent, direction (in|out), kind (text|voice|file|task|ask|permission|system),
 text, transcript?, reply_to?, task?, run_id?, state, answer?: {values, text}, input?: {type, options?, allow_text?, min?, max?, placeholder?}, permission?: {tool, summary},
-attachments: [{id, filename, mime, bytes, available}], ts}`; `state` is always
+attachments: [{id, filename, mime, bytes, available}], ts, deadline?, closed_reason?}`; `state` is always
 present (empty on outbound text) and `attachments` is `[]` when there are none. States: inbound
-`pending|delivered|failed`; `ask` and `permission` `open|answered|expired`.
+`pending|delivered|failed`; `ask` and `permission` `open|answered|expired`. `deadline`
+(RFC3339) is present only on an ask that has one; `closed_reason`
+(`timeout|withdrawn|agent_gone`) only on an `expired` ask, never on a permission prompt.
 
 **Thread:** `{agent, last_message, unread, pinned}`. Only `assistant` is
 pinned.
@@ -243,7 +295,7 @@ pinned.
 | Event | Payload beyond `seq`/`at` |
 |-------|---------------------------|
 | `chat.message` | `agent`, `message` |
-| `chat.updated` | `agent`, `message`, `change` (`transcript`, `state` or `answer`) |
+| `chat.updated` | `agent`, `message` (with `closed_reason` once an ask closes), `change` (`transcript`, `state` or `answer`) |
 
 ### Push
 

@@ -38,6 +38,12 @@ about a file, post it first and then call `leo_chat_ask` with an `input`
 `leo_dispatch` subagent both are refused, so report paths to your orchestrator
 instead.
 
+A question has no deadline: it stays open until the user answers, so do not
+loop on a `pending: true` result. If you stop waiting, the answer arrives later
+as a `[Leo Chat]` message replying to your `leo_chat_ask` (it names the
+`message_id`). Call `leo_chat_ask_withdraw` with that `message_id` once a
+question no longer matters, so a stale answer does not come back to you.
+
 ## API Endpoints
 
 All endpoints are on `http://127.0.0.1:${LEO_WEB_PORT}` (default port 8370).
