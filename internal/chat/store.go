@@ -469,10 +469,10 @@ func (s *Store) OpenMessages(agent, kind, state string) ([]Message, error) {
 	return out, rows.Err()
 }
 
-// ExpireOpen moves every open message to expired: their waiters died with
-// the previous daemon. It returns the ids it moved.
-func (s *Store) ExpireOpen() ([]string, error) {
-	moved, err := s.moveAll(StateOpen, StateExpired)
+// ExpireOpen moves every open message of kind to expired. It returns the ids
+// it moved.
+func (s *Store) ExpireOpen(kind string) ([]string, error) {
+	moved, err := s.moveAll(kind, StateOpen, StateExpired)
 	if err != nil {
 		return nil, fmt.Errorf("expiring open messages: %w", err)
 	}
@@ -509,15 +509,15 @@ func (s *Store) MessagesInState(state string) ([]Message, error) {
 	return out, rows.Err()
 }
 
-// moveAll moves every message in state from to state to, returning their
-// ids and agents.
-func (s *Store) moveAll(from, to string) ([]Message, error) {
+// moveAll moves every message of kind in state from to state to, returning
+// their ids and agents.
+func (s *Store) moveAll(kind, from, to string) ([]Message, error) {
 	tx, err := s.db.Begin()
 	if err != nil {
 		return nil, err
 	}
 	defer func() { _ = tx.Rollback() }()
-	rows, err := tx.Query(`SELECT id, agent FROM messages WHERE state = ? ORDER BY id`, from)
+	rows, err := tx.Query(`SELECT id, agent FROM messages WHERE kind = ? AND state = ? ORDER BY id`, kind, from)
 	if err != nil {
 		return nil, err
 	}
@@ -535,7 +535,7 @@ func (s *Store) moveAll(from, to string) ([]Message, error) {
 	if err != nil {
 		return nil, err
 	}
-	if _, err := tx.Exec(`UPDATE messages SET state = ? WHERE state = ?`, to, from); err != nil {
+	if _, err := tx.Exec(`UPDATE messages SET state = ? WHERE kind = ? AND state = ?`, to, kind, from); err != nil {
 		return nil, err
 	}
 	return moved, tx.Commit()
