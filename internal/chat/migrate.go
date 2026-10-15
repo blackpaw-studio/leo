@@ -84,6 +84,16 @@ CREATE TABLE schedules (
 	cancelled_at INTEGER
 );
 CREATE INDEX schedules_pending ON schedules(fire_at) WHERE fired_at IS NULL AND cancelled_at IS NULL;`},
+	// Asks that don't expire: the deadline is stored (unix ms; 0 is none) so a
+	// restarted daemon can re-arm it, closed_reason says why an ask closed
+	// without an answer, and asker is the caller of the ask, which late
+	// delivery matches against the agent. An ask still open here was orphaned
+	// by a crash, as the old startup sweep would have expired it.
+	{version: 4, sql: `
+ALTER TABLE messages ADD COLUMN deadline INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE messages ADD COLUMN closed_reason TEXT NOT NULL DEFAULT '';
+ALTER TABLE messages ADD COLUMN asker TEXT NOT NULL DEFAULT '';
+UPDATE messages SET state = 'expired', closed_reason = 'timeout' WHERE kind = 'ask' AND state = 'open';`},
 }
 
 // schemaVersion is the user_version of a database with every migration

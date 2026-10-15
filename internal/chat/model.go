@@ -38,6 +38,13 @@ const (
 	StateExpired   = "expired"
 )
 
+// Why an ask closed without an answer (Message.ClosedReason).
+const (
+	ClosedTimeout   = "timeout"
+	ClosedWithdrawn = "withdrawn"
+	ClosedAgentGone = "agent_gone"
+)
+
 // AnswerTerminal is the value of the answer recorded when a permission
 // prompt was settled in the agent's own terminal rather than from chat.
 const AnswerTerminal = "terminal"
@@ -74,6 +81,13 @@ type Message struct {
 	Permission  *Permission  `json:"permission,omitempty"`
 	Attachments []Attachment `json:"attachments"`
 	TS          time.Time    `json:"ts"`
+	// Deadline is when an open ask times out; zero means it never does.
+	Deadline time.Time `json:"deadline,omitzero"`
+	// ClosedReason says why an ask is expired: timeout, withdrawn or agent_gone.
+	ClosedReason string `json:"closed_reason,omitempty"`
+	// Asker is the caller that posted an ask, as given: an agent name or
+	// task:<name>. Late delivery needs it to equal Agent.
+	Asker string `json:"-"`
 	// DeliveryRef names an inbound message's delivery into its agent: the
 	// bridge command id it is delivered under, stored before delivery so a
 	// restarted daemon can ask the agent's outbox whether it still holds it.

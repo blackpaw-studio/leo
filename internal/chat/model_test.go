@@ -24,3 +24,21 @@ func TestMessageJSONAlwaysCarriesStateAndAttachments(t *testing.T) {
 		t.Errorf("event payload %s lacks attachments", b)
 	}
 }
+
+func TestMessageJSONOmitsAnEmptyDeadlineAndReason(t *testing.T) {
+	m := Message{ID: "01X", Agent: "assistant", Kind: KindAsk, State: StateOpen}
+	b, _ := json.Marshal(m)
+	for _, absent := range []string{`"deadline"`, `"closed_reason"`, `"Asker"`, `"asker"`} {
+		if strings.Contains(string(b), absent) {
+			t.Errorf("%s carries %s", b, absent)
+		}
+	}
+	m.Deadline = time.Date(2026, 10, 15, 18, 0, 0, 0, time.UTC)
+	m.ClosedReason = ClosedWithdrawn
+	b, _ = json.Marshal(m)
+	for _, want := range []string{`"deadline":"2026-10-15T18:00:00Z"`, `"closed_reason":"withdrawn"`} {
+		if !strings.Contains(string(b), want) {
+			t.Errorf("%s lacks %s", b, want)
+		}
+	}
+}
