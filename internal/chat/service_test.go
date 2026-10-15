@@ -1419,3 +1419,36 @@ func TestWithdrawOfASettledAskConflicts(t *testing.T) {
 		t.Fatalf("malformed id = %v", err)
 	}
 }
+
+func TestCloseAsksOfClosesOnlyThatAgentsAsks(t *testing.T) {
+	f := newFixture(t)
+	gone := make(chan AskResult, 1)
+	go func() {
+		r, _ := f.svc.Ask(context.Background(), AskRequest{Caller: "assistant", Question: "?", Options: []Option{{Value: "y"}}, Wait: 30 * time.Minute})
+		gone <- r
+	}()
+	go func() {
+		_, _ = f.svc.Ask(context.Background(), AskRequest{Caller: "web", Question: "?", Options: []Option{{Value: "y"}}, Wait: 30 * time.Minute})
+	}()
+	<-f.timers.got
+	<-f.timers.got
+	mine, _ := f.store.OpenMessages("assistant", KindAsk, StateOpen)
+	other, _ := f.store.OpenMessages("web", KindAsk, StateOpen)
+	f.svc.CloseAsksOf("assistant")
+	if r := <-gone; !r.TimedOut || r.ClosedReason != ClosedAgentGone {
+		t.Fatalf("the agent's call = %+v", r)
+	}
+	if got, _ := f.store.Message(mine[0].ID); got.State != StateExpired || got.ClosedReason != ClosedAgentGone {
+		t.Fatalf("agent's ask = %s/%q", got.State, got.ClosedReason)
+	}
+	if got, _ := f.store.Message(other[0].ID); got.State != StateOpen {
+		t.Fatalf("another agent's ask = %s", got.State)
+	}
+	if u, ok := updateOf(f, mine[0].ID); !ok || u.Message.ClosedReason != ClosedAgentGone {
+		t.Fatalf("update event = %+v, %v", u, ok)
+	}
+	f.svc.Flush()
+	if got := f.deliver.delivered(); len(got) != 0 {
+		t.Fatalf("delivered %q", got)
+	}
+}

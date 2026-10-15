@@ -487,6 +487,24 @@ func (s *Service) WithdrawAsk(_ context.Context, req WithdrawRequest) (Message, 
 	return s.opts.Store.Message(m.ID)
 }
 
+// CloseAsksOf closes agent's open asks as agent_gone, for an agent that was
+// stopped or removed: nothing is left to answer them to. Idle suspension and
+// restarts do not call it.
+func (s *Service) CloseAsksOf(agent string) {
+	if s.enter() != nil {
+		return
+	}
+	defer s.leave()
+	ids, err := s.opts.Store.CloseAsksOf(agent, ClosedAgentGone)
+	if err != nil {
+		s.opts.Logf("chat: closing the asks of %s: %v", agent, err)
+	}
+	for _, id := range ids {
+		s.waiters.settle(id, nil)
+		s.publishUpdated(id, ChangeState)
+	}
+}
+
 // HistoryRequest is leo_chat_history.
 type HistoryRequest struct {
 	Caller  string
