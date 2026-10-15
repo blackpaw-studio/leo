@@ -74,8 +74,8 @@ func TestChatPostFromATaskRunCarriesTaskAndRun(t *testing.T) {
 func TestChatToolsRefuseDispatchSubagents(t *testing.T) {
 	d := chatDaemon(t, `{"ok":true,"data":{}}`)
 	reg := newRegistry(newDaemonClient(d.port(), ""), "assistant", leotools.Permissions{}, withDispatchID("d-1"))
-	for _, tool := range []string{"leo_chat_post", "leo_chat_ask", "leo_chat_history", "leo_chat_schedule", "leo_chat_schedule_list", "leo_chat_schedule_cancel"} {
-		_, err := reg.call(tool, json.RawMessage(`{"text":"x","question":"q","options":["a"],"at":"2026-10-14T09:00:00Z","id":"01X"}`))
+	for _, tool := range []string{"leo_chat_post", "leo_chat_ask", "leo_chat_ask_withdraw", "leo_chat_history", "leo_chat_schedule", "leo_chat_schedule_list", "leo_chat_schedule_cancel"} {
+		_, err := reg.call(tool, json.RawMessage(`{"text":"x","question":"q","options":["a"],"at":"2026-10-14T09:00:00Z","id":"01X","message_id":"01X"}`))
 		if err == nil || !strings.Contains(err.Error(), "leo_dispatch subagent") {
 			t.Errorf("%s: err = %v", tool, err)
 		}
@@ -85,7 +85,7 @@ func TestChatToolsRefuseDispatchSubagents(t *testing.T) {
 	}
 }
 
-func TestChatAskNormalizesOptionsAndDefaultsTimeout(t *testing.T) {
+func TestChatAskNormalizesOptionsAndLeavesTheDeadlineFree(t *testing.T) {
 	d := chatDaemon(t, `{"ok":true,"data":{"values":["y"],"labels":["Yes"],"text":"","timed_out":false}}`)
 	reg := newRegistry(newDaemonClient(d.port(), ""), "assistant", leotools.Permissions{})
 	out, err := reg.call("leo_chat_ask", json.RawMessage(`{"question":"Ship?","options":["y",{"value":"n","label":"No"}]}`))
@@ -97,8 +97,11 @@ func TestChatAskNormalizesOptionsAndDefaultsTimeout(t *testing.T) {
 	}
 	path, body := lastBody(t, d)
 	opts := body["options"].([]any)
-	if path != "/api/agent/assistant/chat/ask" || body["timeout_s"] != float64(300) || len(opts) != 2 {
+	if path != "/api/agent/assistant/chat/ask" || len(opts) != 2 {
 		t.Fatalf("call %s %v", path, body)
+	}
+	if _, ok := body["timeout_s"]; ok || body["wait_s"] != chatAskCallWindow.Seconds() {
+		t.Fatalf("an ask without timeout_s has no deadline and waits one call window: %v", body)
 	}
 	if o := opts[0].(map[string]any); o["value"] != "y" || o["label"] != "y" {
 		t.Fatalf("string option = %v", o)
@@ -165,7 +168,7 @@ func TestChatAskRejectsBadArgumentsLocally(t *testing.T) {
 		"13 options":    `{"question":"q","options":` + many + `}`,
 		"bad option":    `{"question":"q","options":[7]}`,
 		"timeout > 1h":  `{"question":"q","options":["a"],"timeout_s":3601}`,
-		"timeout <= 0":  `{"question":"q","options":["a"],"timeout_s":0}`,
+		"timeout < 0":   `{"question":"q","options":["a"],"timeout_s":-1}`,
 		"empty value":   `{"question":"q","options":[{"value":""}]}`,
 		"timeout float": `{"question":"q","options":["a"],"timeout_s":"soon"}`,
 	} {
@@ -314,5 +317,39 @@ func TestChatScheduleToolsRejectMissingArgumentsLocally(t *testing.T) {
 	}
 	if len(d.calls) != 0 {
 		t.Fatalf("a bad call reached the daemon: %+v", d.calls)
+	}
+}
+
+// timeout_s 0 is "no deadline", the same as leaving it out.
+func TestChatAskWithZeroTimeoutHasNoDeadline(t *testing.T) {
+	d := chatDaemon(t, `{"ok":true,"data":{"values":["y"],"labels":["y"],"text":"","timed_out":false}}`)
+	reg := newRegistry(newDaemonClient(d.port(), ""), "assistant", leotools.Permissions{})
+	if _, err := reg.call("leo_chat_ask", json.RawMessage(`{"question":"Ship?","options":["y"],"timeout_s":0}`)); err != nil {
+		t.Fatal(err)
+	}
+	_, body := lastBody(t, d)
+	if _, ok := body["timeout_s"]; ok || body["wait_s"] != chatAskCallWindow.Seconds() {
+		t.Fatalf("body = %v", body)
+	}
+}
+
+func TestChatAskWithdrawCallsTheDaemon(t *testing.T) {
+	d := chatDaemon(t, `{"ok":true,"data":{"message_id":"01ASK","withdrawn":true}}`)
+	reg := newRegistry(newDaemonClient(d.port(), ""), "task:daily", leotools.Permissions{}, withTaskRun("daily", "run-7"))
+	out, err := reg.call("leo_chat_ask_withdraw", json.RawMessage(`{"message_id":"01ASK"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out != `{"message_id":"01ASK","withdrawn":true}` {
+		t.Fatalf("result = %s", out)
+	}
+	path, body := lastBody(t, d)
+	if path != "/api/agent/task:daily/chat/ask/withdraw" || body["message_id"] != "01ASK" || body["task"] != "daily" || body["run_id"] != "run-7" {
+		t.Fatalf("call %s %v", path, body)
+	}
+	for name, args := range map[string]string{"no message_id": `{}`, "numeric message_id": `{"message_id":5}`} {
+		if _, err := reg.call("leo_chat_ask_withdraw", json.RawMessage(args)); err == nil {
+			t.Errorf("%s: accepted", name)
+		}
 	}
 }

@@ -519,8 +519,9 @@ func (s *Server) handleAgentChatPost(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, apiResponse{OK: true, Data: map[string]string{"id": m.ID, "agent": m.Agent}})
 }
 
-// POST /api/agent/{name}/chat/ask — blocks until answered, timed out, or
-// wait_s passes (pending: resume with message_id).
+// POST /api/agent/{name}/chat/ask — blocks until answered, closed, or wait_s
+// passes (pending: resume with message_id, or wait for the late answer that
+// the daemon delivers to the agent). An ask with no timeout_s has no deadline.
 func (s *Server) handleAgentChatAsk(w http.ResponseWriter, r *http.Request) {
 	if !s.chatAvailable(w) {
 		return
@@ -546,6 +547,23 @@ func (s *Server) handleAgentChatAsk(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, apiResponse{OK: true, Data: res})
+}
+
+// POST /api/agent/{name}/chat/ask/withdraw {message_id, task, run_id}
+func (s *Server) handleAgentChatAskWithdraw(w http.ResponseWriter, r *http.Request) {
+	if !s.chatAvailable(w) {
+		return
+	}
+	req, ok := decodeChatTool(w, r)
+	if !ok {
+		return
+	}
+	m, err := s.chat.WithdrawAsk(r.Context(), chat.WithdrawRequest{Caller: r.PathValue("name"), Task: req.Task, RunID: req.RunID, MessageID: req.MessageID})
+	if err != nil {
+		writeChatError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, apiResponse{OK: true, Data: map[string]any{"message_id": m.ID, "withdrawn": true}})
 }
 
 // POST /api/agent/{name}/chat/history
