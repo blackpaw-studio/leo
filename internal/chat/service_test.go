@@ -1358,3 +1358,64 @@ func TestResumeAfterRestartReturnsTheStoredAnswerOrPending(t *testing.T) {
 		t.Fatalf("open resume = %+v, want pending", r)
 	}
 }
+
+func TestWithdrawClosesTheCallersAsk(t *testing.T) {
+	f := newFixture(t)
+	done := make(chan AskResult, 1)
+	go func() {
+		r, _ := f.svc.Ask(context.Background(), AskRequest{Caller: "assistant", Question: "?", Options: []Option{{Value: "y", Label: "Yes"}}, Wait: 30 * time.Minute})
+		done <- r
+	}()
+	<-f.timers.got
+	open := f.thread(t, "assistant")[0]
+	got, err := f.svc.WithdrawAsk(context.Background(), WithdrawRequest{Caller: "assistant", MessageID: open.ID})
+	if err != nil || got.State != StateExpired || got.ClosedReason != ClosedWithdrawn {
+		t.Fatalf("withdraw = %s/%q, %v", got.State, got.ClosedReason, err)
+	}
+	if r := <-done; !r.TimedOut || r.ClosedReason != ClosedWithdrawn || r.Pending {
+		t.Fatalf("the blocked call = %+v", r)
+	}
+	if u, ok := updateOf(f, open.ID); !ok || u.Message.ClosedReason != ClosedWithdrawn || u.Change != ChangeState {
+		t.Fatalf("update event = %+v, %v", u, ok)
+	}
+	if _, err := f.svc.Answer("assistant", open.ID, Answer{Values: []string{"y"}}); !errors.Is(err, ErrConflict) {
+		t.Fatalf("answering a withdrawn ask: %v", err)
+	}
+	f.svc.Flush()
+	if got := f.deliver.delivered(); len(got) != 0 {
+		t.Fatalf("delivered %q", got)
+	}
+}
+
+func TestWithdrawRefusesAnotherAgentsAsk(t *testing.T) {
+	f := newFixture(t)
+	ask := abandonedAsk(t, f, 0)
+	_, err := f.svc.WithdrawAsk(context.Background(), WithdrawRequest{Caller: "web", MessageID: ask.ID})
+	if !errors.Is(err, ErrInvalid) {
+		t.Fatalf("another agent's withdraw = %v", err)
+	}
+	if got, _ := f.store.Message(ask.ID); got.State != StateOpen {
+		t.Fatalf("ask = %s", got.State)
+	}
+}
+
+func TestWithdrawOfASettledAskConflicts(t *testing.T) {
+	f := newFixture(t)
+	ask := abandonedAsk(t, f, 0)
+	if _, err := f.svc.Answer("assistant", ask.ID, Answer{Values: []string{"y"}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.svc.WithdrawAsk(context.Background(), WithdrawRequest{Caller: "assistant", MessageID: ask.ID}); !errors.Is(err, ErrConflict) {
+		t.Fatalf("withdrawing an answered ask = %v", err)
+	}
+	open := abandonedAsk(t, f, 0)
+	if _, err := f.svc.WithdrawAsk(context.Background(), WithdrawRequest{Caller: "assistant", MessageID: open.ID}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.svc.WithdrawAsk(context.Background(), WithdrawRequest{Caller: "assistant", MessageID: open.ID}); !errors.Is(err, ErrConflict) {
+		t.Fatalf("a second withdraw = %v", err)
+	}
+	if _, err := f.svc.WithdrawAsk(context.Background(), WithdrawRequest{Caller: "assistant", MessageID: "nope"}); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("malformed id = %v", err)
+	}
+}
