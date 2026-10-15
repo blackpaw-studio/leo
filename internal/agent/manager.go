@@ -16,6 +16,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/blackpaw-studio/leo/internal/agentstore"
@@ -120,6 +121,30 @@ type Manager struct {
 	// bridgeStatus reads a live agent's Record.Bridge and BridgePending;
 	// nil leaves them empty.
 	bridgeStatus func(name string) BridgeStatus
+	// goneMu guards gone: it is set after the daemon is already serving.
+	goneMu sync.Mutex
+	// gone is told when an agent is stopped by an operator or deleted, so
+	// whatever was waiting on it can close. See SetGoneHook.
+	gone func(name string)
+}
+
+// SetGoneHook sets a callback told the name of an agent that is gone: stopped
+// by an operator (not suspended for idleness, which a message undoes) or
+// deleted. Optional; daemon boot is the only production caller.
+func (m *Manager) SetGoneHook(fn func(name string)) {
+	m.goneMu.Lock()
+	defer m.goneMu.Unlock()
+	m.gone = fn
+}
+
+// notifyGone calls the gone hook, outside its lock.
+func (m *Manager) notifyGone(name string) {
+	m.goneMu.Lock()
+	fn := m.gone
+	m.goneMu.Unlock()
+	if fn != nil {
+		fn(name)
+	}
 }
 
 // SetBridgeCapable tells the Manager how to learn whether claude launches
@@ -1071,6 +1096,18 @@ func (m *Manager) List() []Record {
 // actually live and otherwise falls straight through to the record update. A
 // name that is neither live nor persisted is a real "not found".
 func (m *Manager) Stop(name string, opts StopOptions) error {
+	if err := m.stop(name, opts); err != nil {
+		return err
+	}
+	// A suspend (WakeOnMessage) is not an end: the agent wakes for its next
+	// message, so what waits on it keeps waiting.
+	if !opts.WakeOnMessage {
+		m.notifyGone(name)
+	}
+	return nil
+}
+
+func (m *Manager) stop(name string, opts StopOptions) error {
 	_, live := m.sup.EphemeralAgents()[name]
 	if live {
 		if err := m.sup.StopAgent(name, opts.WakeOnMessage); err != nil {
@@ -1786,6 +1823,7 @@ func (m *Manager) Delete(ctx context.Context, name string, opts DeleteOptions) e
 		Type:    observe.EventAgentStopped,
 		Payload: &observe.AgentStoppedPayload{Agent: name},
 	})
+	m.notifyGone(name)
 	return nil
 }
 
