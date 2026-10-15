@@ -451,7 +451,7 @@ func TestChatToolsDuringAPersistentRunCarryItsTaskAndRun(t *testing.T) {
 		open, _ := f.store.OpenMessages("assistant", KindAsk, StateOpen)
 		_, _ = f.svc.Answer("assistant", open[0].ID, Answer{Values: []string{"y"}})
 	}()
-	res, err := f.svc.Ask(context.Background(), AskRequest{Caller: "assistant", Question: "Publish?", Options: []Option{{Value: "y"}}})
+	res, err := f.svc.Ask(context.Background(), AskRequest{Caller: "assistant", Question: "Publish?", Options: []Option{{Value: "y"}}, Wait: 30 * time.Minute})
 	if err != nil || len(res.Values) != 1 || res.Values[0] != "y" {
 		t.Fatalf("ask = %+v, %v", res, err)
 	}
@@ -579,11 +579,11 @@ func TestAskTimesOutAndExpires(t *testing.T) {
 	f := newFixture(t)
 	done := make(chan AskResult, 1)
 	go func() {
-		r, _ := f.svc.Ask(context.Background(), AskRequest{Caller: "assistant", Question: "?", Options: []Option{{Value: "a", Label: "a"}}})
+		r, _ := f.svc.Ask(context.Background(), AskRequest{Caller: "assistant", Question: "?", Options: []Option{{Value: "a", Label: "a"}}, Timeout: 5 * time.Minute})
 		done <- r
 	}()
-	if d := <-f.timers.got; d != DefaultAskTimeout {
-		t.Fatalf("default timeout = %s", d)
+	if d := <-f.timers.got; d != 5*time.Minute {
+		t.Fatalf("timeout = %s", d)
 	}
 	f.timers.fireLast()
 	if r := <-done; !r.TimedOut {
@@ -605,6 +605,7 @@ func TestAskValidation(t *testing.T) {
 		"too many":     {Caller: "assistant", Question: "?", Options: many},
 		"no question":  {Caller: "assistant", Options: []Option{{Value: "a"}}},
 		"long timeout": {Caller: "assistant", Question: "?", Options: []Option{{Value: "a"}}, Timeout: 2 * time.Hour},
+		"negative timeout": {Caller: "assistant", Question: "?", Options: []Option{{Value: "a"}}, Timeout: -time.Second},
 		"dup values":   {Caller: "assistant", Question: "?", Options: []Option{{Value: "a"}, {Value: "a"}}},
 	} {
 		if _, err := f.svc.Ask(context.Background(), req); !errors.Is(err, ErrInvalid) {
@@ -854,7 +855,7 @@ func TestCloseCancelsAndDrainsWaitersAndDeliveries(t *testing.T) {
 	<-started
 	asked := make(chan AskResult, 1)
 	go func() {
-		r, _ := f.svc.Ask(context.Background(), AskRequest{Caller: "assistant", Question: "?", Options: []Option{{Value: "a"}}})
+		r, _ := f.svc.Ask(context.Background(), AskRequest{Caller: "assistant", Question: "?", Options: []Option{{Value: "a"}}, Wait: 30 * time.Minute})
 		asked <- r
 	}()
 	<-f.timers.got
@@ -863,11 +864,15 @@ func TestCloseCancelsAndDrainsWaitersAndDeliveries(t *testing.T) {
 	// result may still be a step behind: block on it, under a guard.
 	select {
 	case r := <-asked:
-		if !r.TimedOut {
-			t.Fatalf("ask after close = %+v", r)
+		if !r.Pending || r.TimedOut {
+			t.Fatalf("ask after close = %+v, want pending", r)
 		}
 	case <-time.After(10 * time.Second):
 		t.Fatal("Close returned while an ask still waited")
+	}
+	// Shutdown leaves the ask open: the next daemon still answers it.
+	if m := f.thread(t, "assistant")[0]; m.Kind != KindAsk || m.State != StateOpen {
+		t.Fatalf("ask after close = %s/%s, want open", m.Kind, m.State)
 	}
 	got, _ := f.store.Message(in.ID)
 	notes, _ := f.store.OpenMessages("assistant", KindSystem, "")
@@ -961,5 +966,87 @@ func TestAskResumeChecksTheMessage(t *testing.T) {
 		if _, err := f.svc.Ask(context.Background(), req); !errors.Is(err, ErrInvalid) {
 			t.Errorf("%s: err = %v", name, err)
 		}
+	}
+}
+
+// An ask with no timeout has no deadline: only its call's window ends, and
+// a resume days later still finds it open.
+func TestAskWithoutTimeoutNeverExpires(t *testing.T) {
+	f := newFixture(t)
+	done := make(chan AskResult, 1)
+	go func() {
+		r, _ := f.svc.Ask(context.Background(), AskRequest{Caller: "assistant", Question: "?", Options: []Option{{Value: "a"}}, Wait: 30 * time.Minute})
+		done <- r
+	}()
+	if d := <-f.timers.got; d != 30*time.Minute {
+		t.Fatalf("first timer = %s, want only the call window", d)
+	}
+	select {
+	case d := <-f.timers.got:
+		t.Fatalf("a deadline timer of %s was armed for a deadline-free ask", d)
+	default:
+	}
+	f.timers.fireLast()
+	if r := <-done; !r.Pending || r.TimedOut {
+		t.Fatalf("first call = %+v", r)
+	}
+	open := f.thread(t, "assistant")[0]
+	if open.State != StateOpen || !open.Deadline.IsZero() {
+		t.Fatalf("ask = %s, deadline %v", open.State, open.Deadline)
+	}
+	f.clock.Advance(72 * time.Hour)
+	resumed := make(chan AskResult, 1)
+	go func() {
+		r, _ := f.svc.Ask(context.Background(), AskRequest{Caller: "assistant", MessageID: open.ID, Wait: 30 * time.Minute})
+		resumed <- r
+	}()
+	<-f.timers.got
+	f.timers.fireLast()
+	if r := <-resumed; !r.Pending || r.TimedOut {
+		t.Fatalf("resumed = %+v, want pending", r)
+	}
+}
+
+func TestAskWithTimeoutPersistsItsDeadline(t *testing.T) {
+	f := newFixture(t)
+	done := make(chan AskResult, 1)
+	go func() {
+		r, _ := f.svc.Ask(context.Background(), AskRequest{Caller: "assistant", Question: "?", Options: []Option{{Value: "a"}}, Timeout: 10 * time.Minute})
+		done <- r
+	}()
+	<-f.timers.got
+	open := f.thread(t, "assistant")[0]
+	if want := open.TS.Add(10 * time.Minute); !open.Deadline.Equal(want) {
+		t.Fatalf("deadline = %v, want %v", open.Deadline, want)
+	}
+	f.timers.fireLast()
+	r := <-done
+	if !r.TimedOut || r.ClosedReason != ClosedTimeout {
+		t.Fatalf("result = %+v", r)
+	}
+	if m, _ := f.store.Message(open.ID); m.State != StateExpired || m.ClosedReason != ClosedTimeout {
+		t.Fatalf("message = %s/%q", m.State, m.ClosedReason)
+	}
+}
+
+// A task run's ask has no agent to hand a late answer to, so it keeps the
+// default deadline rather than staying open forever.
+func TestAskFromATaskRunKeepsTheDefaultDeadline(t *testing.T) {
+	f := newFixture(t)
+	f.cfg.Tasks["build"] = config.TaskConfig{Workspace: "/src/web"}
+	done := make(chan AskResult, 1)
+	go func() {
+		r, _ := f.svc.Ask(context.Background(), AskRequest{Caller: "task:build", Task: "build", RunID: "r1", Question: "?", Options: []Option{{Value: "a"}}})
+		done <- r
+	}()
+	if d := <-f.timers.got; d != DefaultAskTimeout {
+		t.Fatalf("task-run ask deadline = %s, want %s", d, DefaultAskTimeout)
+	}
+	f.timers.fireLast()
+	if r := <-done; !r.TimedOut || r.ClosedReason != ClosedTimeout {
+		t.Fatalf("result = %+v", r)
+	}
+	if m := f.thread(t, "web")[0]; m.State != StateExpired || m.Asker != "task:build" {
+		t.Fatalf("message = %s asker %q", m.State, m.Asker)
 	}
 }

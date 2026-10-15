@@ -479,7 +479,7 @@ func TestShutdownClosesChatFirst(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("the held ask was never answered")
 	}
-	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"timed_out":true`) {
+	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"pending":true`) {
 		t.Fatalf("held ask = %d %s", w.Code, w.Body.String())
 	}
 	if w := chatRequest(t, cs.s, "POST", "/api/v1/chat/assistant/messages", testAPIToken, `{"text":"late"}`); w.Code != http.StatusServiceUnavailable {

@@ -11,7 +11,10 @@ import (
 
 // Ask limits.
 const (
-	MaxAskOptions     = 12
+	MaxAskOptions = 12
+	// DefaultAskTimeout is the deadline of an ask with no timeout and no
+	// agent to hand a late answer to (a task run's ask). An agent's own ask
+	// has no deadline by default.
 	DefaultAskTimeout = 300 * time.Second
 	MaxAskTimeout     = time.Hour
 	// MaxPostFiles caps the files one leo_chat_post copies.
@@ -163,6 +166,8 @@ type AskRequest struct {
 	// Options (legacy: buttons) and Input are alternatives; give one.
 	Options   []Option
 	Input     *Input
+	// Timeout is the ask's deadline; 0 means none (except for an ask with no
+	// agent to deliver a late answer to, which gets DefaultAskTimeout).
 	Timeout   time.Duration
 	MessageID string
 	// Wait bounds this call's wait (0: until the ask settles). A call can be
@@ -173,14 +178,16 @@ type AskRequest struct {
 
 // AskResult is leo_chat_ask's answer: the chosen values with their labels,
 // and any free text. Pending says the call's wait ended with the question
-// still open: ask again with MessageID to keep waiting.
+// still open: ask again with MessageID to keep waiting. TimedOut says the
+// ask closed without an answer, and ClosedReason why.
 type AskResult struct {
-	Values    []string `json:"values"`
-	Labels    []string `json:"labels"`
-	Text      string   `json:"text"`
-	TimedOut  bool     `json:"timed_out"`
-	Pending   bool     `json:"pending,omitempty"`
-	MessageID string   `json:"message_id,omitempty"`
+	Values       []string `json:"values"`
+	Labels       []string `json:"labels"`
+	Text         string   `json:"text"`
+	TimedOut     bool     `json:"timed_out"`
+	ClosedReason string   `json:"closed_reason,omitempty"`
+	Pending      bool     `json:"pending,omitempty"`
+	MessageID    string   `json:"message_id,omitempty"`
 }
 
 // noAnswer is the result of an ask that has no answer (yet): empty, not
@@ -192,9 +199,6 @@ func noAnswer(id string) AskResult {
 // validateAsk checks req and resolves its input.
 func validateAsk(req AskRequest) (Input, time.Duration, error) {
 	timeout := req.Timeout
-	if timeout == 0 {
-		timeout = DefaultAskTimeout
-	}
 	switch {
 	case strings.TrimSpace(req.Question) == "":
 		return Input{}, 0, fmt.Errorf("%w: question is required", ErrInvalid)
@@ -213,9 +217,9 @@ func validateAsk(req AskRequest) (Input, time.Duration, error) {
 }
 
 // Ask posts a question with an answer input to the caller's thread and waits for
-// the answer: until it is answered or its own deadline (Timeout) passes,
-// which expires it, or until the call's Wait or ctx ends first, which
-// leaves it open and the result Pending.
+// the answer: until it is answered, withdrawn, or its own deadline (Timeout,
+// if it has one) passes, which expires it, or until the call's Wait or ctx
+// ends first, which leaves it open and the result Pending.
 func (s *Service) Ask(ctx context.Context, req AskRequest) (AskResult, error) {
 	if err := s.enter(); err != nil {
 		return AskResult{}, err
@@ -236,72 +240,105 @@ func (s *Service) Ask(ctx context.Context, req AskRequest) (AskResult, error) {
 	if note != "" {
 		s.postSystem(agent, note)
 	}
-	m := Message{Agent: agent, Direction: DirectionOut, Kind: KindAsk, Text: strings.TrimSpace(req.Question), State: StateOpen, Input: &input}
+	if timeout == 0 && req.Caller != agent {
+		// A task run (or a persistent task's foreign owner) has no agent to
+		// hand a late answer to: don't leave its ask open forever.
+		timeout = DefaultAskTimeout
+	}
+	m := Message{Agent: agent, Direction: DirectionOut, Kind: KindAsk, Text: strings.TrimSpace(req.Question), State: StateOpen, Input: &input, Asker: req.Caller}
 	if req.Task != "" {
 		m.Task, m.RunID = req.Task, req.RunID
+	}
+	if timeout > 0 {
+		m.Deadline = s.opts.Now().Add(timeout)
 	}
 	m, wt, err := s.insertOpen(m)
 	if err != nil {
 		return AskResult{}, err
 	}
-	deadline := s.opts.After(timeout)
-	// The deadline is the ask's own: the call holds no lease on it. Close
-	// waits for it (active), and cancelling s.ctx ends it.
-	s.active.Add(1)
-	go s.expireAsk(m.ID, wt, deadline)
+	if timeout > 0 {
+		deadline := s.opts.After(timeout)
+		// The deadline is the ask's own: the call holds no lease on it. Close
+		// waits for it (active), and cancelling s.ctx ends it.
+		s.active.Add(1)
+		go s.expireAsk(m.ID, wt, deadline)
+	}
 	return s.waitAsk(ctx, m.ID, wt, req.Wait), nil
 }
 
-// expireAsk expires ask id at its deadline, or at shutdown, unless it is
-// answered first, and wakes everyone waiting on it.
+// expireAsk times ask id out at its deadline unless it settles first.
+// Shutdown ends it without expiring the ask: the next daemon re-arms it.
 func (s *Service) expireAsk(id string, wt *waiter, deadline <-chan time.Time) {
 	defer s.active.Done()
-	defer s.waiters.remove(id)
 	select {
 	case <-wt.done:
-		return
 	case <-deadline:
+		s.closeAsk(id, ClosedTimeout)
 	case <-s.ctx.Done():
 	}
-	ok, err := s.opts.Store.Transition(id, []string{StateOpen}, StateExpired, nil)
-	if err != nil {
-		s.opts.Logf("chat: expiring ask %s: %v", id, err)
-	}
-	if ok {
-		s.publishUpdated(id, ChangeState)
-	}
-	s.waiters.settle(id, nil)
 }
 
-// waitAsk waits for ask id to settle, up to window (0: no bound) or ctx's
-// end, either of which leaves it pending.
+// closeAsk expires open ask id with reason, settling its waiter and
+// announcing it. It reports whether this call closed it: only the winner of
+// the store's compare-and-swap settles.
+func (s *Service) closeAsk(id, reason string) bool {
+	ok, err := s.opts.Store.CloseAsk(id, reason)
+	if err != nil {
+		s.opts.Logf("chat: closing ask %s: %v", id, err)
+		return false
+	}
+	if !ok {
+		return false
+	}
+	s.waiters.settle(id, nil)
+	s.publishUpdated(id, ChangeState)
+	return true
+}
+
+// waitAsk waits for ask id to settle, up to window (0: no bound), ctx's end
+// or shutdown, any of which leaves it pending. The call counts as blocked
+// on the ask while it waits, so an answer it receives is not also delivered
+// to the agent as a late one.
 func (s *Service) waitAsk(ctx context.Context, id string, wt *waiter, window time.Duration) AskResult {
+	if !s.waiters.join(wt) {
+		return s.askOutcome(id) // settled before this call could count itself
+	}
 	var windowEnd <-chan time.Time
 	if window > 0 {
 		windowEnd = s.opts.After(window)
 	}
 	select {
 	case <-wt.done:
-		return s.askOutcome(id)
 	case <-windowEnd:
 	case <-ctx.Done():
+	case <-s.ctx.Done():
+	}
+	if s.waiters.leave(wt) && ctx.Err() == nil {
+		return s.askOutcome(id)
 	}
 	res := noAnswer(id)
 	res.Pending = true
 	return res
 }
 
-// askOutcome is a settled ask's result: the answer, else timed out.
+// askOutcome is an ask's result from the store: the answer, pending while it
+// is open, else closed without one.
 func (s *Service) askOutcome(id string) AskResult {
 	res := noAnswer(id)
 	m, err := s.opts.Store.Message(id)
-	if err != nil || m.State != StateAnswered || m.Answer == nil {
+	switch {
+	case err != nil:
 		res.TimedOut = true
-		return res
+	case m.State == StateOpen:
+		res.Pending = true
+	case m.State == StateAnswered && m.Answer != nil:
+		res.Values = append(res.Values, m.Answer.Values...)
+		res.Labels = labelsOf(m.Input, m.Answer.Values)
+		res.Text = m.Answer.Text
+	default:
+		res.TimedOut = true
+		res.ClosedReason = m.ClosedReason
 	}
-	res.Values = append(res.Values, m.Answer.Values...)
-	res.Labels = labelsOf(m.Input, m.Answer.Values)
-	res.Text = m.Answer.Text
 	return res
 }
 
@@ -357,7 +394,7 @@ func (s *Service) Answer(agent, id string, answer Answer) (Message, error) {
 	if !ok {
 		return Message{}, ErrConflict
 	}
-	s.waiters.settle(id, &answer)
+	_ = s.waiters.settle(id, &answer)
 	s.publishUpdated(id, ChangeAnswer)
 	return s.opts.Store.Message(id)
 }

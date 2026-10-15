@@ -141,6 +141,11 @@ func TestValidAnswerByInputType(t *testing.T) {
 func askAndAnswer(t *testing.T, f *harnessFixture, req AskRequest, ans Answer) (AskResult, Message) {
 	t.Helper()
 	req.Caller, req.Question = "assistant", "Which?"
+	// A deadline-free ask arms no timer of its own; the call window is the
+	// timer the test waits on, and it keeps the call blocked on the answer.
+	if req.Wait == 0 {
+		req.Wait = 30 * time.Minute
+	}
 	done := make(chan AskResult, 1)
 	go func() {
 		r, err := f.svc.Ask(context.Background(), req)
