@@ -229,7 +229,7 @@ func (n *Notifier) chatMessage(m chat.Message) {
 		// Only buttons can be answered from a notification action.
 		if m.Input.Type == chat.InputButtons {
 			for _, o := range m.Input.Options {
-				a.Options = append(a.Options, Option(o))
+				a.Options = append(a.Options, Option{Value: o.Value, Label: o.Label})
 			}
 		}
 	}

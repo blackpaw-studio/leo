@@ -286,3 +286,127 @@ func TestCheckboxesWithAllowTextNeedTextForAnEmptySelection(t *testing.T) {
 		t.Fatalf("plain checkboxes, min 0: %v", err)
 	}
 }
+
+func qs(questions ...Question) Input {
+	return Input{Type: InputQuestions, Questions: questions}
+}
+
+func q(id, text string, multi bool, labels ...string) Question {
+	opts := make([]Option, len(labels))
+	for i, l := range labels {
+		opts[i] = Option{Value: l, Label: l}
+	}
+	return Question{ID: id, Header: "H", Question: text, Multi: multi, AllowText: true, Options: opts}
+}
+
+func TestValidateQuestionsInput(t *testing.T) {
+	good := qs(q("q1", "Size?", false, "S", "L"), q("q2", "Toppings?", true, "Ham", "Egg"))
+	got, err := validateInput(good)
+	if err != nil || len(got.Questions) != 2 {
+		t.Fatalf("valid questions: %+v, %v", got, err)
+	}
+	five := make([]Question, MaxAskQuestions+1)
+	for i := range five {
+		five[i] = q("q"+string(rune('1'+i)), "Q"+string(rune('1'+i)), false, "a")
+	}
+	bad := map[string]Input{
+		"no questions":             {Type: InputQuestions},
+		"too many questions":       qs(five...),
+		"top-level options":        {Type: InputQuestions, Options: abc, Questions: good.Questions},
+		"top-level allow_text":     {Type: InputQuestions, AllowText: true, Questions: good.Questions},
+		"top-level max":            {Type: InputQuestions, Max: ip(1), Questions: good.Questions},
+		"top-level min":            {Type: InputQuestions, Min: 1, Questions: good.Questions},
+		"top-level placeholder":    {Type: InputQuestions, Placeholder: "x", Questions: good.Questions},
+		"ids out of position":      qs(q("q2", "Size?", false, "S")),
+		"blank question":           qs(q("q1", "  ", false, "S")),
+		"duplicate questions":      qs(q("q1", "Size?", false, "S"), q("q2", "Size?", false, "L")),
+		"question w/o options":     qs(q("q1", "Size?", false)),
+		"duplicate labels":         qs(q("q1", "Size?", false, "S", "S")),
+		"value differs from label": qs(Question{ID: "q1", Question: "Size?", Options: []Option{{Value: "s", Label: "S"}}}),
+	}
+	for name, in := range bad {
+		if _, err := validateInput(in); !errors.Is(err, ErrInvalid) {
+			t.Errorf("%s: err = %v, want ErrInvalid", name, err)
+		}
+	}
+	if _, err := resolveInput(nil, &good); !errors.Is(err, ErrInvalid) {
+		t.Errorf("leo_chat_ask must not build a questions input: %v", err)
+	}
+}
+
+func TestValidAnswerForQuestions(t *testing.T) {
+	in := qs(q("q1", "Size?", false, "S", "L"), q("q2", "Toppings?", true, "Ham", "Egg"))
+	noText := qs(Question{ID: "q1", Question: "Size?", Options: []Option{{Value: "S", Label: "S"}}})
+	long := strings.Repeat("x", MaxAnswerTextRunes+1)
+	qa := func(v string, text string) QuestionAnswer {
+		a := QuestionAnswer{Text: text}
+		if v != "" {
+			a.Values = []string{v}
+		}
+		return a
+	}
+	ok := map[string]map[string]QuestionAnswer{
+		"values for each":    {"q1": qa("S", ""), "q2": {Values: []string{"Ham", "Egg"}}},
+		"text for single":    {"q1": qa("", "XL"), "q2": qa("Ham", "")},
+		"multi value + text": {"q1": qa("S", ""), "q2": {Values: []string{"Ham"}, Text: "pickles"}},
+		"multi text only":    {"q1": qa("S", ""), "q2": qa("", "none")},
+	}
+	for name, a := range ok {
+		if err := validAnswerFor(in, Answer{Answers: a}); err != nil {
+			t.Errorf("%s: %v", name, err)
+		}
+	}
+	bad := map[string]Answer{
+		"no answers":            {},
+		"missing id":            {Answers: map[string]QuestionAnswer{"q1": qa("S", "")}},
+		"unknown id":            {Answers: map[string]QuestionAnswer{"q1": qa("S", ""), "q2": qa("Ham", ""), "q3": qa("S", "")}},
+		"empty question":        {Answers: map[string]QuestionAnswer{"q1": qa("S", ""), "q2": {}}},
+		"blank text only":       {Answers: map[string]QuestionAnswer{"q1": qa("S", ""), "q2": qa("", "  ")}},
+		"single two values":     {Answers: map[string]QuestionAnswer{"q1": {Values: []string{"S", "L"}}, "q2": qa("Ham", "")}},
+		"single value and text": {Answers: map[string]QuestionAnswer{"q1": qa("S", "XL"), "q2": qa("Ham", "")}},
+		"multi duplicate":       {Answers: map[string]QuestionAnswer{"q1": qa("S", ""), "q2": {Values: []string{"Ham", "Ham"}}}},
+		"unknown option":        {Answers: map[string]QuestionAnswer{"q1": qa("Z", ""), "q2": qa("Ham", "")}},
+		"text too long":         {Answers: map[string]QuestionAnswer{"q1": qa("S", ""), "q2": qa("", long)}},
+		"top-level values":      {Values: []string{"S"}, Answers: map[string]QuestionAnswer{"q1": qa("S", ""), "q2": qa("Ham", "")}},
+		"top-level text":        {Text: "hi", Answers: map[string]QuestionAnswer{"q1": qa("S", ""), "q2": qa("Ham", "")}},
+	}
+	for name, a := range bad {
+		if err := validAnswerFor(in, a); !errors.Is(err, ErrInvalid) {
+			t.Errorf("%s: err = %v, want ErrInvalid", name, err)
+		}
+	}
+	if err := validAnswerFor(noText, Answer{Answers: map[string]QuestionAnswer{"q1": qa("", "x")}}); !errors.Is(err, ErrInvalid) {
+		t.Errorf("text on a question without allow_text: %v", err)
+	}
+	// answers belong to the questions type only
+	if err := validAnswerFor(Input{Type: InputButtons, Options: abc}, Answer{Values: []string{"a"}, Answers: map[string]QuestionAnswer{}}); !errors.Is(err, ErrInvalid) {
+		t.Errorf("answers on a buttons ask: %v", err)
+	}
+	if err := validAnswerFor(Input{Type: InputText}, Answer{Text: "x", Answers: map[string]QuestionAnswer{"q1": {}}}); !errors.Is(err, ErrInvalid) {
+		t.Errorf("answers on a text ask: %v", err)
+	}
+}
+
+func TestQuestionsWireShape(t *testing.T) {
+	in := qs(Question{ID: "q1", Header: "Size", Question: "Size?", AllowText: true, Options: []Option{{Value: "L", Label: "L", Description: "large"}}})
+	got, _ := json.Marshal(in)
+	want := `{"type":"questions","questions":[{"id":"q1","header":"Size","question":"Size?","multi":false,"allow_text":true,"options":[{"value":"L","label":"L","description":"large"}]}]}`
+	if string(got) != want {
+		t.Errorf("input =\n%s\nwant\n%s", got, want)
+	}
+	ans, _ := json.Marshal(Answer{Answers: map[string]QuestionAnswer{"q1": {Values: []string{"L"}}}})
+	if string(ans) != `{"values":[],"text":"","answers":{"q1":{"values":["L"],"text":""}}}` {
+		t.Errorf("answer = %s", ans)
+	}
+	empty, _ := json.Marshal(Answer{Answers: map[string]QuestionAnswer{"q1": {}}})
+	if string(empty) != `{"values":[],"text":"","answers":{"q1":{"values":[],"text":""}}}` {
+		t.Errorf("empty-values answer = %s", empty)
+	}
+	btn, _ := json.Marshal(Input{Type: InputButtons, Options: []Option{{Value: "a", Label: "A"}}})
+	if string(btn) != `{"type":"buttons","options":[{"value":"a","label":"A"}]}` {
+		t.Errorf("description must be omitted when empty: %s", btn)
+	}
+	if (Answer{Values: []string{AnswerTerminal}, Answers: map[string]QuestionAnswer{"q1": {}}}).isTerminal() {
+		t.Error("an answer carrying answers is not the terminal marker")
+	}
+}
