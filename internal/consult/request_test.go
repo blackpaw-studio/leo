@@ -20,6 +20,13 @@ func TestDispatchPreambleBackgroundWorkGuidance(t *testing.T) {
 	}
 }
 
+func TestDispatchPreambleSteersLongJobsToRunInBackground(t *testing.T) {
+	got := requestPrompt(Request{Prompt: "work"})
+	if want := "Start long jobs with Bash run_in_background, not `&`/nohup; detached jobs never wake you."; !strings.Contains(got, want) {
+		t.Fatalf("detached-job guidance %q missing: %s", want, got)
+	}
+}
+
 func TestDispatchPreambleAllowsNestedSubagents(t *testing.T) {
 	got := requestPrompt(Request{Prompt: "work"})
 	for _, banned := range []string{"Do not spawn", "own code review"} {
