@@ -899,10 +899,12 @@ func (d *Dispatcher) Report(id string, r HookReport) error {
 	case "pretooluse", "posttooluse", "posttoolusefailure":
 		// Activity only: no turn is opened, closed, or attributed.
 		s.record.OpenTools = applyToolEvent(s.record.OpenTools, event, str(p, "tool_use_id"), s.lastHook)
+		d.setTrackedLocked(s, trackToolEvent(s.record.BackgroundTasks, event, p, s.lastHook))
 	case "userpromptsubmit":
 		if s.record.Status == StatusSettling {
 			return nil
 		}
+		d.setTrackedLocked(s, trackPrompt(s.record.BackgroundTasks, str(p, "prompt")))
 		if key := harnessKey(p); key != "" {
 			s.idMode = true
 			d.submitKeyedLocked(s, key, p)
@@ -968,6 +970,9 @@ func (d *Dispatcher) Report(id string, r HookReport) error {
 			out = TurnInterrupted
 		}
 		text := str(p, "last_assistant_message")
+		if event == "stop" {
+			d.setTrackedLocked(s, trackStop(s.record.BackgroundTasks, p))
+		}
 		if key := harnessKey(p); key != "" {
 			s.idMode = true
 			d.stopKeyedLocked(s, key, event, p, out, text)
@@ -1204,6 +1209,7 @@ func (d *Dispatcher) beginSettlementLocked(s *runState, status Status, grace tim
 	d.dropPermissionsLocked(s)
 	boundary := d.now()
 	clearPendingLocked(s)
+	s.record.BackgroundTasks = nil
 	s.record.Status = StatusSettling
 	s.record.foldActive(boundary)
 	s.settleStatus = status
@@ -1217,6 +1223,7 @@ func (d *Dispatcher) finishInteractiveLocked(s *runState, status Status) {
 	d.dropPermissionsLocked(s)
 	s.record.foldActive(d.now())
 	clearPendingLocked(s)
+	s.record.BackgroundTasks = nil
 	closeReason := ""
 	if status == StatusClosed {
 		closeReason = s.closeReason

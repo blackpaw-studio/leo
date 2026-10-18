@@ -201,8 +201,11 @@ type Record struct {
 	// NeedsInput is what a needs_input run waits on (see RequestPermission).
 	NeedsInput *NeedsInput `json:"needs_input,omitempty"`
 	// PendingWork is the background work a waiting run is paused on.
-	PendingWork  *PendingWork `json:"pending_work,omitempty"`
-	HookActivity time.Time    `json:"-"`
+	PendingWork *PendingWork `json:"pending_work,omitempty"`
+	// BackgroundTasks are the background Bash tasks the run started and has
+	// not seen end.
+	BackgroundTasks []BackgroundTask `json:"background_tasks,omitempty"`
+	HookActivity    time.Time        `json:"-"`
 	// OpenTools are the tool calls PreToolUse has announced and no
 	// PostToolUse has settled, by tool_use_id, with when each started. A
 	// foreground tool sends no hooks until it ends, so a non-empty set keeps
