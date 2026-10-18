@@ -86,11 +86,21 @@ func trackPrompt(tasks []BackgroundTask, prompt string) []BackgroundTask {
 // without a task list, or one with an entry that names no id (the bridge's
 // counts-only rendition), says nothing about which tasks ended.
 func trackStop(tasks []BackgroundTask, p map[string]any) []BackgroundTask {
+	return reconcileStop(tasks, p, time.Time{}, false)
+}
+
+// reconcileStop is trackStop that can also adopt: with adopt set, a listed
+// running shell the tracker missed (its PostToolUse was lost) is added at now.
+// Only the superseded shell Stop adopts: a Stop the dispatcher applies whole
+// already carries its own pending work, and adopting from it would keep a
+// task alive that only a notification clears.
+func reconcileStop(tasks []BackgroundTask, p map[string]any, now time.Time, adopt bool) []BackgroundTask {
 	listed, ok := p["background_tasks"].([]any)
-	if !ok || len(tasks) == 0 {
+	if !ok || (len(tasks) == 0 && !adopt) {
 		return tasks
 	}
 	live := map[string]bool{}
+	var missing []BackgroundTask
 	for _, raw := range listed {
 		entry, _ := raw.(map[string]any)
 		id := str(entry, "id")
@@ -98,12 +108,31 @@ func trackStop(tasks []BackgroundTask, p map[string]any) []BackgroundTask {
 			return tasks
 		}
 		live[id] = true
+		if adopt && isRunningShell(entry) && !slices.ContainsFunc(tasks, func(t BackgroundTask) bool { return t.ID == id }) {
+			missing = append(missing, BackgroundTask{ID: id, Command: truncateRunes(firstNonEmpty(str(entry, "command"), str(entry, "description")), maxTrackedCommandRunes), StartedAt: now})
+		}
 	}
 	kept := slices.DeleteFunc(slices.Clone(tasks), func(t BackgroundTask) bool { return !live[t.ID] })
+	kept = append(kept, missing[:min(len(missing), max(0, maxTrackedTasks-len(kept)))]...)
 	if len(kept) == 0 {
 		return nil
 	}
 	return kept
+}
+
+// isRunningShell reports whether a Stop's task entry is in-flight shell work,
+// the only kind the tracker holds (other kinds ride the Stop's own counts).
+func isRunningShell(entry map[string]any) bool {
+	return sanitizeTaskType(str(entry, "type")) == "shell" && !settledTaskStatuses[strings.ToLower(str(entry, "status"))]
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, v := range values {
+		if strings.TrimSpace(v) != "" {
+			return v
+		}
+	}
+	return ""
 }
 
 func withoutTask(tasks []BackgroundTask, id string) []BackgroundTask {
@@ -162,8 +191,42 @@ func (d *Dispatcher) ReportSupersededStop(id string, r HookReport) error {
 	if json.Unmarshal(r.Payload, &p) != nil || normalizeHookEvent(str(p, "hook_event_name")) != "stop" {
 		return nil
 	}
-	d.setTrackedLocked(s, trackStop(s.record.BackgroundTasks, p))
+	d.setTrackedLocked(s, reconcileStop(s.record.BackgroundTasks, p, d.now(), true))
+	d.reopenForTrackedLocked(s)
 	return nil
+}
+
+// lateStopReopenWindow bounds how long after its close a finished turn can be
+// pulled back into waiting by a superseded Stop. The bridge's turn.complete
+// and the shell Stop for the same moment arrive in either order, within a
+// hook round trip of each other.
+const lateStopReopenWindow = 30 * time.Second
+
+// reopenForTrackedLocked returns an idle run to waiting when tracked
+// background work exists that its closed turn never saw: the superseded Stop
+// that names the work arrived after the bridge's turn.complete had already
+// closed the turn on no pending work. The latest turn, if it finished within
+// lateStopReopenWindow, reopens paused on that work, keeping what it said as
+// its wait text, and its premature completion notification is withdrawn
+// unless a delivery already claimed it. When the Stop came first the turn is
+// still open, and finishKeyedLocked holds it on the tracked tasks instead.
+func (d *Dispatcher) reopenForTrackedLocked(s *runState) {
+	if len(s.record.BackgroundTasks) == 0 || s.record.Status != StatusIdle || len(s.record.Turns) == 0 {
+		return
+	}
+	last := len(s.record.Turns) - 1
+	t := &s.record.Turns[last]
+	if t.Outcome != TurnFinished || t.EndedAt.IsZero() || d.now().Sub(t.EndedAt) > lateStopReopenWindow {
+		return
+	}
+	if n, ok := s.record.Notifications[t.TurnID]; ok && n.Disposition != NotificationClaimed {
+		delete(s.record.Notifications, t.TurnID)
+	}
+	text := t.Text
+	t.Outcome, t.Status, t.EndedAt, t.Text, t.FinalText = "", "", time.Time{}, "", ""
+	t.WaitText = appendStopText(nil, text)
+	d.waitOnBackgroundLocked(s, withTrackedTasks(nil, s.record.BackgroundTasks), "", t)
+	d.persistTurnLocked(s, *t)
 }
 
 // setTrackedLocked replaces the run's tracked tasks, persisting a change.
