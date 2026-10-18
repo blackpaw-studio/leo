@@ -218,7 +218,14 @@ func (s *Server) handleAPIDispatchReport(w http.ResponseWriter, r *http.Request)
 		// consult.TmuxInteractiveRuntime.DispatchBridgeSubscriber); applying
 		// both would double every turn. Acknowledge so the hook stops. Tool
 		// events are exempt: the bridge does not translate them, and they
-		// are activity only, so applying them doubles nothing.
+		// are activity only, so applying them doubles nothing. A Stop's task
+		// list still prunes the dispatch's tracked background tasks: the mod
+		// may never see the Stop hook, so that list is the only authoritative
+		// one.
+		if err := s.consults.ReportSupersededStop(id, report); err != nil {
+			writeJSON(w, http.StatusInternalServerError, apiResponse{Error: err.Error()})
+			return
+		}
 		writeJSON(w, http.StatusOK, apiResponse{OK: true, Data: map[string]bool{"accepted": true, "superseded_by_bridge": true}})
 		return
 	}

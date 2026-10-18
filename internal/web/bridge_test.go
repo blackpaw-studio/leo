@@ -106,3 +106,36 @@ func TestDispatchReportHTTPAppliesToolEventsForBridgedDispatch(t *testing.T) {
 		t.Fatalf("open tools after PostToolUse: %v", rec.OpenTools)
 	}
 }
+
+// A bridged dispatch's Stop hook is superseded for turn state, but its task
+// list is the only authoritative record of which tracked background tasks
+// ended, so the handler still applies that much of it.
+func TestDispatchReportHTTPPrunesTrackedTasksFromASupersededStop(t *testing.T) {
+	s, _, _ := newModeTestServer(t)
+	got := postDispatch(t, s, `{"template":"coding","prompt":"work","cwd":"/tmp","mode":"interactive"}`)
+	id := got.Data.ID
+	s.dispatchBridge = fakeDispatchBridge{id: true}
+	seq := 0
+	post := func(payload string) string {
+		t.Helper()
+		seq++
+		w := httptest.NewRecorder()
+		req := httptest.NewRequest("POST", "/api/dispatch/"+id+"/report", strings.NewReader(fmt.Sprintf(`{"event_id":"e%d","payload":`, seq)+payload+`}`))
+		req.SetPathValue("id", id)
+		s.handleAPIDispatchReport(w, req)
+		if w.Code != http.StatusOK {
+			t.Fatalf("status %d: %s", w.Code, w.Body.String())
+		}
+		return w.Body.String()
+	}
+	post(`{"hook_event_name":"PostToolUse","tool_name":"Bash","tool_use_id":"tu1","tool_input":{"command":"pnpm check"},"tool_response":{"backgroundTaskId":"b1"}}`)
+	if rec, _ := s.consults.Get(id); len(rec.BackgroundTasks) != 1 || rec.BackgroundTasks[0].ID != "b1" {
+		t.Fatalf("tracked after PostToolUse: %+v", rec.BackgroundTasks)
+	}
+	if body := post(`{"hook_event_name":"Stop","background_tasks":[]}`); !strings.Contains(body, "superseded_by_bridge") {
+		t.Fatalf("turn event not superseded: %s", body)
+	}
+	if rec, _ := s.consults.Get(id); len(rec.BackgroundTasks) != 0 {
+		t.Fatalf("the shell Stop's empty task list did not prune: %+v", rec.BackgroundTasks)
+	}
+}

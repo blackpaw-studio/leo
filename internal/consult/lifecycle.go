@@ -32,6 +32,7 @@ func cloneRecord(record Record) Record {
 	record.ToolCalls = clonePtr(record.ToolCalls)
 	record.NeedsInput = clonePtr(record.NeedsInput)
 	record.PendingWork = clonePendingWork(record.PendingWork)
+	record.BackgroundTasks = cloneBackgroundTasks(record.BackgroundTasks)
 	for i := range record.Turns {
 		record.Turns[i].Pending = clonePendingWork(record.Turns[i].Pending)
 	}
