@@ -84,8 +84,55 @@ func (d *Dispatcher) addCloseNotice(rec *Record, reason string, covered bool) bo
 	return true
 }
 
+// waitCoversRunLocked reports a leo_wait on rec: on the run id, or on one of
+// its turns (Wait([id]) registers the latest orchestrator turn's id).
+func (d *Dispatcher) waitCoversRunLocked(rec Record) bool {
+	if d.waits[rec.ID] > 0 {
+		return true
+	}
+	for _, t := range rec.Turns {
+		if d.waits[t.TurnID] > 0 {
+			return true
+		}
+	}
+	return false
+}
+
+// closeNoticeReady reports whether item may be delivered now. A close notice
+// waits until every turn notice of its run is resolved, so the caller reads
+// the last result before the close, and is dropped if a wait on the run came
+// in since it was recorded.
+func (d *Dispatcher) closeNoticeReady(item pendingNotification) bool {
+	if !isCloseNoticeKey(item.record, item.key) {
+		return true
+	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	rec := item.state.record
+	n := rec.Notifications[item.key]
+	if n.Disposition != NotificationPending {
+		return true
+	}
+	if d.waitCoversRunLocked(rec) {
+		n.Disposition, n.SuppressedAt = NotificationSuppressed, d.now()
+		item.state.record.Notifications[item.key] = n
+		_ = d.persistNotificationRecordLocked(item.state)
+		return false
+	}
+	return !hasUnresolvedTurnNotice(rec)
+}
+
+func hasUnresolvedTurnNotice(rec Record) bool {
+	for key, n := range rec.Notifications {
+		if !isCloseNoticeKey(rec, key) && (n.Disposition == NotificationPending || n.Disposition == NotificationClaimed) {
+			return true
+		}
+	}
+	return false
+}
+
 func (d *Dispatcher) closeNoticeLocked(s *runState, reason string) {
-	if !d.addCloseNotice(&s.record, reason, d.waits[s.record.ID] > 0) {
+	if !d.addCloseNotice(&s.record, reason, d.waitCoversRunLocked(s.record)) {
 		return
 	}
 	if err := d.persistNotificationRecordLocked(s); err != nil {

@@ -200,7 +200,7 @@ func (d *Dispatcher) addRestartCandidates(rec *Record) {
 		}
 	}
 	if rec.Mode == ModeInteractive {
-		d.addCloseNotice(rec, closeReasonDaemonRestart, d.waits[rec.ID] > 0)
+		d.addCloseNotice(rec, closeReasonDaemonRestart, d.waitCoversRunLocked(*rec))
 	}
 }
 
@@ -254,6 +254,9 @@ func (d *Dispatcher) SweepNotifications(ctx context.Context) {
 		return !isCloseNoticeKey(pending[i].record, pending[i].key) && isCloseNoticeKey(pending[j].record, pending[j].key)
 	})
 	for _, item := range pending {
+		if !d.closeNoticeReady(item) {
+			continue
+		}
 		unlock := d.serialLocks([]string{item.record.CallerPaneID})
 		itemCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
 		d.deliverNotification(itemCtx, delivery, item)
