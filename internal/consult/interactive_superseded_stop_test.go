@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"testing"
-	"time"
 )
 
 // supersededStop is the shell Stop hook a bridge-owned run has dropped to
@@ -62,48 +61,29 @@ func TestSupersededStopTracksAMissedTaskBeforeTurnComplete(t *testing.T) {
 	assertWaitingOnShell(t, d, id, turnID)
 }
 
-// turn.complete closes the turn first: the late superseded Stop reopens it
-// into waiting, so the run is not idle for the orchestrator to close.
-func TestSupersededStopAfterTurnCompleteReturnsRunToWaiting(t *testing.T) {
+// turn.complete closes the turn first: the late superseded Stop reconciles
+// the tracker only. The run stays idle with its turn finished and nothing is
+// resent, since the completion already went out.
+func TestSupersededStopAfterTurnCompleteOnlyReconcilesTracker(t *testing.T) {
 	d, id, turnID := startedBridgedTurn(t)
 	reportAll(t, d, id, bridgeStop(t, "e2", "t2", "the check is running"))
-	if rec := idleRecord(t, d, id); rec.Status != StatusIdle {
-		t.Fatalf("turn.complete with no pending work should close idle, status=%s", rec.Status)
+	before := idleRecord(t, d, id)
+	if before.Status != StatusIdle {
+		t.Fatalf("turn.complete with no pending work should close idle, status=%s", before.Status)
 	}
 	if err := d.ReportSupersededStop(id, supersededStop(t, "s1", runningShell)); err != nil {
 		t.Fatal(err)
 	}
-	assertWaitingOnShell(t, d, id, turnID)
 	rec := idleRecord(t, d, id)
-	if got := turnByID(rec, turnID); len(got.WaitText) != 1 || got.WaitText[0] != "the check is running" {
-		t.Fatalf("the closing words were not kept as wait text: %+v", got)
+	got := turnByID(rec, turnID)
+	if rec.Status != StatusIdle || got.Outcome != TurnFinished || got.Text != "the check is running" || rec.PendingWork != nil {
+		t.Fatalf("late Stop changed the run: status=%s turn=%+v pending=%v", rec.Status, got, rec.PendingWork)
 	}
-	if closed, err := d.CloseFinished(rec.CallerSessionID); err != nil || len(closed) != 0 {
-		t.Fatalf("a waiting run was closable: closed=%v err=%v", closed, err)
+	if !got.EndedAt.Equal(turnByID(before, turnID).EndedAt) || len(rec.Notifications) != len(before.Notifications) {
+		t.Fatalf("late Stop reopened or renotified: turn=%+v notifications=%v", got, rec.Notifications)
 	}
-
-	// The wake and its own Stop finish the turn with both texts.
-	reportAll(t, d, id, bridgeWake(t, "e3", "t3", taskNotification), bridgeStop(t, "e4", "t3", "check passed"))
-	rec = idleRecord(t, d, id)
-	if got := turnByID(rec, turnID); got.Outcome != TurnFinished || got.Text != "the check is running\n\ncheck passed" || rec.Status != StatusIdle {
-		t.Fatalf("status=%s turn=%+v", rec.Status, got)
-	}
-}
-
-// The reopen is bounded: a Stop long after the turn closed does not drag a
-// finished turn back.
-func TestSupersededStopLongAfterTurnCompleteLeavesRunIdle(t *testing.T) {
-	d, id, turnID := startedBridgedTurn(t)
-	reportAll(t, d, id, bridgeStop(t, "e2", "t2", "done"))
-	ended := turnByID(idleRecord(t, d, id), turnID).EndedAt
-	now := ended.Add(lateStopReopenWindow + time.Second)
-	d.now = func() time.Time { return now }
-	if err := d.ReportSupersededStop(id, supersededStop(t, "s1", runningShell)); err != nil {
-		t.Fatal(err)
-	}
-	rec := idleRecord(t, d, id)
-	if got := turnByID(rec, turnID); got.Outcome != TurnFinished || rec.Status != StatusIdle {
-		t.Fatalf("status=%s turn=%+v", rec.Status, got)
+	if ids := trackedIDs(rec); len(ids) != 1 || ids[0] != "b1" {
+		t.Fatalf("tracker not reconciled: %v", ids)
 	}
 }
 

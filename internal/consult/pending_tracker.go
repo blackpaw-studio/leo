@@ -175,8 +175,11 @@ func cloneBackgroundTasks(tasks []BackgroundTask) []BackgroundTask { return slic
 
 // ReportSupersededStop applies what a shell Stop hook says about background
 // tasks when a bridge owns the run's turn state and so drops that Stop's
-// turn meaning: its task list is the one authoritative record of which
-// tracked tasks have ended.
+// turn meaning: its task list reconciles the tracker, adding a shell whose
+// PostToolUse was lost and pruning ended ones. Only the tracker changes: a
+// turn the bridge's turn.complete already closed stays closed, since
+// reopening it would collide with its completion notification and any
+// release_on_finish it triggered.
 func (d *Dispatcher) ReportSupersededStop(id string, r HookReport) error {
 	_, s, err := d.lookup(id)
 	if err != nil || s == nil {
@@ -192,41 +195,7 @@ func (d *Dispatcher) ReportSupersededStop(id string, r HookReport) error {
 		return nil
 	}
 	d.setTrackedLocked(s, reconcileStop(s.record.BackgroundTasks, p, d.now(), true))
-	d.reopenForTrackedLocked(s)
 	return nil
-}
-
-// lateStopReopenWindow bounds how long after its close a finished turn can be
-// pulled back into waiting by a superseded Stop. The bridge's turn.complete
-// and the shell Stop for the same moment arrive in either order, within a
-// hook round trip of each other.
-const lateStopReopenWindow = 30 * time.Second
-
-// reopenForTrackedLocked returns an idle run to waiting when tracked
-// background work exists that its closed turn never saw: the superseded Stop
-// that names the work arrived after the bridge's turn.complete had already
-// closed the turn on no pending work. The latest turn, if it finished within
-// lateStopReopenWindow, reopens paused on that work, keeping what it said as
-// its wait text, and its premature completion notification is withdrawn
-// unless a delivery already claimed it. When the Stop came first the turn is
-// still open, and finishKeyedLocked holds it on the tracked tasks instead.
-func (d *Dispatcher) reopenForTrackedLocked(s *runState) {
-	if len(s.record.BackgroundTasks) == 0 || s.record.Status != StatusIdle || len(s.record.Turns) == 0 {
-		return
-	}
-	last := len(s.record.Turns) - 1
-	t := &s.record.Turns[last]
-	if t.Outcome != TurnFinished || t.EndedAt.IsZero() || d.now().Sub(t.EndedAt) > lateStopReopenWindow {
-		return
-	}
-	if n, ok := s.record.Notifications[t.TurnID]; ok && n.Disposition != NotificationClaimed {
-		delete(s.record.Notifications, t.TurnID)
-	}
-	text := t.Text
-	t.Outcome, t.Status, t.EndedAt, t.Text, t.FinalText = "", "", time.Time{}, "", ""
-	t.WaitText = appendStopText(nil, text)
-	d.waitOnBackgroundLocked(s, withTrackedTasks(nil, s.record.BackgroundTasks), "", t)
-	d.persistTurnLocked(s, *t)
 }
 
 // setTrackedLocked replaces the run's tracked tasks, persisting a change.
