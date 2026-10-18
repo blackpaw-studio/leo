@@ -150,8 +150,11 @@ type runState struct {
 	// idMode latches once a hook payload carries a harness id: from then on
 	// attribution is by id, and an id-less payload never closes more than
 	// the one working turn. Runs whose payloads carry no ids never set it.
-	idMode      bool
-	idleSince   time.Time
+	idMode    bool
+	idleSince time.Time
+	// closeReason is why the run is closing on its own (idle, a dead pane or
+	// session); its close notice says so once it ends.
+	closeReason string
 	killPending bool
 	releasing   bool
 	// releasingOnFinish marks a release triggered by release_on_finish, so

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -198,6 +199,9 @@ func (d *Dispatcher) addRestartCandidates(rec *Record) {
 			add(turn.TurnID)
 		}
 	}
+	if rec.Mode == ModeInteractive {
+		d.addCloseNotice(rec, closeReasonDaemonRestart, d.waitCoversRunLocked(*rec))
+	}
 }
 
 type pendingNotification struct {
@@ -245,7 +249,14 @@ func (d *Dispatcher) SweepNotifications(ctx context.Context) {
 		}
 	}
 	d.mu.Unlock()
+	// A close notice follows the turn notices it summarises.
+	sort.SliceStable(pending, func(i, j int) bool {
+		return !isCloseNoticeKey(pending[i].record, pending[i].key) && isCloseNoticeKey(pending[j].record, pending[j].key)
+	})
 	for _, item := range pending {
+		if !d.closeNoticeReady(item) {
+			continue
+		}
 		unlock := d.serialLocks([]string{item.record.CallerPaneID})
 		itemCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
 		d.deliverNotification(itemCtx, delivery, item)
