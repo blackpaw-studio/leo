@@ -426,7 +426,10 @@ func TestMarkInterruptedFailedKillInstallsDurableHandleBeforeDelivery(t *testing
 	d.now = func() time.Time { return now }
 	d.SetInteractiveRuntime(failedRestartKillRuntime{})
 	d.MarkInterrupted()
-	d.SetNotificationDelivery(inspectDelivery{ready: true, deliver: func(_ Record, _ string) error {
+	d.SetNotificationDelivery(inspectDelivery{ready: true, deliver: func(_ Record, line string) error {
+		if strings.Contains(line, "closed:") {
+			return nil
+		}
 		got, err := LoadOne(state, "d-restart")
 		if err != nil {
 			t.Fatal(err)

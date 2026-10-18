@@ -976,7 +976,7 @@ func (d *Dispatcher) Report(id string, r HookReport) error {
 		d.stopUnkeyedLocked(s, event, p, out, text, effort)
 	case "sessionend":
 		s.record.OpenTools = nil
-		d.beginSettlementLocked(s, StatusClosed, finalReportGrace)
+		d.beginCloseLocked(s, closeReasonSessionEnded, finalReportGrace)
 	}
 	if len(s.permissions) > 0 {
 		d.refreshNeedsInputLocked(s)
@@ -1217,6 +1217,10 @@ func (d *Dispatcher) finishInteractiveLocked(s *runState, status Status) {
 	d.dropPermissionsLocked(s)
 	s.record.foldActive(d.now())
 	clearPendingLocked(s)
+	closeReason := ""
+	if status == StatusClosed {
+		closeReason = s.closeReason
+	}
 	for _, t := range s.record.Turns {
 		if t.Outcome == "" {
 			o := TurnLost
@@ -1238,6 +1242,9 @@ func (d *Dispatcher) finishInteractiveLocked(s *runState, status Status) {
 done:
 	s.record.Status = status
 	s.record.EndedAt = d.now()
+	if closeReason != "" {
+		d.closeNoticeLocked(s, closeReason)
+	}
 	d.persistLocked(s, "status")
 	d.releaseRunFilesLocked(s.record.ID)
 	_ = s.handle.Close(status, nil)
@@ -1339,6 +1346,7 @@ func (d *Dispatcher) Sweep(now time.Time) {
 				if err == nil && !alive {
 					d.mu.Lock()
 					if !p.state.releasing && p.state.record.Status != StatusReleased && !p.state.record.Status.Terminal() {
+						p.state.closeReason = closeReasonCallerGone
 						d.finishInteractiveLocked(p.state, StatusClosed)
 					}
 					if p.state.killPending && p.state.record.PaneID != "" {
@@ -1364,9 +1372,9 @@ func (d *Dispatcher) Sweep(now time.Time) {
 			d.mu.Lock()
 			if p.state.record.PaneID == p.pane && !p.state.record.Status.Terminal() {
 				if !alive {
-					d.beginSettlementLocked(p.state, StatusClosed, finalReportGrace)
+					d.beginCloseLocked(p.state, closeReasonPaneGone, finalReportGrace)
 				} else if p.idle && p.state.record.Status == StatusIdle && !p.state.idleSince.IsZero() && now.Sub(p.state.idleSince) >= idleCloseAfter && empty {
-					d.beginSettlementLocked(p.state, StatusClosed, 0)
+					d.beginCloseLocked(p.state, closeReasonIdle(), 0)
 				}
 				if p.state.record.Status == StatusSettling && !now.Before(p.state.settleDeadline) {
 					d.finishInteractiveLocked(p.state, p.state.settleStatus)
