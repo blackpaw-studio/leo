@@ -194,13 +194,22 @@ type Decision struct {
 // IsZero reports whether d is no decision.
 func (d Decision) IsZero() bool { return d.Behavior == "" && d.UpdatedInput == nil }
 
+// PermissionWaits is how long a PermissionRequest hook's card waits for an
+// answer from chat before the terminal's own dialog is left to stand.
+type PermissionWaits struct {
+	// Permission is the wait for an Allow/Deny permission prompt.
+	Permission time.Duration
+	// Question is the wait for an AskUserQuestion questions card.
+	Question time.Duration
+}
+
 // RequestPermission posts a Claude permission prompt to agent's thread and
-// waits up to timeout for the answer from chat: allow or deny, or for an
+// waits up to the matching wait for the answer from chat: allow or deny, or for an
 // AskUserQuestion that parses, the answers to its questions card (an allow
 // with the answers as updated input). It returns the zero Decision on
 // timeout, dismissal, or when the hook goes away — Claude kills it once the
 // prompt is answered in the terminal, which marks the message answered there.
-func (s *Service) RequestPermission(ctx context.Context, agent string, payload json.RawMessage, timeout time.Duration) Decision {
+func (s *Service) RequestPermission(ctx context.Context, agent string, payload json.RawMessage, waits PermissionWaits) Decision {
 	if s.enter() != nil {
 		return Decision{}
 	}
@@ -211,7 +220,7 @@ func (s *Service) RequestPermission(ctx context.Context, agent string, payload j
 	}
 	if req.ToolName == askUserQuestionTool {
 		if card, err := parseQuestions(req.ToolInput); err == nil {
-			return s.requestQuestions(ctx, agent, card, timeout)
+			return s.requestQuestions(ctx, agent, card, waits.Question)
 		}
 	}
 	summary := summarizeToolInput(req.ToolInput)
@@ -221,7 +230,7 @@ func (s *Service) RequestPermission(ctx context.Context, agent string, payload j
 		Input:      &permissionInput,
 		Permission: &Permission{Tool: req.ToolName, Summary: summary, input: req.ToolInput},
 	}
-	answer, settled := s.awaitWith(ctx, m, timeout, awaitEnd{state: StateAnswered, answer: terminalAnswer})
+	answer, settled := s.awaitWith(ctx, m, waits.Permission, awaitEnd{state: StateAnswered, answer: terminalAnswer})
 	if !settled || len(answer.Values) != 1 || (answer.Values[0] != "allow" && answer.Values[0] != "deny") {
 		return Decision{}
 	}

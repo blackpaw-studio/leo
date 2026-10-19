@@ -650,7 +650,7 @@ func TestPermissionAnsweredFromChat(t *testing.T) {
 	f := newFixture(t)
 	done := make(chan Decision, 1)
 	go func() {
-		done <- f.svc.RequestPermission(context.Background(), "assistant", permissionPayload("Bash", "rm -rf build"), 2*time.Minute)
+		done <- f.svc.RequestPermission(context.Background(), "assistant", permissionPayload("Bash", "rm -rf build"), PermissionWaits{Permission: 2 * time.Minute, Question: 2 * time.Minute})
 	}()
 	<-f.timers.got
 	m := f.thread(t, "assistant")[0]
@@ -676,7 +676,7 @@ func TestPermissionTimeoutLeavesTerminalPrompt(t *testing.T) {
 	f := newFixture(t)
 	done := make(chan Decision, 1)
 	go func() {
-		done <- f.svc.RequestPermission(context.Background(), "assistant", permissionPayload("Bash", "ls"), 2*time.Minute)
+		done <- f.svc.RequestPermission(context.Background(), "assistant", permissionPayload("Bash", "ls"), PermissionWaits{Permission: 2 * time.Minute, Question: 2 * time.Minute})
 	}()
 	<-f.timers.got
 	f.timers.fireLast()
@@ -692,7 +692,7 @@ func TestPermissionAnsweredInTerminalViaPostToolUse(t *testing.T) {
 	f := newFixture(t)
 	done := make(chan Decision, 1)
 	go func() {
-		done <- f.svc.RequestPermission(context.Background(), "assistant", permissionPayload("Bash", "make"), 2*time.Minute)
+		done <- f.svc.RequestPermission(context.Background(), "assistant", permissionPayload("Bash", "make"), PermissionWaits{Permission: 2 * time.Minute, Question: 2 * time.Minute})
 	}()
 	<-f.timers.got
 	// A different tool finishing must not settle it.
@@ -714,7 +714,9 @@ func TestPermissionHookGoneMarksAnsweredInTerminal(t *testing.T) {
 	f := newFixture(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan Decision, 1)
-	go func() { done <- f.svc.RequestPermission(ctx, "assistant", permissionPayload("Bash", "x"), time.Minute) }()
+	go func() {
+		done <- f.svc.RequestPermission(ctx, "assistant", permissionPayload("Bash", "x"), PermissionWaits{Permission: time.Minute, Question: time.Minute})
+	}()
 	<-f.timers.got
 	cancel()
 	<-done

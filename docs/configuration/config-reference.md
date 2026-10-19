@@ -161,6 +161,7 @@ Routes for the app (bearer auth; device or operator token):
 |-------|------|----------|---------|-------------|
 | `whisper_model` | string | No | -- | whisper.cpp ggml model for voice notes (`~` expands). Unset: voice notes are delivered untranscribed. |
 | `permission_timeout` | duration | No | `120s` | How long a Claude permission prompt waits for an answer in chat, at most `1h`. |
+| `question_timeout` | duration | No | `1h` | How long an `AskUserQuestion` questions card waits for an answer in chat, at most `1h`. |
 
 ## `client`
 
