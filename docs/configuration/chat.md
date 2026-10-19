@@ -15,6 +15,7 @@ the daemon opens it; a database from a newer leo is refused.
 chat:
   whisper_model: ~/.leo/models/ggml-large-v3-turbo.bin
   permission_timeout: 120s
+  question_timeout: 1h
 
 tasks:
   daily-news:
@@ -25,6 +26,7 @@ tasks:
 |-------|---------|-------------|
 | `chat.whisper_model` | unset | whisper.cpp ggml model used to transcribe voice notes. Unset or missing: a voice note is delivered with a "transcription failed" note. |
 | `chat.permission_timeout` | `120s` | How long a Claude permission prompt waits for an answer from chat (at most `1h`). |
+| `chat.question_timeout` | `1h` | How long an `AskUserQuestion` [questions card](#questions-cards) waits for an answer from chat (at most `1h`, the hook's ceiling). Longer than the permission wait because questions are often answered from a phone. |
 | `tasks.<name>.owner` | see below | Agent whose thread gets this task's cards. Validated as an agent name only; agents are runtime state, resolved when the card posts. |
 | `push.chat` (defaults and templates) | on | Whether an agent's chat messages push to paired phones. |
 
@@ -281,7 +283,8 @@ with `closed_reason: "timeout"`.
 In every case but an answer from chat (dismissal, timeout, daemon shutdown or
 restart, the hook going away, an answer given in the terminal first) the hook
 prints nothing, Claude's own dialog stands, and nothing is ever denied. The
-timeout is `chat.permission_timeout`, as for a permission prompt. A settled
+timeout is `chat.question_timeout` (default and maximum `1h`), not
+`chat.permission_timeout`. A settled
 card is a `409`, and a late answer is never delivered to the agent as a reply:
 the tool call is gone.
 

@@ -162,6 +162,12 @@ All notable user-visible changes to Leo are documented here.
 
 ### Fixed
 
+- **Questions cards no longer expire after two minutes.** An `AskUserQuestion`
+  card used the `chat.permission_timeout` wait (120s by default), too short to
+  answer from a phone. It now has its own `chat.question_timeout`, defaulting
+  to and capped at `1h` (the hook's ceiling); Allow/Deny permission prompts
+  keep `chat.permission_timeout`. See
+  [Questions cards](docs/configuration/chat.md#questions-cards).
 - **Persistent codex and opencode tasks no longer fail every run.** Only
   claude reported a finished turn, so a codex or opencode persistent task
   waited out its `timeout` even when the agent answered in seconds, recorded

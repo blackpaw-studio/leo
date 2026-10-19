@@ -19,7 +19,7 @@ func requestQuestions(t *testing.T, f *harnessFixture, ctx context.Context, tool
 	t.Helper()
 	done := make(chan Decision, 1)
 	go func() {
-		done <- f.svc.RequestPermission(ctx, "assistant", askPayload(toolInput), 2*time.Minute)
+		done <- f.svc.RequestPermission(ctx, "assistant", askPayload(toolInput), PermissionWaits{Permission: 2 * time.Minute, Question: 2 * time.Minute})
 	}()
 	<-f.timers.got
 	return done, f.thread(t, "assistant")[0]
@@ -60,7 +60,7 @@ func TestMalformedAskUserQuestionFallsBackToPermissionCard(t *testing.T) {
 	f := newFixture(t)
 	done := make(chan Decision, 1)
 	go func() {
-		done <- f.svc.RequestPermission(context.Background(), "assistant", askPayload(`{"questions":[]}`), time.Minute)
+		done <- f.svc.RequestPermission(context.Background(), "assistant", askPayload(`{"questions":[]}`), PermissionWaits{Permission: time.Minute, Question: time.Minute})
 	}()
 	<-f.timers.got
 	m := f.thread(t, "assistant")[0]
@@ -223,4 +223,24 @@ func TestQuestionsCardAnsweredInTerminalViaPostToolUse(t *testing.T) {
 	if m.State != StateAnswered || m.Answer == nil || !m.Answer.isTerminal() {
 		t.Fatalf("card = %s/%+v", m.State, m.Answer)
 	}
+}
+
+func TestQuestionsCardWaitsForTheQuestionTimeoutNotThePermissionOne(t *testing.T) {
+	f := newFixture(t)
+	waits := PermissionWaits{Permission: 2 * time.Minute, Question: 45 * time.Minute}
+	go f.svc.RequestPermission(context.Background(), "assistant", askPayload(sampleAskInput), waits)
+	if got := <-f.timers.got; got != waits.Question {
+		t.Fatalf("questions card waits %s, want the question timeout %s", got, waits.Question)
+	}
+	f.timers.fireLast()
+}
+
+func TestPermissionPromptWaitsForThePermissionTimeoutNotTheQuestionOne(t *testing.T) {
+	f := newFixture(t)
+	waits := PermissionWaits{Permission: 2 * time.Minute, Question: 45 * time.Minute}
+	go f.svc.RequestPermission(context.Background(), "assistant", permissionPayload("Bash", "ls"), waits)
+	if got := <-f.timers.got; got != waits.Permission {
+		t.Fatalf("permission prompt waits %s, want the permission timeout %s", got, waits.Permission)
+	}
+	f.timers.fireLast()
 }

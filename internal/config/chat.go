@@ -18,6 +18,12 @@ type ChatConfig struct {
 	// answer from chat before the agent's own terminal prompt is left to
 	// answer it (a Go duration; default 120s, at most 1h).
 	PermissionTimeout string `yaml:"permission_timeout,omitempty"`
+	// QuestionTimeout is how long an AskUserQuestion questions card waits for
+	// an answer from chat before the agent's own terminal dialog is left to
+	// answer it (a Go duration; default and maximum 1h, the hook's ceiling).
+	// It is longer than the permission wait because questions are often
+	// answered from a phone.
+	QuestionTimeout string `yaml:"question_timeout,omitempty"`
 }
 
 const (
@@ -25,6 +31,9 @@ const (
 	// MaxChatPermissionTimeout bounds chat.permission_timeout; the
 	// PermissionRequest hook's own timeout is sized from it.
 	MaxChatPermissionTimeout = claudeharness.AgentPermissionWait
+	// defaultChatQuestionTimeout is the hook ceiling: nobody's phone answer
+	// should lose to a clock the hook would have outlived anyway.
+	defaultChatQuestionTimeout = MaxChatPermissionTimeout
 )
 
 // ChatPermissionTimeout is the parsed chat.permission_timeout; Validate
@@ -36,9 +45,26 @@ func (c *Config) ChatPermissionTimeout() time.Duration {
 	return defaultChatPermissionTimeout
 }
 
+// ChatQuestionTimeout is the parsed chat.question_timeout; Validate rejects
+// bad values, so a bad one here falls back to the default. It never exceeds
+// MaxChatPermissionTimeout, so the hook always gets its answer before its own
+// timeout.
+func (c *Config) ChatQuestionTimeout() time.Duration {
+	if d, err := parseChatTimeout(c.Chat.QuestionTimeout, defaultChatQuestionTimeout); err == nil {
+		return d
+	}
+	return defaultChatQuestionTimeout
+}
+
 func parseChatPermissionTimeout(raw string) (time.Duration, error) {
+	return parseChatTimeout(raw, defaultChatPermissionTimeout)
+}
+
+// parseChatTimeout parses a chat wait: empty is fallback, otherwise a
+// positive duration of at most MaxChatPermissionTimeout.
+func parseChatTimeout(raw string, fallback time.Duration) (time.Duration, error) {
 	if raw == "" {
-		return defaultChatPermissionTimeout, nil
+		return fallback, nil
 	}
 	d, err := time.ParseDuration(raw)
 	if err != nil {
@@ -70,6 +96,9 @@ func (c *Config) validateChat() []string {
 	var errs []string
 	if _, err := parseChatPermissionTimeout(c.Chat.PermissionTimeout); err != nil {
 		errs = append(errs, fmt.Sprintf("chat.permission_timeout %q: %v", c.Chat.PermissionTimeout, err))
+	}
+	if _, err := parseChatTimeout(c.Chat.QuestionTimeout, defaultChatQuestionTimeout); err != nil {
+		errs = append(errs, fmt.Sprintf("chat.question_timeout %q: %v", c.Chat.QuestionTimeout, err))
 	}
 	for name, task := range c.Tasks {
 		if task.Owner != "" && !IsAgentName(task.Owner) {

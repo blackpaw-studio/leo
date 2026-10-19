@@ -97,8 +97,9 @@ func requestPermission(ctx context.Context, stdin io.Reader, id, configPath stri
 }
 
 // requestAgentPermission offers a supervised agent's permission prompt in
-// Leo Chat. The daemon applies chat.permission_timeout, which never exceeds
-// config.MaxChatPermissionTimeout, so the client deadline needs no config.
+// Leo Chat. The daemon applies chat.permission_timeout (chat.question_timeout
+// for a questions card); neither exceeds config.MaxChatPermissionTimeout, so
+// the client deadline needs no config.
 func requestAgentPermission(ctx context.Context, stdin io.Reader, token, port string) (permissionDecision, error) {
 	if ctx == nil {
 		ctx = context.Background()
