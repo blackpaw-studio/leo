@@ -152,8 +152,9 @@ func New(deps Deps) *Manager {
 
 // Begin starts a drain over the agents that are busy now, holds cron, and
 // starts the pause notices to bridge members without waiting on them: one
-// delivery can take seconds, and Begin answers an IPC call. An empty set is
-// done at once.
+// delivery can take seconds, and Begin answers an IPC call. Running
+// dispatches are left out: the restarted daemon adopts them. An empty set
+// is done at once.
 func (m *Manager) Begin(ctx context.Context, timeout time.Duration) (Status, error) {
 	m.opMu.Lock()
 	defer m.opMu.Unlock()
@@ -170,6 +171,9 @@ func (m *Manager) Begin(ctx context.Context, timeout time.Duration) (Status, err
 	}
 	d := &activeDrain{id: id, phase: PhaseDraining, timeout: timeout, lastStatus: m.deps.Clock.Now()}
 	for _, probe := range busy {
+		if probe.Kind == KindDispatch {
+			continue
+		}
 		d.members = append(d.members, &member{name: probe.Name, transport: probe.Transport, state: StateWaiting})
 	}
 	sort.Slice(d.members, func(i, j int) bool { return d.members[i].name < d.members[j].name })

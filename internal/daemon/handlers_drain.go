@@ -52,6 +52,20 @@ func (s *Server) setDrainNotifier(n drain.Notifier) {
 	s.drainNotifier.Store(&drainNotifierHolder{n: n})
 }
 
+// RunningDispatches lists the running interactive dispatches as drain
+// probes of KindDispatch; none until StartWeb has built the web server
+// (or with web.enabled off).
+func (s *Server) RunningDispatches() []drain.Probe {
+	if list := s.runningDispatches.Load(); list != nil {
+		return (*list)()
+	}
+	return nil
+}
+
+func (s *Server) setRunningDispatches(list func() []drain.Probe) {
+	s.runningDispatches.Store(&list)
+}
+
 type daemonDrainNotifier struct{ s *Server }
 
 func (d daemonDrainNotifier) Message(ctx context.Context, name, text, id string) (drain.Delivery, error) {

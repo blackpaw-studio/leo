@@ -27,7 +27,14 @@ type Probe struct {
 	// Transport is TransportBridge while the agent's mod is connected and
 	// TransportComposer otherwise.
 	Transport string `json:"transport,omitempty"`
+	// Kind is KindDispatch for a running interactive dispatch, listed so
+	// the operator sees it but never drained: the restarted daemon adopts
+	// it. Empty for an agent.
+	Kind string `json:"kind,omitempty"`
 }
+
+// KindDispatch marks a Probe that is a running dispatch, not an agent.
+const KindDispatch = "dispatch"
 
 // Prober reports which agents are mid-turn.
 type Prober interface {

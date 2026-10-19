@@ -539,3 +539,58 @@ func TestGracefulRestartBusyCheckFailure(t *testing.T) {
 		})
 	}
 }
+
+func TestWorkingSummaryListsAgentsAndDispatches(t *testing.T) {
+	agent := func(name string) drain.Probe { return drain.Probe{Name: name, Exists: true, Busy: true} }
+	dispatch := func(name string) drain.Probe {
+		return drain.Probe{Name: name, Exists: true, Busy: true, Kind: drain.KindDispatch}
+	}
+	for _, tc := range []struct {
+		busy []drain.Probe
+		want string
+	}{
+		{[]drain.Probe{agent("a"), agent("b"), dispatch("fix-x")}, "2 agents are working (a, b) and 1 dispatch is running (fix-x)"},
+		{[]drain.Probe{agent("a"), dispatch("fix-x"), dispatch("d-1")}, "1 agent is working (a) and 2 dispatches are running (fix-x, d-1)"},
+		{[]drain.Probe{agent("a")}, "1 agent is working (a)"},
+		{[]drain.Probe{dispatch("fix-x")}, "1 dispatch is running (fix-x)"},
+	} {
+		if got := workingSummary(tc.busy); got != tc.want {
+			t.Errorf("workingSummary = %q, want %q", got, tc.want)
+		}
+	}
+}
+
+// Running dispatches alone are no reason to ask: the restarted daemon
+// adopts them. The operator is told so, and the restart goes ahead.
+func TestGracefulRestartWithOnlyDispatchesRunningRestartsWithoutAsking(t *testing.T) {
+	f := newGracefulFixture(true)
+	f.drain.busy = []drain.Probe{
+		{Name: "fix-x", Exists: true, Busy: true, Kind: drain.KindDispatch},
+		{Name: "d-1", Exists: true, Busy: true, Kind: drain.KindDispatch},
+	}
+	if err := f.run(t, gracefulOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	f.wantLog(t, "busy", "restart")
+	if len(f.asked) != 0 {
+		t.Fatalf("asked %q", f.asked)
+	}
+	want := "2 dispatches are running (fix-x, d-1); they will be adopted across the restart.\n"
+	if !strings.Contains(f.out.String(), want) {
+		t.Fatalf("output %q lacks %q", f.out.String(), want)
+	}
+}
+
+func TestGracefulRestartPromptNamesRunningDispatches(t *testing.T) {
+	f := newGracefulFixture(true, "a")
+	f.drain.busy = append(f.drain.busy, drain.Probe{Name: "fix-x", Exists: true, Busy: true, Kind: drain.KindDispatch})
+	f.drain.doneAt = f.clock.Now()
+	f.answers = []string{"y"}
+	if err := f.run(t, gracefulOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	want := "1 agent is working (a) and 1 dispatch is running (fix-x). Graceful restart? [Y/n] "
+	if len(f.asked) != 1 || f.asked[0] != want {
+		t.Fatalf("asked %q, want %q", f.asked, want)
+	}
+}

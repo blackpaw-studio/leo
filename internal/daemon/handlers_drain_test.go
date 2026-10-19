@@ -169,3 +169,25 @@ func TestDaemonDrainNotifierUnavailableUntilWeb(t *testing.T) {
 		t.Fatalf("Message after web started: %v", err)
 	}
 }
+
+func TestDrainBusyMarksRunningDispatches(t *testing.T) {
+	s := drainServer(t, drain.Probe{Name: "fix-x", Exists: true, Busy: true, Kind: drain.KindDispatch})
+	_, resp := drainRequest(t, s, "GET", "/drain/busy", "")
+	if !strings.Contains(string(resp.Data), `"kind":"dispatch"`) {
+		t.Fatalf("wire shape = %s, want the dispatch's kind", resp.Data)
+	}
+}
+
+// The drain prober asks the daemon for running dispatches from startup,
+// before StartWeb has built the web server that knows them.
+func TestRunningDispatchesFollowTheWebServer(t *testing.T) {
+	s := New(tmpSockPath(t, "d.sock"), "/nonexistent/leo.yaml", nil)
+	if got := s.RunningDispatches(); len(got) != 0 {
+		t.Fatalf("RunningDispatches before StartWeb = %+v, want none", got)
+	}
+	running := []drain.Probe{{Name: "fix-x", Exists: true, Busy: true, Kind: drain.KindDispatch}}
+	s.setRunningDispatches(func() []drain.Probe { return running })
+	if got := s.RunningDispatches(); !reflect.DeepEqual(got, running) {
+		t.Fatalf("RunningDispatches = %+v, want %+v", got, running)
+	}
+}

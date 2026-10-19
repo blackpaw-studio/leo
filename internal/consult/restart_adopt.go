@@ -3,6 +3,7 @@ package consult
 import (
 	"fmt"
 	"os"
+	"sort"
 	"time"
 
 	"github.com/blackpaw-studio/leo/internal/config"
@@ -361,4 +362,27 @@ func (d *Dispatcher) persistRestartSettle(recorder *FileRecorder, rec Record) {
 		rec = d.cleanupWorktree(rec.ID)
 	}
 	d.restorePendingNotifications(rec)
+}
+
+// RunningInteractive returns the live interactive runs with a turn at
+// work, oldest first: what a graceful restart lists as running dispatches,
+// since adoption carries them across the restart.
+func (d *Dispatcher) RunningInteractive() []Record {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	var running []Record
+	for _, s := range d.runs {
+		rec := s.record
+		if rec.Mode != ModeInteractive || rec.Status.Terminal() || rec.Status == StatusSettling || !hasWorkingTurnLocked(s) {
+			continue
+		}
+		running = append(running, cloneRecord(rec))
+	}
+	sort.Slice(running, func(i, j int) bool {
+		if !running[i].StartedAt.Equal(running[j].StartedAt) {
+			return running[i].StartedAt.Before(running[j].StartedAt)
+		}
+		return running[i].ID < running[j].ID
+	})
+	return running
 }

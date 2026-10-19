@@ -131,6 +131,10 @@ func gracefulRestart(ctx context.Context, opts gracefulOptions, d gracefulDeps) 
 	if len(busy) == 0 {
 		return d.restart(ctx)
 	}
+	if agents, _ := splitBusy(busy); len(agents) == 0 {
+		fmt.Fprintf(d.out, "%s; they will be adopted across the restart.\n", workingSummary(busy))
+		return d.restart(ctx)
+	}
 	drainFirst, err := chooseDrain(ctx, opts, busy, d)
 	if err != nil {
 		return err
@@ -200,16 +204,37 @@ func chooseDrain(ctx context.Context, opts gracefulOptions, busy []drain.Probe, 
 	}
 }
 
+// workingSummary names the busy agents, then the running dispatches.
 func workingSummary(busy []drain.Probe) string {
-	names := make([]string, 0, len(busy))
+	agents, dispatches := splitBusy(busy)
+	var parts []string
+	if len(agents) > 0 {
+		parts = append(parts, countedNames(agents, "agent is working", "agents are working"))
+	}
+	if len(dispatches) > 0 {
+		parts = append(parts, countedNames(dispatches, "dispatch is running", "dispatches are running"))
+	}
+	return strings.Join(parts, " and ")
+}
+
+// splitBusy separates busy agents from running dispatches, keeping order.
+func splitBusy(busy []drain.Probe) (agents, dispatches []string) {
 	for _, p := range busy {
-		names = append(names, p.Name)
+		if p.Kind == drain.KindDispatch {
+			dispatches = append(dispatches, p.Name)
+		} else {
+			agents = append(agents, p.Name)
+		}
 	}
-	verb := "agents are"
-	if len(busy) == 1 {
-		verb = "agent is"
+	return agents, dispatches
+}
+
+func countedNames(names []string, one, many string) string {
+	phrase := many
+	if len(names) == 1 {
+		phrase = one
 	}
-	return fmt.Sprintf("%d %s working (%s)", len(busy), verb, strings.Join(names, ", "))
+	return fmt.Sprintf("%d %s (%s)", len(names), phrase, strings.Join(names, ", "))
 }
 
 func drainThenRestart(ctx context.Context, opts gracefulOptions, d gracefulDeps) error {

@@ -545,3 +545,42 @@ func (s *switchNotifier) Message(ctx context.Context, name, text, id string) (De
 }
 
 func (s *switchNotifier) Holds(name, id string) (bool, error) { return s.then.Holds(name, id) }
+
+func dispatchRunning(name string) Probe {
+	return Probe{Name: name, Exists: true, Busy: true, Kind: KindDispatch}
+}
+
+// Dispatches are listed so the operator sees them, but a restarted daemon
+// adopts them: the drain neither messages, waits on, nor persists them.
+func TestBeginLeavesRunningDispatchesOutOfTheDrain(t *testing.T) {
+	h := newHarness(t, bridgeBusy("alpha"), dispatchRunning("fix-x"))
+	st := h.begin(t)
+	if len(st.Members) != 1 || st.Members[0].Name != "alpha" {
+		t.Fatalf("members = %+v, want alpha only", st.Members)
+	}
+	for _, msg := range h.notifier.messages() {
+		if msg.name == "fix-x" {
+			t.Fatalf("messaged the dispatch: %+v", msg)
+		}
+	}
+	busy, err := h.m.BusyAgents(context.Background())
+	if err != nil || len(busy) != 2 {
+		t.Fatalf("BusyAgents = %+v, %v; want the agent and the dispatch", busy, err)
+	}
+}
+
+func TestADrainOfOnlyDispatchesIsDoneAtOnce(t *testing.T) {
+	h := newHarness(t, dispatchRunning("fix-x"))
+	if st := h.begin(t); !st.Done || len(st.Members) != 0 {
+		t.Fatalf("status = %+v, want done with no members", st)
+	}
+	if err := h.m.Commit(context.Background(), false); err != nil {
+		t.Fatal(err)
+	}
+	if len(h.store.writes) != 1 || len(h.store.writes[0].Agents) != 0 {
+		t.Fatalf("persisted %+v, want no agents", h.store.writes)
+	}
+	if got := h.prober.probedNames(); len(got) != 0 {
+		t.Fatalf("probed %v", got)
+	}
+}

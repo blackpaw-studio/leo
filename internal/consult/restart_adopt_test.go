@@ -302,3 +302,35 @@ func TestAdoptedWorkingTurnHoldsASlot(t *testing.T) {
 		t.Fatalf("in use = %d after the adopted turn ended", d.slots.InUse())
 	}
 }
+
+// RunningInteractive is what a graceful restart lists as running
+// dispatches: live interactive runs with a turn at work, oldest first.
+func TestRunningInteractiveListsLiveWorkingRuns(t *testing.T) {
+	d := NewDispatcher(nil)
+	working := Turn{Source: TurnSourceOrchestrator, Delivered: true}
+	add := func(rec Record, at time.Duration) {
+		rec.StartedAt = adoptNow.Add(at)
+		d.runs[rec.ID] = &runState{record: rec, handle: nopHandle{}, done: make(chan struct{})}
+	}
+	add(liveInteractiveRecord("d-late", working), -time.Minute)
+	add(liveInteractiveRecord("d-early", Turn{Source: TurnSourceUser}), -time.Hour)
+	add(liveInteractiveRecord("d-unsent", Turn{Source: TurnSourceOrchestrator}), -2*time.Minute)
+	add(liveInteractiveRecord("d-idle", Turn{Source: TurnSourceOrchestrator, Delivered: true, Outcome: TurnFinished}), -3*time.Minute)
+	settling := liveInteractiveRecord("d-settling", working)
+	settling.Status = StatusSettling
+	add(settling, -4*time.Minute)
+	closed := liveInteractiveRecord("d-closed", working)
+	closed.Status = StatusClosed
+	add(closed, -5*time.Minute)
+	headless := liveInteractiveRecord("d-headless")
+	headless.Mode = ModeHeadless
+	add(headless, -6*time.Minute)
+
+	var ids []string
+	for _, rec := range d.RunningInteractive() {
+		ids = append(ids, rec.ID)
+	}
+	if want := []string{"d-early", "d-late"}; !reflect.DeepEqual(ids, want) {
+		t.Fatalf("RunningInteractive = %v, want %v", ids, want)
+	}
+}
