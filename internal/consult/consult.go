@@ -1222,72 +1222,33 @@ func (d *Dispatcher) MarkInterrupted() {
 			d.restorePendingNotifications(rec)
 			continue
 		}
-		rec.Error, rec.EndedAt = "daemon restarted", markedAt
 		if rec.Mode == ModeInteractive {
-			finished := false
-			for i := range rec.Turns {
-				if rec.Turns[i].Outcome == TurnFinished {
-					finished = true
-				}
-				if rec.Turns[i].Outcome == "" {
-					rec.Turns[i].Outcome = TurnLost
-					rec.Turns[i].mergeWaitText("")
-					rec.Turns[i].EndedAt = markedAt
-					rec.Turns[i].SlotHeld = false
-				}
-				rec.Turns[i].Pending = nil
+			d.settleRestarted(rec)
+			continue
+		}
+		rec.Error, rec.EndedAt = "daemon restarted", markedAt
+		if rec.Mode == "" {
+			rec.Mode = ModeHeadless
+		}
+		rec.Status = StatusFailed
+		if len(rec.Turns) == 0 {
+			synthesizeOpeningTurn(&rec)
+		}
+		for i := range rec.Turns {
+			if rec.Turns[i].Outcome == "" {
+				rec.Turns[i].Outcome, rec.Turns[i].Status = TurnInterrupted, StatusFailed
+				rec.Turns[i].Error, rec.Turns[i].EndedAt = "daemon restarted", markedAt
+				rec.Turns[i].SlotHeld, rec.Turns[i].Queued = false, false
 			}
-			rec.PendingWork = nil
-			if finished {
-				rec.Status = StatusClosed
-			} else {
-				rec.Status = StatusFailed
-			}
-		} else {
-			if rec.Mode == "" {
-				rec.Mode = ModeHeadless
-			}
-			rec.Status = StatusFailed
-			if len(rec.Turns) == 0 {
-				synthesizeOpeningTurn(&rec)
-			}
-			for i := range rec.Turns {
-				if rec.Turns[i].Outcome == "" {
-					rec.Turns[i].Outcome, rec.Turns[i].Status = TurnInterrupted, StatusFailed
-					rec.Turns[i].Error, rec.Turns[i].EndedAt = "daemon restarted", markedAt
-					rec.Turns[i].SlotHeld, rec.Turns[i].Queued = false, false
-				}
-			}
-			if rec.Isolation == "worktree" && rec.WorktreeState != WorktreeRemoved {
-				rec.WorktreeState = WorktreeKept
-			}
+		}
+		if rec.Isolation == "worktree" && rec.WorktreeState != WorktreeRemoved {
+			rec.WorktreeState = WorktreeKept
 		}
 		rec.foldActive(markedAt)
 		d.mu.Lock()
 		d.addRestartCandidates(&rec)
 		d.mu.Unlock()
-		if rec.Mode == ModeInteractive && rec.PaneID != "" && d.interactiveRuntime != nil {
-			alive, certain := panePresent(d.interactiveRuntime, rec.PaneID)
-			if !certain {
-				if rec.Isolation == "worktree" {
-					rec.WorktreeState = WorktreeKept
-				}
-			} else if alive {
-				cleaned, killErr := d.closeRestartPane(rec)
-				if killErr != nil {
-					d.trackRestartKill(rec)
-				} else {
-					rec = cleaned
-				}
-			}
-		}
-		if err := writeRecord(recorder.dir, rec); err != nil {
-			fmt.Fprintf(os.Stderr, "dispatch %s: recording: %v\n", rec.ID, err)
-		}
-		if rec.Status.Terminal() && rec.WorktreeState != WorktreeKept {
-			rec = d.cleanupWorktree(rec.ID)
-		}
-		d.restorePendingNotifications(rec)
+		d.persistRestartSettle(recorder, rec)
 	}
 }
 
