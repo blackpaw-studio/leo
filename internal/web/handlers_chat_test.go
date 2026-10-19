@@ -791,3 +791,20 @@ func TestChatDismissRefusesWhatIsNotAnOpenQuestionsCard(t *testing.T) {
 	chatRequest(t, cs.s, http.MethodPost, "/api/v1/chat/assistant/messages/"+ask.ID+"/answer", testAPIToken, `{"values":["y"]}`)
 	<-done
 }
+
+func TestAgentPermissionAnswersAQuestionsCardWithUpdatedInput(t *testing.T) {
+	cs := newChatServer(t)
+	card, done := postQuestionsCard(t, cs)
+	if card.Permission != nil || card.Input == nil || card.Input.Type != chat.InputQuestions {
+		t.Fatalf("card = %+v", card)
+	}
+	if w := chatRequest(t, cs.s, http.MethodPost, "/api/v1/chat/assistant/messages/"+card.ID+"/answer", testAPIToken, `{"answers":{"q1":{"values":["L"]}}}`); w.Code != http.StatusOK {
+		t.Fatalf("answer = %d %s", w.Code, w.Body)
+	}
+	want := `{"ok":true,"data":{"behavior":"allow","updatedInput":{"questions":` + questionsArray + `,"answers":{"Which size?":"L"}}}}` + "\n"
+	if got := (<-done).Body.String(); got != want {
+		t.Fatalf("hook reply =\n%s\nwant\n%s", got, want)
+	}
+}
+
+const questionsArray = `[{"question":"Which size?","header":"Size","options":[{"label":"S","description":"small"},{"label":"L","description":"large"}],"multiSelect":false}]`
