@@ -96,6 +96,16 @@ func (w *waiters) settle(id string, value *Answer) (blocked int) {
 type awaitEnd struct {
 	state  string
 	answer *Answer
+	reason string // the closed_reason of an expired ask
+}
+
+// closeWaited moves m, whose wait ended, to end's state. An expired ask
+// records why it closed, which a plain transition does not.
+func (s *Service) closeWaited(m Message, end awaitEnd) (bool, error) {
+	if m.Kind == KindAsk && end.state == StateExpired {
+		return s.opts.Store.CloseAsk(m.ID, end.reason)
+	}
+	return s.opts.Store.Transition(m.ID, []string{StateOpen}, end.state, end.answer)
 }
 
 // awaitWith stores open message m, announces it, and blocks until it is
@@ -117,14 +127,14 @@ func (s *Service) awaitWith(ctx context.Context, m Message, timeout time.Duratio
 		}
 		return *wt.value, true
 	case <-timer:
-		end = awaitEnd{state: StateExpired}
+		end = awaitEnd{state: StateExpired, reason: ClosedTimeout}
 	case <-s.ctx.Done():
 		// Shutdown: nobody can answer it now.
-		end = awaitEnd{state: StateExpired}
+		end = awaitEnd{state: StateExpired, reason: ClosedTimeout}
 	case <-ctx.Done():
 		end = gone
 	}
-	ok, err := s.opts.Store.Transition(m.ID, []string{StateOpen}, end.state, end.answer)
+	ok, err := s.closeWaited(m, end)
 	if err != nil {
 		s.opts.Logf("chat: closing %s: %v", m.ID, err)
 		return Answer{}, false
@@ -168,19 +178,41 @@ type permissionRequest struct {
 // render it like an ask.
 var permissionInput = Input{Type: InputButtons, Options: []Option{{Value: "allow", Label: "Allow"}, {Value: "deny", Label: "Deny"}}}
 
+// askUserQuestionTool is the tool whose permission prompt chat shows as a
+// questions card rather than an Allow/Deny one.
+const askUserQuestionTool = "AskUserQuestion"
+
+// Decision is what a PermissionRequest hook answers Claude with: a behavior
+// (allow or deny) and, for an allow, the tool input to run with in place of
+// its own. The zero Decision is no decision: the terminal dialog, already
+// on screen, stands.
+type Decision struct {
+	Behavior     string          `json:"behavior,omitempty"`
+	UpdatedInput json.RawMessage `json:"updatedInput,omitempty"`
+}
+
+// IsZero reports whether d is no decision.
+func (d Decision) IsZero() bool { return d.Behavior == "" && d.UpdatedInput == nil }
+
 // RequestPermission posts a Claude permission prompt to agent's thread and
-// waits up to timeout for allow or deny from chat. It returns "" (no
-// decision: the terminal dialog, already on screen, stands) on timeout, or
-// when the hook goes away — Claude kills it once the prompt is answered in
-// the terminal, which marks the message answered there.
-func (s *Service) RequestPermission(ctx context.Context, agent string, payload json.RawMessage, timeout time.Duration) string {
+// waits up to timeout for the answer from chat: allow or deny, or for an
+// AskUserQuestion that parses, the answers to its questions card (an allow
+// with the answers as updated input). It returns the zero Decision on
+// timeout, dismissal, or when the hook goes away — Claude kills it once the
+// prompt is answered in the terminal, which marks the message answered there.
+func (s *Service) RequestPermission(ctx context.Context, agent string, payload json.RawMessage, timeout time.Duration) Decision {
 	if s.enter() != nil {
-		return ""
+		return Decision{}
 	}
 	defer s.leave()
 	var req permissionRequest
 	if err := json.Unmarshal(payload, &req); err != nil || req.ToolName == "" {
-		return ""
+		return Decision{}
+	}
+	if req.ToolName == askUserQuestionTool {
+		if card, err := parseQuestions(req.ToolInput); err == nil {
+			return s.requestQuestions(ctx, agent, card, timeout)
+		}
 	}
 	summary := summarizeToolInput(req.ToolInput)
 	m := Message{
@@ -191,9 +223,22 @@ func (s *Service) RequestPermission(ctx context.Context, agent string, payload j
 	}
 	answer, settled := s.awaitWith(ctx, m, timeout, awaitEnd{state: StateAnswered, answer: terminalAnswer})
 	if !settled || len(answer.Values) != 1 || (answer.Values[0] != "allow" && answer.Values[0] != "deny") {
-		return ""
+		return Decision{}
 	}
-	return answer.Values[0]
+	return Decision{Behavior: answer.Values[0]}
+}
+
+// requestQuestions posts card as an ask with no permission and waits for its
+// answers. Only an answer from chat decides: every other end (timeout,
+// dismissal, the hook going away) leaves the terminal's own dialog to stand,
+// and nothing is ever denied.
+func (s *Service) requestQuestions(ctx context.Context, agent string, card questionsCard, timeout time.Duration) Decision {
+	m := Message{Agent: agent, Direction: DirectionOut, Kind: KindAsk, Text: card.Text, State: StateOpen, Input: &card.Input}
+	answer, settled := s.awaitWith(ctx, m, timeout, awaitEnd{state: StateAnswered, answer: terminalAnswer})
+	if !settled || answer.Answers == nil {
+		return Decision{}
+	}
+	return Decision{Behavior: "allow", UpdatedInput: card.updatedInput(answer)}
 }
 
 // summarizeToolInput renders the field of a tool input a person decides

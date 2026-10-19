@@ -617,8 +617,8 @@ func (s *Server) handleAPIPermission(w http.ResponseWriter, r *http.Request) {
 // agentPermission routes a supervised agent's permission prompt to Leo
 // Chat. An unknown token, a foreign session or chat being off is no
 // decision.
-func (s *Server) agentPermission(ctx context.Context, token string, payload json.RawMessage, timeout time.Duration) map[string]string {
-	none := map[string]string{}
+func (s *Server) agentPermission(ctx context.Context, token string, payload json.RawMessage, timeout time.Duration) chat.Decision {
+	none := chat.Decision{}
 	if s.chat == nil || s.attention == nil {
 		return none
 	}
@@ -631,10 +631,7 @@ func (s *Server) agentPermission(ctx context.Context, token string, payload json
 	if !s.isAgentHookSession(name, p.SessionID) {
 		return none
 	}
-	if decision := s.chat.RequestPermission(ctx, name, payload, timeout); decision != "" {
-		return map[string]string{"behavior": decision}
-	}
-	return none
+	return s.chat.RequestPermission(ctx, name, payload, timeout)
 }
 
 // chatHook hands an agent hook to Leo Chat (auto-capture, terminal-answered

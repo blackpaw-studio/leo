@@ -179,6 +179,10 @@ func (s *Service) recoverAsks() error {
 	for _, m := range open {
 		switch {
 		case m.Kind != KindAsk:
+		case m.Input != nil && m.Input.Type == InputQuestions:
+			// Its AskUserQuestion hook died with the daemon: the terminal
+			// dialog stands, so there is nothing left to answer.
+			s.closeAsk(m.ID, ClosedTimeout)
 		case m.Deadline.IsZero():
 			s.waiters.add(m.ID)
 		case !m.Deadline.After(now):
