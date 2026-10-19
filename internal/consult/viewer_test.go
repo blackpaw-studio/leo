@@ -607,8 +607,13 @@ func TestViewerSweepTreatsGoneWindowAsClosed(t *testing.T) {
 	if len(logs) != 0 {
 		t.Fatalf("logged for an already-gone window: %v", logs)
 	}
-	if len(persisted) != 1 || persisted[0].ID != "d-gone" || persisted[0].ViewerWindowID != "" {
-		t.Fatalf("persisted = %#v, want one record with cleared ViewerWindowID", persisted)
+	if len(persisted) == 0 {
+		t.Fatal("cleared window id never persisted")
+	}
+	for _, r := range persisted {
+		if r.ID != "d-gone" || r.ViewerWindowID != "" {
+			t.Fatalf("persisted %#v, want cleared ViewerWindowID", r)
+		}
 	}
 }
 
@@ -679,5 +684,35 @@ func TestCloseFinishedTreatsGonePaneAsClosed(t *testing.T) {
 	}
 	if want := [][]string{{"tmux", "-L", "leo", "kill-pane", "-t", "%8"}}; !reflect.DeepEqual(calls, want) {
 		t.Fatalf("tmux calls = %#v, want %#v", calls, want)
+	}
+}
+
+func TestViewerSweepAfterCloseClearsPersistedWindowWithoutSecondKill(t *testing.T) {
+	var calls [][]string
+	var persisted []Record
+	now := time.Now()
+	v := &Viewer{
+		TmuxPath: "tmux",
+		ExecCommand: func(name string, args ...string) *exec.Cmd {
+			calls = append(calls, append([]string{name}, args...))
+			return exec.Command("true")
+		},
+		PersistRecord: func(r Record) { persisted = append(persisted, r) },
+	}
+	rec := Record{ID: "d-closed", Kind: "dispatch", Status: StatusDone, EndedAt: now.Add(-viewerGraceAfterEnd - time.Second), ViewerKind: "window", ViewerWindowID: "@42"}
+
+	v.Close(rec)
+	v.Sweep([]Record{rec}, now)
+
+	if want := [][]string{{"tmux", "-L", "leo", "kill-window", "-t", "@42"}}; !reflect.DeepEqual(calls, want) {
+		t.Fatalf("tmux calls = %#v, want exactly one kill-window", calls)
+	}
+	if len(persisted) == 0 {
+		t.Fatal("cleared window id never persisted")
+	}
+	for _, r := range persisted {
+		if r.ID != "d-closed" || r.ViewerWindowID != "" {
+			t.Fatalf("persisted %#v, want cleared ViewerWindowID", r)
+		}
 	}
 }

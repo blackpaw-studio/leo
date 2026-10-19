@@ -291,7 +291,9 @@ func (v *Viewer) Close(rec Record) {
 		}
 		v.mu.Unlock()
 	}
-	v.kill(rec.ID)
+	if closed, err := v.closeWindow(rec.ID, "", false); err == nil && closed {
+		v.persistClearedWindow(rec)
+	}
 }
 
 // Sweep closes viewers for terminal dispatches after their post-mortem grace
@@ -330,21 +332,30 @@ func (v *Viewer) Sweep(records []Record, now time.Time) {
 
 // sweepWindow closes an expired record's window and, once it is gone, clears
 // the persisted window id so later passes (and daemon restarts) stop retrying.
+// A window already handled in memory is never killed again, only cleared: tmux
+// can reuse its @N for an unrelated window after a server restart.
 func (v *Viewer) sweepWindow(rec Record) {
-	closed, err := v.closeWindow(rec.ID, rec.ViewerWindowID, false)
-	if err != nil || !closed || rec.ViewerWindowID == "" || v.PersistRecord == nil {
+	if v.windowHandled(rec.ID, rec.ViewerWindowID) {
+		v.persistClearedWindow(rec)
+		return
+	}
+	if closed, err := v.closeWindow(rec.ID, rec.ViewerWindowID, false); err == nil && closed {
+		v.persistClearedWindow(rec)
+	}
+}
+
+func (v *Viewer) windowHandled(id, windowID string) bool {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	return windowID != "" && v.handledWindowIDs[id] == windowID
+}
+
+func (v *Viewer) persistClearedWindow(rec Record) {
+	if rec.ViewerWindowID == "" || v.PersistRecord == nil {
 		return
 	}
 	rec.ViewerWindowID = ""
 	v.PersistRecord(rec)
-}
-
-func (v *Viewer) kill(id string) {
-	_ = v.killWindow(id, "")
-}
-
-func (v *Viewer) killWindow(id, persistedWindowID string) error {
-	return v.killWindowWithRetry(id, persistedWindowID, false)
 }
 
 func (v *Viewer) killWindowWithRetry(id, persistedWindowID string, retry bool) error {
