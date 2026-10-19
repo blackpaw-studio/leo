@@ -6,6 +6,7 @@ import (
 	"os/exec"
 	"reflect"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -71,6 +72,7 @@ func TestProbeAdoption(t *testing.T) {
 		{"dead", "%9\t1\ttok_ABC\t" + owned + "\n", "", AdoptProbe{Presence: PanePresentDead, Owned: true, Launch: "tok_ABC"}, false},
 		{"foreign start command", "%9\t0\ttok_ABC\t" + foreign + "\n", "", AdoptProbe{Presence: PanePresentAlive, Launch: "tok_ABC"}, false},
 		{"no token", "%9\t0\t\t" + owned + "\n", "", AdoptProbe{Presence: PanePresentAlive, Owned: true}, false},
+		{"tmux 3.6 quotes the start command", "%9\t0\ttok_ABC\t" + tmux36Quoted(owned) + "\n", "", AdoptProbe{Presence: PanePresentAlive, Owned: true, Launch: "tok_ABC"}, false},
 		{"absent", "", "can't find pane: %9", AdoptProbe{Presence: PaneAbsent}, false},
 		{"tmux error", "", "no server running on /tmp/tmux-501/leo", AdoptProbe{}, true},
 	}
@@ -203,5 +205,26 @@ func TestDispatchBridgeSubscriberPassesOnAnAdoptedRunsHello(t *testing.T) {
 	defer log.mu.Unlock()
 	if !reflect.DeepEqual(log.hellos, []string{"d-adopt"}) || len(log.got) != 0 {
 		t.Fatalf("hellos=%v reports=%v; want one hello and no report", log.hellos, log.got)
+	}
+}
+
+// tmux36Quoted renders a one-string start command the way tmux 3.6 prints
+// #{pane_start_command}: a single double-quoted word, inner quotes escaped.
+func tmux36Quoted(command string) string {
+	return `"` + strings.ReplaceAll(command, `"`, `\"`) + `"`
+}
+
+func TestStartCommandHasDispatchIDReadsATmuxQuotedCommand(t *testing.T) {
+	launched := strings.Join(launchCommandWords("d-cafe", "codex", []string{"-c", `x="y"`}, "/s/token"), " ")
+	for _, command := range []string{launched, tmux36Quoted(launched)} {
+		if !startCommandHasDispatchID(command, "d-cafe") {
+			t.Errorf("not owned: %s", command)
+		}
+		if startCommandHasDispatchID(command, "d-other") {
+			t.Errorf("owned by another dispatch: %s", command)
+		}
+	}
+	if startCommandHasDispatchID(`"LEO_DISPATCH_ID=d-cafe"`, "d-cafe") {
+		t.Error("a bare quoted assignment counted as a launch")
 	}
 }

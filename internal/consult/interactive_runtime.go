@@ -569,6 +569,11 @@ func (r *TmuxInteractiveRuntime) FindPaneByDispatchID(windowID, dispatchID strin
 
 func startCommandHasDispatchID(command, dispatchID string) bool {
 	words := shellCommandWords(command)
+	// tmux 3.6 prints a one-string start command as a single quoted word:
+	// the launch's own words are inside it.
+	if len(words) == 1 {
+		words = shellCommandWords(words[0])
+	}
 	for i, word := range words {
 		if word == dispatchIDEnv+"="+dispatchID && i > 0 && filepath.Base(words[i-1]) == "env" {
 			return true
