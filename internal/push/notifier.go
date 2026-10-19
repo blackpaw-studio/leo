@@ -41,6 +41,10 @@ type Notifier struct {
 	// openPermissions holds each agent's open Leo Chat permission message,
 	// whose id rides that agent's permission attention alert.
 	openPermissions map[string]string
+	// openQuestions holds each agent's open questions card (an
+	// AskUserQuestion in Leo Chat). Its chat push is the one push for the
+	// question, so the agent's needs_input alert for it is dropped.
+	openQuestions map[string]string
 
 	// permissionWait is how long a permission alert that finds no open
 	// permission message waits for one (0: it never waits). The attention
@@ -55,11 +59,13 @@ type Notifier struct {
 	holds uint64
 }
 
-// heldAlert is a permission alert waiting for its chat message.
+// heldAlert is a permission or question alert waiting for its chat message.
+// A question alert never takes a permission message's id.
 type heldAlert struct {
-	alert Alert
-	stop  func() bool
-	n     uint64
+	alert    Alert
+	stop     func() bool
+	n        uint64
+	question bool
 }
 
 // NotifierOption configures a Notifier.
@@ -107,6 +113,7 @@ func NewNotifier(next observe.Publisher, sender Sender, opts ...NotifierOption) 
 
 		previews:        make(map[string]string),
 		openPermissions: make(map[string]string),
+		openQuestions:   make(map[string]string),
 		held:            make(map[string]heldAlert),
 		afterFunc: func(d time.Duration, f func()) func() bool {
 			return time.AfterFunc(d, f).Stop
@@ -152,6 +159,7 @@ func (n *Notifier) Publish(ev observe.Event) {
 		delete(n.last, p.Agent)
 		delete(n.previews, p.Agent)
 		delete(n.openPermissions, p.Agent)
+		delete(n.openQuestions, p.Agent)
 		if h, ok := n.held[p.Agent]; ok {
 			h.stop()
 			delete(n.held, p.Agent)
@@ -159,9 +167,37 @@ func (n *Notifier) Publish(ev observe.Event) {
 		n.mu.Unlock()
 	case *chat.MessagePayload:
 		n.trackPermission(p.Message)
+		n.trackQuestions(p.Message)
 		n.chatMessage(p.Message)
 	case *chat.UpdatedPayload:
 		n.trackPermission(p.Message)
+		n.trackQuestions(p.Message)
+	}
+}
+
+// isQuestionsCard reports whether m is an AskUserQuestion questions card.
+func isQuestionsCard(m chat.Message) bool {
+	return m.Kind == chat.KindAsk && m.Input != nil && m.Input.Type == chat.InputQuestions
+}
+
+// trackQuestions keeps openQuestions current with a questions card's state.
+// An alert held for the agent's own needs_input for the same question is
+// dropped when the card opens: the card's chat push replaces it.
+func (n *Notifier) trackQuestions(m chat.Message) {
+	if !isQuestionsCard(m) {
+		return
+	}
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	switch {
+	case m.State == chat.StateOpen:
+		n.openQuestions[m.Agent] = m.ID
+		if h, ok := n.held[m.Agent]; ok {
+			h.stop()
+			delete(n.held, m.Agent)
+		}
+	case n.openQuestions[m.Agent] == m.ID:
+		delete(n.openQuestions, m.Agent)
 	}
 }
 
@@ -177,7 +213,7 @@ func (n *Notifier) trackPermission(m chat.Message) {
 	case m.State == chat.StateOpen:
 		n.openPermissions[m.Agent] = m.ID
 		// Whoever removes a held alert sends it: here, or its timer.
-		if h, ok := n.held[m.Agent]; ok {
+		if h, ok := n.held[m.Agent]; ok && !h.question {
 			h.stop()
 			delete(n.held, m.Agent)
 			h.alert.MessageID, h.alert.MessageKind = m.ID, chat.KindPermission
@@ -188,9 +224,10 @@ func (n *Notifier) trackPermission(m chat.Message) {
 	}
 }
 
-// holdLocked keeps agent's permission alert a until its chat message opens or
-// permissionWait passes, whichever is first. Caller holds n.mu.
-func (n *Notifier) holdLocked(agent string, a Alert) {
+// holdLocked keeps agent's permission or question alert a until its chat
+// message opens or permissionWait passes, whichever is first. Caller holds
+// n.mu.
+func (n *Notifier) holdLocked(agent string, a Alert, question bool) {
 	if h, ok := n.held[agent]; ok {
 		// An earlier prompt's alert still waiting goes now, without an id.
 		h.stop()
@@ -210,7 +247,7 @@ func (n *Notifier) holdLocked(agent string, a Alert) {
 			n.enqueue(a)
 		}
 	})
-	n.held[agent] = heldAlert{alert: a, stop: stop, n: seq}
+	n.held[agent] = heldAlert{alert: a, stop: stop, n: seq, question: question}
 }
 
 // chatMessage queues a chat push for an agent's outbound message. Permission
@@ -278,8 +315,10 @@ func (n *Notifier) observe(agent string, att observe.AgentAttention) {
 		delete(n.previews, agent)
 	}
 	// A classic agent's permission_prompt hook reports no reason; any other
-	// reason (a question) is not the permission prompt.
+	// reason (a question) is not the permission prompt. Either may be the
+	// agent's alert for an AskUserQuestion, which a questions card replaces.
 	isPermission := att.State == observe.AttentionNeedsInput && (att.Reason == nil || att.Reason.Kind == observe.AttentionReasonPermission)
+	isQuestion := att.State == observe.AttentionNeedsInput && att.Reason != nil && att.Reason.Kind == observe.AttentionReasonQuestion
 	n.mu.Unlock()
 	title, ok := needsYouTitle(att)
 	if !ok {
@@ -289,15 +328,26 @@ func (n *Notifier) observe(agent string, att observe.AgentAttention) {
 		return
 	}
 	a := Alert{Agent: agent, Kind: string(att.State), Title: title, Body: alertBody(att, preview), At: n.now()}
-	if !isPermission {
+	if !isPermission && !isQuestion {
 		n.enqueue(a)
 		return
 	}
-	// The open message is read under the same lock trackPermission records
-	// it under, so the message opening now either is seen here or finds the
-	// alert held.
+	// The open message is read under the same lock trackPermission and
+	// trackQuestions record it under, so the message opening now either is
+	// seen here or finds the alert held.
 	n.mu.Lock()
 	defer n.mu.Unlock()
+	if n.openQuestions[agent] != "" {
+		return // the questions card's chat push is the one push
+	}
+	if isQuestion {
+		if n.permissionWait > 0 {
+			n.holdLocked(agent, a, true)
+			return
+		}
+		n.enqueue(a)
+		return
+	}
 	if id := n.openPermissions[agent]; id != "" || n.permissionWait <= 0 {
 		if id != "" {
 			a.MessageID, a.MessageKind = id, chat.KindPermission
@@ -305,7 +355,7 @@ func (n *Notifier) observe(agent string, att observe.AgentAttention) {
 		n.enqueue(a)
 		return
 	}
-	n.holdLocked(agent, a)
+	n.holdLocked(agent, a, false)
 }
 
 // needsYouTitle is the human summary for a needs-you state; ok=false for
