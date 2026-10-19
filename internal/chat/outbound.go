@@ -472,6 +472,28 @@ func validAnswer(m Message, answer Answer) error {
 	return validAnswerFor(*m.Input, answer)
 }
 
+// Dismiss closes an open questions card from the apps, as dismissed: the
+// user would rather answer in the terminal, so the hook waiting on it
+// returns no decision and Claude's own dialog stands. A message that is not
+// a questions card is invalid; one already settled conflicts.
+func (s *Service) Dismiss(agent, id string) (Message, error) {
+	if err := s.enter(); err != nil {
+		return Message{}, err
+	}
+	defer s.leave()
+	m, err := s.opts.Store.Message(id)
+	if err != nil || m.Agent != agent {
+		return Message{}, ErrNotFound
+	}
+	if m.Kind != KindAsk || m.Input == nil || m.Input.Type != InputQuestions {
+		return Message{}, fmt.Errorf("%w: only a questions card can be dismissed", ErrInvalid)
+	}
+	if m.State != StateOpen || !s.closeAsk(id, ClosedDismissed) {
+		return Message{}, ErrConflict
+	}
+	return s.opts.Store.Message(id)
+}
+
 // WithdrawRequest is leo_chat_ask_withdraw. Caller is the calling process, as
 // in AskRequest.
 type WithdrawRequest struct {

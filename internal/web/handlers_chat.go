@@ -175,6 +175,7 @@ func (s *Server) registerChatRoutes(mux *http.ServeMux, prefix string, wrap func
 	mux.HandleFunc("POST "+prefix+"/uploads", wrap(s.handleChatUpload))
 	mux.HandleFunc("POST "+prefix+"/{agent}/messages", wrap(s.handleChatSend))
 	mux.HandleFunc("POST "+prefix+"/{agent}/messages/{id}/answer", wrap(s.handleChatAnswer))
+	mux.HandleFunc("POST "+prefix+"/{agent}/messages/{id}/dismiss", wrap(s.handleChatDismiss))
 	mux.HandleFunc("POST "+prefix+"/{agent}/read", wrap(s.handleChatRead))
 }
 
@@ -436,6 +437,21 @@ func (s *Server) handleChatAnswer(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	m, err := s.chat.Answer(r.PathValue("agent"), r.PathValue("id"), req)
+	if err != nil {
+		writeChatError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, apiResponse{OK: true, Data: m})
+}
+
+// POST /api/v1/chat/{agent}/messages/{id}/dismiss — closes an open questions
+// card without answering it, so the terminal's own dialog takes over. The
+// body is ignored.
+func (s *Server) handleChatDismiss(w http.ResponseWriter, r *http.Request) {
+	if !s.chatAvailable(w) {
+		return
+	}
+	m, err := s.chat.Dismiss(r.PathValue("agent"), r.PathValue("id"))
 	if err != nil {
 		writeChatError(w, err)
 		return

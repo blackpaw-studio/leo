@@ -713,3 +713,81 @@ func TestChatPayloadsCarryClosedReasonAndDeadline(t *testing.T) {
 	chatRequest(t, cs.s, http.MethodPost, "/api/v1/chat/assistant/messages/"+timed.ID+"/answer", testAPIToken, `{"values":["a"]}`)
 	<-heldTimed
 }
+
+const questionsToolInput = `{"questions":[{"question":"Which size?","header":"Size","options":[{"label":"S","description":"small"},{"label":"L","description":"large"}],"multiSelect":false}]}`
+
+// postQuestionsCard has a supervised agent's AskUserQuestion hook posted
+// over the permission endpoint and returns the open card and the hook's
+// pending reply.
+func postQuestionsCard(t *testing.T, cs chatServer) (chat.Message, <-chan *httptest.ResponseRecorder) {
+	t.Helper()
+	cs.svc.handles = map[string]resolvedHandle{"assistant": {harnessName: "claude"}}
+	cs.s.attention = observe.NewAttentionStore(nil)
+	cs.s.attention.RegisterToken("tok-a", "assistant")
+	done := make(chan *httptest.ResponseRecorder, 1)
+	go func() {
+		done <- chatRequest(t, cs.s, http.MethodPost, "/api/agent/permission", testAgentToken,
+			`{"token":"tok-a","payload":{"hook_event_name":"PermissionRequest","tool_name":"AskUserQuestion","tool_input":`+questionsToolInput+`}}`)
+	}()
+	return waitEvent(t, cs.events, chat.KindAsk), done
+}
+
+func TestChatDismissQuestionsCard(t *testing.T) {
+	cs := newChatServer(t)
+	card, done := postQuestionsCard(t, cs)
+	dismiss := "/api/v1/chat/assistant/messages/" + card.ID + "/dismiss"
+	if w := chatRequest(t, cs.s, http.MethodPost, "/api/v1/chat/ghost/messages/"+card.ID+"/dismiss", testAPIToken, ``); w.Code != http.StatusNotFound {
+		t.Fatalf("wrong agent = %d %s", w.Code, w.Body)
+	}
+	w := chatRequest(t, cs.s, http.MethodPost, dismiss, testAPIToken, ``)
+	var got chat.Message
+	decodeChatData(t, w, &got)
+	if w.Code != http.StatusOK || got.State != chat.StateExpired || got.ClosedReason != chat.ClosedDismissed {
+		t.Fatalf("dismiss = %d %+v", w.Code, got)
+	}
+	// The hook prints nothing: the reply carries no decision.
+	if hook := <-done; hook.Code != http.StatusOK || hook.Body.String() != "{\"ok\":true,\"data\":{}}\n" {
+		t.Fatalf("hook reply = %d %q", hook.Code, hook.Body)
+	}
+	if w := chatRequest(t, cs.s, http.MethodPost, dismiss, testAPIToken, ``); w.Code != http.StatusConflict {
+		t.Fatalf("second dismiss = %d", w.Code)
+	}
+	if w := chatRequest(t, cs.s, http.MethodPost, "/api/v1/chat/assistant/messages/"+card.ID+"/answer", testAPIToken, `{"answers":{"q1":{"values":["S"]}}}`); w.Code != http.StatusConflict {
+		t.Fatalf("answering a dismissed card = %d", w.Code)
+	}
+}
+
+func TestChatDismissPublishesStateChange(t *testing.T) {
+	cs := newChatServer(t)
+	card, done := postQuestionsCard(t, cs)
+	chatRequest(t, cs.s, http.MethodPost, "/api/v1/chat/assistant/messages/"+card.ID+"/dismiss", testAPIToken, ``)
+	<-done
+	timeout := time.After(5 * time.Second)
+	for {
+		select {
+		case ev := <-cs.events:
+			if p, ok := ev.Payload.(*chat.UpdatedPayload); ok && p.Message.ID == card.ID {
+				if p.Change != chat.ChangeState || p.Message.ClosedReason != chat.ClosedDismissed {
+					t.Fatalf("event = %s %+v", p.Change, p.Message)
+				}
+				return
+			}
+		case <-timeout:
+			t.Fatal("no chat.updated event for the dismissal")
+		}
+	}
+}
+
+func TestChatDismissRefusesWhatIsNotAnOpenQuestionsCard(t *testing.T) {
+	cs := newChatServer(t)
+	done := make(chan *httptest.ResponseRecorder, 1)
+	go func() {
+		done <- chatRequest(t, cs.s, http.MethodPost, "/api/agent/assistant/chat/ask", testAgentToken, `{"question":"Deploy?","options":[{"value":"y"}],"timeout_s":60}`)
+	}()
+	ask := waitEvent(t, cs.events, chat.KindAsk)
+	if w := chatRequest(t, cs.s, http.MethodPost, "/api/v1/chat/assistant/messages/"+ask.ID+"/dismiss", testAPIToken, ``); w.Code != http.StatusBadRequest {
+		t.Fatalf("dismissing a buttons ask = %d %s", w.Code, w.Body)
+	}
+	chatRequest(t, cs.s, http.MethodPost, "/api/v1/chat/assistant/messages/"+ask.ID+"/answer", testAPIToken, `{"values":["y"]}`)
+	<-done
+}
