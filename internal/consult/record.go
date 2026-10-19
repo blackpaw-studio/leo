@@ -88,12 +88,14 @@ type Turn struct {
 	// is the two joined; the inline notification keeps it whole when the
 	// joined result overflows its cap.
 	FinalText string `json:"final_text,omitempty"`
-	armedAt   time.Time
-	// keys are the namespaced harness ids this turn answers to (see
-	// harnessKey); a wake adds a second. commandID is the bridge command a
-	// sent turn travels under, which its turn.start names. submitted is the
-	// normalized prompt of the submit that started it.
-	keys      []string
+	// HarnessKeys are the namespaced harness ids this turn answers to (see
+	// harnessKey); a wake adds a second. They are kept on the record so a
+	// restarted daemon still routes a completion under any of them.
+	HarnessKeys []string `json:"harness_keys,omitempty"`
+	armedAt     time.Time
+	// commandID is the bridge command a sent turn travels under, which its
+	// turn.start names. submitted is the normalized prompt of the submit
+	// that started it.
 	commandID string
 	submitted string
 }

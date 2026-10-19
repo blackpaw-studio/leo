@@ -60,9 +60,10 @@ func TestPaneSnapshotCapturesAndClassifiesThePane(t *testing.T) {
 // adoptRig is a dispatcher that adopted workingRecord's run at adoptNow,
 // with a clock the test moves and a pane the test paints.
 type adoptRig struct {
-	d   *Dispatcher
-	rt  *adoptingRuntime
-	now time.Time
+	d        *Dispatcher
+	rt       *adoptingRuntime
+	now      time.Time
+	stateDir string
 }
 
 func newAdoptRig(t *testing.T, transcript string) *adoptRig {
@@ -77,9 +78,17 @@ func newAdoptRigFor(t *testing.T, rec Record, transcript string) *adoptRig {
 	t.Helper()
 	g := &adoptRig{now: adoptNow}
 	g.rt = &adoptingRuntime{fakeInteractiveRuntime: &fakeInteractiveRuntime{alive: true}, probe: ownedProbe(""), snapshot: "✻ Running… (1s)"}
-	stateDir := t.TempDir()
-	restartRecord(t, stateDir, rec)
-	g.d = NewDispatcher(NewFileRecorder(stateDir))
+	g.stateDir = t.TempDir()
+	restartRecord(t, g.stateDir, rec)
+	g.restart(t, transcript)
+	return g
+}
+
+// restart replaces the rig's dispatcher with a new daemon's over the same
+// state, which adopts what the last one left.
+func (g *adoptRig) restart(t *testing.T, transcript string) {
+	t.Helper()
+	g.d = NewDispatcher(NewFileRecorder(g.stateDir))
 	g.d.now = func() time.Time { return g.now }
 	g.d.liveUsage.path = func(cwd, sessionID string) (string, error) {
 		if sessionID != "s-adopt" {
@@ -90,7 +99,6 @@ func newAdoptRigFor(t *testing.T, rec Record, transcript string) *adoptRig {
 	g.d.adoptTimeout = time.Minute
 	g.d.SetInteractiveRuntime(g.rt)
 	g.d.MarkInterrupted()
-	return g
 }
 
 func (g *adoptRig) sweepAt(at time.Time) {
@@ -278,5 +286,29 @@ func TestSupersededHookStillRecordsTheTranscriptPath(t *testing.T) {
 		if rec.ID == "d-adopt" && rec.TranscriptPath != path {
 			t.Fatalf("persisted transcript path = %q, want %q", rec.TranscriptPath, path)
 		}
+	}
+}
+
+// A wake binds a second harness id to its waiting turn. A restart must keep
+// it: the completion comes under the wake's id, not the turn's first.
+func TestAdoptedTurnStillAnswersToItsWakesID(t *testing.T) {
+	g := newAdoptRig(t, "")
+	_, s, err := g.d.lookup("d-adopt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	g.d.mu.Lock()
+	g.d.bindKeyLocked(s, "d-adopt#1", "p:P1")
+	g.d.bindKeyLocked(s, "d-adopt#1", "p:P2")
+	g.d.persistLocked(s, "")
+	g.d.mu.Unlock()
+
+	g.restart(t, "")
+	if err := g.d.Report("d-adopt", hookReport("Stop", map[string]string{"prompt_id": "P2", "last_assistant_message": "WAKE-DONE"})); err != nil {
+		t.Fatal(err)
+	}
+	got := mustGet(t, g.d, "d-adopt")
+	if got.Turns[0].Outcome != TurnFinished || got.Turns[0].Text != "WAKE-DONE" {
+		t.Fatalf("turn = %+v; want finished by the wake's Stop", got.Turns[0])
 	}
 }

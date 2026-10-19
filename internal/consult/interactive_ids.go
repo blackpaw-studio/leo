@@ -69,14 +69,14 @@ func keyID(key string) string { return key[2:] }
 func isBridgeKey(key string) bool { return key[0] == keyBridge }
 
 func (t *Turn) hasKey(key string) bool {
-	if slices.Contains(t.keys, key) {
+	if slices.Contains(t.HarnessKeys, key) {
 		return true
 	}
-	return len(t.keys) == 0 && t.HarnessTurnID != "" && t.HarnessTurnID == keyID(key)
+	return len(t.HarnessKeys) == 0 && t.HarnessTurnID != "" && t.HarnessTurnID == keyID(key)
 }
 
 // isBound reports a turn some harness id already names.
-func (t *Turn) isBound() bool { return len(t.keys) > 0 || t.HarnessTurnID != "" }
+func (t *Turn) isBound() bool { return len(t.HarnessKeys) > 0 || t.HarnessTurnID != "" }
 
 func (d *Dispatcher) bindKeyLocked(s *runState, turnID, key string) {
 	for i := range s.record.Turns {
@@ -84,8 +84,8 @@ func (d *Dispatcher) bindKeyLocked(s *runState, turnID, key string) {
 		if t.TurnID != turnID {
 			continue
 		}
-		if !slices.Contains(t.keys, key) {
-			t.keys = append(t.keys, key)
+		if !slices.Contains(t.HarnessKeys, key) {
+			t.HarnessKeys = append(t.HarnessKeys, key)
 		}
 		if t.HarnessTurnID == "" {
 			t.HarnessTurnID = keyID(key)
