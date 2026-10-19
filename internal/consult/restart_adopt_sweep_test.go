@@ -264,3 +264,19 @@ func TestAdoptedIdleRunWithNothingInFlightStays(t *testing.T) {
 		t.Fatalf("status=%s turn=%+v kills=%d; an idle adopted run must stay as it was", got.Status, got.Turns[0], g.rt.killCount())
 	}
 }
+
+// A bridged run's turn hooks are superseded by its mod's reports, but they
+// still say where the transcript is, and a turn without tools sends no
+// other hook that would.
+func TestSupersededHookStillRecordsTheTranscriptPath(t *testing.T) {
+	g := newAdoptRig(t, "")
+	const path = "/cfg/projects/-ws/s-adopt.jsonl"
+	if err := g.d.ReportSupersededStop("d-adopt", hookReport("UserPromptSubmit", map[string]string{"transcript_path": path})); err != nil {
+		t.Fatal(err)
+	}
+	for _, rec := range g.d.Records() {
+		if rec.ID == "d-adopt" && rec.TranscriptPath != path {
+			t.Fatalf("persisted transcript path = %q, want %q", rec.TranscriptPath, path)
+		}
+	}
+}
