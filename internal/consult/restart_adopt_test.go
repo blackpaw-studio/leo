@@ -218,6 +218,10 @@ func TestAdoptRefusal(t *testing.T) {
 func TestMarkInterruptedSettlesWhatItCannotAdopt(t *testing.T) {
 	undelivered := workingRecord()
 	undelivered.Turns[0].Delivered = false
+	// A run in its final-report grace kept its settle target and deadline
+	// only in the old daemon's memory: nothing is left to adopt.
+	settling := workingRecord()
+	settling.Status = StatusSettling
 	for _, tc := range []struct {
 		name     string
 		rec      Record
@@ -230,10 +234,12 @@ func TestMarkInterruptedSettlesWhatItCannotAdopt(t *testing.T) {
 		{"not ours", workingRecord(), AdoptProbe{Presence: PanePresentAlive}, nil, false},
 		{"uncertain", workingRecord(), AdoptProbe{}, errors.New("no server"), false},
 		{"undelivered", undelivered, ownedProbe("tok"), nil, true},
+		{"settling", settling, ownedProbe("tok"), nil, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			rt := &adoptingRuntime{fakeInteractiveRuntime: &fakeInteractiveRuntime{alive: true}, probe: tc.probe, probeErr: tc.err}
 			d, _ := restartWith(t, tc.rec, rt)
+			d.Sweep(adoptNow.Add(time.Minute))
 			got := mustGet(t, d, "d-adopt")
 			if got.Status != StatusFailed || got.Error != "daemon restarted" || got.Turns[0].Outcome != TurnLost || !got.AdoptedAt.IsZero() {
 				t.Fatalf("record = status %s error %q turn %+v adopted_at %v; want settled as today", got.Status, got.Error, got.Turns[0], got.AdoptedAt)

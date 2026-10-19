@@ -27,6 +27,7 @@ const (
 	settleNotOurs     = "pane not ours"
 	settleDead        = "pane dead"
 	settleUndelivered = "turn undelivered"
+	settleSettling    = "run settling"
 	settleTimeout     = "adopt timeout"
 )
 
@@ -51,6 +52,11 @@ func (d *Dispatcher) restoreInteractive(rec Record) {
 		return
 	case rec.PaneID == "":
 		d.settleRestarted(rec, settleNoPane)
+		return
+	case rec.Status == StatusSettling:
+		// Its settle target, deadline and close reason lived only in the
+		// old daemon: finish it as a restart, as before adoption.
+		d.settleRestarted(rec, settleSettling)
 		return
 	}
 	probe, err := rt.ProbeAdoption(rec.PaneID, rec.ID)
