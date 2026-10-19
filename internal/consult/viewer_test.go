@@ -576,3 +576,108 @@ func TestViewerBackgroundHonorsSessionOverrideWithoutCallerPane(t *testing.T) {
 		t.Fatalf("calls=%#v", calls)
 	}
 }
+
+// tmuxGone stubs the tmux error for a target that no longer exists.
+func tmuxGone(kind, target string) *exec.Cmd {
+	return exec.Command("sh", "-c", fmt.Sprintf(`echo "can't find %s: %s" >&2; exit 1`, kind, target))
+}
+
+func TestViewerSweepTreatsGoneWindowAsClosed(t *testing.T) {
+	var calls [][]string
+	var logs []string
+	var persisted []Record
+	now := time.Now()
+	v := &Viewer{
+		TmuxPath: "tmux",
+		ExecCommand: func(name string, args ...string) *exec.Cmd {
+			calls = append(calls, append([]string{name}, args...))
+			return tmuxGone("window", "@42")
+		},
+		Logf:          func(f string, a ...any) { logs = append(logs, fmt.Sprintf(f, a...)) },
+		PersistRecord: func(r Record) { persisted = append(persisted, r) },
+	}
+	rec := Record{ID: "d-gone", Kind: "dispatch", Status: StatusDone, EndedAt: now.Add(-viewerGraceAfterEnd - time.Second), ViewerKind: "window", ViewerWindowID: "@42"}
+
+	v.Sweep([]Record{rec}, now)
+	v.Sweep([]Record{rec}, now.Add(10*time.Second))
+
+	if want := [][]string{{"tmux", "-L", "leo", "kill-window", "-t", "@42"}}; !reflect.DeepEqual(calls, want) {
+		t.Fatalf("tmux calls = %#v, want %#v", calls, want)
+	}
+	if len(logs) != 0 {
+		t.Fatalf("logged for an already-gone window: %v", logs)
+	}
+	if len(persisted) != 1 || persisted[0].ID != "d-gone" || persisted[0].ViewerWindowID != "" {
+		t.Fatalf("persisted = %#v, want one record with cleared ViewerWindowID", persisted)
+	}
+}
+
+func TestViewerSweepPersistsClearedWindowAfterSuccessfulKill(t *testing.T) {
+	var persisted []Record
+	now := time.Now()
+	v := &Viewer{
+		TmuxPath:      "tmux",
+		ExecCommand:   func(string, ...string) *exec.Cmd { return exec.Command("true") },
+		PersistRecord: func(r Record) { persisted = append(persisted, r) },
+	}
+	rec := Record{ID: "d-done", Kind: "dispatch", Status: StatusDone, EndedAt: now.Add(-viewerGraceAfterEnd - time.Second), ViewerKind: "window", ViewerWindowID: "@42"}
+
+	v.Sweep([]Record{rec}, now)
+
+	if len(persisted) != 1 || persisted[0].ViewerWindowID != "" {
+		t.Fatalf("persisted = %#v, want one record with cleared ViewerWindowID", persisted)
+	}
+}
+
+func TestViewerSweepLogsGenuineKillFailureOnce(t *testing.T) {
+	var calls [][]string
+	var logs []string
+	var persisted []Record
+	now := time.Now()
+	v := &Viewer{
+		TmuxPath: "tmux",
+		ExecCommand: func(name string, args ...string) *exec.Cmd {
+			calls = append(calls, append([]string{name}, args...))
+			return exec.Command("sh", "-c", "echo 'server exited unexpectedly' >&2; exit 1")
+		},
+		Logf:          func(f string, a ...any) { logs = append(logs, fmt.Sprintf(f, a...)) },
+		PersistRecord: func(r Record) { persisted = append(persisted, r) },
+	}
+	rec := Record{ID: "d-err", Kind: "dispatch", Status: StatusDone, EndedAt: now.Add(-viewerGraceAfterEnd - time.Second), ViewerKind: "window", ViewerWindowID: "@42"}
+
+	for i := 0; i < 3; i++ {
+		v.Sweep([]Record{rec}, now.Add(time.Duration(i)*10*time.Second))
+	}
+
+	if len(calls) != 3 {
+		t.Fatalf("kill attempts = %d, want 3 (genuine errors keep retrying)", len(calls))
+	}
+	if len(logs) != 1 {
+		t.Fatalf("logs = %d (%v), want 1", len(logs), logs)
+	}
+	if len(persisted) != 0 {
+		t.Fatalf("persisted a record whose window may still exist: %#v", persisted)
+	}
+}
+
+func TestCloseFinishedTreatsGonePaneAsClosed(t *testing.T) {
+	var calls [][]string
+	v := &Viewer{
+		TmuxPath: "tmux",
+		ExecCommand: func(name string, args ...string) *exec.Cmd {
+			calls = append(calls, append([]string{name}, args...))
+			return tmuxGone("pane", "%8")
+		},
+		ClosePane: func(r Record, pane string, kill func(string) error, _ func(string) error) (Record, error) {
+			return r, kill(pane)
+		},
+	}
+	rec := Record{ID: "d-split", Kind: "dispatch", Status: StatusDone, ViewerKind: "split", ViewerPaneID: "%8"}
+
+	if _, err := v.CloseFinished(rec, nil); err != nil {
+		t.Fatalf("gone pane reported as failure: %v", err)
+	}
+	if want := [][]string{{"tmux", "-L", "leo", "kill-pane", "-t", "%8"}}; !reflect.DeepEqual(calls, want) {
+		t.Fatalf("tmux calls = %#v, want %#v", calls, want)
+	}
+}

@@ -1,6 +1,7 @@
 package consult
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"log"
@@ -33,6 +34,7 @@ type Viewer struct {
 	Coordinator        *ViewerPlacementCoordinator
 	handledWindowIDs   map[string]string
 	handledWindowOrder []handledWindow
+	killFailureLogged  map[string]string
 	rosterMu           sync.Mutex
 	rosters            map[string]rosterSessionState
 	rosterInventoryLog string
@@ -275,7 +277,7 @@ func (v *Viewer) Close(rec Record) {
 	}
 	if rec.ViewerKind == "split" && rec.ViewerPaneID != "" {
 		if v.ClosePane != nil {
-			_, _ = v.ClosePane(rec, rec.ViewerPaneID, func(p string) error { return v.run("kill-pane", "-t", p) }, func(w string) error { return v.run("select-layout", "-t", w, "main-horizontal") })
+			_, _ = v.ClosePane(rec, rec.ViewerPaneID, func(p string) error { return v.runKill("kill-pane", "-t", p) }, func(w string) error { return v.run("select-layout", "-t", w, "main-horizontal") })
 		}
 		return
 	}
@@ -310,7 +312,7 @@ func (v *Viewer) Sweep(records []Record, now time.Time) {
 				}
 				continue
 			}
-			_ = v.killWindow(rec.ID, rec.ViewerWindowID)
+			v.sweepWindow(rec)
 			continue
 		}
 		if rec.ViewerWindowID != "" && !rec.Status.Terminal() {
@@ -326,6 +328,17 @@ func (v *Viewer) Sweep(records []Record, now time.Time) {
 	}
 }
 
+// sweepWindow closes an expired record's window and, once it is gone, clears
+// the persisted window id so later passes (and daemon restarts) stop retrying.
+func (v *Viewer) sweepWindow(rec Record) {
+	closed, err := v.closeWindow(rec.ID, rec.ViewerWindowID, false)
+	if err != nil || !closed || rec.ViewerWindowID == "" || v.PersistRecord == nil {
+		return
+	}
+	rec.ViewerWindowID = ""
+	v.PersistRecord(rec)
+}
+
 func (v *Viewer) kill(id string) {
 	_ = v.killWindow(id, "")
 }
@@ -335,10 +348,17 @@ func (v *Viewer) killWindow(id, persistedWindowID string) error {
 }
 
 func (v *Viewer) killWindowWithRetry(id, persistedWindowID string, retry bool) error {
+	_, err := v.closeWindow(id, persistedWindowID, retry)
+	return err
+}
+
+// closeWindow reports whether this call closed (or found already gone) a
+// window, as opposed to finding nothing to do or having already handled it.
+func (v *Viewer) closeWindow(id, persistedWindowID string, retry bool) (bool, error) {
 	v.mu.Lock()
 	if persistedWindowID != "" && v.handledWindowIDs[id] == persistedWindowID {
 		v.mu.Unlock()
-		return nil
+		return false, nil
 	}
 	windowID := v.windowIDs[id]
 	if windowID == "" {
@@ -346,10 +366,10 @@ func (v *Viewer) killWindowWithRetry(id, persistedWindowID string, retry bool) e
 	}
 	v.mu.Unlock()
 	if windowID == "" {
-		return nil
+		return false, nil
 	}
-	if err := v.run("kill-window", "-t", windowID); err != nil {
-		v.log("closing dispatch viewer %q: %v", id, err)
+	if err := v.runKill("kill-window", "-t", windowID); err != nil {
+		v.logKillFailureOnce(id, windowID, err)
 		if retry {
 			v.mu.Lock()
 			if v.handledWindowIDs == nil {
@@ -362,20 +382,36 @@ func (v *Viewer) killWindowWithRetry(id, persistedWindowID string, retry bool) e
 			v.windowIDs[id] = windowID
 			v.mu.Unlock()
 		}
-		return err
+		return false, err
 	}
 	v.mu.Lock()
 	delete(v.windowIDs, id)
+	delete(v.killFailureLogged, id)
 	v.recordHandledWindow(id, windowID)
 	v.mu.Unlock()
-	return nil
+	return true, nil
+}
+
+// logKillFailureOnce keeps a persistently failing close from logging on every
+// sweep pass; it still retries, and logs again if the target window changes.
+func (v *Viewer) logKillFailureOnce(id, windowID string, err error) {
+	v.mu.Lock()
+	if v.killFailureLogged == nil {
+		v.killFailureLogged = make(map[string]string)
+	}
+	already := v.killFailureLogged[id] == windowID
+	v.killFailureLogged[id] = windowID
+	v.mu.Unlock()
+	if !already {
+		v.log("closing dispatch viewer %q: %v", id, err)
+	}
 }
 
 // CloseFinished closes a terminal headless viewer regardless of outcome.
 func (v *Viewer) CloseFinished(rec Record, layout func(string) error) (Record, error) {
 	v.defaults()
 	if rec.ViewerKind == "split" && rec.ViewerPaneID != "" {
-		return v.ClosePane(rec, rec.ViewerPaneID, func(p string) error { return v.run("kill-pane", "-t", p) }, layout)
+		return v.ClosePane(rec, rec.ViewerPaneID, func(p string) error { return v.runKill("kill-pane", "-t", p) }, layout)
 	}
 	if rec.ViewerWindowID != "" {
 		if err := v.killWindowWithRetry(rec.ID, rec.ViewerWindowID, true); err != nil {
@@ -459,6 +495,24 @@ func (v *Viewer) run(args ...string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), v.Timeout)
 	defer cancel()
 	return v.command(ctx, args...).Run()
+}
+
+// runKill runs a tmux kill-* command, treating a target tmux cannot find as
+// already closed: the goal of the kill is met, and retrying can never succeed.
+func (v *Viewer) runKill(args ...string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), v.Timeout)
+	defer cancel()
+	var stderr bytes.Buffer
+	cmd := v.command(ctx, args...)
+	cmd.Stderr = &stderr
+	err := cmd.Run()
+	if err != nil && strings.Contains(stderr.String(), "can't find ") {
+		return nil
+	}
+	if err != nil && stderr.Len() > 0 {
+		return fmt.Errorf("%w: %s", err, strings.TrimSpace(stderr.String()))
+	}
+	return err
 }
 
 func (v *Viewer) output(args ...string) ([]byte, error) {
