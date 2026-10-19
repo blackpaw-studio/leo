@@ -135,10 +135,15 @@ func (m *manualTimers) after(d time.Duration) <-chan time.Time {
 	return ch
 }
 
+// fireLast fires the newest timer; one already fired and not yet consumed
+// stays fired, so the send never blocks while holding the lock after() needs.
 func (m *manualTimers) fireLast() {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	m.chs[len(m.chs)-1] <- time.Time{}
+	select {
+	case m.chs[len(m.chs)-1] <- time.Time{}:
+	default:
+	}
 }
 
 // gatedIDs mints ULIDs; once armed, the next New mints its id, then blocks
@@ -643,7 +648,7 @@ func permissionPayload(tool, command string) json.RawMessage {
 
 func TestPermissionAnsweredFromChat(t *testing.T) {
 	f := newFixture(t)
-	done := make(chan string, 1)
+	done := make(chan Decision, 1)
 	go func() {
 		done <- f.svc.RequestPermission(context.Background(), "assistant", permissionPayload("Bash", "rm -rf build"), 2*time.Minute)
 	}()
@@ -658,8 +663,8 @@ func TestPermissionAnsweredFromChat(t *testing.T) {
 	if _, err := f.svc.Answer("assistant", m.ID, Answer{Values: []string{"allow"}}); err != nil {
 		t.Fatal(err)
 	}
-	if got := <-done; got != "allow" {
-		t.Fatalf("decision = %q", got)
+	if got := <-done; got.Behavior != "allow" || got.UpdatedInput != nil {
+		t.Fatalf("decision = %+v", got)
 	}
 	f.svc.Flush()
 	if got := f.deliver.delivered(); len(got) != 0 {
@@ -669,14 +674,14 @@ func TestPermissionAnsweredFromChat(t *testing.T) {
 
 func TestPermissionTimeoutLeavesTerminalPrompt(t *testing.T) {
 	f := newFixture(t)
-	done := make(chan string, 1)
+	done := make(chan Decision, 1)
 	go func() {
 		done <- f.svc.RequestPermission(context.Background(), "assistant", permissionPayload("Bash", "ls"), 2*time.Minute)
 	}()
 	<-f.timers.got
 	f.timers.fireLast()
-	if got := <-done; got != "" {
-		t.Fatalf("timeout decision = %q, want none", got)
+	if got := <-done; !got.IsZero() {
+		t.Fatalf("timeout decision = %+v, want none", got)
 	}
 	if m := f.thread(t, "assistant")[0]; m.State != StateExpired {
 		t.Fatalf("state = %s", m.State)
@@ -685,7 +690,7 @@ func TestPermissionTimeoutLeavesTerminalPrompt(t *testing.T) {
 
 func TestPermissionAnsweredInTerminalViaPostToolUse(t *testing.T) {
 	f := newFixture(t)
-	done := make(chan string, 1)
+	done := make(chan Decision, 1)
 	go func() {
 		done <- f.svc.RequestPermission(context.Background(), "assistant", permissionPayload("Bash", "make"), 2*time.Minute)
 	}()
@@ -696,8 +701,8 @@ func TestPermissionAnsweredInTerminalViaPostToolUse(t *testing.T) {
 		t.Fatalf("unrelated PostToolUse settled the prompt: %s", m.State)
 	}
 	f.svc.OnHook("assistant", HookEvent{Event: "PostToolUse", ToolName: "Bash", ToolInput: json.RawMessage(`{ "command": "make" }`)})
-	if got := <-done; got != "" {
-		t.Fatalf("terminal-answered decision = %q, want none", got)
+	if got := <-done; !got.IsZero() {
+		t.Fatalf("terminal-answered decision = %+v, want none", got)
 	}
 	m := f.thread(t, "assistant")[0]
 	if m.State != StateAnswered || (m.Answer == nil || !m.Answer.isTerminal()) {
@@ -708,7 +713,7 @@ func TestPermissionAnsweredInTerminalViaPostToolUse(t *testing.T) {
 func TestPermissionHookGoneMarksAnsweredInTerminal(t *testing.T) {
 	f := newFixture(t)
 	ctx, cancel := context.WithCancel(context.Background())
-	done := make(chan string, 1)
+	done := make(chan Decision, 1)
 	go func() { done <- f.svc.RequestPermission(ctx, "assistant", permissionPayload("Bash", "x"), time.Minute) }()
 	<-f.timers.got
 	cancel()

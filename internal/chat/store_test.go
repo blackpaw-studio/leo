@@ -1,6 +1,7 @@
 package chat
 
 import (
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -587,5 +588,31 @@ func TestCloseAsksOfClosesOnlyThatAskersOpenAsks(t *testing.T) {
 	}
 	if d, _ := st.Message(done.ID); d.State != StateAnswered {
 		t.Fatalf("answered ask = %s", d.State)
+	}
+}
+
+func TestStoreRoundTripsQuestionsInputAndAnswers(t *testing.T) {
+	st := openTestStore(t)
+	clock := newTestClock()
+	ids := NewULIDSource(clock.Now, nil)
+	m := msg(ids, clock, "assistant", DirectionOut, KindAsk, "Size?")
+	m.State = StateOpen
+	m.Input = &Input{Type: InputQuestions, Questions: []Question{{ID: "q1", Header: "H", Question: "Size?", Multi: true, AllowText: true, Options: []Option{{Value: "L", Label: "L", Description: "large"}}}}}
+	mustInsert(t, st, m)
+	ans := &Answer{Answers: map[string]QuestionAnswer{"q1": {Values: []string{"L"}, Text: "x"}}}
+	if ok, err := st.Transition(m.ID, []string{StateOpen}, StateAnswered, ans); err != nil || !ok {
+		t.Fatalf("Transition = %v, %v", ok, err)
+	}
+	got, err := st.Message(m.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want, _ := json.Marshal(m.Input)
+	have, _ := json.Marshal(got.Input)
+	if string(want) != string(have) {
+		t.Errorf("input = %s, want %s", have, want)
+	}
+	if qa := got.Answer.Answers["q1"]; len(qa.Values) != 1 || qa.Values[0] != "L" || qa.Text != "x" {
+		t.Errorf("answers = %+v", got.Answer)
 	}
 }

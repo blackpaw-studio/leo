@@ -13,12 +13,14 @@ const (
 	InputRadio      = "radio"      // select one choice, then submit
 	InputCheckboxes = "checkboxes" // select within [Min, Max] choices, then submit
 	InputText       = "text"       // one free-text field
+	InputQuestions  = "questions"  // several questions answered together; built by the daemon from AskUserQuestion
 )
 
 // Bounds on ask inputs and answers.
 const (
 	MaxAnswerTextRunes  = 4000
 	MaxPlaceholderRunes = 200
+	MaxAskQuestions     = 4 // Claude's AskUserQuestion limit
 )
 
 // Input is the answer control of an ask message (and, as buttons, of a
@@ -32,12 +34,44 @@ type Input struct {
 	Min         int      `json:"min,omitempty"`
 	Max         *int     `json:"max,omitempty"`
 	Placeholder string   `json:"placeholder,omitempty"`
+	// Questions is set for a questions input, which carries nothing else.
+	Questions []Question `json:"questions,omitempty"`
+}
+
+// Question is one question of a questions input. Answers are keyed by ID
+// on the wire; the daemon assigns IDs q1..qN by position. Each option's
+// value equals its label.
+type Question struct {
+	ID        string   `json:"id"`
+	Header    string   `json:"header"`
+	Question  string   `json:"question"`
+	Multi     bool     `json:"multi"`
+	AllowText bool     `json:"allow_text"`
+	Options   []Option `json:"options"`
+}
+
+// QuestionAnswer is the answer to one question of a questions input.
+type QuestionAnswer struct {
+	Values []string `json:"values"`
+	Text   string   `json:"text"`
+}
+
+// MarshalJSON writes values as [] rather than null.
+func (a QuestionAnswer) MarshalJSON() ([]byte, error) {
+	type wire QuestionAnswer // no methods: avoids recursion
+	if a.Values == nil {
+		a.Values = []string{}
+	}
+	return json.Marshal(wire(a))
 }
 
 // Answer is a message's answer: the chosen option values and/or free text.
 type Answer struct {
 	Values []string `json:"values"`
 	Text   string   `json:"text"`
+	// Answers is set for, and only for, a questions input: one answer per
+	// question ID, with Values and Text then empty.
+	Answers map[string]QuestionAnswer `json:"answers,omitempty"`
 }
 
 // MarshalJSON writes values as [] rather than null.
@@ -55,7 +89,7 @@ var terminalAnswer = &Answer{Values: []string{AnswerTerminal}}
 
 // isTerminal reports whether the answer says the terminal settled it.
 func (a Answer) isTerminal() bool {
-	return len(a.Values) == 1 && a.Values[0] == AnswerTerminal && a.Text == ""
+	return len(a.Values) == 1 && a.Values[0] == AnswerTerminal && a.Text == "" && len(a.Answers) == 0
 }
 
 // resolveInput turns an ask's legacy options or its input into the input
@@ -69,6 +103,8 @@ func resolveInput(options []Option, in *Input) (Input, error) {
 		return Input{}, fmt.Errorf("%w: give an input (or options, for buttons)", ErrInvalid)
 	case in == nil:
 		return validateInput(Input{Type: InputButtons, Options: options})
+	case in.Type == InputQuestions:
+		return Input{}, fmt.Errorf("%w: the questions input is built by the daemon, not asked", ErrInvalid)
 	}
 	return validateInput(*in)
 }
@@ -76,6 +112,12 @@ func resolveInput(options []Option, in *Input) (Input, error) {
 func validateInput(in Input) (Input, error) {
 	if utf8.RuneCountInString(in.Placeholder) > MaxPlaceholderRunes {
 		return Input{}, fmt.Errorf("%w: placeholder exceeds %d characters", ErrInvalid, MaxPlaceholderRunes)
+	}
+	if in.Type == InputQuestions {
+		return validateQuestions(in)
+	}
+	if len(in.Questions) > 0 {
+		return Input{}, fmt.Errorf("%w: questions belong to the questions input", ErrInvalid)
 	}
 	if in.Type == InputText {
 		if len(in.Options) > 0 || in.AllowText || in.Min != 0 || in.Max != nil {
@@ -111,6 +153,43 @@ func validateInput(in Input) (Input, error) {
 	return in, nil
 }
 
+// validateQuestions checks a questions input: 1 to MaxAskQuestions
+// questions with IDs q1..qN by position and distinct non-blank text (answers
+// map back to it), each with valid options whose value equals the label.
+// Nothing else is set on the input.
+func validateQuestions(in Input) (Input, error) {
+	if len(in.Options) > 0 || in.AllowText || in.Min != 0 || in.Max != nil || in.Placeholder != "" {
+		return Input{}, fmt.Errorf("%w: a questions input takes only questions", ErrInvalid)
+	}
+	if len(in.Questions) == 0 || len(in.Questions) > MaxAskQuestions {
+		return Input{}, fmt.Errorf("%w: give 1 to %d questions", ErrInvalid, MaxAskQuestions)
+	}
+	questions := make([]Question, len(in.Questions))
+	seen := map[string]bool{}
+	for i, qn := range in.Questions {
+		if qn.ID != fmt.Sprintf("q%d", i+1) {
+			return Input{}, fmt.Errorf("%w: question %d must have id q%d", ErrInvalid, i+1, i+1)
+		}
+		if strings.TrimSpace(qn.Question) == "" || seen[qn.Question] {
+			return Input{}, fmt.Errorf("%w: question text must be non-empty and distinct", ErrInvalid)
+		}
+		seen[qn.Question] = true
+		options, err := validateOptions(qn.Options)
+		if err != nil {
+			return Input{}, err
+		}
+		for _, o := range options {
+			if o.Label != o.Value {
+				return Input{}, fmt.Errorf("%w: question options must have value equal to label", ErrInvalid)
+			}
+		}
+		qn.Options = options
+		questions[i] = qn
+	}
+	in.Questions = questions
+	return in, nil
+}
+
 // validateOptions returns a copy of options with labels defaulted to the
 // value, refusing an empty, oversized or duplicated list.
 func validateOptions(options []Option) ([]Option, error) {
@@ -135,6 +214,12 @@ func validateOptions(options []Option) ([]Option, error) {
 // validAnswerFor checks answer a against input in; see the chat docs for
 // the rules per type.
 func validAnswerFor(in Input, a Answer) error {
+	if in.Type == InputQuestions {
+		return validQuestionsAnswer(in, a)
+	}
+	if a.Answers != nil {
+		return fmt.Errorf("%w: answers apply to a questions input only", ErrInvalid)
+	}
 	if utf8.RuneCountInString(a.Text) > MaxAnswerTextRunes {
 		return fmt.Errorf("%w: text exceeds %d characters", ErrInvalid, MaxAnswerTextRunes)
 	}
@@ -180,6 +265,63 @@ func validAnswerFor(in Input, a Answer) error {
 		if len(a.Values) != 1 {
 			return fmt.Errorf("%w: choose exactly one option", ErrInvalid)
 		}
+	}
+	return nil
+}
+
+// validQuestionsAnswer checks a questions answer: top-level values and text
+// stay empty, and every question id is answered, validly for its kind.
+func validQuestionsAnswer(in Input, a Answer) error {
+	if len(a.Values) > 0 || a.Text != "" {
+		return fmt.Errorf("%w: answer a questions input with answers only", ErrInvalid)
+	}
+	if len(a.Answers) != len(in.Questions) {
+		return fmt.Errorf("%w: answer every question, and only those", ErrInvalid)
+	}
+	for _, qn := range in.Questions {
+		qa, ok := a.Answers[qn.ID]
+		if !ok {
+			return fmt.Errorf("%w: question %s is unanswered", ErrInvalid, qn.ID)
+		}
+		if err := validQuestionAnswer(qn, qa); err != nil {
+			return fmt.Errorf("%w (%s)", err, qn.ID)
+		}
+	}
+	return nil
+}
+
+func validQuestionAnswer(qn Question, a QuestionAnswer) error {
+	if utf8.RuneCountInString(a.Text) > MaxAnswerTextRunes {
+		return fmt.Errorf("%w: text exceeds %d characters", ErrInvalid, MaxAnswerTextRunes)
+	}
+	hasText := strings.TrimSpace(a.Text) != ""
+	if a.Text != "" && !hasText {
+		return fmt.Errorf("%w: text is blank", ErrInvalid)
+	}
+	if hasText && !qn.AllowText {
+		return fmt.Errorf("%w: this question does not take text", ErrInvalid)
+	}
+	known := map[string]bool{}
+	for _, o := range qn.Options {
+		known[o.Value] = true
+	}
+	seen := map[string]bool{}
+	for _, v := range a.Values {
+		if !known[v] {
+			return fmt.Errorf("%w: %q is not one of the options", ErrInvalid, v)
+		}
+		if seen[v] {
+			return fmt.Errorf("%w: %q is chosen twice", ErrInvalid, v)
+		}
+		seen[v] = true
+	}
+	switch {
+	case len(a.Values) == 0 && !hasText:
+		return fmt.Errorf("%w: choose an option or answer with text", ErrInvalid)
+	case !qn.Multi && len(a.Values) > 1:
+		return fmt.Errorf("%w: choose at most one option", ErrInvalid)
+	case !qn.Multi && len(a.Values) == 1 && hasText:
+		return fmt.Errorf("%w: choose an option or answer with text, not both", ErrInvalid)
 	}
 	return nil
 }

@@ -364,7 +364,7 @@ func (s *Service) resumeAsk(ctx context.Context, req AskRequest) (AskResult, err
 		return AskResult{}, err
 	}
 	m, err := s.opts.Store.Message(req.MessageID)
-	if err != nil || m.Agent != agent || m.Kind != KindAsk {
+	if err != nil || m.Agent != agent || m.Kind != KindAsk || (m.Input != nil && m.Input.Type == InputQuestions) {
 		return AskResult{}, fmt.Errorf("%w: %s is not an ask in %s's thread", ErrInvalid, req.MessageID, agent)
 	}
 	wt, ok := s.waiters.get(m.ID)
@@ -385,7 +385,7 @@ func (s *Service) Answer(agent, id string, answer Answer) (Message, error) {
 	if err != nil || m.Agent != agent {
 		return Message{}, ErrNotFound
 	}
-	answer.Text = strings.TrimSpace(answer.Text)
+	answer = trimmedAnswer(answer)
 	if err := validAnswer(m, answer); err != nil {
 		return Message{}, err
 	}
@@ -411,6 +411,22 @@ func (s *Service) Answer(agent, id string, answer Answer) (Message, error) {
 	return stored, nil
 }
 
+// trimmedAnswer returns a with its free text, and that of each question's
+// answer, trimmed. It leaves a itself untouched.
+func trimmedAnswer(a Answer) Answer {
+	a.Text = strings.TrimSpace(a.Text)
+	if a.Answers == nil {
+		return a
+	}
+	answers := make(map[string]QuestionAnswer, len(a.Answers))
+	for id, qa := range a.Answers {
+		qa.Text = strings.TrimSpace(qa.Text)
+		answers[id] = qa
+	}
+	a.Answers = answers
+	return a
+}
+
 // deliverStoredAnswer hands ask id's stored answer to its agent.
 func (s *Service) deliverStoredAnswer(id string) {
 	ask, err := s.opts.Store.Message(id)
@@ -425,9 +441,13 @@ func (s *Service) deliverStoredAnswer(id string) {
 // asked, as an inbound chat message replying to the ask: through the usual
 // delivery, so a suspended agent resumes for it. An ask with no agent to
 // hand it to (a task run's) is skipped; a resume still returns the answer.
+// A questions card is never delivered: its hook waits on no one's reply.
 func (s *Service) deliverAnswer(ask Message) {
 	if ask.Kind != KindAsk || ask.State != StateAnswered || ask.Answer == nil || ask.Asker != ask.Agent {
 		return
+	}
+	if ask.Input != nil && ask.Input.Type == InputQuestions {
+		return // its tool call is gone: nothing can receive the answers
 	}
 	reply, err := s.insert(Message{Agent: ask.Agent, Direction: DirectionIn, Kind: KindText, Text: answerText(ask), ReplyTo: ask.ID, State: StatePending}, nil, nil, nil)
 	if err != nil {
@@ -450,6 +470,28 @@ func validAnswer(m Message, answer Answer) error {
 		return fmt.Errorf("%w: only ask and permission messages take answers", ErrInvalid)
 	}
 	return validAnswerFor(*m.Input, answer)
+}
+
+// Dismiss closes an open questions card from the apps, as dismissed: the
+// user would rather answer in the terminal, so the hook waiting on it
+// returns no decision and Claude's own dialog stands. A message that is not
+// a questions card is invalid; one already settled conflicts.
+func (s *Service) Dismiss(agent, id string) (Message, error) {
+	if err := s.enter(); err != nil {
+		return Message{}, err
+	}
+	defer s.leave()
+	m, err := s.opts.Store.Message(id)
+	if err != nil || m.Agent != agent {
+		return Message{}, ErrNotFound
+	}
+	if m.Kind != KindAsk || m.Input == nil || m.Input.Type != InputQuestions {
+		return Message{}, fmt.Errorf("%w: only a questions card can be dismissed", ErrInvalid)
+	}
+	if m.State != StateOpen || !s.closeAsk(id, ClosedDismissed) {
+		return Message{}, ErrConflict
+	}
+	return s.opts.Store.Message(id)
 }
 
 // WithdrawRequest is leo_chat_ask_withdraw. Caller is the calling process, as

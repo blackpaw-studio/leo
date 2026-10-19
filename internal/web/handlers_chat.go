@@ -175,6 +175,7 @@ func (s *Server) registerChatRoutes(mux *http.ServeMux, prefix string, wrap func
 	mux.HandleFunc("POST "+prefix+"/uploads", wrap(s.handleChatUpload))
 	mux.HandleFunc("POST "+prefix+"/{agent}/messages", wrap(s.handleChatSend))
 	mux.HandleFunc("POST "+prefix+"/{agent}/messages/{id}/answer", wrap(s.handleChatAnswer))
+	mux.HandleFunc("POST "+prefix+"/{agent}/messages/{id}/dismiss", wrap(s.handleChatDismiss))
 	mux.HandleFunc("POST "+prefix+"/{agent}/read", wrap(s.handleChatRead))
 }
 
@@ -443,6 +444,21 @@ func (s *Server) handleChatAnswer(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, apiResponse{OK: true, Data: m})
 }
 
+// POST /api/v1/chat/{agent}/messages/{id}/dismiss — closes an open questions
+// card without answering it, so the terminal's own dialog takes over. The
+// body is ignored.
+func (s *Server) handleChatDismiss(w http.ResponseWriter, r *http.Request) {
+	if !s.chatAvailable(w) {
+		return
+	}
+	m, err := s.chat.Dismiss(r.PathValue("agent"), r.PathValue("id"))
+	if err != nil {
+		writeChatError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, apiResponse{OK: true, Data: m})
+}
+
 // POST /api/v1/chat/{agent}/read {up_to}
 func (s *Server) handleChatRead(w http.ResponseWriter, r *http.Request) {
 	if !s.chatAvailable(w) {
@@ -617,8 +633,8 @@ func (s *Server) handleAPIPermission(w http.ResponseWriter, r *http.Request) {
 // agentPermission routes a supervised agent's permission prompt to Leo
 // Chat. An unknown token, a foreign session or chat being off is no
 // decision.
-func (s *Server) agentPermission(ctx context.Context, token string, payload json.RawMessage, timeout time.Duration) map[string]string {
-	none := map[string]string{}
+func (s *Server) agentPermission(ctx context.Context, token string, payload json.RawMessage, timeout time.Duration) chat.Decision {
+	none := chat.Decision{}
 	if s.chat == nil || s.attention == nil {
 		return none
 	}
@@ -631,10 +647,7 @@ func (s *Server) agentPermission(ctx context.Context, token string, payload json
 	if !s.isAgentHookSession(name, p.SessionID) {
 		return none
 	}
-	if decision := s.chat.RequestPermission(ctx, name, payload, timeout); decision != "" {
-		return map[string]string{"behavior": decision}
-	}
-	return none
+	return s.chat.RequestPermission(ctx, name, payload, timeout)
 }
 
 // chatHook hands an agent hook to Leo Chat (auto-capture, terminal-answered

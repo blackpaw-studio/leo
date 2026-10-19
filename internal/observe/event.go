@@ -70,11 +70,14 @@ const (
 	// environments, and the environment routes exist (names only, never
 	// values).
 	FeatureAgentEnvironments = "agent_environments"
+	// FeatureChatQuestions: an AskUserQuestion reaches Leo Chat as one
+	// "questions" input card, answered with an answers map and dismissable.
+	FeatureChatQuestions = "chat.questions"
 )
 
 // Features returns the hello's features list, a fresh copy each call.
 func Features() []string {
-	return []string{FeatureBridgeTurns, FeatureAttentionReason, FeatureDispatchTree, FeatureAgentUsage, FeatureAgentControl, FeatureDispatchAttach, FeatureDispatchRemoved, FeatureStateSeq, FeatureAttachDispatchPlacement, FeatureDispatchPlacementLive, FeatureAgentEnvironments}
+	return []string{FeatureBridgeTurns, FeatureAttentionReason, FeatureDispatchTree, FeatureAgentUsage, FeatureAgentControl, FeatureDispatchAttach, FeatureDispatchRemoved, FeatureStateSeq, FeatureAttachDispatchPlacement, FeatureDispatchPlacementLive, FeatureAgentEnvironments, FeatureChatQuestions}
 }
 
 // ActivityMinInterval is the most often agent_activity is published per

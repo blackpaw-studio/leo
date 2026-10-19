@@ -487,7 +487,9 @@ turn ends. When an orchestrator turn is `needs_input`, its split pane is
 parked in its background window (the decision is the orchestrator's) and
 returns once the turn runs again; a user-typed turn's prompt never moves
 the pane. Codex dispatches run with `-a never` and
-never prompt; claude elicitation and question dialogs are not routed.
+never prompt; claude elicitation and question dialogs are not routed for
+dispatch panes. (Supervised agents are different: their `AskUserQuestion`
+reaches [Leo Chat](chat.md#questions-cards).)
 
 ## Headless continuation
 

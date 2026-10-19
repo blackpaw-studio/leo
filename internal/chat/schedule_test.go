@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -300,12 +301,52 @@ func TestFailedFireRetriesAfterTheRetryInterval(t *testing.T) {
 	f.clock.Advance(scheduleRetry)
 	f.timers.fireLast()
 
-	m := f.pub.waitMessage(t)
+	m := f.fireArmsUntilMessage(t)
 	if m.Text != "stand up" {
 		t.Fatalf("retried message = %+v", m)
 	}
 	if ms := f.thread(t, "assistant"); len(ms) != 1 {
 		t.Fatalf("thread = %q, want exactly one post", texts(ms))
+	}
+}
+
+// A kick can run a failing pass between a retry arm and the test's fire of
+// it: that pass arms a newer retry timer, and the loop waits on that one, not
+// the one already fired. Firing every arm as it appears must still post.
+func TestRetryTimerSupersededByAKickPass(t *testing.T) {
+	f := newFixture(t)
+	failed, release := make(chan struct{}), make(chan struct{})
+	var onLog atomic.Pointer[func()]
+	f.svc.opts.Logf = func(string, ...any) {
+		if hook := onLog.Load(); hook != nil {
+			(*hook)()
+		}
+	}
+	f.recover(t)
+	f.schedule(t, "assistant", time.Hour, "stand up")
+	f.nextArm(t)
+	lift := failMessageInserts(t, f.store)
+	f.clock.Advance(time.Hour)
+	f.timers.fireLast()
+	if d := f.nextArm(t); d != scheduleRetry {
+		t.Fatalf("armed %v after a failed fire, want the %v retry", d, scheduleRetry)
+	}
+
+	// Park a kick-driven pass after its fire failed but before it re-arms.
+	park := func() {
+		close(failed)
+		<-release
+	}
+	onLog.Store(&park)
+	f.svc.kick()
+	<-failed
+	lift()
+	f.clock.Advance(scheduleRetry)
+	f.timers.fireLast() // the superseded retry timer; the loop is not waiting on it
+	close(release)
+
+	if m := f.fireArmsUntilMessage(t); m.Text != "stand up" {
+		t.Fatalf("retried message = %+v", m)
 	}
 }
 
@@ -326,5 +367,24 @@ func TestKickInterruptsTheRetryWait(t *testing.T) {
 
 	if m := f.pub.waitMessage(t); m.Text != "stand up" {
 		t.Fatalf("message = %+v", m)
+	}
+}
+
+// fireArmsUntilMessage fires each retry timer the loop arms until it posts a
+// message. A pass the test cannot order against its own fire (one a stale kick
+// drives) may arm a newer timer after the one fired, and the loop only waits
+// on its latest.
+func (f *harnessFixture) fireArmsUntilMessage(t *testing.T) Message {
+	t.Helper()
+	for {
+		select {
+		case m := <-f.pub.msgs:
+			return m
+		case <-f.timers.got:
+			f.timers.fireLast()
+		case <-time.After(10 * time.Second):
+			t.Fatal("no chat.message event")
+			return Message{}
+		}
 	}
 }

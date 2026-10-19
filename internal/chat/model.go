@@ -43,6 +43,7 @@ const (
 	ClosedTimeout   = "timeout"
 	ClosedWithdrawn = "withdrawn"
 	ClosedAgentGone = "agent_gone"
+	ClosedDismissed = "dismissed"
 )
 
 // AnswerTerminal is the value of the answer recorded when a permission
@@ -51,8 +52,9 @@ const AnswerTerminal = "terminal"
 
 // Option is one choice of an ask message.
 type Option struct {
-	Value string `json:"value"`
-	Label string `json:"label"`
+	Value       string `json:"value"`
+	Label       string `json:"label"`
+	Description string `json:"description,omitempty"`
 }
 
 // Permission describes the tool call a permission message asks about.
@@ -83,7 +85,7 @@ type Message struct {
 	TS          time.Time    `json:"ts"`
 	// Deadline is when an open ask times out; zero means it never does.
 	Deadline time.Time `json:"deadline,omitzero"`
-	// ClosedReason says why an ask is expired: timeout, withdrawn or agent_gone.
+	// ClosedReason says why an ask is expired: timeout, withdrawn, agent_gone or dismissed.
 	ClosedReason string `json:"closed_reason,omitempty"`
 	// Asker is the caller that posted an ask, as given: an agent name or
 	// task:<name>. Late delivery needs it to equal Agent.

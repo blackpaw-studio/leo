@@ -186,3 +186,57 @@ func TestPermissionHookOutsideLeoDoesNothing(t *testing.T) {
 		t.Fatalf("stdout %q, request %+v; want neither", out, *got)
 	}
 }
+
+const askHookInput = `{"hook_event_name":"PermissionRequest","tool_name":"AskUserQuestion","tool_input":{"questions":[{"question":"Which size?","header":"Size","options":[{"label":"S"},{"label":"L"}],"multiSelect":false}]}}`
+
+func runAgentPermission(t *testing.T, reply string) string {
+	t.Helper()
+	clearReportEnv(t)
+	port, _ := agentPermissionDaemon(t, reply)
+	t.Setenv("LEO_ATTENTION_TOKEN", "launch-tok")
+	t.Setenv("LEO_WEB_PORT", port)
+	return runPermission(t, askHookInput)
+}
+
+// The exact bytes claude reads: pinned as a string, never decoded and
+// compared, so a key rename or wrapper change cannot pass unnoticed.
+func TestAgentPermissionPrintsUpdatedInputExactly(t *testing.T) {
+	reply := `{"ok":true,"data":{"behavior":"allow","updatedInput":{"questions":[{"question":"Which size?","header":"Size","options":[{"label":"S"},{"label":"L"}],"multiSelect":false}],"answers":{"Which size?":"L"}}}}`
+	want := `{"hookSpecificOutput":{"decision":{"behavior":"allow","updatedInput":{"questions":[{"question":"Which size?","header":"Size","options":[{"label":"S"},{"label":"L"}],"multiSelect":false}],"answers":{"Which size?":"L"}}},"hookEventName":"PermissionRequest"}}` + "\n"
+	if got := runAgentPermission(t, reply); got != want {
+		t.Fatalf("stdout =\n%s\nwant\n%s", got, want)
+	}
+}
+
+func TestAgentPermissionIgnoresUpdatedInputThatIsNotAnAllowedObject(t *testing.T) {
+	replies := map[string]string{
+		"with deny":      `{"ok":true,"data":{"behavior":"deny","updatedInput":{"answers":{}}}}`,
+		"with no answer": `{"ok":true,"data":{"updatedInput":{"answers":{}}}}`,
+		"array":          `{"ok":true,"data":{"behavior":"allow","updatedInput":[1]}}`,
+		"string":         `{"ok":true,"data":{"behavior":"allow","updatedInput":"x"}}`,
+		"null":           `{"ok":true,"data":{"behavior":"allow","updatedInput":null}}`,
+	}
+	for name, reply := range replies {
+		got := runAgentPermission(t, reply)
+		// null reads as absent: a plain allow. Everything else prints nothing.
+		want := ""
+		if name == "null" {
+			want = `{"hookSpecificOutput":{"decision":{"behavior":"allow"},"hookEventName":"PermissionRequest"}}` + "\n"
+		}
+		if got != want {
+			t.Errorf("%s: stdout = %q, want %q", name, got, want)
+		}
+	}
+}
+
+func TestPermissionStdoutForPlainDecisionsIsUnchanged(t *testing.T) {
+	cases := map[string]struct{ reply, want string }{
+		"allow": {`{"ok":true,"data":{"behavior":"allow"}}`, `{"hookSpecificOutput":{"decision":{"behavior":"allow"},"hookEventName":"PermissionRequest"}}` + "\n"},
+		"deny":  {`{"ok":true,"data":{"behavior":"deny","message":"no"}}`, `{"hookSpecificOutput":{"decision":{"behavior":"deny","message":"no"},"hookEventName":"PermissionRequest"}}` + "\n"},
+	}
+	for name, c := range cases {
+		if got := runAgentPermission(t, c.reply); got != c.want {
+			t.Errorf("%s: stdout = %q, want %q", name, got, c.want)
+		}
+	}
+}

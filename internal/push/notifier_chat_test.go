@@ -202,12 +202,92 @@ func TestPermissionAlertCarriesTheIDInEitherArrivalOrder(t *testing.T) {
 	})
 }
 
-// A question is not a permission prompt: it never waits.
-func TestQuestionAlertDoesNotWaitForAPermissionMessage(t *testing.T) {
+// A question is not a permission prompt: its alert never takes a permission
+// message's id, and an unrelated permission message does not release it.
+func TestQuestionAlertNeverCarriesAPermissionMessageID(t *testing.T) {
 	timers := &fakeAfter{}
 	n := waitingNotifier(timers)
-	n.Publish(activity("a", observe.AttentionNeedsInput, &observe.AttentionReason{Kind: observe.AttentionReasonQuestion}))
-	if a := nextQueued(t, n); a.MessageID != "" {
+	n.Publish(activity("a", observe.AttentionNeedsInput, questionReason))
+	noAlert(t, n)
+	n.Publish(chatEvent(chat.Message{ID: "p1", Agent: "a", Direction: chat.DirectionOut, Kind: chat.KindPermission, State: chat.StateOpen}))
+	noAlert(t, n)
+	timers.fire()
+	if a := nextQueued(t, n); a.MessageID != "" || a.Kind != string(observe.AttentionNeedsInput) {
+		t.Fatalf("alert = %+v", a)
+	}
+}
+
+var questionReason = &observe.AttentionReason{Kind: observe.AttentionReasonQuestion}
+
+func questionsCard(id string, state string) chat.Message {
+	return chat.Message{ID: id, Agent: "a", Direction: chat.DirectionOut, Kind: chat.KindAsk, State: state, Text: "Which size? (+1 more)",
+		Input: &chat.Input{Type: chat.InputQuestions, Questions: []chat.Question{{ID: "q1", Question: "Which size?", Options: []chat.Option{{Value: "S", Label: "S", Description: "small"}}}}}}
+}
+
+// The questions card is its own push: the ordinary chat one, typed
+// "questions", with no options and never the permission alert.
+func TestQuestionsCardPushesOnceAsAnAsk(t *testing.T) {
+	n, sender, _ := startNotifier(t)
+	n.Publish(chatEvent(questionsCard("c1", chat.StateOpen)))
+	a := sender.next(t)
+	if a.MessageID != "c1" || a.MessageKind != chat.KindAsk || a.InputType != chat.InputQuestions || a.Options != nil || a.Kind != "chat" || a.Body != "Which size? (+1 more)" {
+		t.Fatalf("alert = %+v", a)
+	}
+}
+
+// The agent's needs_input alert for the same AskUserQuestion (a bridge
+// "question" reason, or a classic permission_prompt Notification) would be a
+// second push, so the card's chat push replaces it, in either order.
+func TestQuestionsCardReplacesTheNeedsInputAlert(t *testing.T) {
+	reasons := map[string]*observe.AttentionReason{"bridge question": questionReason, "classic notification": nil}
+	for name, reason := range reasons {
+		t.Run(name+", needs_input first", func(t *testing.T) {
+			timers := &fakeAfter{}
+			n := waitingNotifier(timers)
+			n.Publish(activity("a", observe.AttentionNeedsInput, reason))
+			noAlert(t, n)
+			n.Publish(chatEvent(questionsCard("c1", chat.StateOpen)))
+			if a := nextQueued(t, n); a.MessageKind != chat.KindAsk || a.Kind != "chat" {
+				t.Fatalf("alert = %+v", a)
+			}
+			timers.fire()
+			noAlert(t, n)
+		})
+		t.Run(name+", card first", func(t *testing.T) {
+			timers := &fakeAfter{}
+			n := waitingNotifier(timers)
+			n.Publish(chatEvent(questionsCard("c1", chat.StateOpen)))
+			if a := nextQueued(t, n); a.MessageKind != chat.KindAsk {
+				t.Fatalf("alert = %+v", a)
+			}
+			n.Publish(activity("a", observe.AttentionNeedsInput, reason))
+			timers.fire()
+			noAlert(t, n)
+		})
+	}
+}
+
+func TestNeedsInputAlertStillSendsWhenNoCardComes(t *testing.T) {
+	timers := &fakeAfter{}
+	n := waitingNotifier(timers)
+	n.Publish(activity("a", observe.AttentionNeedsInput, questionReason))
+	noAlert(t, n)
+	timers.fire()
+	if a := nextQueued(t, n); a.Kind != string(observe.AttentionNeedsInput) || a.MessageID != "" {
+		t.Fatalf("alert = %+v", a)
+	}
+}
+
+// Once the card has settled it no longer stands in for an agent's alert.
+func TestSettledQuestionsCardDoesNotSwallowLaterAlerts(t *testing.T) {
+	timers := &fakeAfter{}
+	n := waitingNotifier(timers)
+	n.Publish(chatEvent(questionsCard("c1", chat.StateOpen)))
+	nextQueued(t, n)
+	n.Publish(chatUpdate(questionsCard("c1", chat.StateAnswered)))
+	n.Publish(activity("a", observe.AttentionNeedsInput, questionReason))
+	timers.fire()
+	if a := nextQueued(t, n); a.Kind != string(observe.AttentionNeedsInput) {
 		t.Fatalf("alert = %+v", a)
 	}
 }
