@@ -3,6 +3,7 @@ package chat
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"testing"
 	"time"
 )
@@ -123,5 +124,77 @@ func TestStartupClosesQuestionsCardsLeftOpen(t *testing.T) {
 	}
 	if got, _ := f.store.Message(m.ID); got.State != StateExpired || got.ClosedReason != ClosedTimeout {
 		t.Fatalf("card = %s/%q: its hook died with the daemon", got.State, got.ClosedReason)
+	}
+}
+
+func TestAnswerTrimsEachQuestionText(t *testing.T) {
+	f := newFixture(t)
+	done, m := requestQuestions(t, f, context.Background(), sampleAskInput)
+	answer := Answer{Answers: map[string]QuestionAnswer{"q1": {Values: []string{"L"}}, "q2": {Text: "  pickles\n"}}}
+	if _, err := f.svc.Answer("assistant", m.ID, answer); err != nil {
+		t.Fatal(err)
+	}
+	<-done
+	if stored := f.thread(t, "assistant")[0]; stored.Answer.Answers["q2"].Text != "pickles" {
+		t.Fatalf("stored answers = %+v", stored.Answer.Answers)
+	}
+	blank := Answer{Answers: map[string]QuestionAnswer{"q1": {Values: []string{"L"}}, "q2": {Text: " \n "}}}
+	if _, err := f.svc.Answer("assistant", m.ID, blank); err == nil {
+		t.Fatal("blank text must not count as an answer")
+	}
+}
+
+// openCard stores an open questions card whose asker is its agent, the shape
+// that late delivery would otherwise reply to.
+func openCard(t *testing.T, f *harnessFixture) Message {
+	t.Helper()
+	card, err := parseQuestions(json.RawMessage(sampleAskInput))
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := Message{ID: NewULIDSource(f.clock.Now, nil).New(), Agent: "assistant", Direction: DirectionOut, Kind: KindAsk, Text: card.Text, State: StateOpen, Input: &card.Input, Asker: "assistant", TS: f.clock.Now()}
+	if err := f.store.InsertMessage(m); err != nil {
+		t.Fatal(err)
+	}
+	return m
+}
+
+func TestQuestionsCardAnswerIsNeverDeliveredAsAReply(t *testing.T) {
+	f := newFixture(t)
+	m := openCard(t, f)
+	answer := Answer{Answers: map[string]QuestionAnswer{"q1": {Values: []string{"L"}}, "q2": {Values: []string{"Ham"}}}}
+	if _, err := f.svc.Answer("assistant", m.ID, answer); err != nil {
+		t.Fatal(err)
+	}
+	f.svc.Flush()
+	if got := f.deliver.delivered(); len(got) != 0 {
+		t.Fatalf("a questions answer was delivered as a chat message: %q", got)
+	}
+	if thread := f.thread(t, "assistant"); len(thread) != 1 {
+		t.Fatalf("thread holds %d messages, want only the card", len(thread))
+	}
+}
+
+func TestAnsweringAnExpiredQuestionsCardConflicts(t *testing.T) {
+	f := newFixture(t)
+	done, m := requestQuestions(t, f, context.Background(), sampleAskInput)
+	f.timers.fireLast()
+	<-done
+	answer := Answer{Answers: map[string]QuestionAnswer{"q1": {Values: []string{"L"}}, "q2": {Values: []string{"Ham"}}}}
+	if _, err := f.svc.Answer("assistant", m.ID, answer); !errors.Is(err, ErrConflict) {
+		t.Fatalf("err = %v, want ErrConflict", err)
+	}
+	f.svc.Flush()
+	if got := f.deliver.delivered(); len(got) != 0 {
+		t.Fatalf("delivered %q", got)
+	}
+}
+
+func TestResumeAskRefusesQuestionsCards(t *testing.T) {
+	f := newFixture(t)
+	m := openCard(t, f)
+	_, err := f.svc.Ask(context.Background(), AskRequest{Caller: "assistant", MessageID: m.ID})
+	if !errors.Is(err, ErrInvalid) {
+		t.Fatalf("err = %v, want ErrInvalid", err)
 	}
 }
