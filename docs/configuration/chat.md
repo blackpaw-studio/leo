@@ -120,7 +120,8 @@ defaults to the number of options. An ask is rejected when `min < 0`,
 or any `max` is set on another input type.
 
 Bare-string options are accepted only as MCP tool input; on the wire (API
-and events) options are always `{value, label}` objects. `allow_text` (choice
+and events) options are always `{value, label}` objects, plus an optional
+`description` (omitted when empty) on every input type. `allow_text` (choice
 types) also accepts a free-text answer, `placeholder` hints the text field. Omitting
 `input` and giving top-level `options` asks `buttons`; giving both is an error.
 
@@ -139,6 +140,9 @@ An answer is `{values, text}`:
 The tool returns `values` with their `labels` (same order) and the `text`.
 An ask that closed without an answer returns empty `values`, `timed_out: true`
 and a `closed_reason`.
+
+The `questions` input is not an `input` type an agent can ask for: the daemon
+builds it for an `AskUserQuestion` (see [Questions cards](#questions-cards)).
 
 ### Ask lifecycle
 
@@ -173,8 +177,9 @@ to hand a late answer to, so without `timeout_s` it keeps a 300-second deadline.
 - **Withdraw.** `leo_chat_ask_withdraw` closes your own open ask. It is
   refused for another agent's ask and conflicts when the ask is no longer open.
   A blocked call returns at once.
-- **Closed reasons.** A timed-out, withdrawn or agent-gone ask is `expired`,
-  with `closed_reason` `timeout`, `withdrawn` or `agent_gone`. Existing clients
+- **Closed reasons.** A timed-out, withdrawn, agent-gone or dismissed ask is
+  `expired`, with `closed_reason` `timeout`, `withdrawn`, `agent_gone` or
+  `dismissed` (the last only for a [questions card](#questions-cards)). Existing clients
   that read only `state` keep working.
 - **Agent gone.** `leo agent stop` and removing an agent close its open asks as
   `agent_gone`. Idle suspension, a crash restart, a graceful restart and a
@@ -224,6 +229,72 @@ up meanwhile, so either side can answer:
 
 Agents with `bypass_permissions` never ask.
 
+## Questions cards
+
+When a supervised Claude agent calls `AskUserQuestion`, the same
+`PermissionRequest` hook posts ONE `ask` message for all of its questions
+(up to 4) instead of the Allow/Deny prompt. It has no `permission` field, and
+its `input` is of type `questions`:
+
+```json
+{"type":"questions","questions":[{"id":"q1","header":"Size","question":"Which size?","multi":false,"allow_text":true,"options":[{"value":"L","label":"L","description":"large"}]}]}
+```
+
+The daemon assigns ids `q1..qN` by position. `value` equals `label`, and
+`allow_text` is always true (Claude always offers "Other"). Top-level `options`,
+`min`, `max` and `placeholder` are absent. An `AskUserQuestion` that does not
+fit (more than 4 questions, duplicate question text or labels, no options)
+falls back to the ordinary Allow/Deny prompt.
+
+Answer with `POST /api/v1/chat/{agent}/messages/{id}/answer`:
+
+```json
+{"answers":{"q1":{"values":["L"],"text":"…"}}}
+```
+
+Top-level `values` and `text` must be empty or absent, and `answers` is a 400
+on any other input type. The answer is validated per question (400 on failure):
+
+- every question id is present, and no unknown ids appear;
+- each question has at least one value or non-blank text;
+- single-select allows at most one value, and not a value together with text;
+- multi-select values are distinct;
+- every value is a known option;
+- text is trimmed and at most 4000 characters.
+
+The hook then answers Claude with `allow` and an `updatedInput` of the original
+`questions` array, verbatim, plus `answers` keyed by exact question text: the
+chosen label or the free text for a single-select question, and an array of the
+chosen labels with any free text as its last element for a multi-select one.
+The terminal dialog is skipped and Claude receives the answers.
+
+The answered message has `state: "answered"` and `answer:
+{"values":[],"text":"","answers":{…}}`. Answered in the terminal first: `answer:
+{"values":["terminal"],"text":""}`, with no `answers`.
+
+`POST /api/v1/chat/{agent}/messages/{id}/dismiss` (empty body) closes an open
+card without answering it: `200` with the message, now `expired` with
+`closed_reason: "dismissed"`. It is a `400` for a message that is not a
+questions card and a `409` for a card already settled. A timeout is `expired`
+with `closed_reason: "timeout"`.
+
+In every case but an answer from chat (dismissal, timeout, daemon shutdown or
+restart, the hook going away, an answer given in the terminal first) the hook
+prints nothing, Claude's own dialog stands, and nothing is ever denied. The
+timeout is `chat.permission_timeout`, as for a permission prompt. A settled
+card is a `409`, and a late answer is never delivered to the agent as a reply:
+the tool call is gone.
+
+The `chat.updated` event is `change: "answer"` for an answer and
+`change: "state"` for a dismissal or timeout. The observe hello lists the
+`chat.questions` feature.
+
+> The `PermissionRequest` hook output `updatedInput` is not in Claude's
+> documented hook contract (verified against claude 2.1.303). The documented
+> route for the same effect is a `PreToolUse` hook that returns
+> `permissionDecision: "allow"` with the same `updatedInput`; switch to it if
+> this path ever breaks.
+
 ## Task failure cards
 
 When a `runtime: oneshot` task ends in failure (every attempt used, not
@@ -261,7 +332,8 @@ without a token for the Mac app.
 | `POST /api/v1/chat/{agent}/messages` | `{text, reply_to?, attachment_ids?}` | `Message` (`202`) |
 | `POST /api/v1/chat/uploads` | multipart: one `file` part, optionally after an `agent` field; 50 MB | `Attachment` |
 | `GET /api/v1/chat/attachments/{id}` | | the file, with `Range` support; `410` once pruned |
-| `POST /api/v1/chat/{agent}/messages/{id}/answer` | `{values, text?}` | `Message`; `400` when the answer does not fit the message's `input`, `409` once settled |
+| `POST /api/v1/chat/{agent}/messages/{id}/answer` | `{values, text?}`, or `{answers}` for a [questions card](#questions-cards) | `Message`; `400` when the answer does not fit the message's `input`, `409` once settled |
+| `POST /api/v1/chat/{agent}/messages/{id}/dismiss` | | `Message`, expired as `dismissed`; `400` unless a questions card, `409` once settled |
 | `POST /api/v1/chat/{agent}/read` | `{up_to}` | |
 
 The agent tools use `POST /api/agent/{name}/chat/{post,ask,ask/withdraw,history}`
@@ -278,12 +350,12 @@ An upload without an `agent` belongs to the first message that sends it.
 Audio uploads make that message a `voice` note.
 
 **Message:** `{id, agent, direction (in|out), kind (text|voice|file|task|ask|permission|system),
-text, transcript?, reply_to?, task?, run_id?, state, answer?: {values, text}, input?: {type, options?, allow_text?, min?, max?, placeholder?}, permission?: {tool, summary},
+text, transcript?, reply_to?, task?, run_id?, state, answer?: {values, text, answers?}, input?: {type, options?, allow_text?, min?, max?, placeholder?, questions?}, permission?: {tool, summary},
 attachments: [{id, filename, mime, bytes, available}], ts, deadline?, closed_reason?}`; `state` is always
 present (empty on outbound text) and `attachments` is `[]` when there are none. States: inbound
 `pending|delivered|failed`; `ask` and `permission` `open|answered|expired`. `deadline`
 (RFC3339) is present only on an ask that has one; `closed_reason`
-(`timeout|withdrawn|agent_gone`) only on an `expired` ask, never on a permission prompt.
+(`timeout|withdrawn|agent_gone|dismissed`) only on an `expired` ask, never on a permission prompt.
 
 **Thread:** `{agent, last_message, unread, pinned}`. Only `assistant` is
 pinned.
@@ -305,7 +377,9 @@ as kind `chat`: title the agent, body the text or file names, plus
 posts and permission prompts) and, for a `buttons` ask, `options` when they fit. A
 permission prompt keeps the `needs_input` attention push as its only alert,
 which carries the prompt's `message_id` with `message_kind: "permission"`.
-Both go through the per-state [push policy](config-reference.md#pairing-a-phone).
+A [questions card](#questions-cards) is the ordinary chat push (`message_kind:
+"ask"`, `input_type: "questions"`, no `options`); the agent's own `needs_input`
+alert for the same question is dropped in its favour. Both go through the per-state [push policy](config-reference.md#pairing-a-phone).
 
 ## Trust boundary
 

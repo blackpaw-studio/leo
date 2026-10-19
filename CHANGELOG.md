@@ -17,6 +17,17 @@ All notable user-visible changes to Leo are documented here.
 
 ### Added
 
+- **AskUserQuestion in Leo Chat.** A supervised Claude agent's
+  `AskUserQuestion` used to appear as a generic Allow/Deny card around clipped
+  JSON. It is now one questions card for all the questions (a new `questions`
+  input with option descriptions), answered per question from chat; the
+  answers go back to Claude, which skips its terminal dialog. A new
+  `POST /api/v1/chat/{agent}/messages/{id}/dismiss` closes a card without
+  answering, and a dismissal, timeout or terminal answer leaves Claude's own
+  dialog standing, never a denial. The card pushes once as an ordinary chat
+  alert. The observe hello advertises `chat.questions`. See
+  [Questions cards](docs/configuration/chat.md#questions-cards).
+
 - **Graceful daemon restart.** `leo service restart` and `leo update` check
   for agents that are mid-turn and offer to let them pause first
   (`N agents are working (...). Graceful restart? [Y/n]`). Busy agents get an
