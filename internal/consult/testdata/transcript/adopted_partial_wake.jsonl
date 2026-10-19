@@ -1,0 +1,9 @@
+{"type":"user","timestamp":"2026-10-19T08:58:00.000Z","message":{"role":"user","content":"earlier turn"},"uuid":"u0"}
+{"type":"assistant","timestamp":"2026-10-19T08:58:05.000Z","message":{"id":"msg_old","role":"assistant","content":[{"type":"text","text":"the earlier turn's answer"}],"stop_reason":"end_turn"},"uuid":"a0"}
+{"type":"user","timestamp":"2026-10-19T08:59:00.000Z","message":{"role":"user","content":"do it"},"uuid":"u1"}
+{"type":"assistant","timestamp":"2026-10-19T08:59:02.000Z","message":{"id":"msg_a","role":"assistant","content":[{"type":"text","text":"Running the sleep now."}],"stop_reason":"tool_use"},"uuid":"a1"}
+{"type":"assistant","timestamp":"2026-10-19T08:59:02.100Z","message":{"id":"msg_a","role":"assistant","content":[{"type":"tool_use","id":"tu1","name":"Bash","input":{"command":"sleep 150","run_in_background":true}},{"type":"tool_use","id":"tu2","name":"Bash","input":{"command":"sleep 900","run_in_background":true}}],"stop_reason":"tool_use"},"uuid":"a2"}
+{"type":"user","timestamp":"2026-10-19T08:59:02.300Z","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"tu1","content":"Command running in background with ID: bg1"},{"type":"tool_result","tool_use_id":"tu2","content":"Command running in background with ID: bg2"}]},"uuid":"u2"}
+{"type":"user","timestamp":"2026-10-19T09:01:32.000Z","message":{"role":"user","content":"<task-notification><task-id>bg1</task-id><status>completed</status></task-notification>"},"uuid":"u3"}
+{"type":"assistant","timestamp":"2026-10-19T09:01:34.000Z","message":{"id":"msg_b","role":"assistant","content":[{"type":"text","text":"The short sleep finished; still waiting on the long one."}],"stop_reason":"end_turn"},"uuid":"b1"}
+{"type":"system","timestamp":"2026-10-19T09:01:34.500Z","subtype":"stop_hook_summary","uuid":"s1"}

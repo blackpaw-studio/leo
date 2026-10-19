@@ -80,9 +80,6 @@ type Turn struct {
 	// turn is paused, not done, until that work wakes it. The run's
 	// PendingWork is the first open turn's, derived from the turns.
 	Pending *PendingWork `json:"pending_work,omitempty"`
-	// PausedAt is when the Stop that left Pending paused the turn: a reply
-	// written after it is the wake's.
-	PausedAt time.Time `json:"paused_at,omitzero"`
 	// WaitText is what each Stop that paused this turn on background work
 	// said, in order; the turn's result leads with it so the closing Stop's
 	// reply does not replace it.

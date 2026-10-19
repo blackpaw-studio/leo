@@ -1112,7 +1112,8 @@ func (d *Dispatcher) closeWorkingLocked(s *runState, o TurnOutcome, text string)
 func (d *Dispatcher) waitOnBackgroundLocked(s *runState, w *PendingWork, text string, turns ...*Turn) {
 	old := s.record.Status
 	for _, t := range turns {
-		t.Pending, t.PausedAt = w, d.now()
+		t.Pending = w
+		delete(s.adoptWaits, t.TurnID)
 		t.WaitText = appendStopText(t.WaitText, text)
 	}
 	d.recomputeStatusLocked(s, d.now())
@@ -1180,6 +1181,7 @@ func (d *Dispatcher) confirmArmedLocked(s *runState) {
 // caller persists the change.
 func (d *Dispatcher) resumeWaitingLocked(s *runState) {
 	clearPendingLocked(s)
+	s.adoptWaits = nil
 	d.settleResumedLocked(s)
 }
 
@@ -1187,6 +1189,7 @@ func (d *Dispatcher) resumeWaitingLocked(s *runState) {
 // wake that carries it on arrives. Other turns' waits stand.
 func (d *Dispatcher) resumeTurnLocked(s *runState, t *Turn) {
 	t.Pending = nil
+	delete(s.adoptWaits, t.TurnID)
 	d.settleResumedLocked(s)
 }
 

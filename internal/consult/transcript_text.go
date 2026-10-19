@@ -54,19 +54,18 @@ func (l *lastAssistantText) line(raw []byte) {
 
 // lastAssistantTextSince is the text of the last assistant message written to
 // the transcript at path at or after since: a turn's final reply, when the
-// Stop that would have carried it was lost. found is false for a missing
-// transcript, which says nothing either way.
-func lastAssistantTextSince(read TranscriptReader, path string, since time.Time) (text string, found bool, err error) {
+// Stop that would have carried it was lost. A missing transcript has none.
+func lastAssistantTextSince(read TranscriptReader, path string, since time.Time) (string, error) {
 	last := lastAssistantText{since: since}
 	var offset int64
 	var partial []byte
 	for {
 		data, size, err := read(path, offset)
 		if errors.Is(err, fs.ErrNotExist) {
-			return "", false, nil
+			return "", nil
 		}
 		if err != nil {
-			return "", false, err
+			return "", err
 		}
 		offset += int64(len(data))
 		buf := append(append([]byte(nil), partial...), data...)
@@ -87,5 +86,5 @@ func lastAssistantTextSince(read TranscriptReader, path string, since time.Time)
 		}
 	}
 	last.line(partial)
-	return strings.Join(last.texts, "\n"), true, nil
+	return strings.Join(last.texts, "\n"), nil
 }

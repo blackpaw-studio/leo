@@ -513,7 +513,15 @@ and the turn's result reaches the caller as usual. Each run logs one
   reconciled once its composer has sat idle for 15s: it finishes with the last
   assistant text from the session transcript, or is marked lost (`finished
   while the daemon was down; no result recovered`) when there is none.
-- **Background work** tracking starts empty; the next Stop repopulates it.
+- **Background work.** A turn that was waiting on background work, or that
+  had started background tasks, is never finished from the transcript: no
+  transcript shows whether its wait is over. Only its own reports (a Stop,
+  or the wake that resumes it) settle it. If none arrives by
+  `adopt_timeout` and the composer is idle, the turn is marked lost (`may
+  have been waiting on background work when the daemon restarted; nothing
+  reported how it ended`). Its slot is freed, the caller is told, and the run
+  stays open for follow-ups. Background-task tracking starts empty; the next
+  Stop repopulates it.
 - **Older runs.** Runs launched before this release carry no launch tag, so
   they are adopted hook-driven: their mod is refused, and hooks and the pane
   drive them.

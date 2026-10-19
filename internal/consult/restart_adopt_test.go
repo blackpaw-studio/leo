@@ -131,7 +131,6 @@ var adoptNow = time.Date(2026, time.October, 19, 9, 5, 0, 0, time.UTC)
 func workingRecord() Record {
 	rec := liveInteractiveRecord("d-adopt", Turn{TurnID: "d-adopt#1", Source: TurnSourceOrchestrator, StartedAt: adoptNow.Add(-6 * time.Minute), Delivered: true, SlotHeld: true, Text: "do it"})
 	rec.Harness, rec.Caller, rec.ViewerKind = "claude", "orch", "split"
-	rec.BackgroundTasks = []BackgroundTask{{ID: "bg1"}}
 	return rec
 }
 
@@ -152,7 +151,9 @@ func ownedProbe(launch string) AdoptProbe {
 
 func TestMarkInterruptedAdoptsALiveOwnedPane(t *testing.T) {
 	rt := &adoptingRuntime{fakeInteractiveRuntime: &fakeInteractiveRuntime{alive: true}, probe: ownedProbe("tok_ABC")}
-	d, stateDir := restartWith(t, workingRecord(), rt)
+	rec := workingRecord()
+	rec.BackgroundTasks = []BackgroundTask{{ID: "bg1"}}
+	d, stateDir := restartWith(t, rec, rt)
 	got := mustGet(t, d, "d-adopt")
 	if got.Status != StatusRunning || got.Error != "" || got.Turns[0].Outcome != "" || !got.Turns[0].SlotHeld {
 		t.Fatalf("adopted record = status %s error %q turn %+v; want the same running turn", got.Status, got.Error, got.Turns[0])

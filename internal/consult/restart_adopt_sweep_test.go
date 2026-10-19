@@ -23,13 +23,13 @@ func TestLastAssistantTextSince(t *testing.T) {
 		{time.Date(2026, time.October, 19, 8, 57, 0, 0, time.UTC), "ADOPT-OK"},
 		{time.Date(2026, time.October, 19, 9, 2, 0, 0, time.UTC), ""},
 	} {
-		got, found, err := lastAssistantTextSince(readTranscriptFrom, path, tc.since)
-		if err != nil || !found || got != tc.want {
-			t.Fatalf("since %s: %q, %v, %v; want %q", tc.since, got, found, err, tc.want)
+		got, err := lastAssistantTextSince(readTranscriptFrom, path, tc.since)
+		if err != nil || got != tc.want {
+			t.Fatalf("since %s: %q, %v; want %q", tc.since, got, err, tc.want)
 		}
 	}
-	if got, found, err := lastAssistantTextSince(readTranscriptFrom, filepath.Join(t.TempDir(), "missing.jsonl"), time.Time{}); err != nil || found || got != "" {
-		t.Fatalf("missing transcript: %q, %v, %v", got, found, err)
+	if got, err := lastAssistantTextSince(readTranscriptFrom, filepath.Join(t.TempDir(), "missing.jsonl"), time.Time{}); err != nil || got != "" {
+		t.Fatalf("missing transcript: %q, %v", got, err)
 	}
 }
 
@@ -313,84 +313,113 @@ func TestAdoptedTurnStillAnswersToItsWakesID(t *testing.T) {
 	}
 }
 
-// waitingRecord is workingRecord's turn paused on a background shell at
-// pausedAt, having said "Running the sleep now." (see adopted.jsonl).
-func waitingRecord(pausedAt time.Time) Record {
+// waitingRecord is workingRecord's turn paused on tasks background shells,
+// having said "Running the sleep now." (see adopted*.jsonl).
+func waitingRecord(tasks int) Record {
 	rec := workingRecord()
 	rec.SessionID = "s-adopt"
 	rec.Status = StatusWaiting
-	rec.Turns[0].Pending = &PendingWork{Tasks: map[string]int{"shell": 1}}
+	rec.Turns[0].Pending = &PendingWork{Tasks: map[string]int{"shell": tasks}}
 	rec.Turns[0].WaitText = []string{"Running the sleep now."}
-	rec.Turns[0].PausedAt = pausedAt
 	return rec
 }
 
-var adoptedTranscript = filepath.Join("testdata", "transcript", "adopted.jsonl")
+var adoptedTranscript = transcriptFixture("adopted.jsonl")
 
-// A wait whose background work woke the session and finished while the
-// daemon was down: the transcript holds the wake's reply, after the pause.
-func TestAdoptedWaitThatFinishedDuringTheOutageFinishesFromItsTranscript(t *testing.T) {
-	g := newAdoptRigFor(t, waitingRecord(time.Date(2026, 10, 19, 8, 59, 3, 0, time.UTC)), adoptedTranscript)
-	g.rt.setSnapshot("│ > │", true)
-	g.sweepAt(adoptNow)
-	g.sweepAt(adoptNow.Add(adoptIdleGrace))
-	got := mustGet(t, g.d, "d-adopt")
-	if got.Status != StatusIdle || got.Turns[0].Outcome != TurnFinished || got.Turns[0].Text != "Running the sleep now.\n\nADOPT-OK" {
-		t.Fatalf("status=%s turn=%+v; want finished with the wait and the wake's reply", got.Status, got.Turns[0])
+func transcriptFixture(name string) string { return filepath.Join("testdata", "transcript", name) }
+
+// A turn that may be paused on background work ends only on a report placed
+// on it: no transcript can say its wait is over (a wake may end one task of
+// several, or end without a word). With none by the adopt deadline and the
+// composer idle it is lost, its slot freed and its caller told, and the run
+// stays for follow-ups.
+func TestAnAdoptedWaitWithoutAReportIsLostAtTheDeadline(t *testing.T) {
+	tracked := workingRecord()
+	tracked.SessionID, tracked.BackgroundTasks = "s-adopt", []BackgroundTask{{ID: "bg1"}}
+	for _, tc := range []struct {
+		name       string
+		rec        Record
+		transcript string
+	}{
+		{"wake ended with no reply", waitingRecord(1), transcriptFixture("adopted_wake_no_text.jsonl")},
+		{"wake ended one task of two", waitingRecord(2), transcriptFixture("adopted_partial_wake.jsonl")},
+		{"wake replied", waitingRecord(1), adoptedTranscript},
+		{"no transcript", waitingRecord(1), filepath.Join(t.TempDir(), "missing.jsonl")},
+		{"working with background tasks", tracked, adoptedTranscript},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			g := newAdoptRigFor(t, tc.rec, tc.transcript)
+			g.rt.setSnapshot("│ > │", true)
+			for _, at := range []time.Duration{0, adoptIdleGrace, 30 * time.Second, time.Minute - time.Nanosecond} {
+				g.sweepAt(adoptNow.Add(at))
+				if got := mustGet(t, g.d, "d-adopt"); got.Turns[0].Outcome != "" {
+					t.Fatalf("at +%s: turn=%+v; want it open until the deadline", at, got.Turns[0])
+				}
+			}
+			g.sweepAt(adoptNow.Add(time.Minute))
+			got := mustGet(t, g.d, "d-adopt")
+			if got.Turns[0].Outcome != TurnLost || got.Status != StatusIdle || g.rt.killCount() != 0 || g.d.slots.InUse() != 0 {
+				t.Fatalf("status=%s turn=%+v kills=%d slots=%d; want the turn lost, its slot freed and the run kept", got.Status, got.Turns[0], g.rt.killCount(), g.d.slots.InUse())
+			}
+			if n, ok := got.Notifications["d-adopt#1"]; !ok || n.Disposition != NotificationPending {
+				t.Fatalf("turn notification = %+v (%v)", n, ok)
+			}
+		})
 	}
 }
 
-// A report from the run says it is live, not that its wait is settled: a
-// wake already under way when the daemon came back may have started unseen.
-func TestAReportDoesNotSettleAnAdoptedWait(t *testing.T) {
-	g := newAdoptRigFor(t, waitingRecord(time.Date(2026, 10, 19, 8, 59, 3, 0, time.UTC)), adoptedTranscript)
+// A report the run sends says it is live, not that the wait is over.
+func TestAnUnrelatedReportLeavesAnAdoptedWaitsDeadline(t *testing.T) {
+	g := newAdoptRigFor(t, waitingRecord(1), adoptedTranscript)
 	if err := g.d.Report("d-adopt", hookReport("PreToolUse", map[string]string{"tool_use_id": "tu9"})); err != nil {
 		t.Fatal(err)
 	}
 	g.rt.setSnapshot("│ > │", true)
 	g.sweepAt(adoptNow)
 	g.sweepAt(adoptNow.Add(adoptIdleGrace))
-	if got := mustGet(t, g.d, "d-adopt"); got.Turns[0].Outcome != TurnFinished {
-		t.Fatalf("turn=%+v; want the wait checked against the transcript", got.Turns[0])
+	g.sweepAt(adoptNow.Add(time.Minute))
+	if got := mustGet(t, g.d, "d-adopt"); got.Turns[0].Outcome != TurnLost {
+		t.Fatalf("turn=%+v; want it lost at the deadline", got.Turns[0])
 	}
 }
 
-// No reply since the pause: the background work is still running, so the
-// turn keeps waiting, verified, past the deadline.
-func TestAdoptedWaitStillPendingKeepsWaiting(t *testing.T) {
-	g := newAdoptRigFor(t, waitingRecord(time.Date(2026, 10, 19, 9, 2, 0, 0, time.UTC)), adoptedTranscript)
+// A Stop under any id the waiting turn answers to ends it as it would have
+// before the restart, and the deadline no longer applies to it.
+func TestALiveStopFinishesAnAdoptedWait(t *testing.T) {
+	rec := waitingRecord(1)
+	rec.Turns[0].HarnessKeys = []string{"p:P1", "p:P2"}
+	g := newAdoptRigFor(t, rec, "")
 	g.rt.setSnapshot("│ > │", true)
 	g.sweepAt(adoptNow)
-	g.sweepAt(adoptNow.Add(adoptIdleGrace))
-	g.sweepAt(adoptNow.Add(2 * time.Minute))
-	got := mustGet(t, g.d, "d-adopt")
-	if got.Status != StatusWaiting || got.Turns[0].Outcome != "" || g.rt.killCount() != 0 {
-		t.Fatalf("status=%s turn=%+v kills=%d; want still waiting", got.Status, got.Turns[0], g.rt.killCount())
-	}
-	_, s, _ := g.d.lookup("d-adopt")
-	g.d.mu.Lock()
-	defer g.d.mu.Unlock()
-	if watchingAdoptedLocked(s) {
-		t.Fatal("a verified wait is still being watched")
-	}
-}
-
-// A wait that cannot be checked (no transcript) is not left open on trust:
-// at the deadline its turn ends, and the run, idle and live, stays.
-func TestAnAdoptedWaitThatCannotBeVerifiedEndsAtTheDeadline(t *testing.T) {
-	g := newAdoptRigFor(t, waitingRecord(time.Date(2026, 10, 19, 8, 59, 3, 0, time.UTC)), filepath.Join(t.TempDir(), "missing.jsonl"))
-	g.rt.setSnapshot("│ > │", true)
-	g.sweepAt(adoptNow)
-	g.sweepAt(adoptNow.Add(adoptIdleGrace))
-	if got := mustGet(t, g.d, "d-adopt"); got.Turns[0].Outcome != "" {
-		t.Fatalf("turn ended before the deadline: %+v", got.Turns[0])
+	g.now = adoptNow.Add(adoptIdleGrace)
+	if err := g.d.Report("d-adopt", hookReport("Stop", map[string]string{"prompt_id": "P2", "last_assistant_message": "WAKE-DONE"})); err != nil {
+		t.Fatal(err)
 	}
 	g.sweepAt(adoptNow.Add(time.Minute))
 	got := mustGet(t, g.d, "d-adopt")
-	if got.Turns[0].Outcome != TurnLost || got.Status.Terminal() || g.rt.killCount() != 0 {
-		t.Fatalf("status=%s turn=%+v kills=%d; want the turn lost and the run kept", got.Status, got.Turns[0], g.rt.killCount())
+	if got.Turns[0].Outcome != TurnFinished || got.Turns[0].Text != "Running the sleep now.\n\nWAKE-DONE" || got.Status != StatusIdle || g.d.slots.InUse() != 0 {
+		t.Fatalf("status=%s turn=%+v slots=%d; want it finished by its Stop", got.Status, got.Turns[0], g.d.slots.InUse())
 	}
-	if n, ok := got.Notifications["d-adopt#1"]; !ok || n.Disposition != NotificationPending {
-		t.Fatalf("turn notification = %+v (%v)", n, ok)
+}
+
+// Each adopted wait answers for itself: a report placed on one leaves the
+// deadline standing for the others.
+func TestAReportOnOneAdoptedWaitLeavesTheOthersDeadline(t *testing.T) {
+	rec := waitingRecord(1)
+	rec.Turns[0].HarnessKeys = []string{"p:P1"}
+	second := rec.Turns[0]
+	second.TurnID, second.HarnessKeys = "d-adopt#2", []string{"p:Q1"}
+	rec.Turns = append(rec.Turns, second)
+	g := newAdoptRigFor(t, rec, "")
+	g.rt.setSnapshot("│ > │", true)
+	if err := g.d.Report("d-adopt", hookReport("Stop", map[string]string{"prompt_id": "P1", "last_assistant_message": "WAKE-DONE"})); err != nil {
+		t.Fatal(err)
+	}
+	g.sweepAt(adoptNow)
+	g.sweepAt(adoptNow.Add(adoptIdleGrace))
+	g.sweepAt(adoptNow.Add(time.Minute))
+	got := mustGet(t, g.d, "d-adopt")
+	if got.Turns[0].Outcome != TurnFinished || got.Turns[1].Outcome != TurnLost || g.d.slots.InUse() != 0 {
+		t.Fatalf("turns=%+v slots=%d; want the reported one finished and the other lost", got.Turns, g.d.slots.InUse())
 	}
 }

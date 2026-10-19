@@ -212,11 +212,12 @@ type runState struct {
 	// finished while the daemon was down: until a report lands, an idle
 	// composer means it did (see reconcileAdoptedLocked).
 	adoptReconcile bool
-	// adoptWaits marks an adopted run whose turns were paused on background
-	// work: until the transcript shows whether a wake finished them while
-	// the daemon was down, no report or hello settles that (see
-	// reconcileAdoptedLocked).
-	adoptWaits bool
+	// adoptWaits holds the open turns of an adopted run that may be paused
+	// on background work, whose end no transcript can show: only a report
+	// placed on one releases it, and those still held once the adopt
+	// deadline has passed with the composer idle are lost (see
+	// loseAdoptWaitsLocked).
+	adoptWaits map[string]bool
 	// adoptSnapshot is the adopted pane's last capture (once adoptSnapped),
 	// and adoptIdleSince when its composer was first seen empty.
 	adoptSnapshot  string
