@@ -41,6 +41,10 @@ const adoptIdleGrace = 15 * time.Second
 // was down when its transcript holds no final reply.
 const adoptNoResultText = "finished while the daemon was down; no result recovered"
 
+// adoptWaitUnverifiedText is the result of a turn paused on background work
+// across a restart whose transcript could not show how the wait ended.
+const adoptWaitUnverifiedText = "was waiting on background work when the daemon restarted; its result could not be recovered"
+
 // restoreInteractive adopts an interactive run the previous daemon left
 // live, when its pane survived the restart and nothing it was doing lived
 // only in that daemon; any other run is settled as "daemon restarted".
@@ -134,7 +138,8 @@ func (d *Dispatcher) adoptRestarted(rec Record, probe AdoptProbe, rt adoptionRun
 		timeout = config.DefaultDispatchAdoptTimeout
 	}
 	s.adopting, s.adoptDeadline = true, now.Add(timeout)
-	s.adoptReconcile = hasWorkingTurnLocked(s) && openPendingWork(s) == nil
+	s.adoptWaits = openPendingWork(s) != nil
+	s.adoptReconcile = hasWorkingTurnLocked(s) && !s.adoptWaits
 	for _, t := range s.record.Turns {
 		if t.Outcome == "" && t.SlotHeld {
 			d.slotsFor(s).Adopt()
@@ -184,7 +189,7 @@ func (d *Dispatcher) sweepAdopted(now time.Time) {
 }
 
 func watchingAdoptedLocked(s *runState) bool {
-	return (s.adopting || s.adoptReconcile) && s.record.PaneID != "" && !s.releasing &&
+	return (s.adopting || s.adoptReconcile || s.adoptWaits) && s.record.PaneID != "" && !s.releasing &&
 		!s.record.Status.Terminal() && s.record.Status != StatusSettling
 }
 
@@ -201,16 +206,20 @@ func (d *Dispatcher) sweepAdoptedRun(s *runState, rt adoptionRuntime, now time.T
 		d.mu.Unlock()
 		return
 	}
+	if s.adoptWaits && openPendingWork(s) == nil {
+		s.adoptWaits = false // its own wake's reports resumed or ended it
+	}
 	due := d.observeAdoptedPaneLocked(s, now, screen, empty)
 	path, readable := "", false
 	if due {
 		path, readable = d.liveTranscriptPathLocked(s)
 	}
-	since := workingSinceLocked(s)
+	since := adoptedSinceLocked(s)
 	d.mu.Unlock()
-	text := ""
-	if readable {
-		if text, err = lastAssistantTextSince(d.liveUsage.read, path, since); err != nil {
+	var reply transcriptReply
+	if readable && !since.IsZero() {
+		reply.text, reply.found, err = lastAssistantTextSince(d.liveUsage.read, path, since)
+		if err != nil {
 			fmt.Fprintf(os.Stderr, "dispatch %s: reading transcript for the adopted turn: %v\n", s.record.ID, err)
 		}
 	}
@@ -219,8 +228,8 @@ func (d *Dispatcher) sweepAdoptedRun(s *runState, rt adoptionRuntime, now time.T
 	if !watchingAdoptedLocked(s) {
 		return
 	}
-	if due && s.adoptReconcile {
-		d.reconcileAdoptedLocked(s, text)
+	if due {
+		d.reconcileAdoptedLocked(s, reply, !now.Before(s.adoptDeadline))
 	}
 	switch {
 	case now.Before(s.adoptDeadline):
@@ -229,6 +238,36 @@ func (d *Dispatcher) sweepAdoptedRun(s *runState, rt adoptionRuntime, now time.T
 	default:
 		s.adoptReconcile = false
 	}
+}
+
+// transcriptReply is what an adopted run's transcript says since its turn
+// started or paused: found is false when it could not be read.
+type transcriptReply struct {
+	text  string
+	found bool
+}
+
+// adoptedSinceLocked is when the reply that would settle an adopted run's
+// turns must have been written after: the latest pause of a waiting turn,
+// else when the earliest working one started. Zero when a wait has no
+// pause time to check against.
+func adoptedSinceLocked(s *runState) time.Time {
+	if !s.adoptWaits {
+		return workingSinceLocked(s)
+	}
+	var since time.Time
+	for _, t := range s.record.Turns {
+		if t.Outcome != "" || t.Pending == nil {
+			continue
+		}
+		if t.PausedAt.IsZero() {
+			return time.Time{}
+		}
+		if t.PausedAt.After(since) {
+			since = t.PausedAt
+		}
+	}
+	return since
 }
 
 // observeAdoptedPaneLocked folds one capture of an adopted run's pane into
@@ -254,7 +293,7 @@ func (d *Dispatcher) observeAdoptedPaneLocked(s *runState, now time.Time, screen
 		return false
 	}
 	s.adopting = false
-	return s.adoptReconcile
+	return s.adoptReconcile || s.adoptWaits
 }
 
 // workingSinceLocked is when the run's earliest working turn started.
@@ -268,17 +307,39 @@ func workingSinceLocked(s *runState) time.Time {
 	return since
 }
 
-// reconcileAdoptedLocked ends an adopted run's working turns, which finished
-// while the daemon was down, with text read from the transcript: their
-// final reply, or, with none, a lost outcome that says so.
-func (d *Dispatcher) reconcileAdoptedLocked(s *runState, text string) {
+// reconcileAdoptedLocked settles what an adopted run's idle composer and
+// transcript say of its turns. A working turn finished while the daemon was
+// down: it ends with its final reply, or, with none, a lost outcome that
+// says so. A paused one finished there only if a reply follows its pause;
+// with none it is still waiting, verified. A wait the transcript cannot
+// show is left to the deadline (pastDeadline), where its turn is lost.
+func (d *Dispatcher) reconcileAdoptedLocked(s *runState, reply transcriptReply, pastDeadline bool) {
+	if s.adoptWaits {
+		switch {
+		case reply.found && reply.text != "":
+			s.adoptWaits = false
+			d.closeWorkingLocked(s, TurnFinished, reply.text)
+			fmt.Fprintf(os.Stderr, "dispatch %s: adopted wait finished while the daemon was down; result read from its transcript\n", s.record.ID)
+		case reply.found:
+			s.adoptWaits = false
+			fmt.Fprintf(os.Stderr, "dispatch %s: adopted wait still pending\n", s.record.ID)
+		case pastDeadline:
+			s.adoptWaits = false
+			d.closeWorkingLocked(s, TurnLost, adoptWaitUnverifiedText)
+			fmt.Fprintf(os.Stderr, "dispatch %s: adopted wait could not be verified; turn lost\n", s.record.ID)
+		}
+		return
+	}
+	if !s.adoptReconcile {
+		return
+	}
 	s.adopting, s.adoptReconcile = false, false
-	if text == "" {
+	if reply.text == "" {
 		d.closeWorkingLocked(s, TurnLost, adoptNoResultText)
 		fmt.Fprintf(os.Stderr, "dispatch %s: adopted turn finished while the daemon was down; no result recovered\n", s.record.ID)
 		return
 	}
-	d.closeWorkingLocked(s, TurnFinished, text)
+	d.closeWorkingLocked(s, TurnFinished, reply.text)
 	fmt.Fprintf(os.Stderr, "dispatch %s: adopted turn finished while the daemon was down; result read from its transcript\n", s.record.ID)
 }
 
@@ -286,7 +347,7 @@ func (d *Dispatcher) reconcileAdoptedLocked(s *runState, text string) {
 // by its deadline exactly as a run the restart could not adopt: lost turns,
 // "daemon restarted", a close notice, and its pane killed.
 func (d *Dispatcher) settleAdoptTimeoutLocked(s *runState) {
-	s.adopting, s.adoptReconcile = false, false
+	s.adopting, s.adoptReconcile, s.adoptWaits = false, false, false
 	s.record.Error = closeReasonDaemonRestart
 	s.closeReason = closeReasonDaemonRestart
 	d.finishInteractiveLocked(s, StatusClosed)

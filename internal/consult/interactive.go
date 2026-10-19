@@ -1112,7 +1112,7 @@ func (d *Dispatcher) closeWorkingLocked(s *runState, o TurnOutcome, text string)
 func (d *Dispatcher) waitOnBackgroundLocked(s *runState, w *PendingWork, text string, turns ...*Turn) {
 	old := s.record.Status
 	for _, t := range turns {
-		t.Pending = w
+		t.Pending, t.PausedAt = w, d.now()
 		t.WaitText = appendStopText(t.WaitText, text)
 	}
 	d.recomputeStatusLocked(s, d.now())
