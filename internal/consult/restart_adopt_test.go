@@ -66,11 +66,35 @@ func TestMarkInterruptedSettlesInteractiveRun(t *testing.T) {
 // (or probeErr), and it records what it was asked to re-register.
 type adoptingRuntime struct {
 	*fakeInteractiveRuntime
-	probe    AdoptProbe
-	probeErr error
-	probed   []string
-	panes    [][3]string
-	bridges  [][4]string
+	probe     AdoptProbe
+	probeErr  error
+	probed    []string
+	panes     [][3]string
+	bridges   [][4]string
+	snapshot  string
+	snapEmpty bool
+}
+
+func (r *adoptingRuntime) PaneSnapshot(string) (string, bool, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.probe.Presence == PaneAbsent {
+		return "", false, errors.New("can't find pane")
+	}
+	return r.snapshot, r.snapEmpty, nil
+}
+
+func (r *adoptingRuntime) setSnapshot(screen string, empty bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.snapshot, r.snapEmpty = screen, empty
+}
+
+// setGone makes the pane vanish.
+func (r *adoptingRuntime) setGone() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.probe.Presence, r.alive = PaneAbsent, false
 }
 
 func (r *adoptingRuntime) ProbeAdoption(pane, id string) (AdoptProbe, error) {
@@ -82,6 +106,8 @@ func (r *adoptingRuntime) ProbeAdoption(pane, id string) (AdoptProbe, error) {
 
 // PanePresence agrees with the probe, as tmux would.
 func (r *adoptingRuntime) PanePresence(string) (PanePresence, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	return r.probe.Presence, r.probeErr
 }
 

@@ -208,6 +208,15 @@ type runState struct {
 	// "daemon restarted" (see restart_adopt.go).
 	adopting      bool
 	adoptDeadline time.Time
+	// adoptReconcile marks an adopted run whose working turn may have
+	// finished while the daemon was down: until a report lands, an idle
+	// composer means it did (see reconcileAdoptedLocked).
+	adoptReconcile bool
+	// adoptSnapshot is the adopted pane's last capture (once adoptSnapped),
+	// and adoptIdleSince when its composer was first seen empty.
+	adoptSnapshot  string
+	adoptSnapped   bool
+	adoptIdleSince time.Time
 }
 
 // NewDispatcher builds a dispatcher recording through rec. A nil recorder

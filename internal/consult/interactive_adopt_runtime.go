@@ -111,3 +111,14 @@ func (r *TmuxInteractiveRuntime) AdoptBridge(id, pane, caller, launch string) er
 	r.bridged[id] = &bridgedDispatch{id: id, key: key, launch: launch, caller: caller, target: target, pane: pane, ownsReports: true}
 	return nil
 }
+
+// PaneSnapshot captures pane's screen and says whether its composer is
+// empty, as its harness's classifier reads it.
+func (r *TmuxInteractiveRuntime) PaneSnapshot(pane string) (screen string, empty bool, err error) {
+	out, err := r.output(context.Background(), "capture-pane", "-p", "-t", pane)
+	if err != nil {
+		return "", false, fmt.Errorf("capture tmux pane %q: %w", pane, err)
+	}
+	screen = string(out)
+	return screen, r.classifier(pane)(screen) == tmux.ComposerEmpty, nil
+}

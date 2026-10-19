@@ -175,3 +175,33 @@ func TestSlotLimiterAdoptTakesASlotOverTheCap(t *testing.T) {
 		t.Fatal("not granted once a slot freed")
 	}
 }
+
+type helloLog struct {
+	reportLog
+	hellos []string
+}
+
+func (l *helloLog) NoteBridgeHello(id string) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.hellos = append(l.hellos, id)
+}
+
+// The mod of an adopted dispatch says hello when it reconnects, which is
+// what tells the dispatcher the run is live.
+func TestDispatchBridgeSubscriberPassesOnAnAdoptedRunsHello(t *testing.T) {
+	g := newBridgeRig(t, "2.1.289")
+	var log helloLog
+	g.hub.AddSubscriber(g.r.DispatchBridgeSubscriber(&log))
+	if err := g.r.AdoptBridge("d-adopt", "%9", "orch", "tok_ABC"); err != nil {
+		t.Fatal(err)
+	}
+	if err := g.hub.Apply("dispatch.d-adopt", "tok_ABC", bridge.Report{Type: bridge.ReportHello, SessionID: "s1", ClaudeVersion: "2.1.289"}); err != nil {
+		t.Fatal(err)
+	}
+	log.mu.Lock()
+	defer log.mu.Unlock()
+	if !reflect.DeepEqual(log.hellos, []string{"d-adopt"}) || len(log.got) != 0 {
+		t.Fatalf("hellos=%v reports=%v; want one hello and no report", log.hellos, log.got)
+	}
+}

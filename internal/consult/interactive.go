@@ -887,6 +887,9 @@ func (d *Dispatcher) Report(id string, r HookReport) error {
 	}
 	s.lastHook = d.now()
 	s.record.HookActivity = s.lastHook
+	// A report is the run's own word on where it is: an adopted run is
+	// live, and nothing it did while the daemon was down needs guessing.
+	s.adopting, s.adoptReconcile = false, false
 	if s.record.SessionID == "" {
 		s.record.SessionID = str(p, "session_id")
 	}
@@ -1302,6 +1305,7 @@ func (d *Dispatcher) Sweep(now time.Time) {
 	// d.now (as tests do), avoiding mixed-clock deadlines.
 	_ = now
 	now = d.now()
+	d.sweepAdopted(now)
 	type probe struct {
 		state         *runState
 		pane          string

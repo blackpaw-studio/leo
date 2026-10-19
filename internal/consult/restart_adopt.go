@@ -3,6 +3,7 @@ package consult
 import (
 	"fmt"
 	"os"
+	"time"
 
 	"github.com/blackpaw-studio/leo/internal/config"
 )
@@ -13,6 +14,7 @@ type adoptionRuntime interface {
 	ProbeAdoption(pane, id string) (AdoptProbe, error)
 	AdoptPane(pane, harnessName, placement string)
 	AdoptBridge(id, pane, caller, launch string) error
+	PaneSnapshot(pane string) (screen string, empty bool, err error)
 }
 
 // Why a run the previous daemon left live is settled rather than adopted.
@@ -24,7 +26,18 @@ const (
 	settleNotOurs     = "pane not ours"
 	settleDead        = "pane dead"
 	settleUndelivered = "turn undelivered"
+	settleTimeout     = "adopt timeout"
 )
+
+// adoptIdleGrace is how long an adopted run's composer must sit empty, with
+// no report, before its working turn is taken to have finished while the
+// daemon was down: long enough for the reports the bridge mod retries across
+// the restart to land first.
+const adoptIdleGrace = 15 * time.Second
+
+// adoptNoResultText is the result of a turn that finished while the daemon
+// was down when its transcript holds no final reply.
+const adoptNoResultText = "finished while the daemon was down; no result recovered"
 
 // restoreInteractive adopts an interactive run the previous daemon left
 // live, when its pane survived the restart and nothing it was doing lived
@@ -107,12 +120,14 @@ func (d *Dispatcher) adoptRestarted(rec Record, probe AdoptProbe, rt adoptionRun
 			via = "bridge"
 		}
 	}
+	s.live.sessionID = rec.SessionID
 	d.mu.Lock()
 	timeout := d.adoptTimeout
 	if timeout <= 0 {
 		timeout = config.DefaultDispatchAdoptTimeout
 	}
 	s.adopting, s.adoptDeadline = true, now.Add(timeout)
+	s.adoptReconcile = hasWorkingTurnLocked(s) && openPendingWork(s) == nil
 	for _, t := range s.record.Turns {
 		if t.Outcome == "" && t.SlotHeld {
 			d.slotsFor(s).Adopt()
@@ -127,6 +142,148 @@ func (d *Dispatcher) adoptRestarted(rec Record, probe AdoptProbe, rt adoptionRun
 		go d.watchLiveUsage(s)
 	}
 	fmt.Fprintf(os.Stderr, "dispatch %s: adopted (%s)\n", rec.ID, via)
+}
+
+// NoteBridgeHello records a hello from dispatch id's bridge mod: an adopted
+// run whose mod reconnected is live. It says nothing of a turn that may
+// have finished meanwhile, which only a report or the pane settles.
+func (d *Dispatcher) NoteBridgeHello(id string) {
+	_, s, err := d.lookup(id)
+	if err != nil || s == nil {
+		return
+	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	s.adopting = false
+}
+
+// sweepAdopted watches the runs adopted across a restart until each shows
+// it is live, settles a turn that finished while the daemon was down, and
+// settles a run still showing no sign of life at its deadline. Tmux and
+// transcript reads run without the lock.
+func (d *Dispatcher) sweepAdopted(now time.Time) {
+	d.mu.Lock()
+	rt, ok := d.interactiveRuntime.(adoptionRuntime)
+	var watched []*runState
+	for _, s := range d.runs {
+		if ok && watchingAdoptedLocked(s) {
+			watched = append(watched, s)
+		}
+	}
+	d.mu.Unlock()
+	for _, s := range watched {
+		d.sweepAdoptedRun(s, rt, now)
+	}
+}
+
+func watchingAdoptedLocked(s *runState) bool {
+	return (s.adopting || s.adoptReconcile) && s.record.PaneID != "" && !s.releasing &&
+		!s.record.Status.Terminal() && s.record.Status != StatusSettling
+}
+
+func (d *Dispatcher) sweepAdoptedRun(s *runState, rt adoptionRuntime, now time.Time) {
+	d.mu.Lock()
+	pane := s.record.PaneID
+	d.mu.Unlock()
+	screen, empty, err := rt.PaneSnapshot(pane)
+	if err != nil {
+		return // a pane that went away closes through Sweep's own probe
+	}
+	d.mu.Lock()
+	if !watchingAdoptedLocked(s) || s.record.PaneID != pane {
+		d.mu.Unlock()
+		return
+	}
+	due := d.observeAdoptedPaneLocked(s, now, screen, empty)
+	path, readable := "", false
+	if due {
+		path, readable = d.liveTranscriptPathLocked(s)
+	}
+	since := workingSinceLocked(s)
+	d.mu.Unlock()
+	text := ""
+	if readable {
+		if text, err = lastAssistantTextSince(d.liveUsage.read, path, since); err != nil {
+			fmt.Fprintf(os.Stderr, "dispatch %s: reading transcript for the adopted turn: %v\n", s.record.ID, err)
+		}
+	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if !watchingAdoptedLocked(s) {
+		return
+	}
+	if due && s.adoptReconcile {
+		d.reconcileAdoptedLocked(s, text)
+	}
+	switch {
+	case now.Before(s.adoptDeadline):
+	case s.adopting:
+		d.settleAdoptTimeoutLocked(s)
+	default:
+		s.adoptReconcile = false
+	}
+}
+
+// observeAdoptedPaneLocked folds one capture of an adopted run's pane into
+// its adoption, and reports whether its working turn is now due to be
+// reconciled. A screen that changes while the composer is busy is the turn
+// at work; an empty composer that stays so for adoptIdleGrace is a run with
+// nothing in flight, so one that was working finished while the daemon was
+// down.
+func (d *Dispatcher) observeAdoptedPaneLocked(s *runState, now time.Time, screen string, empty bool) bool {
+	changed := s.adoptSnapped && screen != s.adoptSnapshot
+	s.adoptSnapshot, s.adoptSnapped = screen, true
+	if !empty {
+		s.adoptIdleSince = time.Time{}
+		if changed {
+			s.adopting, s.adoptReconcile = false, false
+		}
+		return false
+	}
+	if s.adoptIdleSince.IsZero() {
+		s.adoptIdleSince = now
+	}
+	if now.Sub(s.adoptIdleSince) < adoptIdleGrace {
+		return false
+	}
+	s.adopting = false
+	return s.adoptReconcile
+}
+
+// workingSinceLocked is when the run's earliest working turn started.
+func workingSinceLocked(s *runState) time.Time {
+	var since time.Time
+	for _, t := range s.record.Turns {
+		if t.Outcome == "" && (t.Source == TurnSourceUser || t.Delivered) && (since.IsZero() || t.StartedAt.Before(since)) {
+			since = t.StartedAt
+		}
+	}
+	return since
+}
+
+// reconcileAdoptedLocked ends an adopted run's working turns, which finished
+// while the daemon was down, with text read from the transcript: their
+// final reply, or, with none, a lost outcome that says so.
+func (d *Dispatcher) reconcileAdoptedLocked(s *runState, text string) {
+	s.adopting, s.adoptReconcile = false, false
+	if text == "" {
+		d.closeWorkingLocked(s, TurnLost, adoptNoResultText)
+		fmt.Fprintf(os.Stderr, "dispatch %s: adopted turn finished while the daemon was down; no result recovered\n", s.record.ID)
+		return
+	}
+	d.closeWorkingLocked(s, TurnFinished, text)
+	fmt.Fprintf(os.Stderr, "dispatch %s: adopted turn finished while the daemon was down; result read from its transcript\n", s.record.ID)
+}
+
+// settleAdoptTimeoutLocked ends an adopted run that showed no sign of life
+// by its deadline exactly as a run the restart could not adopt: lost turns,
+// "daemon restarted", a close notice, and its pane killed.
+func (d *Dispatcher) settleAdoptTimeoutLocked(s *runState) {
+	s.adopting, s.adoptReconcile = false, false
+	s.record.Error = closeReasonDaemonRestart
+	s.closeReason = closeReasonDaemonRestart
+	d.finishInteractiveLocked(s, StatusClosed)
+	fmt.Fprintf(os.Stderr, "dispatch %s: settled: %s\n", s.record.ID, settleTimeout)
 }
 
 // adoptedPlacement is the viewer placement a pane found in viewerKind was
