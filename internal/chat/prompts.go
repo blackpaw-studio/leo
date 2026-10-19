@@ -270,7 +270,7 @@ type HookEvent struct {
 
 // OnHook applies one of agent's turn hooks: a Stop resolves pending
 // auto-captures; a PostToolUse for the tool call an open permission prompt
-// asked about marks it answered in the terminal.
+// or questions card asked about marks it answered in the terminal.
 func (s *Service) OnHook(agent string, ev HookEvent) {
 	if s.enter() != nil {
 		return
@@ -350,6 +350,9 @@ func (s *Service) postReply(agent, replyTo, text string) {
 }
 
 func (s *Service) settlePermissionInTerminal(agent string, ev HookEvent) {
+	if ev.ToolName == askUserQuestionTool {
+		s.settleQuestionsInTerminal(agent, ev)
+	}
 	open, err := s.opts.Store.OpenMessages(agent, KindPermission, StateOpen)
 	if err != nil {
 		s.opts.Logf("chat: reading open permission prompts of %s: %v", agent, err)
@@ -367,6 +370,46 @@ func (s *Service) settlePermissionInTerminal(agent string, ev HookEvent) {
 		s.publishUpdated(m.ID, ChangeAnswer)
 		return
 	}
+}
+
+// settleQuestionsInTerminal marks agent's open questions card answered in
+// the terminal when its AskUserQuestion call finished there: the call whose
+// questions are the card's, in order. The hook going away does this too;
+// this is the backstop for a hook that outlives the call.
+func (s *Service) settleQuestionsInTerminal(agent string, ev HookEvent) {
+	finished, err := parseQuestions(ev.ToolInput)
+	if err != nil {
+		return
+	}
+	open, err := s.opts.Store.OpenMessages(agent, KindAsk, StateOpen)
+	if err != nil {
+		s.opts.Logf("chat: reading open questions cards of %s: %v", agent, err)
+		return
+	}
+	for _, m := range open {
+		if m.Input == nil || m.Input.Type != InputQuestions || !sameQuestionTexts(m.Input.Questions, finished.Input.Questions) {
+			continue
+		}
+		ok, err := s.opts.Store.Transition(m.ID, []string{StateOpen}, StateAnswered, terminalAnswer)
+		if err != nil || !ok {
+			continue
+		}
+		s.waiters.settle(m.ID, nil)
+		s.publishUpdated(m.ID, ChangeAnswer)
+		return
+	}
+}
+
+func sameQuestionTexts(a, b []Question) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i].Question != b[i].Question {
+			return false
+		}
+	}
+	return true
 }
 
 // sameJSON reports whether two JSON documents are equal as values.

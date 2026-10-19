@@ -198,3 +198,29 @@ func TestResumeAskRefusesQuestionsCards(t *testing.T) {
 		t.Fatalf("err = %v, want ErrInvalid", err)
 	}
 }
+
+func TestQuestionsCardAnsweredInTerminalViaPostToolUse(t *testing.T) {
+	f := newFixture(t)
+	done, _ := requestQuestions(t, f, context.Background(), sampleAskInput)
+	other := `{"questions":[{"question":"Something else?","header":"h","options":[{"label":"a"}],"multiSelect":false}]}`
+	f.svc.OnHook("assistant", HookEvent{Event: "PostToolUse", ToolName: "AskUserQuestion", ToolInput: json.RawMessage(other)})
+	f.svc.OnHook("assistant", HookEvent{Event: "PostToolUse", ToolName: "Read", ToolInput: json.RawMessage(sampleAskInput)})
+	if m := f.thread(t, "assistant")[0]; m.State != StateOpen {
+		t.Fatalf("an unrelated PostToolUse settled the card: %s", m.State)
+	}
+	// Claude reports the call with its answers added.
+	answered := `{"questions":` + compactQuestions(t, sampleAskInput) + `,"answers":{"Which size? ":"S"}}`
+	f.svc.OnHook("assistant", HookEvent{Event: "PostToolUse", ToolName: "AskUserQuestion", ToolInput: json.RawMessage(answered)})
+	select {
+	case got := <-done:
+		if !got.IsZero() {
+			t.Fatalf("decision = %+v, want none", got)
+		}
+	case <-time.After(5 * time.Second): // only a failing run waits
+		t.Fatal("the hook was not released")
+	}
+	m := f.thread(t, "assistant")[0]
+	if m.State != StateAnswered || m.Answer == nil || !m.Answer.isTerminal() {
+		t.Fatalf("card = %s/%+v", m.State, m.Answer)
+	}
+}
