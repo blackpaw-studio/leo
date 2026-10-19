@@ -207,6 +207,9 @@ type Dispatch struct {
 	ParentDispatchID string     `json:"parent_dispatch_id,omitempty"`
 	StartedAt        time.Time  `json:"started_at"`
 	EndedAt          *time.Time `json:"ended_at,omitempty"`
+	// AdoptedAt is when a restarted daemon took the dispatch over, its pane
+	// having survived the restart; absent for one never adopted.
+	AdoptedAt *time.Time `json:"adopted_at,omitempty"`
 	// Attachable is true while `leo dispatch attach <id>` can show the
 	// dispatch: an interactive dispatch whose TUI is alone in its own tmux
 	// window. TmuxTarget is its tmux pane id (%N) on Leo's tmux server,

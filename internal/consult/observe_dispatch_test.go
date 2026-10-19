@@ -424,3 +424,21 @@ func TestTickNeverAnnouncesRemovalOfADispatchItNeverListed(t *testing.T) {
 		t.Fatalf("events=%v for a dispatch that was never in /state", h.pub.events)
 	}
 }
+
+func TestDispatchesReportAdoptedAt(t *testing.T) {
+	adopted := stateNow.Add(-30 * time.Second)
+	rec := agentDispatch("d1", "alpha", StatusRunning)
+	rec.AdoptedAt = adopted
+	h := newObserveHarness(rec, agentDispatch("d2", "alpha", StatusRunning))
+	got := h.obs.Dispatches(stateNow)
+	byID := map[string]observe.Dispatch{}
+	for _, d := range got {
+		byID[d.ID] = d
+	}
+	if at := byID["d1"].AdoptedAt; at == nil || !at.Equal(adopted) {
+		t.Fatalf("adopted_at = %v, want %v", at, adopted)
+	}
+	if at := byID["d2"].AdoptedAt; at != nil {
+		t.Fatalf("a dispatch never adopted reports adopted_at %v", at)
+	}
+}

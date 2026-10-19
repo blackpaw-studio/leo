@@ -84,6 +84,9 @@ type Dispatcher struct {
 	// placementCfg is the config of the latest Start, for the placement
 	// decisions a live move has to make again.
 	placementCfg *config.Config
+	// adoptTimeout bounds how long a run adopted across a restart may stay
+	// quiet (see restart_adopt.go); zero means the config default.
+	adoptTimeout time.Duration
 	// rootPlacements holds the live placement watch's per-root-session state.
 	rootPlacements map[string]*rootPlacement
 	// watchMu keeps placement polls from overlapping.
@@ -200,6 +203,11 @@ type runState struct {
 	bridgedUsage bridgedUsage
 	// live is a running interactive claude run's transcript-derived usage.
 	live liveUsage
+	// adopting marks a run a restarted daemon took over that has not shown
+	// activity since: by adoptDeadline it does, or it is settled as
+	// "daemon restarted" (see restart_adopt.go).
+	adopting      bool
+	adoptDeadline time.Time
 }
 
 // NewDispatcher builds a dispatcher recording through rec. A nil recorder
@@ -1223,7 +1231,7 @@ func (d *Dispatcher) MarkInterrupted() {
 			continue
 		}
 		if rec.Mode == ModeInteractive {
-			d.settleRestarted(rec)
+			d.restoreInteractive(rec)
 			continue
 		}
 		rec.Error, rec.EndedAt = "daemon restarted", markedAt

@@ -295,10 +295,10 @@ func parseApprovalTimeout(raw string) (time.Duration, error) {
 	return parseBoundedDuration(raw, defaultDispatchApprovalTimeout, maxDispatchApprovalTimeout)
 }
 
-const (
-	defaultDispatchAdoptTimeout = 2 * time.Minute
-	maxDispatchAdoptTimeout     = time.Hour
-)
+// DefaultDispatchAdoptTimeout is adopt_timeout when it is unset.
+const DefaultDispatchAdoptTimeout = 2 * time.Minute
+
+const maxDispatchAdoptTimeout = time.Hour
 
 // DispatchAdoptTimeout is the parsed adopt_timeout; Validate rejects an
 // unusable value, which otherwise reads as the default.
@@ -306,11 +306,11 @@ func (c *Config) DispatchAdoptTimeout() time.Duration {
 	if d, err := parseAdoptTimeout(c.Defaults.Dispatch.AdoptTimeout); err == nil && d > 0 {
 		return d
 	}
-	return defaultDispatchAdoptTimeout
+	return DefaultDispatchAdoptTimeout
 }
 
 func parseAdoptTimeout(raw string) (time.Duration, error) {
-	return parseBoundedDuration(raw, defaultDispatchAdoptTimeout, maxDispatchAdoptTimeout)
+	return parseBoundedDuration(raw, DefaultDispatchAdoptTimeout, maxDispatchAdoptTimeout)
 }
 
 // parseBoundedDuration parses a Go duration in (0, limit]; empty means def.

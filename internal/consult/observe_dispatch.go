@@ -244,6 +244,10 @@ func observedDispatchShown(rec, shown Record, now time.Time) observe.Dispatch {
 		ended := rec.EndedAt
 		d.EndedAt = &ended
 	}
+	if !rec.AdoptedAt.IsZero() {
+		adopted := rec.AdoptedAt
+		d.AdoptedAt = &adopted
+	}
 	return d
 }
 
@@ -258,12 +262,16 @@ func Attachable(rec Record) bool {
 }
 
 func sameDispatch(a, b observe.Dispatch) bool {
-	aEnd, bEnd := a.EndedAt, b.EndedAt
-	a.EndedAt, b.EndedAt = nil, nil
-	if !reflect.DeepEqual(a, b) || (aEnd == nil) != (bEnd == nil) {
-		return false
+	aEnd, bEnd, aAdopted, bAdopted := a.EndedAt, b.EndedAt, a.AdoptedAt, b.AdoptedAt
+	a.EndedAt, b.EndedAt, a.AdoptedAt, b.AdoptedAt = nil, nil, nil, nil
+	return reflect.DeepEqual(a, b) && sameInstant(aEnd, bEnd) && sameInstant(aAdopted, bAdopted)
+}
+
+func sameInstant(a, b *time.Time) bool {
+	if a == nil || b == nil {
+		return a == b
 	}
-	return aEnd == nil || aEnd.Equal(*bEnd)
+	return a.Equal(*b)
 }
 
 func valueOr[T any](p *T) T {

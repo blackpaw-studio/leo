@@ -218,6 +218,9 @@ type Record struct {
 	// released run closed.
 	ReleaseOnFinish  bool `json:"release_on_finish"`
 	ReleasedOnFinish bool `json:"released_on_finish,omitempty"`
+	// AdoptedAt is when a restarted daemon took the run over from the one
+	// that launched it, its pane having survived the restart.
+	AdoptedAt time.Time `json:"adopted_at,omitzero"`
 }
 
 func (r *Record) startActive(now time.Time) {
