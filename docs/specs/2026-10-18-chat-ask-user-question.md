@@ -44,7 +44,7 @@ Claude's `AskUserQuestion` tool reaches Leo Chat through the PermissionRequest h
   ```
 
   - Top-level `values` and `text` must be empty or absent for this type.
-  - For any other type, `answers` must be absent. If it is present, the server returns 400.
+  - For any other type, `answers` must be absent or null; a non-empty `answers` gets 400.
 - Validation (400 on failure):
   - Every question id is present, and no unknown ids appear.
   - Each question has at least one value or non-blank text.
