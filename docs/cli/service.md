@@ -66,16 +66,19 @@ stopping point first (a *graceful restart*) and tell them to resume afterwards.
 
 1. **Busy check.** leo asks the daemon which agents are working: a bridged
    agent by its mod's busy flag, any other agent by reading its composer the
-   way message delivery does. With no busy agents the restart proceeds at
-   once, as before.
+   way message delivery does. It also lists the interactive dispatches with a
+   turn running. With no busy agents the restart proceeds at once, as before;
+   when only dispatches are running, leo says so and restarts without asking.
 2. **Prompt.** Otherwise it asks:
 
    ```
-   3 agents are working (assistant, chronicle, plex). Graceful restart? [Y/n]
+   2 agents are working (assistant, plex) and 1 dispatch is running (fix-x). Graceful restart? [Y/n]
    ```
 
    `--graceful` and `--no-graceful` answer it in advance. A non-interactive
-   run without either flag restarts at once, as before.
+   run without either flag restarts at once, as before. Dispatches are never
+   paused: the new daemon adopts their live panes (see
+   [Dispatches → Daemon restarts](../configuration/dispatches.md#daemon-restarts)).
 3. **Drain.** Each busy agent gets an urgent `[leo]` message asking it to stop
    starting new work, save or commit what it has, note where it is, and end
    its turn. A bridged agent receives it at its next turn boundary; any other

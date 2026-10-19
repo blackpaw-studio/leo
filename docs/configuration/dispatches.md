@@ -378,7 +378,8 @@ waiting run is rejected like a send to a running one; cancel works as usual.
 
 An interactive dispatch is bound to its caller's tmux session. It closes on
 cancel, TUI exit, one hour of empty-composer idle time, or the session timeout.
-Nothing survives a daemon restart, and interactive panes never close merely
+A live pane survives a daemon restart (see [Daemon restarts](#daemon-restarts)),
+and interactive panes never close merely
 because their result was collected, unless the run opted into
 [`release_on_finish`](#release-on-finish).
 
@@ -490,6 +491,37 @@ the pane. Codex dispatches run with `-a never` and
 never prompt; claude elicitation and question dialogs are not routed for
 dispatch panes. (Supervised agents are different: their `AskUserQuestion`
 reaches [Leo Chat](chat.md#questions-cards).)
+
+## Daemon restarts
+
+`leo update`, `leo service restart` or a daemon crash leaves the dispatches'
+tmux panes running. At startup the new daemon checks each interactive run the
+old one left open and **adopts** it when its pane is still alive and was
+launched for that dispatch: the run keeps its id, its open turn and its slot,
+and the turn's result reaches the caller as usual. Each run logs one
+`service.log` line, `dispatch <id>: adopted (bridge)`, `adopted (hooks)` or
+`settled: <reason>`, and its record notes `adopted_at`.
+
+- **Settled instead.** A run whose pane is gone, dead or not its own, or whose
+  turn was sent but never submitted, closes as `daemon restarted`, as before.
+  A pane that is not the dispatch's own is never killed.
+- **Bounded wait.** An adopted run must show life within
+  `defaults.dispatch.adopt_timeout` (Go duration, positive, at most `1h`;
+  default `2m`): its bridge reconnecting, a hook report, or its pane changing.
+  Otherwise it closes as `daemon restarted`.
+- **Finished while down.** A turn that ended while no daemon was listening is
+  reconciled once its composer has sat idle for 15s: it finishes with the last
+  assistant text from the session transcript, or is marked lost (`finished
+  while the daemon was down; no result recovered`) when there is none.
+- **Background work** tracking starts empty; the next Stop repopulates it.
+- **Older runs.** Runs launched before this release carry no launch tag, so
+  they are adopted hook-driven: their mod is refused, and hooks and the pane
+  drive them.
+- **Headless runs** are unchanged: they settle as `daemon restarted`, and
+  [headless continuation](#headless-continuation) picks them up.
+
+A graceful restart (`leo service restart`, `leo update`) lists running
+dispatches next to busy agents and never pauses them.
 
 ## Headless continuation
 
