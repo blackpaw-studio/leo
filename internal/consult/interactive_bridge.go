@@ -279,6 +279,8 @@ func (r *TmuxInteractiveRuntime) AwaitOpening(ctx context.Context, pane string) 
 		return true, false, nil // released meanwhile; nothing to relaunch
 	}
 	fmt.Fprintf(os.Stderr, "dispatch %s: leo bridge did not connect within %s; relaunching without it\n", d.id, b.connectTimeout())
+	// The relaunched claude has no mod: nothing may adopt its bridge.
+	_ = r.run(ctx, "set-option", "-p", "-u", "-t", pane, adoptLaunchOption)
 	argv := append([]string{"respawn-pane", "-k", "-t", pane}, d.respawn...)
 	if err := r.run(ctx, argv...); err != nil {
 		return true, false, fmt.Errorf("relaunching without the leo bridge: %w", err)

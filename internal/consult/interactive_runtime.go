@@ -342,23 +342,11 @@ func (r *TmuxInteractiveRuntime) Launch(ctx context.Context, req LaunchRequest) 
 		_ = r.run(ctx, "set-option", "-w", "-t", req.CallerWindowID, "main-pane-height", fmt.Sprintf("%d%%", req.Placement.MainPaneHeight))
 		_ = r.run(ctx, "select-layout", "-t", req.CallerWindowID, "main-horizontal")
 	}
-	r.mu.Lock()
-	if r.classifiers == nil {
-		r.classifiers = make(map[string]tmux.ComposerClassifier)
-	}
-	if h.Name() == "codex" {
-		r.classifiers[pane] = tmux.CodexComposerClassifier
-	} else {
-		r.classifiers[pane] = tmux.ClaudeComposerClassifier
-	}
-	if r.placements == nil {
-		r.placements = make(map[string]string)
-	}
-	r.placements[pane] = req.Placement.Kind
-	r.mu.Unlock()
+	r.AdoptPane(pane, h.Name(), req.Placement.Kind)
 	launched = true
 	if bd != nil {
 		r.bridgeLaunched(req.ID, pane)
+		r.tagLaunch(ctx, req.ID, pane, bd.launch)
 	}
 	return pane, label, nil
 }
