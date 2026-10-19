@@ -893,7 +893,9 @@ func (d *Dispatcher) Report(id string, r HookReport) error {
 	if s.record.SessionID == "" {
 		s.record.SessionID = str(p, "session_id")
 	}
-	noteLiveTranscriptLocked(s, p)
+	if noteLiveTranscriptLocked(s, p) {
+		d.persistLocked(s, "")
+	}
 	// Effort lands only once the event is accepted and its turn placed: a
 	// submission's effort is the turn it starts, and a hook for a closed
 	// turn carries none.

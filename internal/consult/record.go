@@ -150,13 +150,16 @@ type Record struct {
 	Timeout        time.Duration `json:"timeout,omitempty"`
 	// ViewerWindowID identifies the optional tmux viewer so lifecycle cleanup
 	// can survive a daemon restart.
-	ViewerWindowID  string `json:"viewer_window_id,omitempty"`
-	ViewerPaneID    string `json:"viewer_pane_id,omitempty"`
-	ViewerKind      string `json:"viewer_kind,omitempty"`
-	ViewerTitle     string `json:"viewer_title,omitempty"`
-	Mode            Mode   `json:"mode,omitempty"`
-	PaneID          string `json:"pane_id,omitempty"`
-	SessionID       string `json:"session_id,omitempty"`
+	ViewerWindowID string `json:"viewer_window_id,omitempty"`
+	ViewerPaneID   string `json:"viewer_pane_id,omitempty"`
+	ViewerKind     string `json:"viewer_kind,omitempty"`
+	ViewerTitle    string `json:"viewer_title,omitempty"`
+	Mode           Mode   `json:"mode,omitempty"`
+	PaneID         string `json:"pane_id,omitempty"`
+	SessionID      string `json:"session_id,omitempty"`
+	// TranscriptPath is where the run's hooks last said its transcript is,
+	// kept so a restarted daemon can read an adopted run's session.
+	TranscriptPath  string `json:"transcript_path,omitempty"`
 	Notify          bool   `json:"notify"`
 	CallerPaneID    string `json:"caller_pane_id,omitempty"`
 	CallerHarness   string `json:"caller_harness,omitempty"`

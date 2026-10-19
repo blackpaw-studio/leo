@@ -67,11 +67,17 @@ type adoptRig struct {
 
 func newAdoptRig(t *testing.T, transcript string) *adoptRig {
 	t.Helper()
+	rec := workingRecord()
+	rec.SessionID = "s-adopt"
+	return newAdoptRigFor(t, rec, transcript)
+}
+
+// newAdoptRigFor adopts rec, guessing transcript as its session's path.
+func newAdoptRigFor(t *testing.T, rec Record, transcript string) *adoptRig {
+	t.Helper()
 	g := &adoptRig{now: adoptNow}
 	g.rt = &adoptingRuntime{fakeInteractiveRuntime: &fakeInteractiveRuntime{alive: true}, probe: ownedProbe(""), snapshot: "✻ Running… (1s)"}
 	stateDir := t.TempDir()
-	rec := workingRecord()
-	rec.SessionID = "s-adopt"
 	restartRecord(t, stateDir, rec)
 	g.d = NewDispatcher(NewFileRecorder(stateDir))
 	g.d.now = func() time.Time { return g.now }
@@ -168,6 +174,37 @@ func TestAdoptedIdleRunFinishesFromItsTranscript(t *testing.T) {
 	}
 	if g.rt.killCount() != 0 {
 		t.Fatal("reconciling killed the pane")
+	}
+}
+
+// The transcript a hook reported before the restart is where the session
+// is, even when claude's config dir is not the default one the session id
+// alone would point at.
+func TestAdoptedIdleRunReadsTheTranscriptItsHooksReported(t *testing.T) {
+	rec := workingRecord()
+	rec.SessionID = "s-adopt"
+	rec.TranscriptPath = filepath.Join("testdata", "transcript", "adopted.jsonl")
+	g := newAdoptRigFor(t, rec, filepath.Join(t.TempDir(), "default-config-dir.jsonl"))
+	g.rt.setSnapshot("│ > │", true)
+	g.sweepAt(adoptNow)
+	g.sweepAt(adoptNow.Add(adoptIdleGrace))
+	if got := mustGet(t, g.d, "d-adopt"); got.Turns[0].Outcome != TurnFinished || got.Turns[0].Text != "ADOPT-OK" {
+		t.Fatalf("turn=%+v; want finished with the reported transcript's text", got.Turns[0])
+	}
+}
+
+// A hook's transcript path is kept on the record, so a restarted daemon
+// still knows it.
+func TestHookReportedTranscriptPathIsPersisted(t *testing.T) {
+	g := newAdoptRig(t, "")
+	const path = "/cfg/projects/-ws/s-adopt.jsonl"
+	if err := g.d.Report("d-adopt", hookReport("PreToolUse", map[string]string{"tool_use_id": "tu9", "transcript_path": path})); err != nil {
+		t.Fatal(err)
+	}
+	for _, rec := range g.d.Records() {
+		if rec.ID == "d-adopt" && rec.TranscriptPath != path {
+			t.Fatalf("persisted transcript path = %q, want %q", rec.TranscriptPath, path)
+		}
 	}
 }
 

@@ -121,7 +121,7 @@ func (d *Dispatcher) adoptRestarted(rec Record, probe AdoptProbe, rt adoptionRun
 			via = "bridge"
 		}
 	}
-	s.live.sessionID = rec.SessionID
+	s.live.sessionID, s.live.transcriptPath = rec.SessionID, rec.TranscriptPath
 	d.mu.Lock()
 	timeout := d.adoptTimeout
 	if timeout <= 0 {
