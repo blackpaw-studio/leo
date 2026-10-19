@@ -1189,7 +1189,6 @@ func (d *Dispatcher) resumeWaitingLocked(s *runState) {
 // wake that carries it on arrives. Other turns' waits stand.
 func (d *Dispatcher) resumeTurnLocked(s *runState, t *Turn) {
 	t.Pending = nil
-	delete(s.adoptWaits, t.TurnID)
 	d.settleResumedLocked(s)
 }
 

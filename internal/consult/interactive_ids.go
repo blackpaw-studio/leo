@@ -179,16 +179,20 @@ func (d *Dispatcher) submitKeyedLocked(s *runState, key string, p map[string]any
 	prompt := str(p, "prompt")
 	injected := s.record.Harness == "claude" && isInjectedSubmit(key, prompt, p)
 	persistPlaced := func() { d.persistLocked(s, "") }
+	var turnID string
 	if known := turnForKeyLocked(s, key); known != nil {
+		turnID = known.TurnID
 		d.noteKnownSubmitLocked(s, known, prompt, injected)
 	} else {
-		turnID := d.startKeyedTurnLocked(s, key, prompt, injected, str(p, "command_id"))
+		turnID = d.startKeyedTurnLocked(s, key, prompt, injected, str(p, "command_id"))
 		persistPlaced = func() {
 			if i := turnIndexByID(s.record.Turns, turnID); i >= 0 {
 				d.persistTurnLocked(s, s.record.Turns[i])
 			}
 		}
 	}
+	// The run speaks for the turn again: an adopted wait on it is released.
+	delete(s.adoptWaits, turnID)
 	d.applyObservedEffortLocked(s, effortFromPayload(p), currentTurnIndex(s.record.Turns))
 	closed := false
 	// A Stop held for this id is this turn's, however long it waited: the

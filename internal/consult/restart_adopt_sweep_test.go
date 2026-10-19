@@ -423,3 +423,32 @@ func TestAReportOnOneAdoptedWaitLeavesTheOthersDeadline(t *testing.T) {
 		t.Fatalf("turns=%+v slots=%d; want the reported one finished and the other lost", got.Turns, g.d.slots.InUse())
 	}
 }
+
+// A submit placed on an adopted turn that had started background tasks is
+// that turn's own report, by whichever path it is attributed: the wake of a
+// turn not yet seen to pause, or a submit under an id it already answers to.
+// The turn carries on; the deadline no longer applies to it.
+func TestASubmitPlacedOnAnAdoptedTurnReleasesItsWait(t *testing.T) {
+	for _, tc := range []struct{ name, promptID, prompt string }{
+		{"wake under a new id", "P2", "<task-notification><task-id>bg1</task-id><status>completed</status></task-notification>"},
+		{"submit under its own id", "P1", "do it"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			rec := workingRecord()
+			rec.SessionID, rec.BackgroundTasks = "s-adopt", []BackgroundTask{{ID: "bg1"}}
+			rec.Turns[0].HarnessKeys = []string{"p:P1"}
+			g := newAdoptRigFor(t, rec, "")
+			if err := g.d.Report("d-adopt", hookReport("UserPromptSubmit", map[string]string{"prompt_id": tc.promptID, "prompt": tc.prompt})); err != nil {
+				t.Fatal(err)
+			}
+			g.rt.setSnapshot("│ > │", true)
+			g.sweepAt(adoptNow)
+			g.sweepAt(adoptNow.Add(adoptIdleGrace))
+			g.sweepAt(adoptNow.Add(time.Minute))
+			got := mustGet(t, g.d, "d-adopt")
+			if got.Turns[0].Outcome != "" || got.Status != StatusRunning || g.d.slots.InUse() != 1 {
+				t.Fatalf("status=%s turn=%+v slots=%d; want the reported turn still running", got.Status, got.Turns[0], g.d.slots.InUse())
+			}
+		})
+	}
+}
