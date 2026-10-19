@@ -135,10 +135,15 @@ func (m *manualTimers) after(d time.Duration) <-chan time.Time {
 	return ch
 }
 
+// fireLast fires the newest timer; one already fired and not yet consumed
+// stays fired, so the send never blocks while holding the lock after() needs.
 func (m *manualTimers) fireLast() {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	m.chs[len(m.chs)-1] <- time.Time{}
+	select {
+	case m.chs[len(m.chs)-1] <- time.Time{}:
+	default:
+	}
 }
 
 // gatedIDs mints ULIDs; once armed, the next New mints its id, then blocks
