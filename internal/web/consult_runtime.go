@@ -121,6 +121,9 @@ func (s *Server) setupConsultRuntime(opts Options, resolveCallerSession func(str
 		s.dispatches = dispatchObserver
 	}
 	s.consults.SetInteractiveRuntime(runtime)
+	// Adopting surviving dispatches re-opens their bridge keys, so it must
+	// run before the agents' restore settles adoption (Hub.AwaitAdoption):
+	// after that, a key nobody opened refuses its mod for good.
 	s.consults.MarkInterrupted()
 	// Best-effort: drop settings spill files (which can hold credentials)
 	// of runs the previous daemon never finalized.
