@@ -122,7 +122,7 @@ drains, boots out the CLI job, moves the plist to `<plist>.handed-over`, and
 waits until `daemon.lock` is free. The app then writes `managed.json` and
 registers its LaunchAgent. A CLI daemon whose plist exists but whose job is not
 loaded skips the drain and bootout; only the plist moves. A daemon running with
-no launchd job at all fails `no_launchd_job`.
+no launchd job at all fails `no_launchd_job`; "running" means it holds `daemon.lock`, not that its socket answers, so a daemon with broken IPC is never mistaken for a stopped one.
 
 **`--to-cli`** checks the marker, the `.handed-over` backup, and that the
 backup's `ProgramArguments[0]` exists and is executable. It drains through the
@@ -162,7 +162,7 @@ Steps: `preflight`, `env`, `drain`, `bootout`, `plist`, `lock`, `marker`,
 `plist_missing`, `env_unreadable`, `drain_timeout`, `drain_failed`,
 `bootout_failed`, `plist_move_failed`, `lock_timeout`, `not_managed`,
 `backup_missing`, `backup_unusable`, `marker_move_failed`,
-`plist_restore_failed`, `bootstrap_failed`, `not_ready`, `config_error`.
+`plist_restore_failed`, `bootstrap_failed`, `not_ready`, `config_error`, plus `invalid_args` and `not_permitted` for bad flags and denied agents.
 
 ## The JSON rule
 
@@ -171,7 +171,8 @@ Every `--json` command (`service restart`, `service handover`, `pair`,
 
 - stdout carries only the JSON object; logs and progress go to stderr;
 - a failure is `{"error": "<stable code>", "message": "…"}` (message optional)
-  with a non-zero exit.
+  with a non-zero exit. That includes bad flags and arguments, which answer
+  `invalid_args`.
 
 ```bash
 leo service restart --json
