@@ -11,7 +11,7 @@ func newOnboardCmd() *cobra.Command {
 		Short:  "Alias for 'leo setup'",
 		Hidden: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return setup.Run()
+			return setup.Run(setup.Options{ResolveTmux: resolveTmux})
 		},
 	}
 }

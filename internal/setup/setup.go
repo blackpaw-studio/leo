@@ -18,6 +18,7 @@ import (
 	"github.com/blackpaw-studio/leo/internal/prompt"
 	"github.com/blackpaw-studio/leo/internal/service"
 	"github.com/blackpaw-studio/leo/internal/templates"
+	"github.com/blackpaw-studio/leo/internal/tmux"
 )
 
 var (
@@ -25,8 +26,7 @@ var (
 	checkClaudeFn = func() prereq.BinaryResult {
 		return prereq.CheckBinary(claudeharness.Claude{}.Binary())
 	}
-	checkTmuxFn    = prereq.CheckTmux
-	tmuxVersionFn  = prereq.TmuxVersion
+	tmuxVersionFn  = prereq.TmuxVersionAt
 	daemonStatusFn = service.DaemonStatus
 	newReaderFn    = prompt.NewReader
 	sshExecFn      = func(ctx context.Context, name string, args ...string) *exec.Cmd {
@@ -34,20 +34,34 @@ var (
 	}
 )
 
+// Options injects what the wizard cannot discover on its own.
+type Options struct {
+	// ResolveTmux finds the tmux binary leo will run (a managed install's
+	// bundled copy, else a lookup). Nil means tmux.Locate.
+	ResolveTmux func() (string, error)
+}
+
+func (o Options) resolveTmux() (string, error) {
+	if o.ResolveTmux != nil {
+		return o.ResolveTmux()
+	}
+	return tmux.Locate()
+}
+
 // Run executes the interactive setup wizard with its own banner.
-func Run() error {
+func Run(opts Options) error {
 	reader := newReaderFn()
 
 	fmt.Println()
 	prompt.Bold.Println("  Leo Setup Wizard")
 	fmt.Println()
 
-	return RunInteractive(reader)
+	return RunInteractive(reader, opts)
 }
 
 // RunInteractive executes the setup wizard using the given reader, without printing a banner.
 // This allows the onboard command to call it after its own welcome screen.
-func RunInteractive(reader *bufio.Reader) error {
+func RunInteractive(reader *bufio.Reader, opts Options) error {
 	home, err := userHomeDirFn()
 	if err != nil {
 		return fmt.Errorf("determining home directory: %w", err)
@@ -62,7 +76,7 @@ func RunInteractive(reader *bufio.Reader) error {
 		return runClientSetup(reader, defaultHome, existing)
 	}
 
-	if err := checkPrerequisites(); err != nil {
+	if err := checkPrerequisites(opts.resolveTmux); err != nil {
 		return err
 	}
 
@@ -261,7 +275,7 @@ func promptDaemonInstall(reader *bufio.Reader, leoHome, cfgPath string) {
 	}
 }
 
-func checkPrerequisites() error {
+func checkPrerequisites(resolveTmux func() (string, error)) error {
 	prompt.Bold.Println("Checking prerequisites...")
 	fmt.Println()
 
@@ -284,12 +298,12 @@ func checkPrerequisites() error {
 	}
 	prompt.Success.Printf("    claude CLI    ✓ %s\n", versionStr)
 
-	if checkTmuxFn() {
+	if tmuxPath, tmuxErr := resolveTmux(); tmuxErr == nil {
 		// Version matters, not just presence: leo passes agent env via
 		// `new-session -e`, added in tmux 3.2. On an older tmux setup would
 		// otherwise finish clean and every agent spawn would then fail
 		// forever in the restart loop.
-		if raw, ok := tmuxVersionFn(); ok {
+		if raw, ok := tmuxVersionFn(tmuxPath); ok {
 			label := raw
 			if label == "" {
 				label = "installed"
