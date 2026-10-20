@@ -34,29 +34,28 @@ import (
 
 // Testability seams
 var (
-	startProcess      = defaultStartProcess
-	findProcess       = os.FindProcess
-	readFile          = os.ReadFile
-	writeFile         = os.WriteFile
-	removeFile        = os.Remove
-	renameFile        = os.Rename
-	mkdirAll          = os.MkdirAll
-	createTempFile    = os.CreateTemp
-	openLogFile       = defaultOpenLogFile
-	supervisedExecFn  = defaultSupervisedExec
-	serviceExecutable = os.Executable
+	startProcess     = defaultStartProcess
+	findProcess      = os.FindProcess
+	readFile         = os.ReadFile
+	writeFile        = os.WriteFile
+	removeFile       = os.Remove
+	renameFile       = os.Rename
+	mkdirAll         = os.MkdirAll
+	createTempFile   = os.CreateTemp
+	openLogFile      = defaultOpenLogFile
+	supervisedExecFn = defaultSupervisedExec
 )
 
-func resolveViewerMenuBinding(configPath string) (tmux.ViewerMenuBinding, error) {
-	leoPath, err := serviceExecutable()
+func resolveViewerMenuBinding(executable func() (string, error), configPath string) (tmux.ViewerMenuBinding, error) {
+	leoPath, err := executable()
 	if err != nil {
 		return tmux.ViewerMenuBinding{}, fmt.Errorf("resolve leo executable for tmux viewer menu: %w", err)
 	}
 	return tmux.ViewerMenuBinding{LeoPath: leoPath, ConfigPath: configPath}, nil
 }
 
-func resolveViewerMenuBindings(configPath string, warnings io.Writer) []tmux.ViewerMenuBinding {
-	binding, err := resolveViewerMenuBinding(configPath)
+func resolveViewerMenuBindings(executable func() (string, error), configPath string, warnings io.Writer) []tmux.ViewerMenuBinding {
+	binding, err := resolveViewerMenuBinding(executable, configPath)
 	if err != nil {
 		fmt.Fprintf(warnings, "warning: tmux viewer menu binding skipped: %v\n", err)
 		return nil
@@ -200,6 +199,9 @@ type Supervisor struct {
 	claudePath   string
 	homePath     string
 	configPath   string
+	// reportCmd is the `<leo> dispatch report` argv attention hooks call back
+	// into; nil means the bare `leo` on the agent's PATH.
+	reportCmd []string
 	// publisher announces agent lifecycle transitions on the observability
 	// event bus. nil (the default for every existing caller) makes publish a
 	// no-op — see SetPublisher.
@@ -850,6 +852,10 @@ type RunSupervisedOptions struct {
 	// internal/web, so it can't be read back from here — the CLI passes it
 	// down explicitly instead. Empty is safe: the web layer just reports "".
 	Version string
+	// Executable resolves the leo binary whose path the daemon persists
+	// (hooks, MCP config, tmux key bindings, bridge env). nil means
+	// os.Executable; a managed install passes its stable self_path.
+	Executable func() (string, error)
 }
 
 // RunSupervised starts the leo daemon: the web UI, cron scheduler, and the
@@ -914,6 +920,11 @@ func defaultSupervisedExec(opts RunSupervisedOptions) error {
 		defer func() { _ = closer.Close() }()
 	}
 
+	executable := opts.Executable
+	if executable == nil {
+		executable = os.Executable
+	}
+
 	// Find tmux early so we can cache it
 	tmuxPath, err := findTmux()
 	if err != nil {
@@ -926,7 +937,7 @@ func defaultSupervisedExec(opts RunSupervisedOptions) error {
 	// signed leo binary. Must run before RestoreAgents/any supervise loop
 	// issues a new-session. Fail-open: a daemonized fallback server is worse
 	// than a dead daemon, so a failure here only warns.
-	menuBindings := resolveViewerMenuBindings(configPath, os.Stderr)
+	menuBindings := resolveViewerMenuBindings(executable, configPath, os.Stderr)
 	if err := tmux.EnsureForegroundServer(tmuxPath, menuBindings...); err != nil {
 		fmt.Fprintf(os.Stderr, "warning: foreground tmux server setup failed: %v\n", err)
 	} else {
@@ -938,6 +949,7 @@ func defaultSupervisedExec(opts RunSupervisedOptions) error {
 	supervisor.claudePath = claudePath
 	supervisor.homePath = homePath
 	supervisor.configPath = configPath
+	supervisor.reportCmd = reportCmdFor(executable)
 
 	obs := wireObservability(ctx, supervisor, tmuxPath)
 	// Leo Chat's store; nil (chat off, logged) when it cannot open. Closed
@@ -953,10 +965,10 @@ func defaultSupervisedExec(opts RunSupervisedOptions) error {
 	// /api/bridge/* routes and reachable through srv.Bridge() by the call
 	// sites that deliver through it; the launcher plans bridged claude
 	// launches for the supervisor and for dispatches.
-	bridgeHub, bridgeLauncher := wireBridge(supervisor, homePath, opts.Version, nil)
+	bridgeHub, bridgeLauncher := wireBridge(supervisor, homePath, opts.Version, executable, nil)
 	// Resolved once: every agent, task and dispatch this daemon launches runs
 	// this same binary's MCP server, never whichever leo is first on PATH.
-	leoMCP := leomcp.ResolveServer(serviceExecutable, os.Stderr)
+	leoMCP := leomcp.ResolveServer(executable, os.Stderr)
 	srv := daemon.New(sockPath, configPath, supervisor,
 		daemon.WithLeoMCP(leoMCP),
 		daemon.WithBridge(bridgeHub),
@@ -1364,7 +1376,7 @@ func superviseProcess(ctx context.Context, tmuxPath, claudePath string, spec Pro
 
 			// launchArgs carries this launch's attention hooks; currentArgs
 			// (and the stored args behind it) never do.
-			launchArgs, hooked := attentionLaunchArgs(drv, handleForSpec(spec, id, homePath), currentArgs, spec, name)
+			launchArgs, hooked := attentionLaunchArgs(drv, handleForSpec(spec, id, homePath), currentArgs, spec, name, sv.reportCmdOrDefault())
 			spec.attentionToken = ""
 			if hooked {
 				if token, ok := launchAttentionToken(homePath, name); ok {

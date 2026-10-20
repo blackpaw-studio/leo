@@ -84,15 +84,13 @@ func newLaunchFixture(t *testing.T, drv harness.SessionDriver, rec agentstore.Re
 	t.Helper()
 	testFakeDriver = drv
 	t.Cleanup(func() { testFakeDriver = nil })
-	origCmd := attentionReportCmd
-	attentionReportCmd = func() []string { return []string{"/opt/leo", "dispatch", "report"} }
-	t.Cleanup(func() { attentionReportCmd = origCmd })
 	origPoll := sessionPollInterval
 	sessionPollInterval = time.Hour
 	t.Cleanup(func() { sessionPollInterval = origPoll })
 
 	ctx, cancel := context.WithCancel(context.Background())
 	sv := NewSupervisor(ctx)
+	sv.reportCmd = []string{"/opt/leo", "dispatch", "report"}
 	tmuxPath, logPath := liveTmuxStub(t)
 	sv.tmuxPath = tmuxPath
 	sv.homePath = t.TempDir()
@@ -501,5 +499,30 @@ func TestFirstHookedRestartStartsUnknown(t *testing.T) {
 	first := pub.Events()[0].Payload.(*observe.AgentActivityPayload).Attention
 	if first == nil || first.State != observe.AttentionUnknown {
 		t.Fatalf("first hooked launch (a restart) attention = %+v, want unknown", first)
+	}
+}
+
+// The hook callback persists in the agent's hook files, so it must be the
+// supervisor's injected leo path, not os.Executable.
+func TestAttentionLaunchArgsPassesSupervisorReportCmd(t *testing.T) {
+	drv := &fakeAttentionDriver{supported: true}
+	reportCmd := []string{"/stable/leo", "dispatch", "report"}
+
+	got, hooked := attentionLaunchArgs(drv, harness.SessionHandle{}, []string{"--x"}, ProcessSpec{Kind: harness.KindAgent}, "a", reportCmd)
+
+	want := []string{"--x", "--hooked", "/stable/leo dispatch report"}
+	if !hooked || !reflect.DeepEqual(got, want) {
+		t.Fatalf("got %#v hooked=%v, want %#v", got, hooked, want)
+	}
+}
+
+func TestDefaultReportCmdFallsBackToBareLeo(t *testing.T) {
+	failing := func() (string, error) { return "", os.ErrNotExist }
+	if got, want := reportCmdFor(failing), []string{"leo", "dispatch", "report"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("got %#v, want %#v", got, want)
+	}
+	stable := func() (string, error) { return "/stable/leo", nil }
+	if got, want := reportCmdFor(stable), []string{"/stable/leo", "dispatch", "report"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("got %#v, want %#v", got, want)
 	}
 }

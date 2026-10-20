@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bytes"
+	"os"
 	"sync"
 	"testing"
 
@@ -58,5 +59,32 @@ func TestSelfExecutableUsesMarkerWhenManaged(t *testing.T) {
 	got, err := selfExecutable(&config.Config{HomePath: "/h"})()
 	if err != nil || got != "/app/leo" {
 		t.Fatalf("got %q, %v; want /app/leo", got, err)
+	}
+}
+
+func TestBuildServiceConfigPersistsSelfPathWhenManaged(t *testing.T) {
+	stubManaged(t, managed.State{Managed: true, Marker: managed.Marker{SelfPath: "/app/Support/bin/leo"}})
+	cfg := &config.Config{HomePath: t.TempDir()}
+
+	sc, err := buildServiceConfig(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sc.LeoPath != "/app/Support/bin/leo" {
+		t.Fatalf("LeoPath = %q, want the marker self_path", sc.LeoPath)
+	}
+}
+
+func TestBuildServiceConfigUnmanagedUsesRunningExecutable(t *testing.T) {
+	stubManaged(t, managed.State{})
+	cfg := &config.Config{HomePath: t.TempDir()}
+
+	sc, err := buildServiceConfig(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want, _ := os.Executable()
+	if sc.LeoPath != want {
+		t.Fatalf("LeoPath = %q, want os.Executable %q", sc.LeoPath, want)
 	}
 }

@@ -2,7 +2,6 @@ package cli
 
 import (
 	"fmt"
-	"os"
 	"os/exec"
 
 	"github.com/blackpaw-studio/leo/internal/config"
@@ -37,8 +36,10 @@ func loadConfig() (*config.Config, error) {
 	return cfg, nil
 }
 
-func leoExecutablePath() (string, error) {
-	path, err := os.Executable()
+// leoExecutablePath is the leo path to persist (service plist): the marker's
+// self_path when managed, else the running executable.
+func leoExecutablePath(cfg *config.Config) (string, error) {
+	path, err := selfExecutable(cfg)()
 	if err != nil {
 		// Fallback to looking up in PATH
 		return exec.LookPath("leo")

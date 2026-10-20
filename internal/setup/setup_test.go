@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/blackpaw-studio/leo/internal/config"
+	"github.com/blackpaw-studio/leo/internal/managed"
 	"github.com/blackpaw-studio/leo/internal/prereq"
 	"github.com/blackpaw-studio/leo/internal/service"
 	"gopkg.in/yaml.v3"
@@ -402,6 +403,32 @@ func TestInstallDaemon_NoExecutable(t *testing.T) {
 	installDaemon("/tmp/leo-home", "/tmp/leo-home/leo.yaml")
 	if capturedSC.LeoPath != "leo" {
 		t.Errorf("LeoPath = %q, want %q (fallback)", capturedSC.LeoPath, "leo")
+	}
+}
+
+func TestInstallDaemon_ManagedUsesSelfPath(t *testing.T) {
+	origExec, origEnv, origInstall, origStatus, origManaged := osExecutableFn, envCaptureFn, installDaemonFn, daemonStatusFn, loadManagedFn
+	t.Cleanup(func() {
+		osExecutableFn, envCaptureFn, installDaemonFn, daemonStatusFn, loadManagedFn = origExec, origEnv, origInstall, origStatus, origManaged
+	})
+	osExecutableFn = func() (string, error) { return "/opt/homebrew/bin/leo", nil }
+	envCaptureFn = func(extraKeys ...string) map[string]string { return map[string]string{} }
+	daemonStatusFn = func(string) (string, error) { return "running", nil }
+	var stateDirs []string
+	loadManagedFn = func(stateDir string) managed.State {
+		stateDirs = append(stateDirs, stateDir)
+		return managed.State{Managed: true, Marker: managed.Marker{SelfPath: "/app/Support/bin/leo"}}
+	}
+	var captured service.ServiceConfig
+	installDaemonFn = func(sc service.ServiceConfig) error { captured = sc; return nil }
+
+	installDaemon("/tmp/leo-home", "/tmp/leo-home/leo.yaml")
+
+	if captured.LeoPath != "/app/Support/bin/leo" {
+		t.Errorf("LeoPath = %q, want the marker self_path", captured.LeoPath)
+	}
+	if len(stateDirs) != 1 || stateDirs[0] != "/tmp/leo-home/state" {
+		t.Errorf("marker loaded from %v, want [/tmp/leo-home/state]", stateDirs)
 	}
 }
 

@@ -85,6 +85,7 @@ func runService(cmd *cobra.Command, args []string) error {
 		ConfigPath: cfgPath,
 		WebToken:   webToken,
 		Version:    Version,
+		Executable: selfExecutable(cfg),
 	})
 }
 
@@ -323,7 +324,7 @@ func newServiceReloadCmd() *cobra.Command {
 }
 
 func buildServiceConfig(cfg *config.Config) (service.ServiceConfig, error) {
-	leoPath, err := leoExecutablePath()
+	leoPath, err := leoExecutablePath(cfg)
 	if err != nil {
 		return service.ServiceConfig{}, fmt.Errorf("finding leo binary: %w", err)
 	}

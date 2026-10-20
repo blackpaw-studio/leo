@@ -2,6 +2,7 @@ package web
 
 import (
 	"context"
+	"errors"
 	"io"
 	"os/exec"
 	"slices"
@@ -167,5 +168,31 @@ func TestSetupConsultRuntimeReopensAnAdoptedDispatchsBridge(t *testing.T) {
 	}
 	if rec.Status != consult.StatusIdle || rec.Turns[0].Outcome != consult.TurnFinished || rec.Turns[0].Text != "ADOPT-OK" {
 		t.Fatalf("status=%s turn=%+v; want the adopted turn finished with its text", rec.Status, rec.Turns[0])
+	}
+}
+
+// The interactive dispatch runtime persists this path into agent hook files:
+// it must follow the daemon's resolved leo binary (a managed install's stable
+// self_path), falling back to the running executable, then to the bare path.
+func TestInteractiveLeoPath(t *testing.T) {
+	running := func() (string, error) { return "/running/leo", nil }
+	failing := func() (string, error) { return "", errors.New("no exe") }
+	tests := []struct {
+		name     string
+		bin      string
+		exe      func() (string, error)
+		fallback string
+		want     string
+	}{
+		{"daemon binary wins", "/app/Support/bin/leo", running, "leo", "/app/Support/bin/leo"},
+		{"running executable when daemon binary unknown", "", running, "leo", "/running/leo"},
+		{"absolute fallback when executable fails", "", failing, "/fallback/leo", "/fallback/leo"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := interactiveLeoPath(tc.bin, tc.exe, tc.fallback); got != tc.want {
+				t.Fatalf("interactiveLeoPath = %q, want %q", got, tc.want)
+			}
+		})
 	}
 }
