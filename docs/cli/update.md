@@ -18,6 +18,10 @@ Fetches the latest release from GitHub, verifies its cosign signature (keyless, 
 
 Operational instructions/skills are served on demand via the `leo_skill` MCP tool rather than synced files, so they update automatically with the binary — no workspace re-sync or daemon restart required to pick them up.
 
+## Managed by Leo.app
+
+When [Leo.app manages the install](../configuration/managed-install.md), every form of `leo update` (including `--check`) exits non-zero with `leo is managed by Leo.app; update the app (Leo ▸ Check for Updates)` and downloads nothing. A leo binary inside `*.app/Contents/` also refuses to replace itself, marker or not: editing a signed bundle would break its code signature.
+
 ## Restart prompts
 
 After the swap, `leo update` offers to restart the daemon so the new binary actually serves requests.

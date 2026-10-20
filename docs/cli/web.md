@@ -2,6 +2,27 @@
 
 Web UI utilities. Subcommands:
 
+## `leo web enable`
+
+Turn the web listener on and restart the daemon so it comes up.
+
+```bash
+leo web enable [--bind <addr>] [--allow-host <host>]... [--json]
+```
+
+It sets `web.enabled: true` (and `web.bind` with `--bind`, and appends each `--allow-host` to `web.allowed_hosts`), validates the result, writes `leo.yaml`, and gracefully restarts a running daemon through the same routing as [`leo service restart`](service.md#leo-service-restart) — the managed label when [Leo.app manages the install](../configuration/managed-install.md). Writing the file drops its comments, as other leo commands that edit it do. A config that already says so is left alone: nothing is written and nothing restarts. If the daemon is running outside launchd it cannot be restarted, so the change is saved and a warning says to restart it.
+
+A non-loopback `--bind` needs `web.allowed_hosts`, or validation fails and the file is left unchanged; pass `--allow-host` for each host name or IP clients will use, or the daemon refuses requests to those URLs.
+
+| Flag | Description |
+|------|-------------|
+| `--bind` | `web.bind` address to set. |
+| `--allow-host` | Host or IP to add to `web.allowed_hosts`. Repeatable. |
+| `--json` | One JSON object on stdout; progress on stderr. Restarts gracefully unless `--no-graceful`. |
+| `--graceful`, `--no-graceful`, `--drain-timeout`, `--force` | As for `leo service restart`. |
+
+With `--json` the result is `{"ok":true,"changed":true,"restarted":true,"web":{"enabled":true,"bind":"127.0.0.1","port":8370}}` (plus `warnings` when set). Failures are `{"error":"invalid_config"|"write_failed"|"restart_failed"|"drain_timeout"|"config_error","message":"…"}` with a non-zero exit; a failed restart leaves the config saved.
+
 ## `leo web login-url`
 
 Print a one-click login URL for the web dashboard.
