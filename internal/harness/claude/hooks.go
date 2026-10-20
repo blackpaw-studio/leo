@@ -88,13 +88,13 @@ func preLaunch(h harness.SessionHandle) error {
 	if home, err := session.HomeDir(h.Env); err == nil && filepath.Clean(dir) == filepath.Join(home, ".claude") {
 		return nil
 	}
-	return (Claude{}).PrepareInteractive(h.Env, h.Workspace)
+	return (Claude{}).PrepareInteractive(h.Env, h.Workspace, "")
 }
 
 // PrepareInteractive accepts Claude's workspace trust dialog before launch.
 // Its settings file contains unrelated user configuration, so only the
 // dispatch project entry is changed and the result replaces the file atomically.
-func (Claude) PrepareInteractive(env map[string]string, cwd string) error {
+func (Claude) PrepareInteractive(env map[string]string, cwd, _ string) error {
 	prepareInteractiveMu.Lock()
 	defer prepareInteractiveMu.Unlock()
 	path, err := StateFile(env)

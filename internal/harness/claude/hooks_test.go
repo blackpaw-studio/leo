@@ -75,14 +75,14 @@ func TestClaudePrepareInteractiveTrustsCwd(t *testing.T) {
 	if err := os.WriteFile(path, []byte(original), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := (Claude{}).PrepareInteractive(map[string]string{"HOME": home}, cwd); err != nil {
+	if err := (Claude{}).PrepareInteractive(map[string]string{"HOME": home}, cwd, ""); err != nil {
 		t.Fatalf("PrepareInteractive() = %v", err)
 	}
 	first, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := (Claude{}).PrepareInteractive(map[string]string{"HOME": home}, cwd); err != nil {
+	if err := (Claude{}).PrepareInteractive(map[string]string{"HOME": home}, cwd, ""); err != nil {
 		t.Fatal(err)
 	}
 	second, err := os.ReadFile(path)
@@ -112,7 +112,7 @@ func TestClaudePrepareInteractiveTrustsCwd(t *testing.T) {
 	}
 
 	missingHome := t.TempDir()
-	if err := (Claude{}).PrepareInteractive(map[string]string{"HOME": missingHome}, cwd); err != nil {
+	if err := (Claude{}).PrepareInteractive(map[string]string{"HOME": missingHome}, cwd, ""); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := os.Stat(filepath.Join(missingHome, ".claude.json")); err != nil {
@@ -137,7 +137,7 @@ func TestClaudePrepareInteractivePreservesExistingAndConcurrentProjects(t *testi
 		wg.Add(1)
 		go func(project string) {
 			defer wg.Done()
-			if err := (Claude{}).PrepareInteractive(map[string]string{"HOME": home}, project); err != nil {
+			if err := (Claude{}).PrepareInteractive(map[string]string{"HOME": home}, project, ""); err != nil {
 				t.Errorf("PrepareInteractive(%q): %v", project, err)
 			}
 		}(project)
@@ -208,7 +208,7 @@ func TestClaudePrepareInteractiveHonorsConfigDir(t *testing.T) {
 	t.Setenv("CLAUDE_CONFIG_DIR", "")
 	home, configDir, cwd := t.TempDir(), t.TempDir(), t.TempDir()
 	env := map[string]string{"HOME": home, "CLAUDE_CONFIG_DIR": configDir}
-	if err := (Claude{}).PrepareInteractive(env, cwd); err != nil {
+	if err := (Claude{}).PrepareInteractive(env, cwd, ""); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := os.Stat(filepath.Join(home, ".claude.json")); !os.IsNotExist(err) {

@@ -12,8 +12,6 @@ import (
 
 func TestAttentionLaunchInstallsHooksInCodexHome(t *testing.T) {
 	home := t.TempDir()
-	prepareLeoHookCommand = func() string { return "/opt/leo dispatch report" }
-	t.Cleanup(func() { prepareLeoHookCommand = defaultLeoHookCommand })
 	hooker, ok := (Codex{}).Driver().(harness.AttentionHooker)
 	if !ok {
 		t.Fatal("codex driver is not a harness.AttentionHooker")
@@ -23,7 +21,7 @@ func TestAttentionLaunchInstallsHooksInCodexHome(t *testing.T) {
 	}
 	args := []string{"--model", "gpt"}
 
-	got, supported, err := hooker.AttentionLaunch(harness.SessionHandle{Env: map[string]string{"CODEX_HOME": home}, Workspace: t.TempDir()}, args, []string{"/ignored"})
+	got, supported, err := hooker.AttentionLaunch(harness.SessionHandle{Env: map[string]string{"CODEX_HOME": home}, Workspace: t.TempDir()}, args, []string{"/opt/leo", "dispatch", "report"})
 
 	if err != nil || !supported {
 		t.Fatalf("err=%v supported=%v", err, supported)
