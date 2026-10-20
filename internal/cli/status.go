@@ -35,6 +35,7 @@ type StatusReport struct {
 	ConfigError string                  `json:"config_error,omitempty"`
 	Service     string                  `json:"service"`
 	Daemon      string                  `json:"daemon"`
+	Managed     *StatusManaged          `json:"managed,omitempty"`
 	Web         *StatusWeb              `json:"web,omitempty"`
 	Agents      StatusAgentsSummary     `json:"agents"`
 	AgentStates []StatusAgentState      `json:"agent_states,omitempty"`
@@ -43,6 +44,13 @@ type StatusReport struct {
 	TaskIssues  []StatusTaskIssue       `json:"task_issues,omitempty"`
 	Templates   int                     `json:"templates,omitempty"`
 	Next        *StatusNextScheduledRun `json:"next_scheduled_run,omitempty"`
+}
+
+// StatusManaged names the manager that owns the daemon when a managed-install
+// marker is in effect.
+type StatusManaged struct {
+	Manager string `json:"manager"`
+	Label   string `json:"launchd_label"`
 }
 
 // StatusWeb captures the resolved web UI config for the status report.
@@ -131,8 +139,11 @@ func buildStatusReport(ctx context.Context) StatusReport {
 	svcStatus, _ := service.Status(cfg.HomePath)
 	report.Service = svcStatus
 
-	daemonStatus, _ := service.DaemonStatus(cfg.HomePath)
+	daemonStatus, _ := daemonStatusFor(cfg)
 	report.Daemon = daemonStatus
+	if st := managedState(cfg); st.Managed {
+		report.Managed = &StatusManaged{Manager: st.Manager, Label: st.LaunchdLabel}
+	}
 
 	if cfg.Web.Enabled {
 		bind := cfg.WebBind()
@@ -270,6 +281,10 @@ func runStatus(ctx context.Context) error {
 		success.Printf("Supervisor: %s\n", report.Service)
 	} else {
 		warn.Printf("Supervisor: %s\n", report.Service)
+	}
+
+	if report.Managed != nil {
+		info.Printf("Managed by: %s (launchd job %s)\n", report.Managed.Manager, report.Managed.Label)
 	}
 
 	// Autostart: is an OS-level service unit installed (systemd/launchd) to

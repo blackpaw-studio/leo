@@ -126,6 +126,9 @@ it survives reboots.`,
   # Install as a persistent OS service
   leo service start --daemon`,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if err := refuseIfManaged(); err != nil {
+				return err
+			}
 			cfg, err := loadConfig()
 			if err != nil {
 				return err
@@ -145,18 +148,18 @@ it survives reboots.`,
 
 			if daemon {
 				fmt.Println("Installing daemon...")
-				if err := service.InstallDaemon(sc); err != nil {
+				if err := installDaemonFn(sc); err != nil {
 					return fmt.Errorf("installing daemon: %w", err)
 				}
 				// Verify it's running
-				status, _ := service.DaemonStatus(cfg.HomePath)
+				status, _ := daemonStatusFn(cfg.HomePath)
 				success.Printf("Daemon installed (%s).\n", status)
 				info.Printf("Logs: %s\n", sc.LogPath)
 				info.Println("Note: run 'leo service start --daemon' again if you update environment variables.")
 				return nil
 			}
 
-			if err := service.Start(sc); err != nil {
+			if err := startServiceFn(sc); err != nil {
 				return err
 			}
 			success.Println("Service started.")
@@ -183,6 +186,9 @@ installed OS service (launchd/systemd).`,
 		Example: `  leo service stop
   leo service stop --daemon`,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if err := refuseIfManaged(); err != nil {
+				return err
+			}
 			if err := gateCommand(cmd, "leo_stop_agent"); err != nil {
 				return err
 			}
@@ -192,14 +198,14 @@ installed OS service (launchd/systemd).`,
 			}
 
 			if daemon {
-				if err := service.RemoveDaemon(cfg.HomePath); err != nil {
+				if err := removeDaemonFn(cfg.HomePath); err != nil {
 					return fmt.Errorf("removing daemon: %w", err)
 				}
 				success.Println("Daemon removed.")
 				return nil
 			}
 
-			if err := service.Stop(cfg.HomePath); err != nil {
+			if err := stopServiceFn(cfg.HomePath); err != nil {
 				return err
 			}
 			success.Println("Service stopped.")
@@ -214,6 +220,7 @@ installed OS service (launchd/systemd).`,
 
 func newServiceRestartCmd() *cobra.Command {
 	var gopts gracefulOptions
+	var asJSON bool
 	cmd := &cobra.Command{
 		Use:   "restart",
 		Short: "Restart daemon",
@@ -234,22 +241,36 @@ idle (up to --drain-timeout), and they are told to resume afterwards.`,
 
 			ctx, stop := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM, syscall.SIGHUP)
 			defer stop()
-			err = gracefulRestart(ctx, gopts, newGracefulDeps(cfg.HomePath))
+			err = gracefulRestart(ctx, gopts, newGracefulDeps(cfg))
 			if errors.Is(err, errDaemonNotReady) {
 				warn.Printf("%v\n", err)
 			} else if err != nil {
 				return err
 			}
 
-			status, _ := service.DaemonStatus(cfg.HomePath)
+			status, _ := daemonStatusFor(cfg)
 			success.Printf("Daemon restarted (%s).\n", status)
 			info.Printf("Logs: %s\n", service.LogPathFor(cfg.HomePath))
 			return nil
 		},
 	}
 	addGracefulFlags(cmd, &gopts)
+	cmd.Flags().BoolVar(&asJSON, "json", false, "print one JSON object on stdout (errors as {error, message}); progress goes to stderr")
 
 	return cmd
+}
+
+// runRestartJSON loads the config and restarts with progress on stderr.
+func runRestartJSON(cmd *cobra.Command, gopts gracefulOptions) (any, error) {
+	cfg, err := loadConfig()
+	if err != nil {
+		return nil, failJSON("config_error", err)
+	}
+	ctx, stop := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM, syscall.SIGHUP)
+	defer stop()
+	deps := newGracefulDepsTo(cfg, cmd.ErrOrStderr())
+	deps.isInteractive = func() bool { return false }
+	return restartJSON(ctx, cfg, managedState(cfg), gopts, deps)
 }
 
 func newServiceStatusCmd() *cobra.Command {

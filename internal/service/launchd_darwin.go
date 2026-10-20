@@ -105,3 +105,6 @@ func PlistProgramPath(plist string) (string, error) {
 	}
 	return strings.TrimSpace(out), nil
 }
+
+// DaemonRegistered reports whether launchd has leo's own job for home loaded.
+func DaemonRegistered(home string) bool { return LabelLoaded(daemonLabel(home)) }

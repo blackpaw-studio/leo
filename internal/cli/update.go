@@ -287,7 +287,7 @@ func maybeRestartDaemon(gopts gracefulOptions) error {
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM, syscall.SIGHUP)
 	defer stop()
-	err = gracefulRestart(ctx, gopts, newGracefulDeps(cfg.HomePath))
+	err = gracefulRestart(ctx, gopts, newGracefulDeps(cfg))
 	if errors.Is(err, errDaemonNotReady) {
 		success.Println("Daemon restarted")
 		warn.Printf("Could not check agents for pending changes: %v\n", err)

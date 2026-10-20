@@ -25,3 +25,9 @@ func BootoutLabel(string) error { return errNoLaunchd }
 func PlistEnv(string) (map[string]string, error) { return nil, errNoLaunchd }
 
 func PlistProgramPath(string) (string, error) { return "", errNoLaunchd }
+
+// DaemonRegistered reports whether the OS service for home is installed.
+func DaemonRegistered(home string) bool {
+	status, _ := DaemonStatus(home)
+	return status != "not installed"
+}

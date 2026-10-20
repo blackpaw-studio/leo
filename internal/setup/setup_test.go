@@ -392,29 +392,41 @@ func TestInstallDaemon_NoExecutable(t *testing.T) {
 	}
 }
 
-func TestInstallDaemon_ManagedUsesSelfPath(t *testing.T) {
-	origExec, origEnv, origInstall, origStatus, origManaged := osExecutableFn, envCaptureFn, installDaemonFn, daemonStatusFn, loadManagedFn
-	t.Cleanup(func() {
-		osExecutableFn, envCaptureFn, installDaemonFn, daemonStatusFn, loadManagedFn = origExec, origEnv, origInstall, origStatus, origManaged
-	})
-	osExecutableFn = func() (string, error) { return "/opt/homebrew/bin/leo", nil }
-	envCaptureFn = func(extraKeys ...string) map[string]string { return map[string]string{} }
-	daemonStatusFn = func(string) (string, error) { return "running", nil }
+func TestInstallDaemon_ManagedSkipsInstall(t *testing.T) {
+	origInstall, origManaged := installDaemonFn, loadManagedFn
+	t.Cleanup(func() { installDaemonFn, loadManagedFn = origInstall, origManaged })
 	var stateDirs []string
 	loadManagedFn = func(stateDir string) managed.State {
 		stateDirs = append(stateDirs, stateDir)
-		return managed.State{Managed: true, Marker: managed.Marker{SelfPath: "/app/Support/bin/leo"}}
+		return managed.State{Managed: true, Marker: managed.Marker{LaunchdLabel: "studio.blackpaw.leo.daemon", SelfPath: "/app/Support/bin/leo"}}
 	}
-	var captured service.ServiceConfig
-	installDaemonFn = func(sc service.ServiceConfig) error { captured = sc; return nil }
+	installs := 0
+	installDaemonFn = func(service.ServiceConfig) error { installs++; return nil }
 
 	installDaemon("/tmp/leo-home", "/tmp/leo-home/leo.yaml")
 
-	if captured.LeoPath != "/app/Support/bin/leo" {
-		t.Errorf("LeoPath = %q, want the marker self_path", captured.LeoPath)
+	if installs != 0 {
+		t.Errorf("installed %d times; Leo.app owns the daemon registration", installs)
 	}
 	if len(stateDirs) != 1 || stateDirs[0] != "/tmp/leo-home/state" {
 		t.Errorf("marker loaded from %v, want [/tmp/leo-home/state]", stateDirs)
+	}
+}
+
+func TestPromptDaemonInstall_ManagedAsksNothing(t *testing.T) {
+	origInstall, origManaged, origStatus := installDaemonFn, loadManagedFn, daemonStatusFn
+	t.Cleanup(func() { installDaemonFn, loadManagedFn, daemonStatusFn = origInstall, origManaged, origStatus })
+	loadManagedFn = func(string) managed.State {
+		return managed.State{Managed: true, Marker: managed.Marker{LaunchdLabel: "studio.blackpaw.leo.daemon"}}
+	}
+	installDaemonFn = func(service.ServiceConfig) error { t.Error("installed"); return nil }
+	daemonStatusFn = func(string) (string, error) { t.Error("status checked"); return "", nil }
+	reader := bufio.NewReader(strings.NewReader("y\ny\n"))
+
+	promptDaemonInstall(reader, "/tmp/leo-home", "/tmp/leo-home/leo.yaml")
+
+	if rest, _ := reader.Peek(4); string(rest) != "y\ny\n" {
+		t.Errorf("consumed input: %q left", rest)
 	}
 }
 
