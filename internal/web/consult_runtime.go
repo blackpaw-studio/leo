@@ -57,7 +57,7 @@ func (i consultLoopIntervals) withDefaults() consultLoopIntervals {
 // injectable context-aware seam; this is the path used by roster sweeps too.
 func (s *Server) setupConsultRuntime(opts Options, resolveCallerSession func(string) (string, bool)) {
 	viewer := consult.NewViewer(s.configPath, resolveCallerSession)
-	viewer.TmuxPath = findTmuxPath()
+	viewer.TmuxPath = s.tmuxPath()
 	viewer.ExecCommand = s.execCommand
 	viewer.ExecCommandContext = s.execCommandContext
 	s.consults = consult.NewDispatcherWithOnStart(opts.ConsultRecorder, opts.ParentContext, viewer.OnStart, viewer.Close)
@@ -66,10 +66,10 @@ func (s *Server) setupConsultRuntime(opts Options, resolveCallerSession func(str
 		s.consults.ApplyConfig(cfg)
 	}
 	s.consults.SetAttachPlacements(opts.AttachPlacements, func(ctx context.Context, session string) ([]tmux.Client, error) {
-		return tmux.ListClients(ctx, findTmuxPath(), session)
+		return tmux.ListClients(ctx, s.tmuxPath(), session)
 	})
 	s.consults.SetAllClientsLister(func(ctx context.Context) ([]tmux.SessionClient, error) {
-		return tmux.ListAllClients(ctx, findTmuxPath())
+		return tmux.ListAllClients(ctx, s.tmuxPath())
 	})
 	viewer.PlacementOverrides = s.consults.ApplyAttachPlacement
 	viewer.Coordinator = s.consults.PlacementCoordinator()
@@ -79,7 +79,7 @@ func (s *Server) setupConsultRuntime(opts Options, resolveCallerSession func(str
 	viewer.ClosePane = s.consults.CloseRecordedPane
 	s.consults.SetCloseFinishedViewer(viewer.CloseFinished)
 	s.consults.SetNotificationDelivery(s.notificationDelivery(opts.Bridge.Router))
-	runtime := consult.NewInteractiveRuntime(s.configPath, s.loadConfig, resolveCallerSession, findTmuxPath(), interactiveLeoPath(opts.LeoMCP.Bin, os.Executable, s.leoPath))
+	runtime := consult.NewInteractiveRuntime(s.configPath, s.loadConfig, resolveCallerSession, s.tmuxPath(), interactiveLeoPath(opts.LeoMCP.Bin, os.Executable, s.leoPath))
 	runtime.ExecCommandContext = s.execCommandContext
 	runtime.AgentTokenFile = func(cfg *config.Config) string { return AgentTokenPath(cfg.StatePath()) }
 	s.consults.AgentToken = s.agentToken

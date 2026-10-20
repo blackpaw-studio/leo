@@ -15,7 +15,7 @@ import (
 // callers: over a bridged caller's leo bridge when router is set, else (and
 // for every other caller) the peer inbox or tmux, as before.
 func (s *Server) notificationDelivery(router *bridge.Router) consult.NotificationDelivery {
-	legacy := consult.NewTmuxNotificationDelivery(findTmuxPath(), s.execCommandContext)
+	legacy := consult.NewTmuxNotificationDelivery(s.tmuxPath(), s.execCommandContext)
 	if router == nil {
 		return legacy
 	}
@@ -26,7 +26,7 @@ func (s *Server) notificationDelivery(router *bridge.Router) consult.Notificatio
 // session recorded at launch (@leo_primary_pane).
 func (s *Server) agentPrimaryPane(ctx context.Context, name string) (string, error) {
 	session := agent.SessionName(name)
-	out, err := s.execCommandContext(ctx, findTmuxPath(), tmux.Args("show-options", "-t", tmux.Target(session)+":", "-v", "@leo_primary_pane")...).Output()
+	out, err := s.execCommandContext(ctx, s.tmuxPath(), tmux.Args("show-options", "-t", tmux.Target(session)+":", "-v", "@leo_primary_pane")...).Output()
 	if err != nil {
 		return "", fmt.Errorf("reading %s's primary pane: %w", session, err)
 	}

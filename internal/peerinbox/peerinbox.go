@@ -45,7 +45,8 @@ var socketDirs = []string{
 
 // ResolveSocket finds the first Claude inbox socket owned by tmuxSession's
 // pane process or one of its descendants (up to three process levels).
-func ResolveSocket(ctx context.Context, execFn ExecFunc, tmuxSession string) (string, error) {
+// tmuxPath is the tmux binary to query; empty means "tmux" on PATH.
+func ResolveSocket(ctx context.Context, execFn ExecFunc, tmuxPath, tmuxSession string) (string, error) {
 	if execFn == nil {
 		return "", fmt.Errorf("resolve peer inbox socket: exec function is required")
 	}
@@ -56,7 +57,10 @@ func ResolveSocket(ctx context.Context, execFn ExecFunc, tmuxSession string) (st
 		return "", fmt.Errorf("resolve peer inbox socket: %w", err)
 	}
 
-	panePID, err := execFn(ctx, "tmux", tmux.Args("display-message", "-p", "-t", tmuxSession, "#{pane_pid}")...).Output()
+	if tmuxPath == "" {
+		tmuxPath = "tmux"
+	}
+	panePID, err := execFn(ctx, tmuxPath, tmux.Args("display-message", "-p", "-t", tmuxSession, "#{pane_pid}")...).Output()
 	if err != nil {
 		return "", fmt.Errorf("resolve peer inbox socket: pane PID: %w", err)
 	}

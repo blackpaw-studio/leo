@@ -63,7 +63,7 @@ func (s *Server) interruptAgent(ctx context.Context, name string) controlOutcome
 	}
 	sessionName := agent.SessionName(name)
 
-	tmuxPath := findTmuxPath()
+	tmuxPath := s.tmuxPath()
 	pane := s.resolvePaneTarget(tmuxPath, sessionName)
 	escArgs := tmux.Args("send-keys", "-t", pane, "Escape")
 	// Send Escape immediately, then keep sending to catch state transitions.
@@ -120,7 +120,7 @@ func (s *Server) typeSlashCommand(sessionName, verb, instructions string) error 
 		return err
 	}
 	if line := strings.Join(strings.Fields(stripControl(instructions, false)), " "); line != "" {
-		tmuxPath := findTmuxPath()
+		tmuxPath := s.tmuxPath()
 		pane := s.resolvePaneTarget(tmuxPath, sessionName)
 		if err := s.execCommand(tmuxPath, tmux.Args("send-keys", "-t", pane, "-l", "--", " "+line)...).Run(); err != nil {
 			return fmt.Errorf("send-keys failed: %w", err)
@@ -253,7 +253,7 @@ func (s *Server) deliverAgentMessageLegacy(ctx context.Context, name, from, text
 		return controlFailed(http.StatusServiceUnavailable, transportLegacy, "the request ended before agent %s was free: %v", name, err)
 	}
 
-	tmuxPath := findTmuxPath()
+	tmuxPath := s.tmuxPath()
 	pane := s.resolvePaneTarget(tmuxPath, sessionName)
 
 	// Literal paste of the message body.

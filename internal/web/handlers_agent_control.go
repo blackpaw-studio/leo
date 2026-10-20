@@ -70,7 +70,7 @@ func (s *Server) handleWebAgentSendKeys(w http.ResponseWriter, r *http.Request) 
 // typeKeys types keys into session's pane, splitting multi-char literals
 // into individual keystrokes (see handleWebAgentSendKeys).
 func (s *Server) typeKeys(sessionName string, keys []string) error {
-	tmuxPath := findTmuxPath()
+	tmuxPath := s.tmuxPath()
 	pane := s.resolvePaneTarget(tmuxPath, sessionName)
 	for _, key := range keys {
 		if needsCharSplit(key) {

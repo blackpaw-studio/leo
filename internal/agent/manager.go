@@ -1854,6 +1854,7 @@ func (m *Manager) handleForRecord(homePath string, rec agentstore.Record) harnes
 		Workspace:   rec.Workspace,
 		HomePath:    homePath,
 		Env:         rec.Env,
+		TmuxPath:    m.tmuxPath,
 		IDs:         NewAgentIDs(homePath, rec.Name),
 	}
 }
@@ -1910,9 +1911,9 @@ func (m *Manager) Logs(name string, lines int) (string, error) {
 
 	tmuxPath := m.tmuxPath
 	if tmuxPath == "" {
-		found, err := exec.LookPath("tmux")
+		found, err := tmux.Locate()
 		if err != nil {
-			return "", fmt.Errorf("tmux not found in PATH: %w", err)
+			return "", fmt.Errorf("locating tmux: %w", err)
 		}
 		tmuxPath = found
 	}

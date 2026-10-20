@@ -103,6 +103,8 @@ type Server struct {
 	reloader   ConfigReloader
 	agentSvc   AgentService
 	leoPath    string
+	// tmuxBin is the daemon-resolved tmux binary; see tmuxPath.
+	tmuxBin    string
 	templates  *template.Template
 	httpServer *http.Server
 	listener   net.Listener
@@ -442,6 +444,9 @@ type Options struct {
 	// Bridge wires the claude mod bridge into agent messaging and dispatch
 	// launches. Optional; the zero value keeps everything on tmux.
 	Bridge BridgeOptions
+	// TmuxPath is the tmux binary the daemon resolved (tmux.Resolve's
+	// Client). Empty falls back to a PATH lookup, for tests and embedders.
+	TmuxPath string
 	// LeoMCP is the daemon's own leo binary: the leo MCP server dispatches
 	// launch, and the leo that manual task runs and `service restart` exec.
 	// The zero value runs the bare "leo" from PATH.
@@ -483,6 +488,7 @@ func New(configPath string, processes ProcessStateProvider, scheduler SchedulerP
 		reloader:           reloader,
 		agentSvc:           agentSvc,
 		leoPath:            opts.LeoMCP.Executable(),
+		tmuxBin:            opts.TmuxPath,
 		port:               opts.Port,
 		apiToken:           opts.APIToken,
 		agentToken:         opts.AgentToken,
@@ -498,15 +504,17 @@ func New(configPath string, processes ProcessStateProvider, scheduler SchedulerP
 		devices:            opts.Devices,
 		pairLimiter:        newPairLimiter(),
 		now:                time.Now,
-		startAttach:        startTmuxAttach,
 		attachTicker:       realTicker,
 		revocationTicker:   realTicker,
 	}
 	for _, opt := range extra {
 		opt(s)
 	}
+	s.startAttach = func(session string, cols, rows uint16) (attachProc, error) {
+		return startTmuxAttach(s.tmuxPath(), session, cols, rows)
+	}
 	s.resolvePeerSocket = func(ctx context.Context, session string) (string, error) {
-		return peerinbox.ResolveSocket(ctx, peerinbox.DefaultExec, session)
+		return peerinbox.ResolveSocket(ctx, peerinbox.DefaultExec, s.tmuxPath(), session)
 	}
 	s.deliverPeer = peerinbox.Deliver
 	s.fetchAgentListFn = s.fetchAgentList
@@ -523,7 +531,7 @@ func New(configPath string, processes ProcessStateProvider, scheduler SchedulerP
 	s.setupConsultRuntime(opts, resolveCallerSession)
 
 	s.injectPrompt = func(ctx context.Context, session, body string) error {
-		return tmux.InjectPrompt(ctx, findTmuxPath(), session, body)
+		return tmux.InjectPrompt(ctx, s.tmuxPath(), session, body)
 	}
 	s.setupChat(opts.Chat)
 

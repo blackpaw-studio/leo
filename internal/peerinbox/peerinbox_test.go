@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -124,7 +125,7 @@ func TestResolveSocket(t *testing.T) {
 				pid := args[len(args)-1]
 				return exec.CommandContext(ctx, "printf", tt.children[pid])
 			}
-			got, err := ResolveSocket(context.Background(), execFn, "leo-agent")
+			got, err := ResolveSocket(context.Background(), execFn, "/managed/tmux", "leo-agent")
 			if tt.wantErr {
 				if err == nil {
 					t.Fatal("ResolveSocket() error = nil")
@@ -162,7 +163,7 @@ func TestResolveSockectContextCancellation(t *testing.T) {
 	defer cancel()
 
 	start := time.Now()
-	_, sockErr := ResolveSocket(ctx, execFn, "leo-agent")
+	_, sockErr := ResolveSocket(ctx, execFn, "/managed/tmux", "leo-agent")
 	elapsed := time.Since(start)
 
 	if sockErr == nil {
@@ -212,5 +213,33 @@ func TestXDGRuntimeDirUnsetNoRelativePath(t *testing.T) {
 		if !filepath.IsAbs(dir) && dir != "" {
 			t.Errorf("socketDirs contains relative path: %q", dir)
 		}
+	}
+}
+
+// The pane-pid lookup runs the injected tmux binary with the exact leo argv,
+// and falls back to a bare "tmux" only when no path is injected.
+func TestResolveSocketRunsTheInjectedTmux(t *testing.T) {
+	for _, tt := range []struct{ name, tmuxPath, wantBin string }{
+		{"injected", "/managed/tmux", "/managed/tmux"},
+		{"default", "", "tmux"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			var gotBin string
+			var gotArgs []string
+			execFn := func(ctx context.Context, name string, args ...string) *exec.Cmd {
+				gotBin, gotArgs = name, args
+				return exec.CommandContext(ctx, "false")
+			}
+
+			_, _ = ResolveSocket(context.Background(), execFn, tt.tmuxPath, "leo-agent")
+
+			if gotBin != tt.wantBin {
+				t.Errorf("binary = %q, want %q", gotBin, tt.wantBin)
+			}
+			want := []string{"-L", "leo", "display-message", "-p", "-t", "leo-agent", "#{pane_pid}"}
+			if !reflect.DeepEqual(gotArgs, want) {
+				t.Errorf("argv = %v, want %v", gotArgs, want)
+			}
+		})
 	}
 }

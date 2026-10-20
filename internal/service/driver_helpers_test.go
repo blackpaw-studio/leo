@@ -51,7 +51,7 @@ func TestHandleForSpecDefaultsKindToAgent(t *testing.T) {
 	id := newProcIdentity("myproc", []string{"--model", "sonnet"})
 	spec := ProcessSpec{Name: "myproc", WorkDir: "/tmp/ws", Env: map[string]string{"A": "1"}, OpeningPrompt: "hi"}
 
-	h := handleForSpec(spec, id, home)
+	h := handleForSpec(spec, id, home, "")
 	if h.Kind != harness.KindAgent {
 		t.Errorf("Kind = %q, want %q", h.Kind, harness.KindAgent)
 	}
@@ -77,8 +77,18 @@ func TestHandleForSpecPreservesExplicitKind(t *testing.T) {
 	id := newProcIdentity("agent1", nil)
 	spec := ProcessSpec{Name: "agent1", Kind: harness.KindAgent}
 
-	h := handleForSpec(spec, id, home)
+	h := handleForSpec(spec, id, home, "")
 	if h.Kind != harness.KindAgent {
 		t.Errorf("Kind = %q, want %q", h.Kind, harness.KindAgent)
+	}
+}
+
+func TestHandleForSpecCarriesTheDaemonsTmux(t *testing.T) {
+	spec := ProcessSpec{Name: "myproc"}
+
+	h := handleForSpec(spec, newProcIdentity("myproc", nil), t.TempDir(), "/managed/3.5/tmux")
+
+	if h.TmuxPath != "/managed/3.5/tmux" {
+		t.Errorf("TmuxPath = %q, want /managed/3.5/tmux", h.TmuxPath)
 	}
 }

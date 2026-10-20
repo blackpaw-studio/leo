@@ -23,7 +23,7 @@ func (s *Server) resolveDispatchCaller(caller, pane, parentDispatchID string) (d
 		}
 	}
 	if pane == "" && session != "" {
-		out, err := s.execCommand(findTmuxPath(), tmux.Args("show-options", "-t", tmux.Target(session)+":", "-v", "@leo_primary_pane")...).Output()
+		out, err := s.execCommand(s.tmuxPath(), tmux.Args("show-options", "-t", tmux.Target(session)+":", "-v", "@leo_primary_pane")...).Output()
 		if err != nil {
 			return dispatchCaller{}, nil
 		}
@@ -35,7 +35,7 @@ func (s *Server) resolveDispatchCaller(caller, pane, parentDispatchID string) (d
 	if !canonicalPaneID.MatchString(pane) {
 		return dispatchCaller{}, fmt.Errorf("caller_pane_id %q must be a canonical %%N pane id", pane)
 	}
-	out, err := s.execCommand(findTmuxPath(), tmux.Args("display-message", "-p", "-t", pane, "#{session_name} #{session_id} #{window_id}")...).Output()
+	out, err := s.execCommand(s.tmuxPath(), tmux.Args("display-message", "-p", "-t", pane, "#{session_name} #{session_id} #{window_id}")...).Output()
 	if err != nil {
 		return dispatchCaller{}, fmt.Errorf("caller_pane_id %q is not a live pane", pane)
 	}
@@ -62,7 +62,7 @@ func (s *Server) resolveDispatchCaller(caller, pane, parentDispatchID string) (d
 		harness = s.parentDispatchHarness(parentDispatchID, pane)
 	}
 	if harness == "" {
-		command, err := s.execCommand(findTmuxPath(), tmux.Args("display-message", "-p", "-t", pane, "#{pane_current_command}")...).Output()
+		command, err := s.execCommand(s.tmuxPath(), tmux.Args("display-message", "-p", "-t", pane, "#{pane_current_command}")...).Output()
 		if err == nil {
 			switch strings.ToLower(filepath.Base(strings.TrimSpace(string(command)))) {
 			case "claude", "codex", "opencode":

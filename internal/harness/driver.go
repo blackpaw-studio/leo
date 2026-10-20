@@ -21,6 +21,7 @@ type SessionHandle struct {
 	Workspace     string
 	HomePath      string
 	Env           map[string]string // resolved spawn env for driver-spawned helper processes
+	TmuxPath      string            // tmux binary the daemon resolved; empty means locate one
 	OpeningPrompt string            // delivered by Start for drivers that can't put it in argv
 	IDs           SessionIDStore
 }

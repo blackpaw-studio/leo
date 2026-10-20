@@ -3,6 +3,7 @@ package tmuxtui
 import (
 	"context"
 	"errors"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -350,5 +351,43 @@ func TestAbortTurn_LocateError(t *testing.T) {
 	err := d.AbortTurn(harness.SessionHandle{TmuxSession: "leo-abort"})
 	if err == nil {
 		t.Fatal("AbortTurn() error = nil, want locate error to surface")
+	}
+}
+
+// A handle that carries the daemon's resolved tmux is used as-is: Inject
+// never falls back to a PATH lookup, which on a managed install with no
+// system tmux would find nothing.
+func TestInject_UsesHandleTmuxPathWithoutLocating(t *testing.T) {
+	var gotTmux string
+	restoreInject := SetInjectPromptForTest(func(_ context.Context, tmuxPath, _, _ string, _ tmux.Profile) error {
+		gotTmux = tmuxPath
+		return nil
+	})
+	defer restoreInject()
+	restoreLocate := SetLocateTmuxForTest(func() (string, error) { return "", errors.New("must not locate") })
+	defer restoreLocate()
+
+	d := New(Config{})
+	h := harness.SessionHandle{TmuxSession: "leo-foo", TmuxPath: "/managed/3.5/tmux", IDs: &fakeIDStore{}}
+
+	if _, err := d.Inject(context.Background(), h, "hello"); err != nil {
+		t.Fatalf("Inject() error = %v", err)
+	}
+	if gotTmux != "/managed/3.5/tmux" {
+		t.Errorf("inject ran tmux %q, want the handle's /managed/3.5/tmux", gotTmux)
+	}
+}
+
+func TestAbortTurn_UsesHandleTmuxPathWithoutLocating(t *testing.T) {
+	restoreLocate := SetLocateTmuxForTest(func() (string, error) { return "", errors.New("must not locate") })
+	defer restoreLocate()
+
+	d := New(Config{})
+	err := d.AbortTurn(harness.SessionHandle{TmuxSession: "leo-abort", TmuxPath: "/nonexistent/managed/tmux"})
+
+	// The binary does not exist, so the abort itself fails — but through the
+	// handle's path, not through a locate error.
+	if err != nil && strings.Contains(err.Error(), "must not locate") {
+		t.Fatalf("AbortTurn located tmux instead of using the handle's path: %v", err)
 	}
 }

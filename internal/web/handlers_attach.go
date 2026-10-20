@@ -262,8 +262,8 @@ type ptyAttach struct {
 }
 
 // startTmuxAttach runs attachCommand in a new PTY of the given size.
-func startTmuxAttach(session string, cols, rows uint16) (attachProc, error) {
-	cmd := attachCommand(findTmuxPath(), session)
+func startTmuxAttach(tmuxPath, session string, cols, rows uint16) (attachProc, error) {
+	cmd := attachCommand(tmuxPath, session)
 	ptmx, err := pty.StartWithSize(cmd, &pty.Winsize{Cols: cols, Rows: rows})
 	if err != nil {
 		return nil, err
