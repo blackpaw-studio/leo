@@ -92,7 +92,9 @@ type handoverDeps struct {
 	marker         managed.State
 	currentVersion string
 
-	daemonRunning func() bool
+	// daemonAlive reports whether a daemon owns daemon.lock. Lock ownership,
+	// not socket health: a daemon with broken IPC still holds the lock.
+	daemonAlive   func() bool
 	jobLoaded     func(label string) bool
 	exists        func(path string) bool
 	executable    func(path string) bool
@@ -193,7 +195,7 @@ func handOverToApp(ctx context.Context, opts handoverOptions, d handoverDeps, re
 		return failf(stepPreflight, "invalid_label", "--label %q must be reverse-DNS and not %s", opts.label, managed.CLILaunchdLabel)
 	case opts.label == d.prevLabel:
 		return failf(stepPreflight, "label_conflict", "--label must differ from the CLI install's label %s", d.prevLabel)
-	case !loaded && d.daemonRunning():
+	case !loaded && d.daemonAlive():
 		return failf(stepPreflight, "no_launchd_job", "a leo daemon is running but launchd has no job %s for it (started by hand?); stop it or register it first", d.prevLabel)
 	case !d.exists(d.plist):
 		return failf(stepPreflight, "plist_missing", "no launchd plist at %s", d.plist)
@@ -341,6 +343,20 @@ func versionOlder(restoredOutput, current string) bool {
 
 func ptrTo[T any](v T) *T { return &v }
 
+// daemonAliveByLock reports whether a daemon holds state/daemon.lock, by trying
+// to take it without blocking (and dropping it again at once). Any failure to
+// take it other than contention counts as "not alive": it is a preflight
+// hint, and the critical section waits on the same lock for real.
+func daemonAliveByLock(stateDir string) bool {
+	release, err := service.AcquireDaemonLock(stateDir)
+	if err == nil {
+		_ = release()
+		return false
+	}
+	var held *service.LockHeldError
+	return errors.As(err, &held)
+}
+
 // waitForLockRelease polls until acquire succeeds (then releases at once) or
 // timeout passes. A held lock means the old daemon is still shutting down.
 func waitForLockRelease(ctx context.Context, acquire func() (func() error, error), clock drain.Clock, timeout, every time.Duration) error {
@@ -395,24 +411,42 @@ managed_stopped, warnings}); progress goes to stderr and a failure exits
 non-zero. --dry-run runs the read-only checks and prints the plan.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			if toApp == toCLI {
-				return errors.New("pass exactly one of --to-app (with --label) or --to-cli")
-			}
-			if toApp && label == "" {
-				return errors.New("--to-app needs --label <launchd label>")
-			}
-			if drainTimeout <= 0 || drainTimeout > maxDrainTimeout {
-				return fmt.Errorf("--drain-timeout must be positive and at most %s", maxDrainTimeout)
-			}
-			if err := gateCommand(cmd, "leo_stop_agent"); err != nil {
-				return err
-			}
 			dir := handoverToApp
 			if toCLI {
 				dir = handoverToCLI
 			}
 			opts := handoverOptions{label: label, dryRun: dryRun, drainTimeout: drainTimeout, force: force}
-			return runHandoverCmd(cmd, dir, opts, asJSON)
+			check := func() *jsonError {
+				switch {
+				case toApp == toCLI:
+					return failJSON("invalid_args", errors.New("pass exactly one of --to-app (with --label) or --to-cli"))
+				case toApp && label == "":
+					return failJSON("invalid_args", errors.New("--to-app needs --label <launchd label>"))
+				case drainTimeout <= 0 || drainTimeout > maxDrainTimeout:
+					return failJSON("invalid_args", fmt.Errorf("--drain-timeout must be positive and at most %s", maxDrainTimeout))
+				}
+				if err := gateCommand(cmd, "leo_stop_agent"); err != nil {
+					return failJSON("not_permitted", err)
+				}
+				return nil
+			}
+			if asJSON {
+				return runJSON(cmd.OutOrStdout(), func() (any, error) {
+					if je := check(); je != nil {
+						return nil, je
+					}
+					return runHandoverResult(cmd, dir, opts, true)
+				})
+			}
+			if je := check(); je != nil {
+				return errors.New(je.Message)
+			}
+			res, err := runHandoverResult(cmd, dir, opts, false)
+			if err != nil {
+				return err
+			}
+			printHandoverText(cmd.OutOrStdout(), res.(handoverResult))
+			return nil
 		},
 	}
 	f := cmd.Flags()
@@ -423,38 +457,32 @@ non-zero. --dry-run runs the read-only checks and prints the plan.`,
 	f.BoolVar(&dryRun, "dry-run", false, "check and print the plan without changing anything")
 	f.DurationVar(&drainTimeout, "drain-timeout", defaultDrainTimeout, "how long to wait for busy agents to pause")
 	f.BoolVar(&force, "force", false, "continue when the drain times out instead of failing")
-	return cmd
+	return markJSON(cmd)
 }
 
-func runHandoverCmd(cmd *cobra.Command, dir handoverDirection, opts handoverOptions, asJSON bool) error {
+// runHandoverResult runs the handover. In JSON mode progress goes to stderr
+// and a failure carries the whole result as its payload.
+func runHandoverResult(cmd *cobra.Command, dir handoverDirection, opts handoverOptions, asJSON bool) (any, error) {
 	progress := cmd.OutOrStdout()
 	if asJSON {
 		progress = cmd.ErrOrStderr()
 	}
-	compute := func() handoverResult {
-		cfg, err := loadConfig()
-		if err != nil {
-			return failed(handoverResult{}, failf(stepPreflight, "config_error", "%v", err))
-		}
+	cfg, err := loadConfig()
+	var res handoverResult
+	if err != nil {
+		res = failed(handoverResult{}, failf(stepPreflight, "config_error", "%v", err))
+	} else {
 		ctx, stop := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM, syscall.SIGHUP)
 		defer stop()
-		return runHandover(ctx, dir, opts, newHandoverDeps(cfg, progress))
+		res = runHandover(ctx, dir, opts, newHandoverDeps(cfg, progress))
 	}
-	if !asJSON {
-		res := compute()
-		printHandoverText(progress, res)
-		if !res.OK {
-			return errors.New(res.Message)
-		}
-		return nil
+	if res.OK {
+		return res, nil
 	}
-	return runJSON(cmd.OutOrStdout(), func() (any, error) {
-		res := compute()
-		if res.OK {
-			return res, nil
-		}
+	if asJSON {
 		return nil, &jsonError{Code: res.Error, Message: res.Message, Payload: res}
-	})
+	}
+	return nil, errors.New(res.Message)
 }
 
 func printHandoverText(out io.Writer, res handoverResult) {
@@ -487,7 +515,7 @@ func newHandoverDeps(cfg *config.Config, progress io.Writer) handoverDeps {
 		markerPath:     filepath.Join(cfg.StatePath(), managed.MarkerFile),
 		marker:         st,
 		currentVersion: Version,
-		daemonRunning:  func() bool { return daemon.IsRunning(home) },
+		daemonAlive:    func() bool { return daemonAliveByLock(cfg.StatePath()) },
 		jobLoaded:      service.LabelLoaded,
 		exists:         func(p string) bool { _, err := os.Stat(p); return err == nil },
 		executable: func(p string) bool {

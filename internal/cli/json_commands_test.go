@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/blackpaw-studio/leo/internal/config"
@@ -20,11 +21,10 @@ func runRoot(t *testing.T, args ...string) (string, error) {
 		t.Fatal("call useTempConfig first: runRoot must never fall back to the real leo home")
 	}
 	cmd := newRootCmd()
-	cmd.SetArgs(append([]string{"--config", path}, args...))
 	var stdout bytes.Buffer
 	cmd.SetOut(&stdout)
 	cmd.SetErr(&bytes.Buffer{})
-	err := cmd.Execute()
+	err := executeRoot(cmd, append([]string{"--config", path}, args...))
 	return stdout.String(), err
 }
 
@@ -79,5 +79,86 @@ func TestHandoverJSONCmdFailureIsOneObjectWithTheFullResult(t *testing.T) {
 	}
 	if got.OK || got.Step != "preflight" || got.Error == "" {
 		t.Fatalf("result = %+v (stdout %q)", got, stdout)
+	}
+}
+
+// Every failure of a --json command is exactly one JSON object on stdout,
+// including the ones cobra raises before the command's own code runs.
+func TestJSONCommandsReportArgAndFlagErrorsAsInvalidArgs(t *testing.T) {
+	tests := []struct {
+		name string
+		args []string
+	}{
+		{"handover without a direction", []string{"service", "handover", "--json"}},
+		{"handover --to-app without a label", []string{"service", "handover", "--to-app", "--json"}},
+		{"web enable with a bad drain timeout", []string{"web", "enable", "--json", "--drain-timeout", "0s"}},
+		{"unknown flag", []string{"pair", "--json", "--bogus"}},
+		{"unknown flag before --json", []string{"pair", "--bogus", "--json"}},
+		{"unexpected argument", []string{"pair", "--json", "extra"}},
+		{"mutually exclusive flags", []string{"service", "restart", "--json", "--graceful", "--no-graceful"}},
+		{"invalid flag value", []string{"service", "restart", "--json", "--drain-timeout", "soon"}},
+		{"handover with --json=true", []string{"service", "handover", "--json=true"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			useTempConfig(t, nil)
+
+			stdout, err := runRoot(t, tt.args...)
+
+			if ExitCode(err) != 1 || err.Error() != "" {
+				t.Fatalf("err = %v, want a silent exit 1", err)
+			}
+			var got jsonFailure
+			dec := json.NewDecoder(strings.NewReader(stdout))
+			if derr := dec.Decode(&got); derr != nil {
+				t.Fatalf("stdout is not a JSON object: %q", stdout)
+			}
+			if dec.More() || strings.Count(stdout, "\n") != 1 {
+				t.Fatalf("stdout must be exactly one object, got %q", stdout)
+			}
+			if got.Error != "invalid_args" || got.Message == "" {
+				t.Fatalf("failure = %+v", got)
+			}
+		})
+	}
+}
+
+func TestUnknownFlagMessageIsCobrasOwn(t *testing.T) {
+	useTempConfig(t, nil)
+
+	stdout, _ := runRoot(t, "pair", "--json", "--bogus")
+
+	if !strings.Contains(stdout, "unknown flag: --bogus") {
+		t.Fatalf("stdout = %q", stdout)
+	}
+}
+
+func TestTextModeErrorsStayPlain(t *testing.T) {
+	useTempConfig(t, nil)
+
+	stdout, err := runRoot(t, "pair", "--bogus")
+
+	if stdout != "" || err == nil || err.Error() == "" {
+		t.Fatalf("stdout %q err %v: without --json errors stay plain", stdout, err)
+	}
+}
+
+func TestJSONFalseDoesNotSwitchOnJSONErrors(t *testing.T) {
+	useTempConfig(t, nil)
+
+	stdout, err := runRoot(t, "pair", "--json=false", "--bogus")
+
+	if stdout != "" || err == nil || err.Error() == "" {
+		t.Fatalf("stdout %q err %v", stdout, err)
+	}
+}
+
+func TestOtherCommandsAreNotWrapped(t *testing.T) {
+	useTempConfig(t, nil)
+
+	stdout, err := runRoot(t, "version", "--bogus", "--json")
+
+	if stdout != "" || err == nil || err.Error() == "" {
+		t.Fatalf("stdout %q err %v: only commands that promise JSON get it", stdout, err)
 	}
 }

@@ -50,7 +50,7 @@ func newHoFixture(t *testing.T, busy ...string) *hoFixture {
 		markerPath:     hoMarker,
 		marker:         managed.State{},
 		currentVersion: "v0.60.0",
-		daemonRunning:  func() bool { return true },
+		daemonAlive:    func() bool { return true },
 		jobLoaded:      func(string) bool { return true },
 		exists:         func(string) bool { return true },
 		executable:     func(string) bool { return true },
@@ -124,7 +124,7 @@ func TestHandoverToAppWithNothingBusyStillRunsTheCriticalSection(t *testing.T) {
 func TestHandoverToAppCLIDaemonNotLoadedOnlyMovesThePlist(t *testing.T) {
 	f := newHoFixture(t)
 	f.deps.jobLoaded = func(string) bool { return false }
-	f.deps.daemonRunning = func() bool { return false }
+	f.deps.daemonAlive = func() bool { return false }
 
 	res := f.run(t, handoverToApp, toApp(hoAppLabel))
 
@@ -132,6 +132,41 @@ func TestHandoverToAppCLIDaemonNotLoadedOnlyMovesThePlist(t *testing.T) {
 		t.Fatalf("result = %+v", res)
 	}
 	f.wantLog(t, "plutil-env "+hoPlist, "rename "+hoPlist+" "+hoBackup)
+}
+
+// A daemon whose IPC socket is broken still holds daemon.lock. Deciding from
+// socket health would call it stopped and move the plist out from under it.
+func TestHandoverToAppLockHolderWithNoJobIsNotTreatedAsStopped(t *testing.T) {
+	f := newHoFixture(t)
+	f.deps.jobLoaded = func(string) bool { return false }
+	f.deps.daemonAlive = func() bool { return true }
+
+	res := f.run(t, handoverToApp, toApp(hoAppLabel))
+
+	if res.OK || res.Step != "preflight" || res.Error != "no_launchd_job" {
+		t.Fatalf("result = %+v", res)
+	}
+	f.wantLog(t)
+}
+
+func TestDaemonAliveByLockFollowsLockOwnership(t *testing.T) {
+	dir := t.TempDir()
+	if daemonAliveByLock(dir) {
+		t.Fatal("alive with nobody holding the lock")
+	}
+	release, err := service.AcquireDaemonLock(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !daemonAliveByLock(dir) {
+		t.Fatal("not alive while the lock is held")
+	}
+	if err := release(); err != nil {
+		t.Fatal(err)
+	}
+	if daemonAliveByLock(dir) {
+		t.Fatal("still alive after the lock was released")
+	}
 }
 
 func TestHandoverToAppFailures(t *testing.T) {

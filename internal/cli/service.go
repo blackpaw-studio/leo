@@ -258,6 +258,7 @@ idle (up to --drain-timeout), and they are told to resume afterwards.`,
 			return nil
 		},
 	}
+	markJSON(cmd)
 	addGracefulFlags(cmd, &gopts)
 	cmd.Flags().BoolVar(&asJSON, "json", false, "print one JSON object on stdout (errors as {error, message}); progress goes to stderr")
 

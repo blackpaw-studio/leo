@@ -51,7 +51,7 @@ its own bearer token; list and revoke paired phones with 'leo devices'.`,
 		},
 	}
 	cmd.Flags().BoolVar(&asJSON, "json", false, "print the payload, warnings, expiry and the exact QR string as one JSON object instead of a QR code")
-	return cmd
+	return markJSON(cmd)
 }
 
 // errWebDisabled is a pairing request against a daemon with no web listener.
