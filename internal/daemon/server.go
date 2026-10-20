@@ -142,6 +142,9 @@ type Server struct {
 	// through, set by StartWeb.
 	drain         atomic.Pointer[drain.Manager]
 	drainNotifier atomic.Pointer[drainNotifierHolder]
+	// runningDispatches lists the web server's running dispatches for the
+	// drain (see RunningDispatches); set by StartWeb.
+	runningDispatches atomic.Pointer[func() []drain.Probe]
 	// webSources are the web server's bridge feed and dispatch counts,
 	// merged into the local /state rows; set by StartWeb.
 	webSources atomic.Pointer[web.AgentSources]
@@ -488,6 +491,7 @@ func (s *Server) StartWeb(cfg *config.Config, agentSvc web.AgentService) error {
 	}, observeOpts...)
 	s.setControl(s.webServer.ControlHandler())
 	s.setDrainNotifier(s.webServer.DrainNotifier())
+	s.setRunningDispatches(s.webServer.RunningDispatches)
 	if s.chatStore != nil {
 		s.webServer.StartChat(s.parentContext)
 		s.setChat(s.webServer.ChatHandler())

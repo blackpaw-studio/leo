@@ -2,10 +2,12 @@ package web
 
 import (
 	"context"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/blackpaw-studio/leo/internal/consult"
 	"github.com/blackpaw-studio/leo/internal/drain"
 )
 
@@ -82,5 +84,24 @@ func TestDrainNotifierUnknownAgentFails(t *testing.T) {
 	_, err := s.DrainNotifier().Message(context.Background(), "ghost", "[leo] pause", "")
 	if err == nil || !strings.Contains(err.Error(), "ghost") {
 		t.Fatalf("err = %v, want a no-such-agent error", err)
+	}
+}
+
+// Running dispatches go to the drain by name (their id when unnamed),
+// marked as dispatches so it lists them without messaging them.
+func TestDispatchProbesNameRunningDispatches(t *testing.T) {
+	got := dispatchProbes([]consult.Record{{ID: "d-1", Name: "fix-x"}, {ID: "d-2"}})
+	want := []drain.Probe{
+		{Name: "fix-x", Exists: true, Busy: true, Kind: drain.KindDispatch},
+		{Name: "d-2", Exists: true, Busy: true, Kind: drain.KindDispatch},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("dispatchProbes = %+v, want %+v", got, want)
+	}
+}
+
+func TestRunningDispatchesWithoutADispatcherIsEmpty(t *testing.T) {
+	if got := (&Server{}).RunningDispatches(); len(got) != 0 {
+		t.Fatalf("RunningDispatches = %+v, want none", got)
 	}
 }

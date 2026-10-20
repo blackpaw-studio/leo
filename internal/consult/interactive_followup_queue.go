@@ -26,6 +26,7 @@ func (d *Dispatcher) ApplyConfig(cfg *config.Config) {
 	d.slots.SetMax(cfg.DispatchMaxConcurrent())
 	d.mu.Lock()
 	d.placementCfg = cfg
+	d.adoptTimeout = cfg.DispatchAdoptTimeout()
 	d.mu.Unlock()
 }
 

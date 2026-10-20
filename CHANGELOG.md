@@ -17,6 +17,14 @@ All notable user-visible changes to Leo are documented here.
 
 ### Added
 
+- **Interactive dispatches survive a daemon restart.** `leo update`, `leo
+  service restart` or a crash no longer cut off a working interactive
+  dispatch: if its pane is still alive, the new daemon adopts it under the
+  same run id and turn, and its result reaches the caller as usual. A run
+  that doesn't reattach within `defaults.dispatch.adopt_timeout` (default
+  2m), or whose pane is gone, closes as `daemon restarted`, as before.
+  Graceful restart lists running dispatches next to busy agents and doesn't
+  pause them.
 - **AskUserQuestion in Leo Chat.** A supervised Claude agent's
   `AskUserQuestion` used to appear as a generic Allow/Deny card around clipped
   JSON. It is now one questions card for all the questions (a new `questions`

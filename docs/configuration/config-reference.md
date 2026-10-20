@@ -24,6 +24,7 @@ Settings inherited by all tasks and templates unless overridden.
 | `dispatch.viewer` | map | No | Dispatch viewer settings: `placement` (`pane`, `window` or `background`, default `pane`), `max_panes` (1–6, default 3), and `main_pane_height` (20–90 percent, default 60). |
 | `dispatch.max_concurrent` | int | No | Cap on dispatch turns running at once (default `6`, `0` = unlimited, negative is rejected). New dispatches and interactive follow-ups beyond the cap queue in one FIFO line instead of being rejected. See [Dispatches → Records and limits](dispatches.md#records-and-limits). |
 | `dispatch.approval_timeout` | string | No | How long an interactive claude dispatch's permission prompt waits for the orchestrator's decision (Go duration, positive, at most `24h`; default `30m`) before the prompt falls back to the dispatch's pane. See [Dispatches → Permission prompts](dispatches.md#permission-prompts). |
+| `dispatch.adopt_timeout` | string | No | How long a restarted daemon waits for an adopted interactive dispatch to show life (its bridge reconnecting, a hook report, or its pane changing) before closing it as `daemon restarted` (Go duration, positive, at most `1h`; default `2m`). See [Dispatches → Daemon restarts](dispatches.md#daemon-restarts). |
 
 Custom Anthropic-compatible endpoints (z.ai GLM, OpenRouter, Moonshot, DeepSeek, MiniMax, …) are configured via each scope's own `env:` map (`ANTHROPIC_BASE_URL`, `ANTHROPIC_AUTH_TOKEN`) — see [Harnesses → providers is gone](harnesses.md#providers-is-gone).
 

@@ -19,11 +19,11 @@ func drainLogf(format string, args ...any) {
 }
 
 // newDrainManager builds the graceful-restart drain over the supervisor's
-// agents, the daemon's cron scheduler and agent messenger, and the
+// agents (listing the daemon's running dispatches beside them), the daemon's cron scheduler and agent messenger, and the
 // pending-resume file in homePath's state dir.
 func newDrainManager(srv *daemon.Server, sup *Supervisor, tmuxPath, homePath string) *drain.Manager {
 	return drain.New(drain.Deps{
-		Prober:   newDrainProber(sup, tmuxPath, drainLogf),
+		Prober:   newDrainProber(sup, tmuxPath, srv.RunningDispatches, drainLogf),
 		Notifier: srv.DrainNotifier(),
 		Cron:     srv.Scheduler(),
 		Store:    drain.NewFileStore(filepath.Join(homePath, "state")),

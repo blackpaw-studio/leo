@@ -174,7 +174,9 @@ func TestInteractivePaneDeath(t *testing.T) {
 	})
 }
 
-func TestInteractiveDaemonRestart(t *testing.T) {
+// A live pane outlives the daemon, so the restarted daemon adopts its run:
+// same id, pane and turns, and it still takes follow-ups.
+func TestInteractiveDaemonRestartAdoptsTheLivePane(t *testing.T) {
 	s := newInteractiveE2E(t)
 	started := s.dispatch(t, "complete before daemon restart")
 	_ = s.wait(t, started.ID+"#1")
@@ -184,9 +186,33 @@ func TestInteractiveDaemonRestart(t *testing.T) {
 	}
 
 	s.restartDaemon(t)
+	adopted := s.record(t, started.ID)
+	if adopted.Status.Terminal() || adopted.AdoptedAt.IsZero() || adopted.PaneID != rec.PaneID {
+		t.Fatalf("after restart: status %s, adopted_at %v, pane %s; want %s adopted live", adopted.Status, adopted.AdoptedAt, adopted.PaneID, rec.PaneID)
+	}
+	if !s.paneAlive(rec.PaneID) {
+		t.Fatal("the restarted daemon killed the adopted pane")
+	}
+	send := s.send(t, started.ID, "after restart")
+	if send.TurnID != started.ID+"#2" {
+		t.Fatalf("send turn_id = %q", send.TurnID)
+	}
+	if second := s.wait(t, send.TurnID); second.Outcome != consult.TurnFinished || second.Text != "FAKE-REPLY: after restart" {
+		t.Fatalf("follow-up after restart = %+v", second)
+	}
+}
+
+// A pane that died while the daemon was down leaves nothing to adopt: the
+// run closes as before.
+func TestInteractiveDaemonRestartSettlesAGonePane(t *testing.T) {
+	s := newInteractiveE2E(t)
+	started := s.dispatch(t, "complete before daemon restart")
+	_ = s.wait(t, started.ID+"#1")
+	rec := s.record(t, started.ID)
+	s.restartDaemonAfter(t, func() { s.killPane(t, rec.PaneID) })
 	s.waitForStatus(t, started.ID, consult.StatusClosed, 10*time.Second)
-	if s.paneAlive(rec.PaneID) {
-		t.Fatal("orphan interactive pane survived daemon restart")
+	if got := s.record(t, started.ID); got.Error != "daemon restarted" || !got.AdoptedAt.IsZero() {
+		t.Fatalf("settled record: error %q, adopted_at %v", got.Error, got.AdoptedAt)
 	}
 }
 
@@ -366,10 +392,18 @@ func (s *interactiveE2E) daemonEnv() []string {
 
 func (s *interactiveE2E) restartDaemon(t *testing.T) {
 	t.Helper()
+	s.restartDaemonAfter(t, func() {})
+}
+
+// restartDaemonAfter SIGKILLs the daemon, as launchctl kickstart -k does,
+// runs whileDown, then starts it again and waits for it to serve.
+func (s *interactiveE2E) restartDaemonAfter(t *testing.T, whileDown func()) {
+	t.Helper()
 	if err := s.service.Process.Kill(); err != nil {
 		t.Fatalf("killing service: %v", err)
 	}
 	_ = s.service.Wait()
+	whileDown()
 	s.startDaemon(t)
 	s.waitFor(t, func() bool {
 		resp, err := http.Get(fmt.Sprintf("http://127.0.0.1:%d/api/v1/state", s.port))

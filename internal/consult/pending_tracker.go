@@ -179,7 +179,9 @@ func cloneBackgroundTasks(tasks []BackgroundTask) []BackgroundTask { return slic
 // PostToolUse was lost and pruning ended ones. Only the tracker changes: a
 // turn the bridge's turn.complete already closed stays closed, since
 // reopening it would collide with its completion notification and any
-// release_on_finish it triggered.
+// release_on_finish it triggered. Any superseded hook also notes where the
+// session's transcript is, which only hooks say (see
+// noteLiveTranscriptLocked).
 func (d *Dispatcher) ReportSupersededStop(id string, r HookReport) error {
 	_, s, err := d.lookup(id)
 	if err != nil || s == nil {
@@ -191,7 +193,13 @@ func (d *Dispatcher) ReportSupersededStop(id string, r HookReport) error {
 		return nil
 	}
 	var p map[string]any
-	if json.Unmarshal(r.Payload, &p) != nil || normalizeHookEvent(str(p, "hook_event_name")) != "stop" {
+	if json.Unmarshal(r.Payload, &p) != nil {
+		return nil
+	}
+	if noteLiveTranscriptLocked(s, p) {
+		d.persistLocked(s, "")
+	}
+	if normalizeHookEvent(str(p, "hook_event_name")) != "stop" {
 		return nil
 	}
 	d.setTrackedLocked(s, reconcileStop(s.record.BackgroundTasks, p, d.now(), true))

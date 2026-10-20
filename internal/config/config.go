@@ -260,6 +260,10 @@ type DispatchConfig struct {
 	// dispatches and follow-ups queue FIFO until a slot frees. Unset means
 	// DefaultDispatchMaxConcurrent, 0 means unlimited.
 	MaxConcurrent *int `yaml:"max_concurrent,omitempty"`
+	// AdoptTimeout is how long a live interactive dispatch found after a
+	// daemon restart may take to show bridge or pane activity before it is
+	// settled as "daemon restarted", as a Go duration. Empty means 2m.
+	AdoptTimeout string `yaml:"adopt_timeout,omitempty"`
 }
 
 // DefaultDispatchMaxConcurrent is the slot cap when max_concurrent is unset.
@@ -288,15 +292,38 @@ func (c *Config) DispatchApprovalTimeout() time.Duration {
 }
 
 func parseApprovalTimeout(raw string) (time.Duration, error) {
+	return parseBoundedDuration(raw, defaultDispatchApprovalTimeout, maxDispatchApprovalTimeout)
+}
+
+// DefaultDispatchAdoptTimeout is adopt_timeout when it is unset.
+const DefaultDispatchAdoptTimeout = 2 * time.Minute
+
+const maxDispatchAdoptTimeout = time.Hour
+
+// DispatchAdoptTimeout is the parsed adopt_timeout; Validate rejects an
+// unusable value, which otherwise reads as the default.
+func (c *Config) DispatchAdoptTimeout() time.Duration {
+	if d, err := parseAdoptTimeout(c.Defaults.Dispatch.AdoptTimeout); err == nil && d > 0 {
+		return d
+	}
+	return DefaultDispatchAdoptTimeout
+}
+
+func parseAdoptTimeout(raw string) (time.Duration, error) {
+	return parseBoundedDuration(raw, DefaultDispatchAdoptTimeout, maxDispatchAdoptTimeout)
+}
+
+// parseBoundedDuration parses a Go duration in (0, limit]; empty means def.
+func parseBoundedDuration(raw string, def, limit time.Duration) (time.Duration, error) {
 	if raw == "" {
-		return defaultDispatchApprovalTimeout, nil
+		return def, nil
 	}
 	d, err := time.ParseDuration(raw)
 	if err != nil {
 		return 0, err
 	}
-	if d <= 0 || d > maxDispatchApprovalTimeout {
-		return 0, fmt.Errorf("must be positive and at most %s", maxDispatchApprovalTimeout)
+	if d <= 0 || d > limit {
+		return 0, fmt.Errorf("must be positive and at most %s", limit)
 	}
 	return d, nil
 }
@@ -534,6 +561,9 @@ func (c *Config) Validate() error {
 	}
 	if _, err := parseApprovalTimeout(c.Defaults.Dispatch.ApprovalTimeout); err != nil {
 		errs = append(errs, fmt.Sprintf("defaults.dispatch.approval_timeout %q: %v", c.Defaults.Dispatch.ApprovalTimeout, err))
+	}
+	if _, err := parseAdoptTimeout(c.Defaults.Dispatch.AdoptTimeout); err != nil {
+		errs = append(errs, fmt.Sprintf("defaults.dispatch.adopt_timeout %q: %v", c.Defaults.Dispatch.AdoptTimeout, err))
 	}
 	errs = append(errs, c.validateChat()...)
 

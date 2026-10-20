@@ -101,6 +101,14 @@ func (l *slotLimiter) Cancel(w *slotWaiter) {
 	}
 }
 
+// Adopt takes a slot for a turn that is already running (one a restarted
+// daemon found at work): it never waits, even over the cap.
+func (l *slotLimiter) Adopt() {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.used++
+}
+
 // Release frees one slot. Releasing with none held is a no-op.
 func (l *slotLimiter) Release() {
 	l.mu.Lock()

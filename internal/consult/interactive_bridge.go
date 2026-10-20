@@ -279,6 +279,8 @@ func (r *TmuxInteractiveRuntime) AwaitOpening(ctx context.Context, pane string) 
 		return true, false, nil // released meanwhile; nothing to relaunch
 	}
 	fmt.Fprintf(os.Stderr, "dispatch %s: leo bridge did not connect within %s; relaunching without it\n", d.id, b.connectTimeout())
+	// The relaunched claude has no mod: nothing may adopt its bridge.
+	_ = r.run(ctx, "set-option", "-p", "-u", "-t", pane, adoptLaunchOption)
 	argv := append([]string{"respawn-pane", "-k", "-t", pane}, d.respawn...)
 	if err := r.run(ctx, argv...); err != nil {
 		return true, false, fmt.Errorf("relaunching without the leo bridge: %w", err)
@@ -345,6 +347,13 @@ type BridgeTokenSink interface {
 	ApplyBridgeTokens(id, eventID string, tokens *bridge.TurnTokens)
 }
 
+// BridgeHelloSink is a BridgeReportSink that hears each hello of a
+// dispatch's mod; the Dispatcher is one (a hello shows an adopted run is
+// live, see NoteBridgeHello).
+type BridgeHelloSink interface {
+	NoteBridgeHello(id string)
+}
+
 // LiveUsageSink is a BridgeReportSink that tracks running dispatches' live
 // usage; the Dispatcher is one. The subscriber has it catch up a completed
 // turn's transcript before reporting the Stop that lets a follow-up in.
@@ -363,6 +372,12 @@ func (r *TmuxInteractiveRuntime) DispatchBridgeSubscriber(sink BridgeReportSink)
 	return bridge.SubscriberFunc(func(ev bridge.Event) {
 		id, ok := DispatchIDFromBridgeKey(ev.Agent)
 		if !ok || !r.claimReport(id, ev) {
+			return
+		}
+		if ev.Name == bridge.ReportHello {
+			if helloSink, ok := sink.(BridgeHelloSink); ok {
+				helloSink.NoteBridgeHello(id)
+			}
 			return
 		}
 		if ev.Name == bridge.EventEffort {

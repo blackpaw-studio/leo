@@ -887,10 +887,15 @@ func (d *Dispatcher) Report(id string, r HookReport) error {
 	}
 	s.lastHook = d.now()
 	s.record.HookActivity = s.lastHook
+	// A report is the run's own word on where it is: an adopted run is
+	// live, and nothing it did while the daemon was down needs guessing.
+	s.adopting, s.adoptReconcile = false, false
 	if s.record.SessionID == "" {
 		s.record.SessionID = str(p, "session_id")
 	}
-	noteLiveTranscriptLocked(s, p)
+	if noteLiveTranscriptLocked(s, p) {
+		d.persistLocked(s, "")
+	}
 	// Effort lands only once the event is accepted and its turn placed: a
 	// submission's effort is the turn it starts, and a hook for a closed
 	// turn carries none.
@@ -1108,6 +1113,7 @@ func (d *Dispatcher) waitOnBackgroundLocked(s *runState, w *PendingWork, text st
 	old := s.record.Status
 	for _, t := range turns {
 		t.Pending = w
+		delete(s.adoptWaits, t.TurnID)
 		t.WaitText = appendStopText(t.WaitText, text)
 	}
 	d.recomputeStatusLocked(s, d.now())
@@ -1175,6 +1181,7 @@ func (d *Dispatcher) confirmArmedLocked(s *runState) {
 // caller persists the change.
 func (d *Dispatcher) resumeWaitingLocked(s *runState) {
 	clearPendingLocked(s)
+	s.adoptWaits = nil
 	d.settleResumedLocked(s)
 }
 
@@ -1302,6 +1309,7 @@ func (d *Dispatcher) Sweep(now time.Time) {
 	// d.now (as tests do), avoiding mixed-clock deadlines.
 	_ = now
 	now = d.now()
+	d.sweepAdopted(now)
 	type probe struct {
 		state         *runState
 		pane          string

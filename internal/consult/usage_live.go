@@ -46,14 +46,21 @@ type liveUsage struct {
 }
 
 // noteLiveTranscriptLocked records where a hook payload says the run's
-// transcript is.
-func noteLiveTranscriptLocked(s *runState, p map[string]any) {
-	if path := str(p, "transcript_path"); path != "" {
-		s.live.transcriptPath = path
-	}
+// transcript is, on the record too: a restarted daemon has no other way to
+// find a session under a non-default claude config dir. It reports whether
+// the record's path changed, so the caller can persist it.
+func noteLiveTranscriptLocked(s *runState, p map[string]any) bool {
 	if sid := str(p, "session_id"); sid != "" {
 		s.live.sessionID = sid
 	}
+	path := str(p, "transcript_path")
+	if path == "" {
+		return false
+	}
+	s.live.transcriptPath = path
+	changed := s.record.TranscriptPath != path
+	s.record.TranscriptPath = path
+	return changed
 }
 
 // watchLiveUsage polls the run's transcript until the run ends or the

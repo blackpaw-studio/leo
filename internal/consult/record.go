@@ -88,12 +88,14 @@ type Turn struct {
 	// is the two joined; the inline notification keeps it whole when the
 	// joined result overflows its cap.
 	FinalText string `json:"final_text,omitempty"`
-	armedAt   time.Time
-	// keys are the namespaced harness ids this turn answers to (see
-	// harnessKey); a wake adds a second. commandID is the bridge command a
-	// sent turn travels under, which its turn.start names. submitted is the
-	// normalized prompt of the submit that started it.
-	keys      []string
+	// HarnessKeys are the namespaced harness ids this turn answers to (see
+	// harnessKey); a wake adds a second. They are kept on the record so a
+	// restarted daemon still routes a completion under any of them.
+	HarnessKeys []string `json:"harness_keys,omitempty"`
+	armedAt     time.Time
+	// commandID is the bridge command a sent turn travels under, which its
+	// turn.start names. submitted is the normalized prompt of the submit
+	// that started it.
 	commandID string
 	submitted string
 }
@@ -150,13 +152,16 @@ type Record struct {
 	Timeout        time.Duration `json:"timeout,omitempty"`
 	// ViewerWindowID identifies the optional tmux viewer so lifecycle cleanup
 	// can survive a daemon restart.
-	ViewerWindowID  string `json:"viewer_window_id,omitempty"`
-	ViewerPaneID    string `json:"viewer_pane_id,omitempty"`
-	ViewerKind      string `json:"viewer_kind,omitempty"`
-	ViewerTitle     string `json:"viewer_title,omitempty"`
-	Mode            Mode   `json:"mode,omitempty"`
-	PaneID          string `json:"pane_id,omitempty"`
-	SessionID       string `json:"session_id,omitempty"`
+	ViewerWindowID string `json:"viewer_window_id,omitempty"`
+	ViewerPaneID   string `json:"viewer_pane_id,omitempty"`
+	ViewerKind     string `json:"viewer_kind,omitempty"`
+	ViewerTitle    string `json:"viewer_title,omitempty"`
+	Mode           Mode   `json:"mode,omitempty"`
+	PaneID         string `json:"pane_id,omitempty"`
+	SessionID      string `json:"session_id,omitempty"`
+	// TranscriptPath is where the run's hooks last said its transcript is,
+	// kept so a restarted daemon can read an adopted run's session.
+	TranscriptPath  string `json:"transcript_path,omitempty"`
 	Notify          bool   `json:"notify"`
 	CallerPaneID    string `json:"caller_pane_id,omitempty"`
 	CallerHarness   string `json:"caller_harness,omitempty"`
@@ -218,6 +223,9 @@ type Record struct {
 	// released run closed.
 	ReleaseOnFinish  bool `json:"release_on_finish"`
 	ReleasedOnFinish bool `json:"released_on_finish,omitempty"`
+	// AdoptedAt is when a restarted daemon took the run over from the one
+	// that launched it, its pane having survived the restart.
+	AdoptedAt time.Time `json:"adopted_at,omitzero"`
 }
 
 func (r *Record) startActive(now time.Time) {

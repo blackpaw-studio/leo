@@ -18,20 +18,23 @@ const drainProbeTimeout = 5 * time.Second
 
 // drainProber implements drain.Prober over the supervisor's ephemeral
 // agents: a connected bridge reports its busy flag, any other agent is
-// read from its pane the way tmux.InjectInto reads the composer.
+// read from its pane the way tmux.InjectInto reads the composer. Running
+// dispatches, from dispatches, are listed after them.
 type drainProber struct {
-	sup      *Supervisor
-	tmuxPath string
-	command  tmux.CommandFunc
-	logf     func(format string, args ...any)
+	sup        *Supervisor
+	tmuxPath   string
+	command    tmux.CommandFunc
+	logf       func(format string, args ...any)
+	dispatches func() []drain.Probe
 }
 
-func newDrainProber(sup *Supervisor, tmuxPath string, logf func(string, ...any)) *drainProber {
-	return &drainProber{sup: sup, tmuxPath: tmuxPath, command: exec.CommandContext, logf: logf}
+func newDrainProber(sup *Supervisor, tmuxPath string, dispatches func() []drain.Probe, logf func(string, ...any)) *drainProber {
+	return &drainProber{sup: sup, tmuxPath: tmuxPath, command: exec.CommandContext, logf: logf, dispatches: dispatches}
 }
 
 // BusyAgents probes every ephemeral agent, in name order, and returns the
-// busy ones. A probe error is logged and the agent counts as not busy.
+// busy ones, then the running dispatches. A probe error is logged and the
+// agent counts as not busy.
 func (p *drainProber) BusyAgents(ctx context.Context) ([]drain.Probe, error) {
 	agents := p.sup.EphemeralAgents()
 	names := make([]string, 0, len(agents))
@@ -51,6 +54,9 @@ func (p *drainProber) BusyAgents(ctx context.Context) ([]drain.Probe, error) {
 		if probe.Busy {
 			busy = append(busy, probe)
 		}
+	}
+	if p.dispatches != nil {
+		busy = append(busy, p.dispatches()...)
 	}
 	return busy, nil
 }

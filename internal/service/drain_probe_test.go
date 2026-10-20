@@ -118,3 +118,22 @@ func TestDrainBusyAgentsReturnsOnlyBusy(t *testing.T) {
 		t.Fatalf("BusyAgents = %+v, want %+v", got, want)
 	}
 }
+
+func TestDrainBusyAgentsListsRunningDispatchesAfterAgents(t *testing.T) {
+	sv := NewSupervisor(context.Background())
+	addEphemeral(sv, "beta", "claude")
+	fake := &fakeTmux{
+		panes:    map[string]string{"=leo-beta:": "%2"},
+		captures: map[string]string{"%2": drainProbeBusyCapture},
+	}
+	running := []drain.Probe{{Name: "fix-x", Exists: true, Busy: true, Kind: drain.KindDispatch}}
+	p := drainProber{sup: sv, tmuxPath: "tmux", command: fake.command, dispatches: func() []drain.Probe { return running }}
+	got, err := p.BusyAgents(context.Background())
+	if err != nil {
+		t.Fatalf("BusyAgents: %v", err)
+	}
+	want := []drain.Probe{{Name: "beta", Exists: true, Busy: true, Transport: drain.TransportComposer}, running[0]}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("BusyAgents = %+v, want %+v", got, want)
+	}
+}

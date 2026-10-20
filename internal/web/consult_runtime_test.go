@@ -2,13 +2,17 @@ package web
 
 import (
 	"context"
+	"io"
 	"os/exec"
+	"slices"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/blackpaw-studio/leo/internal/bridge"
 	"github.com/blackpaw-studio/leo/internal/config"
 	"github.com/blackpaw-studio/leo/internal/consult"
+	"github.com/blackpaw-studio/leo/internal/harness/claude/bridgemod"
 )
 
 func TestSetupConsultRuntimeUsesContextExecSeamForViewer(t *testing.T) {
@@ -109,5 +113,59 @@ func TestConsultRuntimeLoopPollsLivePlacementOnEachTickUntilShutdown(t *testing.
 	case ticks <- time.Time{}:
 		t.Fatal("placement loop still running after Shutdown")
 	default:
+	}
+}
+
+// A dispatch whose pane survives a daemon restart is adopted before the
+// daemon settles which bridge keys it will adopt: the claude still running
+// there reconnects under the launch its pane was tagged with, and its
+// reports finish the turn it was in.
+func TestSetupConsultRuntimeReopensAnAdoptedDispatchsBridge(t *testing.T) {
+	const id, launch = "d-web", "tok_ADOPT"
+	stateDir := t.TempDir()
+	recorder := consult.NewFileRecorder(stateDir)
+	h, err := recorder.Open(consult.Record{ID: id, Kind: "dispatch", Template: "worker", Harness: "claude", Mode: consult.ModeInteractive,
+		Status: consult.StatusRunning, PaneID: "%9", ViewerKind: "window", StartedAt: time.Now().Add(-time.Minute),
+		Turns: []consult.Turn{{TurnID: id + "#1", Source: consult.TurnSourceOrchestrator, Delivered: true, SlotHeld: true, HarnessTurnID: "t1"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = h.Close(consult.StatusRunning, nil)
+	startCommand := "exec 'env' 'LEO_DISPATCH_ID=" + id + "' 'claude'"
+	s := &Server{
+		configPath:  "test.yaml",
+		leoPath:     "leo",
+		execCommand: func(string, ...string) *exec.Cmd { return exec.Command("true") },
+		execCommandContext: func(_ context.Context, _ string, args ...string) *exec.Cmd {
+			if slices.Contains(args, "list-panes") && slices.Contains(args, "%9") {
+				return exec.Command("printf", "%s\n", "%9\t0\t"+launch+"\t"+startCommand)
+			}
+			return exec.Command("true")
+		},
+	}
+	hub := bridge.New(bridge.Options{})
+	t.Cleanup(hub.Close)
+	launcher := bridgemod.NewLauncher(bridgemod.LauncherOptions{StateDir: t.TempDir(), LeoVersion: "vtest", LeoBin: "/opt/leo", Log: io.Discard})
+	s.setupConsultRuntime(Options{ConsultRecorder: recorder, Bridge: BridgeOptions{Router: &bridge.Router{Hub: hub}, Launcher: launcher}}, nil)
+	hub.AwaitAdoption(nil) // as RestoreAgents does, once the agents are restored
+
+	key := consult.DispatchBridgeKey(id)
+	if _, err := hub.Connect(key, launch); err != nil {
+		t.Fatalf("the adopted dispatch's claude cannot reconnect: %v", err)
+	}
+	for _, r := range []bridge.Report{
+		{Type: bridge.ReportHello, SessionID: "s1", ClaudeVersion: "2.1.289"},
+		{Type: bridge.ReportEvent, Name: bridge.EventTurnComplete, TurnID: "t1", Message: "ADOPT-OK", EventID: "turn.complete:t1"},
+	} {
+		if err := hub.Apply(key, launch, r); err != nil {
+			t.Fatalf("applying %s: %v", r.Type, err)
+		}
+	}
+	rec, err := s.consults.Get(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rec.Status != consult.StatusIdle || rec.Turns[0].Outcome != consult.TurnFinished || rec.Turns[0].Text != "ADOPT-OK" {
+		t.Fatalf("status=%s turn=%+v; want the adopted turn finished with its text", rec.Status, rec.Turns[0])
 	}
 }
