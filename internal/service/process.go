@@ -882,6 +882,13 @@ func scrubDispatchIdentity() error {
 
 func defaultSupervisedExec(opts RunSupervisedOptions) error {
 	claudePath, homePath, configPath, webToken := opts.ClaudePath, opts.HomePath, opts.ConfigPath, opts.WebToken
+	// First thing, before the log rotator, tmux or the socket: a daemon that
+	// loses the lock must not unlink the winner's leo.sock or touch its logs.
+	releaseLock, err := AcquireDaemonLock(filepath.Join(homePath, "state"))
+	if err != nil {
+		return err
+	}
+	defer func() { _ = releaseLock() }()
 	localeEnv := os.Environ()
 	if warning := env.UTF8LocaleWarning(localeEnv); warning != "" {
 		fmt.Fprintf(os.Stderr, "warning: %s\n", warning)
