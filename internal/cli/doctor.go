@@ -111,6 +111,7 @@ func runDoctor(probeHost string, trigger bool) error {
 		warn.Printf("Config: %s\n", err)
 	} else {
 		reportServiceHealth(cfg.HomePath)
+		reportManaged(cfg)
 		reportBridge(context.Background(), cfg.HomePath, bridgeDoctorDepsFn())
 		reportChatVoice(cfg.ChatWhisperModel(), defaultChatLookPath)
 	}
