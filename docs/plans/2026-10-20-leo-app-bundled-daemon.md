@@ -217,6 +217,7 @@ Failing tests:
 
 ## Risks
 1. **`launchctl bootout` might kill the tmux server.** Only survival of `kickstart -k` is proven. Check this live on an isolated daemon before building C2. If bootout kills it, agents are lost and the design needs re-specifying.
+   **Gate passed (2026-10-20, live).** Isolated daemon: label `com.blackpaw.leo.gatetest`, plist `EnvironmentVariables.TMUX_TMPDIR` set to a temp dir (socket `<tmp>/tmuxtmp/tmux-501/leo`, distinct from production's `/private/tmp/tmux-501/leo`), `bin/leo service --supervised --config <tmp>/leo.yaml`, web disabled. The daemon (pid 2452) started its foreground `-L leo` server (pid 2460); a dummy session was created. After `launchctl bootout gui/501/com.blackpaw.leo.gatetest` (rc 0, job gone) the server was still pid 2460 and the dummy session and its pane (pid 2529) were alive. Cleanup killed only the test server; production socket and sessions untouched.
 2. **Local Network attribution after takeover.** The adopted server's creator process is gone, so the grant may lapse. Doctor detects it and `leo service reparent` fixes it (that bounces agents). Whether to offer reparent is an app-side UX call.
 3. **Lock loser crash-loop.** Under `KeepAlive true`, a daemon that loses the lock respawns about every 10s while both jobs are registered. It's noise, not harm; C3 surfaces it.
 4. **Universal notarization can't be tested locally.** It only runs on a real tag. Follow the release guard: CI green in its own call before tagging; pulling a release means reverting the tap cask commit.
