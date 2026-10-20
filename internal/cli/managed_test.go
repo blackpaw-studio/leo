@@ -88,3 +88,31 @@ func TestBuildServiceConfigUnmanagedUsesRunningExecutable(t *testing.T) {
 		t.Fatalf("LeoPath = %q, want os.Executable %q", sc.LeoPath, want)
 	}
 }
+
+// Under launchd's minimal PATH the daemon only finds claude through the
+// marker's PATH, so the marker env must be applied before any lookup.
+func TestResolveClaudeAppliesMarkerEnvBeforeLookup(t *testing.T) {
+	bin := t.TempDir()
+	fake := bin + "/claude"
+	if err := os.WriteFile(fake, []byte("#!/bin/sh\n"), 0o755); err != nil { //nolint:gosec // test fixture
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", "/nonexistent-leo-test-path")
+	stubManaged(t, managed.State{Managed: true, Marker: managed.Marker{Env: map[string]string{"PATH": bin}}})
+
+	got, err := resolveClaude(&config.Config{HomePath: t.TempDir()})
+	if err != nil {
+		t.Fatalf("resolveClaude: %v", err)
+	}
+	if got != fake {
+		t.Fatalf("claude = %q, want %q", got, fake)
+	}
+}
+
+func TestResolveClaudeWithoutMarkerEnvUsesProcessPath(t *testing.T) {
+	t.Setenv("PATH", "/nonexistent-leo-test-path")
+	stubManaged(t, managed.State{})
+	if got, err := resolveClaude(&config.Config{HomePath: t.TempDir()}); err == nil {
+		t.Fatalf("resolved %q from a PATH that has no claude", got)
+	}
+}
