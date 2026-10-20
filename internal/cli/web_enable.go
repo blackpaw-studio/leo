@@ -38,7 +38,9 @@ type webEnableResult struct {
 }
 
 type webEnableDeps struct {
-	daemonRunning func(home string) bool
+	// daemonWeb asks the running daemon about its web listener; reachable is
+	// false when no daemon answers.
+	daemonWeb func(home string) (status daemon.WebStatus, reachable bool)
 	// gracefulDeps builds the restart's drain and restart side effects.
 	gracefulDeps func(cfg *config.Config) gracefulDeps
 	save         func(cfg *config.Config) error
@@ -66,16 +68,22 @@ func runWebEnable(ctx context.Context, cfg *config.Config, opts webEnableOptions
 	if err := updated.Validate(); err != nil {
 		return webEnableResult{}, failJSON("invalid_config", err)
 	}
-	if updated.Web.Enabled == cfg.Web.Enabled && updated.WebBind() == cfg.WebBind() && slices.Equal(updated.Web.AllowedHosts, cfg.Web.AllowedHosts) {
+	configMatches := updated.Web.Enabled == cfg.Web.Enabled && updated.WebBind() == cfg.WebBind() && slices.Equal(updated.Web.AllowedHosts, cfg.Web.AllowedHosts)
+	live, reachable := deps.daemonWeb(updated.HomePath)
+	// A config that already matches is only a no-op while the daemon is
+	// really serving it: a restart that failed after an earlier save leaves
+	// the file right and the listener off.
+	if configMatches && (!reachable || servesWeb(live, &updated)) {
 		res.OK = true
 		return res, nil
 	}
-	if err := deps.save(&updated); err != nil {
-		return webEnableResult{}, failJSON("write_failed", err)
+	if !configMatches {
+		if err := deps.save(&updated); err != nil {
+			return webEnableResult{}, failJSON("write_failed", err)
+		}
+		res.Changed = true
 	}
-	res.Changed = true
-
-	if !deps.daemonRunning(updated.HomePath) {
+	if !reachable {
 		res.OK = true
 		return res, nil
 	}
@@ -95,6 +103,11 @@ func runWebEnable(ctx context.Context, cfg *config.Config, opts webEnableOptions
 	}
 	res.OK = true
 	return res, nil
+}
+
+// servesWeb reports whether the daemon's listener is on cfg's address.
+func servesWeb(live daemon.WebStatus, cfg *config.Config) bool {
+	return live.Listening && live.Bind == cfg.WebBind() && live.Port == cfg.WebPort()
 }
 
 // webEnableFailure is a failed restart after the config was saved.
@@ -131,19 +144,28 @@ non-zero exit.`,
   leo web enable --bind 192.168.1.20 --allow-host 192.168.1.20 --allow-host leo.local --json`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			if err := opts.gracefulOptions.validate(); err != nil {
-				return err
-			}
-			if err := gateCommand(cmd, "leo_stop_agent"); err != nil {
-				return err
+			check := func() *jsonError {
+				if err := opts.gracefulOptions.validate(); err != nil {
+					return failJSON("invalid_args", err)
+				}
+				if err := gateCommand(cmd, "leo_stop_agent"); err != nil {
+					return failJSON("not_permitted", err)
+				}
+				return nil
 			}
 			if asJSON {
 				if !opts.gracefulOptions.noGraceful {
 					opts.gracefulOptions.graceful = true
 				}
 				return runJSON(cmd.OutOrStdout(), func() (any, error) {
+					if je := check(); je != nil {
+						return nil, je
+					}
 					return runWebEnableCmd(cmd, opts, cmd.ErrOrStderr(), true)
 				})
+			}
+			if je := check(); je != nil {
+				return errors.New(je.Message)
 			}
 			res, err := runWebEnableCmd(cmd, opts, cmd.OutOrStdout(), false)
 			if err != nil {
@@ -158,7 +180,7 @@ non-zero exit.`,
 	f.StringSliceVar(&opts.allowHosts, "allow-host", nil, "host or IP to add to web.allowed_hosts (repeatable)")
 	f.BoolVar(&asJSON, "json", false, "print one JSON object on stdout; progress goes to stderr")
 	addGracefulFlags(cmd, &opts.gracefulOptions)
-	return cmd
+	return markJSON(cmd)
 }
 
 func runWebEnableCmd(cmd *cobra.Command, opts webEnableOptions, progress io.Writer, asJSON bool) (webEnableResult, error) {
@@ -172,7 +194,7 @@ func runWebEnableCmd(cmd *cobra.Command, opts webEnableOptions, progress io.Writ
 	ctx, stop := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM, syscall.SIGHUP)
 	defer stop()
 	deps := webEnableDeps{
-		daemonRunning: daemon.IsRunning,
+		daemonWeb: func(home string) (daemon.WebStatus, bool) { return daemon.DaemonWeb(ctx, home) },
 		gracefulDeps: func(cfg *config.Config) gracefulDeps {
 			d := newGracefulDepsTo(cfg, progress)
 			if asJSON {
@@ -187,6 +209,8 @@ func runWebEnableCmd(cmd *cobra.Command, opts webEnableOptions, progress io.Writ
 
 func printWebEnableText(out io.Writer, res webEnableResult) {
 	switch {
+	case res.Restarted && !res.Changed:
+		fmt.Fprintf(out, "The config already enabled the web listener, but the daemon was not serving it; daemon restarted (%s:%d).\n", res.Web.Bind, res.Web.Port)
 	case !res.Changed:
 		fmt.Fprintf(out, "The web listener is already enabled on %s:%d.\n", res.Web.Bind, res.Web.Port)
 	case res.Restarted:

@@ -126,3 +126,25 @@ func probeHealth(ctx context.Context, sockPath string) (healthData, bool) {
 	}
 	return health, true
 }
+
+// WebStatus is whether the running daemon is serving its web listener, and on
+// which address.
+type WebStatus struct {
+	Listening bool
+	Bind      string
+	Port      int
+}
+
+// DaemonWeb asks the daemon at workDir over its socket whether its web
+// listener is up. reachable is false when no daemon answers. A daemon that
+// predates the report is indistinguishable from one with the listener off.
+func DaemonWeb(ctx context.Context, workDir string) (status WebStatus, reachable bool) {
+	health, ok := probeHealth(ctx, SockPath(workDir))
+	if !ok {
+		return WebStatus{}, false
+	}
+	if health.Web == nil {
+		return WebStatus{}, true
+	}
+	return WebStatus{Listening: true, Bind: health.Web.Bind, Port: health.Web.Port}, true
+}

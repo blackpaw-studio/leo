@@ -157,6 +157,9 @@ type Server struct {
 	ready atomic.Bool
 	// pid is this daemon's boot identity reported on /health.
 	pid int
+	// webListening is the web listener's bound address once it is serving,
+	// reported on /health.
+	webListening atomic.Pointer[healthWeb]
 }
 
 // Option configures a Server at construction.
@@ -511,6 +514,7 @@ func (s *Server) StartWeb(cfg *config.Config, agentSvc web.AgentService) error {
 	if err := s.webServer.ListenAndServe(addr); err != nil {
 		return fmt.Errorf("starting web UI: %w", err)
 	}
+	s.setWebListening(bind, port)
 	fmt.Fprintf(os.Stderr, "web UI listening on http://%s\n", addr)
 	fmt.Fprintf(os.Stderr, "api token stored at %s (used for /api/* Bearer auth)\n", web.APITokenPath(cfg.StatePath()))
 	if !config.IsLoopbackBind(bind) {
@@ -633,7 +637,12 @@ func (s *Server) MarkReady() {
 }
 
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
-	writeData(w, http.StatusOK, healthData{Version: s.leoVersion, Ready: s.ready.Load(), PID: s.pid})
+	writeData(w, http.StatusOK, healthData{Version: s.leoVersion, Ready: s.ready.Load(), PID: s.pid, Web: s.webListening.Load()})
+}
+
+// setWebListening records the address the web listener is serving on.
+func (s *Server) setWebListening(bind string, port int) {
+	s.webListening.Store(&healthWeb{Bind: bind, Port: port})
 }
 
 type taskEnqueueReq struct {

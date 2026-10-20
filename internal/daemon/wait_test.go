@@ -230,3 +230,48 @@ func TestDaemonPID(t *testing.T) {
 		t.Fatalf("DaemonPID = %d, %v; want %d, true", got, ok, fakeDaemonPID)
 	}
 }
+
+func TestHealth_ReportsTheWebListenerOnceItIsServing(t *testing.T) {
+	s := New(filepath.Join(t.TempDir(), "leo.sock"), "/nonexistent/leo.yaml", nil)
+	s.SetObservability(nil, nil, nil, nil, "v-test")
+	s.pid = 77
+	s.setWebListening("127.0.0.1", 8370)
+
+	w := httptest.NewRecorder()
+	s.Handler().ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/health", nil))
+
+	const want = "{\"ok\":true,\"data\":{\"version\":\"v-test\",\"ready\":false,\"pid\":77,\"web\":{\"bind\":\"127.0.0.1\",\"port\":8370}}}\n"
+	if w.Body.String() != want {
+		t.Fatalf("body = %s, want %s", w.Body.String(), want)
+	}
+}
+
+func TestDaemonWeb_ReadsTheListenerFromHealth(t *testing.T) {
+	workDir := tmpWorkDir(t)
+	s := New(SockPath(workDir), "/nonexistent/leo.yaml", nil)
+	s.SetObservability(nil, nil, nil, nil, "v-test")
+	ln, err := net.Listen("unix", SockPath(workDir))
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := &http.Server{Handler: s.Handler()}
+	t.Cleanup(func() { _ = srv.Close() })
+	go func() { _ = srv.Serve(ln) }()
+
+	got, reachable := DaemonWeb(context.Background(), workDir)
+	if !reachable || got.Listening {
+		t.Fatalf("before the listener: %+v reachable=%v", got, reachable)
+	}
+
+	s.setWebListening("10.0.0.5", 9000)
+	got, reachable = DaemonWeb(context.Background(), workDir)
+	if !reachable || got != (WebStatus{Listening: true, Bind: "10.0.0.5", Port: 9000}) {
+		t.Fatalf("with the listener: %+v reachable=%v", got, reachable)
+	}
+}
+
+func TestDaemonWeb_UnreachableDaemon(t *testing.T) {
+	if _, reachable := DaemonWeb(context.Background(), tmpWorkDir(t)); reachable {
+		t.Fatal("reachable with no daemon")
+	}
+}

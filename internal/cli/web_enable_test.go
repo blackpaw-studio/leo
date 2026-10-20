@@ -11,15 +11,18 @@ import (
 	"time"
 
 	"github.com/blackpaw-studio/leo/internal/config"
+	"github.com/blackpaw-studio/leo/internal/daemon"
 )
 
 // webEnableFixture runs runWebEnable against a temp config, with the restart
 // driven through the real C1 routing (newGracefulDepsTo -> restartLabelFn) so
 // the managed label's argv is what gets asserted.
 type webEnableFixture struct {
-	cfg      *config.Config
-	calls    *serviceCalls
-	running  bool
+	cfg     *config.Config
+	calls   *serviceCalls
+	running bool
+	// web is what the running daemon reports about its listener.
+	web      daemon.WebStatus
 	gfix     *gracefulFixture
 	cfgBytes func() []byte
 }
@@ -55,7 +58,7 @@ func (f *webEnableFixture) run(t *testing.T, opts webEnableOptions) (webEnableRe
 		opts.gracefulOptions.drainTimeout = 10 * time.Second
 	}
 	deps := webEnableDeps{
-		daemonRunning: func(string) bool { return f.running },
+		daemonWeb: func(string) (daemon.WebStatus, bool) { return f.web, f.running },
 		gracefulDeps: func(cfg *config.Config) gracefulDeps {
 			d := newGracefulDepsTo(cfg, &bytes.Buffer{})
 			d.drain = f.gfix.drain
@@ -110,8 +113,9 @@ func TestWebEnableRestartsTheManagedJobOnceWhenTheDaemonIsRunning(t *testing.T) 
 	}
 }
 
-func TestWebEnableAlreadyEnabledWritesAndRestartsNothing(t *testing.T) {
+func TestWebEnableAlreadyEnabledAndServingWritesAndRestartsNothing(t *testing.T) {
 	f := newWebEnableFixture(t, func(c *config.Config) { c.Web.Enabled = true })
+	f.web = daemon.WebStatus{Listening: true, Bind: "127.0.0.1", Port: 8370}
 	before := f.cfgBytes()
 
 	res, err := f.run(t, webEnableOptions{})
@@ -124,6 +128,58 @@ func TestWebEnableAlreadyEnabledWritesAndRestartsNothing(t *testing.T) {
 	}
 	if len(f.calls.log) != 0 {
 		t.Fatalf("restart calls = %v", f.calls.log)
+	}
+}
+
+// The config can already say enabled while the daemon is not serving it: a
+// restart that failed after the save, or a listener enabled by hand. That is
+// not a no-op.
+func TestWebEnableAlreadyEnabledButNotServedRestartsWithoutRewriting(t *testing.T) {
+	tests := []struct {
+		name string
+		web  daemon.WebStatus
+	}{
+		{name: "listener off", web: daemon.WebStatus{}},
+		{name: "serving another port", web: daemon.WebStatus{Listening: true, Bind: "127.0.0.1", Port: 9999}},
+		{name: "serving another bind", web: daemon.WebStatus{Listening: true, Bind: "0.0.0.0", Port: 8370}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			f := newWebEnableFixture(t, func(c *config.Config) { c.Web.Enabled = true })
+			f.web = tt.web
+			before := f.cfgBytes()
+
+			res, err := f.run(t, webEnableOptions{})
+
+			if err != nil || !res.OK || res.Changed || !res.Restarted {
+				t.Fatalf("result = %+v err %v", res, err)
+			}
+			if !bytes.Equal(before, f.cfgBytes()) {
+				t.Fatal("config rewritten although it already matched")
+			}
+			if want := []string{"restart-label " + managedTestLabel}; !reflect.DeepEqual(f.calls.log, want) {
+				t.Fatalf("restart calls = %v, want %v", f.calls.log, want)
+			}
+		})
+	}
+}
+
+func TestWebEnableRerunAfterAFailedRestartRestartsAgain(t *testing.T) {
+	f := newWebEnableFixture(t, nil)
+	restartLabelFn = func(string) error { return os.ErrPermission }
+	if _, err := f.run(t, webEnableOptions{}); err == nil {
+		t.Fatal("first run should fail its restart")
+	}
+	f.calls = stubServiceSeams(t)
+	f.cfg = reloaded(t) // a rerun is a new process: it reads the saved file
+
+	res, err := f.run(t, webEnableOptions{gracefulOptions: gracefulOptions{force: true}})
+
+	if err != nil || !res.OK || res.Changed || !res.Restarted {
+		t.Fatalf("rerun result = %+v err %v (the saved config must not turn it into a no-op)", res, err)
+	}
+	if want := []string{"restart-label " + managedTestLabel}; !reflect.DeepEqual(f.calls.log, want) {
+		t.Fatalf("restart calls = %v, want %v", f.calls.log, want)
 	}
 }
 

@@ -31,6 +31,15 @@ type healthData struct {
 	// PID identifies this daemon boot, so a caller that restarted the
 	// daemon can tell the new process from the old one still answering.
 	PID int `json:"pid"`
+	// Web is set once the web listener is serving, with the address it bound.
+	// Absent means not serving (or a daemon that predates the field).
+	Web *healthWeb `json:"web,omitempty"`
+}
+
+// healthWeb is the web listener's bound address.
+type healthWeb struct {
+	Bind string `json:"bind"`
+	Port int    `json:"port"`
 }
 
 // localStateData is the socket /state payload: the agent rows plus the
