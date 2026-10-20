@@ -68,3 +68,6 @@ func writeJSON(out io.Writer, v any) error {
 	enc := json.NewEncoder(out)
 	return enc.Encode(v)
 }
+
+// asJSONError unwraps err to a *jsonError.
+func asJSONError(err error, target **jsonError) bool { return errors.As(err, target) }
