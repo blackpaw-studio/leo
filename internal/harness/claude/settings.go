@@ -37,7 +37,7 @@ func (c Claude) AttentionHooks(reportCmd []string) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	command := []any{map[string]any{"type": "command", "command": shellCommand(reportCmd)}}
+	command := []any{map[string]any{"type": "command", "command": harness.ShellCommand(reportCmd)}}
 	groups := map[string]any{
 		"Notification": []any{map[string]any{
 			"matcher": attentionNotificationMatcher,
@@ -48,7 +48,7 @@ func (c Claude) AttentionHooks(reportCmd []string) ([]string, error) {
 	if n := len(reportCmd); n > 0 && reportCmd[n-1] == "report" {
 		permissionCmd := append(slices.Clone(reportCmd[:n-1]), "permission")
 		groups["PermissionRequest"] = []any{map[string]any{"hooks": []any{map[string]any{
-			"type": "command", "command": shellCommand(permissionCmd),
+			"type": "command", "command": harness.ShellCommand(permissionCmd),
 			"timeout": int((AgentPermissionWait + permissionHookGrace).Seconds()),
 		}}}}
 	}

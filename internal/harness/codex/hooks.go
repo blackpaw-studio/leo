@@ -11,6 +11,8 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+
+	"github.com/blackpaw-studio/leo/internal/harness"
 )
 
 // leoHookCommand is the hook command line installed for leoBin. An empty
@@ -21,7 +23,7 @@ func leoHookCommand(leoBin string) string {
 	if leoBin == "" {
 		return "leo dispatch report"
 	}
-	return shellCommand([]string{leoBin, "dispatch", "report"})
+	return harness.ShellCommand([]string{leoBin, "dispatch", "report"})
 }
 
 // codexHookEvents are the events leo's report command is installed for.
@@ -191,16 +193,13 @@ func isLeoDispatchReportCommand(command, current string) bool {
 	if !strings.HasSuffix(command, suffix) {
 		return false
 	}
-	path := strings.TrimSuffix(command, suffix)
-	if path == "" {
-		return false
-	}
-	if filepath.Base(path) == "leo" {
+	// The executable may be shell-quoted (a path with a space or apostrophe),
+	// so judge its unquoted form, not the raw text.
+	words := harness.ShellWords(command)
+	if len(words) == 3 && filepath.Base(words[0]) == "leo" {
 		return true
 	}
-	// shellCommand quotes executable paths containing whitespace, so retain an
-	// exact match for the command being installed in addition to the
-	// conventional binary name check above.
+	// Retain an exact match for the command being installed too.
 	return command == current
 }
 
@@ -489,19 +488,4 @@ func sortedKeys(values map[string]any) []string {
 	}
 	sort.Strings(keys)
 	return keys
-}
-
-// shellCommand joins an argv as POSIX-shell words because Codex executes a
-// command hook through a shell. Keeping safe words bare preserves the
-// documented command shape while protecting executable paths with spaces.
-func shellCommand(args []string) string {
-	words := make([]string, 0, len(args))
-	for _, arg := range args {
-		if arg != "" && !strings.ContainsAny(arg, " \t\n\r'\"\\$`;&|<>()*?[]{}!") {
-			words = append(words, arg)
-			continue
-		}
-		words = append(words, "'"+strings.ReplaceAll(arg, "'", "'\\\"'\\\"'")+"'")
-	}
-	return strings.Join(words, " ")
 }

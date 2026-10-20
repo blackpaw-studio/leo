@@ -3,6 +3,7 @@ package codex
 import (
 	"encoding/json"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"strconv"
@@ -365,5 +366,82 @@ func TestPrepareInteractiveFallsBackToBareLeoWithoutBinary(t *testing.T) {
 	raw, _ := os.ReadFile(filepath.Join(home, "hooks.json"))
 	if !strings.Contains(string(raw), `"command": "leo dispatch report"`) {
 		t.Fatalf("hooks.json = %s, want bare leo fallback", raw)
+	}
+}
+
+// Codex runs the hook command through a shell, so the generated string must
+// round-trip any leo path as exactly one argv[0], and never execute a path's
+// contents. The command is run with printf standing in for leo.
+func TestLeoHookCommandShellRoundTrip(t *testing.T) {
+	for _, path := range []string{"/a b/leo", "/O'Connor/leo", "/x'; printf INJECTED; #/leo", `/q"d$HOME/leo`} {
+		t.Run(path, func(t *testing.T) {
+			command := leoHookCommand(path)
+			out, err := exec.Command("sh", "-c", `printf '%s\0' `+command).Output()
+			if err != nil {
+				t.Fatalf("sh -c failed for %s: %v", command, err)
+			}
+			got := strings.Split(strings.TrimSuffix(string(out), "\x00"), "\x00")
+			want := []string{path, "dispatch", "report"}
+			if !reflect.DeepEqual(got, want) {
+				t.Fatalf("argv = %q, want %q (command %s)", got, want, command)
+			}
+		})
+	}
+}
+
+// A hook left by an earlier leo at a quoted path (it has a space) must be
+// recognised as leo's and replaced, not kept beside the new one.
+func TestPrepareInteractiveReplacesOldQuotedPathHookAndTrust(t *testing.T) {
+	home := t.TempDir()
+	oldCommand := "'/Users/Evan Coleman/bin/leo' dispatch report"
+	newBin := "/Users/Evan Coleman/.leo/app/bin/leo"
+	newCommand := leoHookCommand(newBin)
+	// The file must exist before canonicalising, so the seeded trust key
+	// matches the symlink-resolved key PrepareInteractive uses.
+	if err := os.WriteFile(filepath.Join(home, "hooks.json"), []byte(`{"hooks":{"Stop":[{"hooks":[{"type":"command","command":"`+oldCommand+`"}]}]}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	hooksPath, err := canonicalPath(filepath.Join(home, "hooks.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	oldHash := trustHash("Stop", nil, map[string]any{"type": "command", "command": oldCommand})
+	if err := os.WriteFile(filepath.Join(home, "config.toml"), []byte(trustEntry(hooksPath+":stop:0:0", oldHash)+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := (Codex{}).PrepareInteractive(map[string]string{"CODEX_HOME": home}, "", newBin); err != nil {
+		t.Fatal(err)
+	}
+
+	hooks, err := readHooks(hooksPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stop := hooks["hooks"].(map[string]any)["Stop"].([]any)
+	if len(stop) != 1 || !containsCommand(stop, newCommand) || containsCommand(stop, oldCommand) {
+		t.Fatalf("Stop groups = %#v, want only %q", stop, newCommand)
+	}
+	config, _ := os.ReadFile(filepath.Join(home, "config.toml"))
+	newHash := trustHash("Stop", nil, map[string]any{"type": "command", "command": newCommand})
+	if !strings.Contains(string(config), strconv.Quote(newHash)) || strings.Contains(string(config), oldHash) {
+		t.Fatalf("config.toml trust not switched to the new hook:\n%s", config)
+	}
+}
+
+func TestIsLeoDispatchReportCommandUnquotesTheExecutable(t *testing.T) {
+	for command, want := range map[string]bool{
+		"/opt/homebrew/bin/leo dispatch report":               true,
+		"'/Users/Evan Coleman/bin/leo' dispatch report":       true,
+		"'/O'\\''Connor/leo' dispatch report":                 true,
+		"'/Users/x/not-leo tool' dispatch report":             false,
+		"'/Users/Evan Coleman/bin/other' dispatch report":     false,
+		"/usr/local/bin/other dispatch report":                false,
+		"leo dispatch report":                                 true,
+		"'/Users/Evan Coleman/bin/leo' extra dispatch report": false,
+	} {
+		if got := isLeoDispatchReportCommand(command, "/unrelated dispatch report"); got != want {
+			t.Errorf("isLeoDispatchReportCommand(%q) = %v, want %v", command, got, want)
+		}
 	}
 }
