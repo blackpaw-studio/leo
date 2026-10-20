@@ -70,3 +70,29 @@ jobs:
           set -eu
           shasum -a 256 install.sh > install.sh.sha256
           gh release upload "$TAG" install.sh install.sh.sha256 --clobber
+
+      # Tell leoterm (Leo.app) a stable release is out so it can bundle the
+      # universal tarball. Prereleases (tags containing '-') are skipped. The
+      # dispatch needs a PAT that can write leoterm's contents; without the
+      # secret this warns and skips rather than failing the release.
+      - name: Notify leoterm of release
+        if: ${{ !contains(github.ref_name, '-') }}
+        env:
+          GH_TOKEN: ${{ secrets.LEOTERM_DISPATCH_TOKEN }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -eu
+          if [ -z "${GH_TOKEN:-}" ]; then
+            echo "::warning::LEOTERM_DISPATCH_TOKEN is not set; skipping leoterm dispatch"
+            exit 0
+          fi
+          version="${TAG#v}"
+          sha256="$(awk -v f="leo_${version}_darwin_universal.tar.gz" '$2 == f { print $1 }' dist/checksums.txt)"
+          if [ -z "$sha256" ]; then
+            echo "::error::no checksum for leo_${version}_darwin_universal.tar.gz in dist/checksums.txt"
+            exit 1
+          fi
+          gh api repos/blackpaw-studio/leoterm/dispatches \
+            -f event_type=leo-release \
+            -f "client_payload[version]=${version}" \
+            -f "client_payload[sha256]=${sha256}"
