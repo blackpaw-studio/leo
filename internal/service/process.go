@@ -28,6 +28,7 @@ import (
 	"github.com/blackpaw-studio/leo/internal/harness"
 	claudeharness "github.com/blackpaw-studio/leo/internal/harness/claude"
 	"github.com/blackpaw-studio/leo/internal/leomcp"
+	"github.com/blackpaw-studio/leo/internal/managed"
 	"github.com/blackpaw-studio/leo/internal/observe"
 	"github.com/blackpaw-studio/leo/internal/tmux"
 )
@@ -44,6 +45,7 @@ var (
 	createTempFile   = os.CreateTemp
 	openLogFile      = defaultOpenLogFile
 	supervisedExecFn = defaultSupervisedExec
+	setenvFn         = os.Setenv
 )
 
 func resolveViewerMenuBinding(executable func() (string, error), configPath string) (tmux.ViewerMenuBinding, error) {
@@ -856,6 +858,10 @@ type RunSupervisedOptions struct {
 	// (hooks, MCP config, tmux key bindings, bridge env). nil means
 	// os.Executable; a managed install passes its stable self_path.
 	Executable func() (string, error)
+	// Env holds variables applied to the daemon's own process environment
+	// before anything launches, so agents inherit them (a managed install's
+	// marker env). They override inherited values.
+	Env map[string]string
 }
 
 // RunSupervised starts the leo daemon: the web UI, cron scheduler, and the
@@ -888,6 +894,11 @@ func scrubDispatchIdentity() error {
 
 func defaultSupervisedExec(opts RunSupervisedOptions) error {
 	claudePath, homePath, configPath, webToken := opts.ClaudePath, opts.HomePath, opts.ConfigPath, opts.WebToken
+	// Process-local, so harmless for a daemon that then loses the lock. Runs
+	// before the locale fix-up and any tmux or agent launch, which inherit it.
+	if err := managed.ApplyEnv(opts.Env, setenvFn); err != nil {
+		return err
+	}
 	// First thing, before the log rotator, tmux or the socket: a daemon that
 	// loses the lock must not unlink the winner's leo.sock or touch its logs.
 	releaseLock, err := AcquireDaemonLock(filepath.Join(homePath, "state"))

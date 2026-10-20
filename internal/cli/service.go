@@ -86,6 +86,7 @@ func runService(cmd *cobra.Command, args []string) error {
 		WebToken:   webToken,
 		Version:    Version,
 		Executable: selfExecutable(cfg),
+		Env:        managedState(cfg).Env,
 	})
 }
 

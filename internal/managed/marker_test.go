@@ -190,6 +190,42 @@ func TestLoad(t *testing.T) {
 			wantWarn: "writable",
 		},
 		{
+			name:        "valid env object is accepted",
+			fs:          validFS(markerJSON(map[string]string{"env": `{"PATH":"/a:/b","LEO_X":"1","EMPTY":""}`})),
+			goos:        "darwin",
+			wantManaged: true,
+		},
+		{
+			name:     "empty env key warns",
+			fs:       validFS(markerJSON(map[string]string{"env": `{"":"v"}`})),
+			goos:     "darwin",
+			wantWarn: "env",
+		},
+		{
+			name:     "env key containing = warns",
+			fs:       validFS(markerJSON(map[string]string{"env": `{"A=B":"v"}`})),
+			goos:     "darwin",
+			wantWarn: "env",
+		},
+		{
+			name:     "env key containing NUL warns",
+			fs:       validFS(markerJSON(map[string]string{"env": `{"A\u0000B":"v"}`})),
+			goos:     "darwin",
+			wantWarn: "env",
+		},
+		{
+			name:     "env value containing NUL warns",
+			fs:       validFS(markerJSON(map[string]string{"env": `{"A":"v\u0000w"}`})),
+			goos:     "darwin",
+			wantWarn: "env",
+		},
+		{
+			name:     "non-string env value warns",
+			fs:       validFS(markerJSON(map[string]string{"env": `{"A":1}`})),
+			goos:     "darwin",
+			wantWarn: "env",
+		},
+		{
 			name:     "non-darwin ignores the marker with a warning",
 			fs:       validFS(markerJSON(nil)),
 			goos:     "linux",
@@ -244,5 +280,34 @@ func TestSelfExecutable(t *testing.T) {
 	}
 	if got, _ := SelfExecutable(State{}, exe)(); got != "/brew/bin/leo" {
 		t.Errorf("unmanaged = %q, want the os.Executable result", got)
+	}
+}
+
+func TestLoadParsesEnv(t *testing.T) {
+	got := Load(stateDir, validFS(markerJSON(map[string]string{"env": `{"PATH":"/a:/b","LEO_X":"1"}`})).deps("darwin"))
+	want := map[string]string{"PATH": "/a:/b", "LEO_X": "1"}
+	if !got.Managed || len(got.Env) != len(want) || got.Env["PATH"] != want["PATH"] || got.Env["LEO_X"] != want["LEO_X"] {
+		t.Fatalf("got %+v (warning %q), want env %v", got.Env, got.Warning, want)
+	}
+}
+
+func TestApplyEnvOverridesViaSetenv(t *testing.T) {
+	var calls [][2]string
+	setenv := func(k, v string) error { calls = append(calls, [2]string{k, v}); return nil }
+
+	if err := ApplyEnv(map[string]string{"B": "2", "A": "1"}, setenv); err != nil {
+		t.Fatal(err)
+	}
+	// Sorted by key so the order is deterministic.
+	if len(calls) != 2 || calls[0] != [2]string{"A", "1"} || calls[1] != [2]string{"B", "2"} {
+		t.Fatalf("setenv calls = %v", calls)
+	}
+}
+
+func TestApplyEnvReportsSetenvFailure(t *testing.T) {
+	setenv := func(string, string) error { return errors.New("boom") }
+	err := ApplyEnv(map[string]string{"A": "1"}, setenv)
+	if err == nil || !strings.Contains(err.Error(), "A") {
+		t.Fatalf("err = %v, want it to name the key", err)
 	}
 }

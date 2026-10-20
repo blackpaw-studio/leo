@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"sort"
 	"strings"
 )
 
@@ -37,6 +38,10 @@ type Marker struct {
 	LaunchdLabel string `json:"launchd_label"`
 	SelfPath     string `json:"self_path"`
 	TmuxPath     string `json:"tmux_path"`
+	// Env is optional: variables the daemon applies to its own process
+	// environment at startup, so agents inherit them. They override inherited
+	// values.
+	Env map[string]string `json:"env,omitempty"`
 }
 
 // State is the result of loading the marker. Marker holds expanded paths and
@@ -112,6 +117,9 @@ func validate(path string, data []byte, d Deps) (Marker, error) {
 	if err := checkTmuxLayout(m.TmuxPath); err != nil {
 		return Marker{}, err
 	}
+	if err := validateEnv(m.Env); err != nil {
+		return Marker{}, err
+	}
 	return m, nil
 }
 
@@ -155,6 +163,35 @@ func checkTmuxLayout(p string) error {
 	verDir := filepath.Dir(p)
 	if filepath.Base(p) != "tmux" || verDir == "/" || verDir == "." || filepath.Dir(verDir) == verDir {
 		return fmt.Errorf("tmux_path %q must look like <root>/<version>/tmux", p)
+	}
+	return nil
+}
+
+// validateEnv rejects entries that cannot be set on a process: keys must be
+// non-empty and free of '=' and NUL, values free of NUL.
+func validateEnv(env map[string]string) error {
+	for k, v := range env {
+		if k == "" || strings.ContainsAny(k, "=\x00") {
+			return fmt.Errorf("env key %q must be non-empty and contain no '=' or NUL", k)
+		}
+		if strings.ContainsRune(v, 0) {
+			return fmt.Errorf("env value for %q must not contain NUL", k)
+		}
+	}
+	return nil
+}
+
+// ApplyEnv sets every entry of env through setenv, in key order.
+func ApplyEnv(env map[string]string, setenv func(key, value string) error) error {
+	keys := make([]string, 0, len(env))
+	for k := range env {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	for _, k := range keys {
+		if err := setenv(k, env[k]); err != nil {
+			return fmt.Errorf("applying marker env %s: %w", k, err)
+		}
 	}
 	return nil
 }

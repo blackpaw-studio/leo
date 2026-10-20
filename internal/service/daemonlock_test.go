@@ -115,3 +115,39 @@ func TestDefaultSupervisedExecRefusesWhenLockHeldBeforeTouchingAnything(t *testi
 		}
 	}
 }
+
+// The marker's env is applied to the daemon's own process environment before
+// anything is launched, so agents inherit it. It goes through the setenvFn
+// seam, so the test never mutates the real environment.
+func TestDefaultSupervisedExecAppliesMarkerEnvThroughSeam(t *testing.T) {
+	t.Setenv("TMUX_TMPDIR", t.TempDir())
+	home := t.TempDir()
+	stateDir := filepath.Join(home, "state")
+	if err := os.MkdirAll(stateDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	// Hold the lock so the exec stops right after startup env handling.
+	release, err := AcquireDaemonLock(stateDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = release() }()
+	orig := setenvFn
+	t.Cleanup(func() { setenvFn = orig })
+	var calls [][2]string
+	setenvFn = func(k, v string) error { calls = append(calls, [2]string{k, v}); return nil }
+
+	err = defaultSupervisedExec(RunSupervisedOptions{
+		HomePath: home, ConfigPath: filepath.Join(home, "leo.yaml"),
+		Env: map[string]string{"LEO_B": "2", "LEO_A": "1"},
+	})
+
+	var held *LockHeldError
+	if !errors.As(err, &held) {
+		t.Fatalf("error = %v, want *LockHeldError", err)
+	}
+	want := [][2]string{{"LEO_A", "1"}, {"LEO_B", "2"}}
+	if len(calls) != len(want) || calls[0] != want[0] || calls[1] != want[1] {
+		t.Fatalf("setenv calls = %v, want %v", calls, want)
+	}
+}
