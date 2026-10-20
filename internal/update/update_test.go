@@ -4,9 +4,11 @@ import (
 	"archive/tar"
 	"bytes"
 	"compress/gzip"
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -744,6 +746,16 @@ func TestPackageManagerInstall(t *testing.T) {
 			wantManager: "",
 		},
 		{
+			name:        "binary inside an app bundle",
+			binPath:     makeBinary("Applications/Leo.app/Contents/MacOS/leo"),
+			wantManager: PackageManagerLeoApp,
+		},
+		{
+			name:        "path merely containing .app is not a bundle binary",
+			binPath:     makeBinary("src/Leo.app/tools/leo"),
+			wantManager: "",
+		},
+		{
 			name:        "osExecutable returns error",
 			execErr:     fmt.Errorf("no executable"),
 			wantManager: "",
@@ -775,3 +787,38 @@ func TestPackageManagerInstall(t *testing.T) {
 		})
 	}
 }
+
+// Replacing a binary nested in a signed .app would break the app's code
+// signature, so every self-replace path refuses it before any network call.
+func TestDownloadAndReplaceRefusesAppBundleBinary(t *testing.T) {
+	bundled := filepath.Join(t.TempDir(), "Leo.app", "Contents", "MacOS", "leo")
+	if err := os.MkdirAll(filepath.Dir(bundled), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(bundled, []byte("signed"), 0o755); err != nil { //nolint:gosec // test fixture
+		t.Fatal(err)
+	}
+	origExec, origClient := osExecutable, httpClient
+	t.Cleanup(func() { osExecutable, httpClient = origExec, origClient })
+	osExecutable = func() (string, error) { return bundled, nil }
+	httpClient = &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		t.Errorf("unexpected network call to %s", r.URL)
+		return nil, fmt.Errorf("network disabled")
+	})}
+
+	_, err := DownloadAndReplaceWithOptions("v9.9.9", unsignedOpts())
+	if !errors.Is(err, ErrAppBundleBinary) {
+		t.Fatalf("DownloadAndReplaceWithOptions err = %v, want ErrAppBundleBinary", err)
+	}
+	_, _, err = downloadAndReplaceFromRun(context.Background(), "tok", workflowRun{ID: 1}, buildSource{}, PrereleaseOptions{})
+	if !errors.Is(err, ErrAppBundleBinary) {
+		t.Fatalf("downloadAndReplaceFromRun err = %v, want ErrAppBundleBinary", err)
+	}
+	if data, _ := os.ReadFile(bundled); string(data) != "signed" {
+		t.Fatalf("bundled binary was modified: %q", data)
+	}
+}
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }

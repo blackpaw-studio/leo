@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"syscall"
 
+	"github.com/blackpaw-studio/leo/internal/config"
 	"github.com/blackpaw-studio/leo/internal/daemon"
 	"github.com/blackpaw-studio/leo/internal/prompt"
 	"github.com/blackpaw-studio/leo/internal/update"
@@ -44,6 +45,31 @@ func allowUnsignedFromEnv() bool {
 	return false
 }
 
+// errManagedUpdate is returned instead of any self-update when Leo.app owns
+// the binary: the app updates itself and replaces leo in lockstep.
+var errManagedUpdate = errors.New("leo is managed by Leo.app; update the app (Leo ▸ Check for Updates)")
+
+// packageManagerInstall is a seam over update.PackageManagerInstall.
+var packageManagerInstall = update.PackageManagerInstall
+
+// refuseManagedUpdate returns errManagedUpdate when a valid managed marker
+// exists, or when the running binary sits inside an app bundle (replacing it
+// would break the app's signature, even with a broken marker).
+func refuseManagedUpdate() error {
+	cfg, err := loadConfig()
+	if err != nil {
+		// A missing or invalid leo.yaml must not hide the marker.
+		cfg = &config.Config{HomePath: config.DefaultHome()}
+	}
+	if cfg.HomePath != "" && managedState(cfg).Managed {
+		return errManagedUpdate
+	}
+	if mgr, _ := packageManagerInstall(); mgr == update.PackageManagerLeoApp {
+		return errManagedUpdate
+	}
+	return nil
+}
+
 func newUpdateCmd() *cobra.Command {
 	var checkOnly bool
 	var allowUnsigned bool
@@ -67,6 +93,9 @@ func newUpdateCmd() *cobra.Command {
 			"checks $LEO_GITHUB_TOKEN, then $GH_TOKEN, then $GITHUB_TOKEN,\n" +
 			"and finally falls back to the gh CLI (`gh auth token`).",
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if err := refuseManagedUpdate(); err != nil {
+				return err
+			}
 			selected := 0
 			for _, name := range []string{"pr", "unstable", "version"} {
 				if cmd.Flags().Changed(name) {

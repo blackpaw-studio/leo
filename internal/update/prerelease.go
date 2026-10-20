@@ -305,6 +305,9 @@ func downloadAndReplaceFromRun(ctx context.Context, token string, run workflowRu
 	if err != nil {
 		return "", "", fmt.Errorf("resolving binary path: %w", err)
 	}
+	if err := refuseAppBundleBinary(binaryPath); err != nil {
+		return "", "", err
+	}
 
 	artifactID, err := findRunArtifact(ctx, token, run.ID, src.artifactName)
 	if err != nil {

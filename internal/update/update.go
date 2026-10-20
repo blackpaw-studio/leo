@@ -8,6 +8,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -200,6 +201,26 @@ const PackageManagerHomebrewCask = "homebrew-cask"
 // config), which is what the generated cask's `binary "leo"` stanza stages.
 var homebrewCaskroomPattern = regexp.MustCompile(`/Caskroom/leo/[^/]+/leo$`)
 
+// PackageManagerLeoApp is the manager string returned by PackageManagerInstall
+// when the running binary is the one nested inside Leo.app.
+const PackageManagerLeoApp = "leo-app"
+
+// leoAppBundlePattern matches the binary nested in an app bundle:
+// "<...>.app/Contents/MacOS/leo".
+var leoAppBundlePattern = regexp.MustCompile(`\.app/Contents/MacOS/leo$`)
+
+// ErrAppBundleBinary is returned by every self-replace path when the running
+// binary lives inside an app bundle: replacing it would invalidate the app's
+// code signature, and the app updates itself.
+var ErrAppBundleBinary = errors.New("leo is inside an app bundle; update the app instead of replacing its binary")
+
+func refuseAppBundleBinary(resolvedPath string) error {
+	if leoAppBundlePattern.MatchString(resolvedPath) {
+		return ErrAppBundleBinary
+	}
+	return nil
+}
+
 // PackageManagerInstall reports whether the running binary was installed by
 // a system package manager that owns its lifecycle. It returns the manager
 // name (e.g. PackageManagerHomebrew) and the resolved binary path, or
@@ -218,6 +239,9 @@ func PackageManagerInstall() (manager, path string) {
 	}
 	if homebrewCaskroomPattern.MatchString(resolved) {
 		return PackageManagerHomebrewCask, resolved
+	}
+	if leoAppBundlePattern.MatchString(resolved) {
+		return PackageManagerLeoApp, resolved
 	}
 	return "", ""
 }
@@ -246,6 +270,9 @@ func DownloadAndReplaceWithOptions(version string, opts UpdateOptions) (string, 
 	binaryPath, err = filepath.EvalSymlinks(binaryPath)
 	if err != nil {
 		return "", fmt.Errorf("resolving binary path: %w", err)
+	}
+	if err := refuseAppBundleBinary(binaryPath); err != nil {
+		return "", err
 	}
 
 	versionNum := strings.TrimPrefix(version, "v")
