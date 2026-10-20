@@ -71,7 +71,9 @@ logs a warning and behaves as unmanaged (never refuses to run).
    lookup. Applies to daemon and CLI (`leo agent attach` must talk to the same
    tmux binary as the server).
 4. **tmux server version guard.** Copies live at `<root>/<ver>/tmux` where
-   `<root>` = `dirname(dirname(tmux_path))`. If a `-L leo` server is running
+   `<root>` = `dirname(dirname(tmux_path))` and `<ver>` is `tmux -V` output
+   minus the `tmux ` prefix (e.g. `3.6a`). The app builds/pins tmux (≥3.2) and
+   never removes a version dir a running server may use. If a `-L leo` server is running
    with version V ≠ `tmux_path`'s version and `<root>/V/tmux` exists, leo uses
    that binary (daemon and CLI) and logs "tmux upgrade pending"; `tmux_path` is
    used only when starting a new server (e.g. after reboot). leo never
