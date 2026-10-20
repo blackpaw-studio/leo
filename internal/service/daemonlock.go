@@ -36,7 +36,7 @@ func AcquireDaemonLock(stateDir string) (release func() error, err error) {
 	if err != nil {
 		return nil, fmt.Errorf("opening daemon lock: %w", err)
 	}
-	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil { // #nosec G115 -- fd values are small positive ints
 		holder := readLockPID(f)
 		_ = f.Close()
 		if err == syscall.EWOULDBLOCK {
@@ -48,7 +48,7 @@ func AcquireDaemonLock(stateDir string) (release func() error, err error) {
 		_, _ = f.WriteAt([]byte(strconv.Itoa(os.Getpid())+"\n"), 0)
 	}
 	return func() error {
-		unlockErr := syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
+		unlockErr := syscall.Flock(int(f.Fd()), syscall.LOCK_UN) // #nosec G115 -- fd values are small positive ints
 		if closeErr := f.Close(); closeErr != nil {
 			return closeErr
 		}
