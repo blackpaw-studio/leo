@@ -229,6 +229,9 @@ func newServiceRestartCmd() *cobra.Command {
 restart: busy agents are asked to pause, the restart waits until they are
 idle (up to --drain-timeout), and they are told to resume afterwards.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if asJSON {
+				return runJSON(cmd.OutOrStdout(), func() (any, error) { return runRestartJSON(cmd, gopts) })
+			}
 			if err := gopts.validate(); err != nil {
 				return err
 			}
@@ -263,6 +266,12 @@ idle (up to --drain-timeout), and they are told to resume afterwards.`,
 
 // runRestartJSON loads the config and restarts with progress on stderr.
 func runRestartJSON(cmd *cobra.Command, gopts gracefulOptions) (any, error) {
+	if err := gopts.validate(); err != nil {
+		return nil, failJSON("invalid_args", err)
+	}
+	if err := gateCommand(cmd, "leo_stop_agent"); err != nil {
+		return nil, failJSON("not_permitted", err)
+	}
 	cfg, err := loadConfig()
 	if err != nil {
 		return nil, failJSON("config_error", err)

@@ -279,3 +279,35 @@ func TestRestartJSONRestartFailureIsCoded(t *testing.T) {
 		t.Fatalf("exit %d stdout %v", ExitCode(err), got)
 	}
 }
+
+func TestServiceRestartCmdJSONIsWiredToTheJSONRule(t *testing.T) {
+	useTempConfig(t, nil)
+	stubManaged(t, managedTestState())
+	stubJobLoaded(t, false)
+	calls := stubServiceSeams(t)
+	stdout, err := runRoot(t, "service", "restart", "--json")
+
+	if ExitCode(err) != 1 || err.Error() != "" {
+		t.Fatalf("err = %v, want a silent exit 1", err)
+	}
+	var got map[string]any
+	if jerr := json.Unmarshal([]byte(stdout), &got); jerr != nil || got["error"] != "not_registered" {
+		t.Fatalf("stdout = %q", stdout)
+	}
+	if len(calls.log) != 0 {
+		t.Fatalf("service calls = %v", calls.log)
+	}
+	if strings.Contains(stdout, "Usage") {
+		t.Fatalf("stdout must be only the JSON object, got %q", stdout)
+	}
+}
+
+func TestServiceRestartCmdJSONBadArgsAreJSONToo(t *testing.T) {
+	useTempConfig(t, nil)
+	stubManaged(t, managedTestState())
+	stdout, _ := runRoot(t, "service", "restart", "--json", "--drain-timeout", "0s")
+
+	if !strings.HasPrefix(stdout, `{"error":"invalid_args"`) {
+		t.Fatalf("stdout = %q", stdout)
+	}
+}

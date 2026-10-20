@@ -20,7 +20,6 @@ type webEnableFixture struct {
 	cfg      *config.Config
 	calls    *serviceCalls
 	running  bool
-	loaded   bool
 	gfix     *gracefulFixture
 	cfgBytes func() []byte
 }

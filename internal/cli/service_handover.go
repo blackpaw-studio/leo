@@ -164,7 +164,8 @@ func drainThen(ctx context.Context, opts handoverOptions, d handoverDeps, critic
 	deps := d.drain
 	deps.isInteractive = func() bool { return false }
 	deps.restart = func(ctx context.Context) error {
-		if stepErr = critical(ctx); stepErr != nil {
+		stepErr = critical(ctx)
+		if stepErr != nil {
 			return stepErr
 		}
 		return nil
