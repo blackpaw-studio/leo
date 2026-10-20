@@ -115,12 +115,13 @@ func collectValidateFindings(ctx context.Context) ([]Finding, *config.Config) {
 		}
 	}
 
-	if prereq.CheckTmux() {
+	tmuxPath, tmuxErr := resolveTmux()
+	if tmuxErr == nil {
 		// Leo passes agent env via `new-session -e`, which needs tmux 3.2+.
 		// On an older tmux every spawn fails and the supervisor retries
 		// forever, so flag it here rather than letting it look like agents
 		// mysteriously never start.
-		if raw, ok := prereq.TmuxVersion(); ok {
+		if raw, ok := prereq.TmuxVersionAt(tmuxPath); ok {
 			// Report the version, not just "installed" — it is the first
 			// thing worth knowing when someone says agents never start.
 			if raw == "" {

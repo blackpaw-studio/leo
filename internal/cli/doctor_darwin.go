@@ -110,7 +110,7 @@ func checkLocalNetwork(probeHost string, trigger bool) LocalNetworkStatus {
 // "no verdict" rather than a failure — doctor's job is to explain, not to
 // abort.
 func probeTree(target string) treeProbeResult {
-	tmuxPath, err := tmux.Locate()
+	tmuxPath, err := resolveTmux()
 	if err != nil {
 		return treeProbeResult{Detail: err.Error()}
 	}

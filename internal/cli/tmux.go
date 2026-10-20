@@ -45,12 +45,13 @@ func hintRemoteTmuxMissing(res config.HostResolution, err error) error {
 
 // tmuxLocate is a testability seam for locating the tmux binary. Tests
 // override it so the local-attach path doesn't require tmux on the runner
-// (notably the macOS GitHub runner). It defaults to tmux.Locate, which
-// checks $PATH then a small set of well-known install locations — needed
+// (notably the macOS GitHub runner). It defaults to resolveTmux, which honours
+// a managed install's tmux and otherwise uses tmux.Locate — $PATH then a
+// small set of well-known install locations — needed
 // because leo's local-attach branch also runs on the remote side when the
 // top-level `leo attach` is dispatched over SSH (the non-interactive shell
 // usually does not have /opt/homebrew/bin on PATH).
-var tmuxLocate = tmux.Locate
+var tmuxLocate = resolveTmux
 
 // tmuxEnv reads $TMUX; indirected so tests can simulate being inside or
 // outside a tmux client without actually nesting one.

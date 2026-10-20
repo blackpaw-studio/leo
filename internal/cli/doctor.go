@@ -189,7 +189,7 @@ func reportServiceHealth(home string) {
 // reportTmuxTree summarizes who owns leo's tmux server, tolerating a missing
 // tmux binary — doctor's job is to explain, not to abort.
 func reportTmuxTree() tmuxTreeReport {
-	tmuxPath, err := tmux.Locate()
+	tmuxPath, err := resolveTmux()
 	if err != nil {
 		return tmuxTreeReport{Line: err.Error()}
 	}

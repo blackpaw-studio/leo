@@ -206,7 +206,7 @@ does not), then waits for the daemon to start a fresh, owned server.`,
 			reader := prompt.NewReader()
 			return reparentServer(reparentDeps{
 				daemonRunning: func() bool { return daemon.IsRunning(cfg.HomePath) },
-				locate:        tmux.Locate,
+				locate:        resolveTmux,
 				serverRunning: tmux.ServerRunning,
 				ownership:     tmux.ServerOwnership,
 				killServer:    tmux.KillServer,
