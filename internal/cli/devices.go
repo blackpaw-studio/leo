@@ -22,7 +22,8 @@ import (
 
 // newPairCmd pairs a phone (the Leo iOS app) with this machine's daemon.
 func newPairCmd() *cobra.Command {
-	return &cobra.Command{
+	var asJSON bool
+	cmd := &cobra.Command{
 		Use:   "pair",
 		Short: "Pair a phone with this daemon (prints a QR code)",
 		Long: `Print a QR code and text payload for the Leo iOS app.
@@ -33,6 +34,15 @@ code. The code works once and expires after 5 minutes. Pairing issues the phone
 its own bearer token; list and revoke paired phones with 'leo devices'.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
+			if asJSON {
+				return runJSON(cmd.OutOrStdout(), func() (any, error) {
+					cfg, err := loadConfig()
+					if err != nil {
+						return nil, failJSON("config_error", err)
+					}
+					return pairJSON(cfg, daemonDisplayName(), net.InterfaceAddrs)
+				})
+			}
 			cfg, err := loadConfig()
 			if err != nil {
 				return err
@@ -40,44 +50,88 @@ its own bearer token; list and revoke paired phones with 'leo devices'.`,
 			return runPair(cmd.OutOrStdout(), cmd.ErrOrStderr(), cfg, daemonDisplayName(), net.InterfaceAddrs)
 		},
 	}
+	cmd.Flags().BoolVar(&asJSON, "json", false, "print the payload, warnings, expiry and the exact QR string as one JSON object instead of a QR code")
+	return cmd
 }
 
-// runPair mints a pairing code and prints the payload as a QR code and as
-// one line of JSON, warning about URLs the phone will not be able to use.
-func runPair(out, errOut io.Writer, cfg *config.Config, name string, ifaceAddrs func() ([]net.Addr, error)) error {
+// errWebDisabled is a pairing request against a daemon with no web listener.
+var errWebDisabled = errors.New("the web listener is disabled (web.enabled: false); a phone has nothing to connect to")
+
+// buildPairing mints a pairing code and assembles the payload the phone
+// scans, with a warning for each URL the phone will not be able to use.
+func buildPairing(cfg *config.Config, name string, ifaceAddrs func() ([]net.Addr, error)) (devices.Payload, []string, time.Time, error) {
 	if !cfg.Web.Enabled {
-		return errors.New("the web listener is disabled (web.enabled: false); a phone has nothing to connect to")
+		return devices.Payload{}, nil, time.Time{}, errWebDisabled
 	}
 	urls, localOnly, err := devices.PairingURLs(cfg.Web.PublicURLs, cfg.WebBind(), cfg.WebPort(), ifaceAddrs)
 	if err != nil {
-		return err
+		return devices.Payload{}, nil, time.Time{}, err
 	}
 	daemonID, err := devices.EnsureDaemonID(cfg.StatePath())
 	if err != nil {
-		return err
+		return devices.Payload{}, nil, time.Time{}, err
 	}
 	code, expires, err := devices.NewStore(cfg.StatePath(), nil).NewPairingCode()
 	if err != nil {
-		return fmt.Errorf("creating pairing code: %w", err)
-	}
-	payload, err := json.Marshal(devices.Payload{DaemonID: daemonID, Name: name, URLs: urls, PairingCode: code})
-	if err != nil {
-		return err
+		return devices.Payload{}, nil, time.Time{}, fmt.Errorf("creating pairing code: %w", err)
 	}
 
+	warnings := []string{}
 	if localOnly || len(urls) == 0 {
-		fmt.Fprintln(errOut, "warning: the web listener is loopback-only, so a phone cannot reach it. "+
+		warnings = append(warnings, "the web listener is loopback-only, so a phone cannot reach it. "+
 			"Set web.public_urls (e.g. a Cloudflare Tunnel hostname) or web.bind + web.allowed_hosts.")
 	}
 	for _, u := range unreachableHosts(cfg, urls) {
-		fmt.Fprintf(errOut, "warning: %s is not in web.allowed_hosts; the daemon will refuse requests to it\n", u)
+		warnings = append(warnings, fmt.Sprintf("%s is not in web.allowed_hosts; the daemon will refuse requests to it", u))
 	}
-	if err := renderQR(out, string(payload)); err != nil {
+	return devices.Payload{DaemonID: daemonID, Name: name, URLs: urls, PairingCode: code}, warnings, expires, nil
+}
+
+// runPair prints the pairing payload as a QR code and as one line of JSON.
+func runPair(out, errOut io.Writer, cfg *config.Config, name string, ifaceAddrs func() ([]net.Addr, error)) error {
+	payload, warnings, expires, err := buildPairing(cfg, name, ifaceAddrs)
+	if err != nil {
 		return err
 	}
-	fmt.Fprintf(out, "\nScan with the Leo app, or paste this payload:\n\n%s\n\n", payload)
+	encoded, err := json.Marshal(payload)
+	if err != nil {
+		return err
+	}
+	for _, w := range warnings {
+		fmt.Fprintf(errOut, "warning: %s\n", w)
+	}
+	if err := renderQR(out, string(encoded)); err != nil {
+		return err
+	}
+	fmt.Fprintf(out, "\nScan with the Leo app, or paste this payload:\n\n%s\n\n", encoded)
 	fmt.Fprintf(out, "The code works once and expires at %s.\n", expires.Local().Format(time.Kitchen))
 	return nil
+}
+
+// pairResult is `leo pair --json`: the payload's own fields, plus what the
+// caller needs to show it. QRPayload is the exact string to encode as a QR.
+type pairResult struct {
+	devices.Payload
+	Warnings  []string `json:"warnings"`
+	ExpiresAt string   `json:"expires_at"`
+	QRPayload string   `json:"qr_payload"`
+}
+
+// pairJSON builds the --json result. A disabled web listener fails with the
+// stable code web_disabled and no message.
+func pairJSON(cfg *config.Config, name string, ifaceAddrs func() ([]net.Addr, error)) (any, error) {
+	payload, warnings, expires, err := buildPairing(cfg, name, ifaceAddrs)
+	if errors.Is(err, errWebDisabled) {
+		return nil, failJSON("web_disabled", nil)
+	}
+	if err != nil {
+		return nil, failJSON("pairing_failed", err)
+	}
+	encoded, err := json.Marshal(payload)
+	if err != nil {
+		return nil, failJSON("pairing_failed", err)
+	}
+	return pairResult{Payload: payload, Warnings: warnings, ExpiresAt: expires.UTC().Format(time.RFC3339), QRPayload: string(encoded)}, nil
 }
 
 // unreachableHosts lists the URLs (other than web.public_urls, which the
