@@ -205,9 +205,9 @@ var homebrewCaskroomPattern = regexp.MustCompile(`/Caskroom/leo/[^/]+/leo$`)
 // when the running binary is the one nested inside Leo.app.
 const PackageManagerLeoApp = "leo-app"
 
-// leoAppBundlePattern matches the binary nested in an app bundle:
-// "<...>.app/Contents/MacOS/leo".
-var leoAppBundlePattern = regexp.MustCompile(`\.app/Contents/MacOS/leo$`)
+// leoAppBundlePattern matches any file nested under an app bundle's Contents
+// directory ("<...>.app/Contents/..."); Leo.app ships leo at Contents/Helpers/leo.
+var leoAppBundlePattern = regexp.MustCompile(`\.app/Contents/.+`)
 
 // ErrAppBundleBinary is returned by every self-replace path when the running
 // binary lives inside an app bundle: replacing it would invalidate the app's

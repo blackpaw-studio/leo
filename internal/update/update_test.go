@@ -751,6 +751,11 @@ func TestPackageManagerInstall(t *testing.T) {
 			wantManager: PackageManagerLeoApp,
 		},
 		{
+			name:        "helper binary inside an app bundle",
+			binPath:     makeBinary("Applications/Leo.app/Contents/Helpers/leo"),
+			wantManager: PackageManagerLeoApp,
+		},
+		{
 			name:        "path merely containing .app is not a bundle binary",
 			binPath:     makeBinary("src/Leo.app/tools/leo"),
 			wantManager: "",
@@ -791,7 +796,7 @@ func TestPackageManagerInstall(t *testing.T) {
 // Replacing a binary nested in a signed .app would break the app's code
 // signature, so every self-replace path refuses it before any network call.
 func TestDownloadAndReplaceRefusesAppBundleBinary(t *testing.T) {
-	bundled := filepath.Join(t.TempDir(), "Leo.app", "Contents", "MacOS", "leo")
+	bundled := filepath.Join(t.TempDir(), "Leo.app", "Contents", "Helpers", "leo")
 	if err := os.MkdirAll(filepath.Dir(bundled), 0o755); err != nil {
 		t.Fatal(err)
 	}
