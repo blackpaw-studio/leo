@@ -6,6 +6,17 @@ All notable user-visible changes to Leo are documented here.
 
 ### Fixed
 
+- **A managed daemon survives a clean first start.** Leo.app registers the
+  daemon before `leo setup` or the Claude CLI exist, and the daemon used to
+  exit ("no leo.yaml found", then "claude not found"), deadlocking the app's
+  Claude onboarding. With a valid `managed.json` the daemon now creates the
+  default `~/.leo/leo.yaml` (0600, atomically, never overwriting), and a missing
+  `claude` is no longer fatal in any mode: `/health` reports
+  `claude: {found, path?}`, claude-harness spawns fail with `claude_not_found`
+  (`claude CLI not found; install it from https://claude.com/claude-code`) and
+  start working once it is installed, with no restart. Scheduled and
+  persistent tasks fail per run with the same error. See
+  [managed install](docs/configuration/managed-install.md#first-start).
 - **`leo service handover --to-cli` recovers a half-finished `--to-app`.** When
   the app failed to write `managed.json` after a successful `--to-app`, there
   was no way back. With no marker and a `<plist>.handed-over` backup,

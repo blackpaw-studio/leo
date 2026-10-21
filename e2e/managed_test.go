@@ -6,6 +6,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -196,4 +198,84 @@ func TestManagedDaemonUsesStableSelfPathAndRefusesSecondDaemon(t *testing.T) {
 			t.Fatal("the first daemon stopped answering on its socket")
 		}
 	})
+}
+
+// Leo.app registers the daemon on a clean account: no ~/.leo/leo.yaml and no
+// claude CLI yet. The daemon must still come up (creating its default config),
+// report claude as missing on /health so the app can onboard it, and answer
+// found:true once claude is installed, with no restart.
+func TestManagedFirstStartWithoutConfigOrClaude(t *testing.T) {
+	if runtime.GOOS != "darwin" {
+		t.Skip("managed installs are darwin-only")
+	}
+	acct, err := os.MkdirTemp("/tmp", "leo-first-start-") // short: unix socket path limit
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(acct) })
+	home := filepath.Join(acct, ".leo")
+	writeManagedMarker(t, home)
+	bin := filepath.Join(acct, "bin") // where claude will be installed later
+	if err := os.MkdirAll(bin, 0o700); err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	cmd := exec.CommandContext(ctx, leoBin, "service", "--supervised") // no --config, as the LaunchAgent runs it
+	cmd.Dir = acct
+	cmd.Env = append(os.Environ(), "HOME="+acct, "PATH="+bin+":/usr/bin:/bin", "FAKECLAUDE_TMUX_SOCKET=leo-first-start-"+filepath.Base(acct))
+	var logs strings.Builder
+	cmd.Stdout, cmd.Stderr = &logs, &logs
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { cancel(); _ = cmd.Wait() })
+
+	deadline := time.Now().Add(30 * time.Second)
+	for !daemon.IsRunning(home) {
+		if time.Now().After(deadline) {
+			t.Fatalf("daemon never came up:\n%s", logs.String())
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+
+	cfgPath := filepath.Join(home, "leo.yaml")
+	if fi, err := os.Stat(cfgPath); err != nil || fi.Mode().Perm() != 0o600 {
+		t.Fatalf("default config: %v, %v; want a 0600 file", fi, err)
+	}
+	if got := healthClaude(t, home); got != `{"found":false}` {
+		t.Fatalf("/health claude = %s before install, want {\"found\":false}", got)
+	}
+
+	installed := filepath.Join(bin, "claude")
+	if err := os.WriteFile(installed, []byte("#!/bin/sh\n"), 0o755); err != nil { //nolint:gosec // fixture must be executable
+		t.Fatal(err)
+	}
+	if got, want := healthClaude(t, home), fmt.Sprintf(`{"found":true,"path":%q}`, installed); got != want {
+		t.Fatalf("/health claude = %s after install, want %s", got, want)
+	}
+}
+
+// healthClaude is the raw "claude" object of GET /health on home's socket.
+func healthClaude(t *testing.T, home string) string {
+	t.Helper()
+	sock := daemon.SockPath(home)
+	client := &http.Client{Transport: &http.Transport{DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+		return (&net.Dialer{}).DialContext(ctx, "unix", sock)
+	}}}
+	resp, err := client.Get("http://daemon/health")
+	if err != nil {
+		t.Fatalf("GET /health: %v", err)
+	}
+	defer resp.Body.Close()
+	var env struct {
+		Data struct {
+			Claude json.RawMessage `json:"claude"`
+		} `json:"data"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&env); err != nil {
+		t.Fatalf("decode /health: %v", err)
+	}
+	return string(env.Data.Claude)
 }

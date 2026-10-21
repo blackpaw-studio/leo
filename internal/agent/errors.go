@@ -4,6 +4,7 @@ import (
 	"errors"
 
 	"github.com/blackpaw-studio/leo/internal/git"
+	claudeharness "github.com/blackpaw-studio/leo/internal/harness/claude"
 )
 
 // Sentinel errors for worktree-aware spawn and prune flows. These are re-exported
@@ -31,6 +32,11 @@ var (
 	// ErrAgentNameUnchanged is returned by Manager.Rename when the new name
 	// equals the current name. Callers may map it to HTTP 400.
 	ErrAgentNameUnchanged = errors.New("agent name unchanged")
+
+	// ErrClaudeNotFound is returned by a spawn that needs the claude CLI when
+	// it is not installed. The daemon runs without it; installing claude
+	// fixes the next spawn with no restart.
+	ErrClaudeNotFound = claudeharness.ErrNotFound
 
 	ErrBranchCheckedOut = git.ErrBranchCheckedOut
 	ErrWorktreeDirty    = git.ErrWorktreeDirty

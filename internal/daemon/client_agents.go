@@ -33,6 +33,8 @@ func responseError(resp *Response, query string) error {
 		return fmt.Errorf("%w: %s", agent.ErrNotWorktreeAgent, resp.Error)
 	case ErrorCodeWorktreeRequireSep:
 		return fmt.Errorf("%w: %s", agent.ErrWorktreeRequiresSlash, resp.Error)
+	case ErrorCodeClaudeNotFound:
+		return agent.ErrClaudeNotFound
 	default:
 		return fmt.Errorf("%s", resp.Error)
 	}

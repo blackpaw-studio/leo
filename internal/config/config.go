@@ -899,7 +899,7 @@ func FindConfig(dir string) (string, error) {
 		}
 	}
 
-	return "", fmt.Errorf("leo.yaml not found")
+	return "", ErrConfigNotFound
 }
 
 // validateCronExpr checks that a cron expression has 5 fields with valid ranges.

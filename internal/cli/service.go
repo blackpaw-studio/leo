@@ -54,14 +54,17 @@ demand. Subcommands (start/stop/restart/logs) manage the background daemon.`,
 }
 
 func runService(cmd *cobra.Command, args []string) error {
-	cfg, err := loadConfig()
+	cfg, err := loadDaemonConfig(os.Stderr)
 	if err != nil {
 		return err
 	}
 
-	claudePath, err := resolveClaude(cfg)
+	lookClaude, err := daemonClaudeLookup(cfg)
 	if err != nil {
 		return err
+	}
+	if _, err := lookClaude(); err != nil {
+		warn.Printf("  %v — the daemon is starting without it; claude agents fail until it is installed\n", err)
 	}
 	cfgPath, err := resolveConfigPath(cfg)
 	if err != nil {
@@ -82,7 +85,7 @@ func runService(cmd *cobra.Command, args []string) error {
 
 	info.Printf("Starting supervised mode...\n")
 	return service.RunSupervised(service.RunSupervisedOptions{
-		ClaudePath: claudePath,
+		LookClaude: lookClaude,
 		HomePath:   cfg.HomePath,
 		ConfigPath: cfgPath,
 		WebToken:   webToken,
@@ -93,19 +96,17 @@ func runService(cmd *cobra.Command, args []string) error {
 	})
 }
 
-// resolveClaude finds the claude binary after applying a managed marker's env
-// to this process: under launchd's minimal PATH, the marker's PATH is the only
-// way to find a Homebrew or ~/.local/bin claude. Anything that looks up a
-// binary must run after this.
-func resolveClaude(cfg *config.Config) (string, error) {
+// daemonClaudeLookup applies a managed marker's env to this process and returns
+// the claude lookup the daemon re-runs whenever something needs it. Under
+// launchd's minimal PATH the marker's PATH is the only way to find a Homebrew
+// or ~/.local/bin claude, so anything that looks up a binary must run after
+// this. A missing claude is not an error here: the daemon starts without it
+// and the lookup succeeds once the CLI is installed.
+func daemonClaudeLookup(cfg *config.Config) (func() (string, error), error) {
 	if err := managed.ApplyEnv(managedState(cfg).Env, os.Setenv); err != nil {
-		return "", err
+		return nil, err
 	}
-	path, err := exec.LookPath(claudeharness.Claude{}.Binary())
-	if err != nil {
-		return "", fmt.Errorf("claude not found: %w", err)
-	}
-	return path, nil
+	return claudeharness.LocateClaude, nil
 }
 
 func newServiceStartCmd() *cobra.Command {
