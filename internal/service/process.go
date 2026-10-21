@@ -405,9 +405,15 @@ func (s *Supervisor) SpawnAgent(spec daemon.AgentSpawnSpec) error {
 	if err != nil {
 		return err
 	}
-	claudePath, err := s.claudeFor(spec.Harness)
-	if err != nil {
-		return err
+	// Adopting a surviving session never needs the claude binary; a fresh
+	// launch resolves it itself (see superviseProcess), so only a spawn that
+	// will launch now fails fast on a missing claude.
+	claudePath := s.claudePath
+	if !spec.Adopt {
+		var err error
+		if claudePath, err = s.claudeFor(spec.Harness); err != nil {
+			return err
+		}
 	}
 	hooked := spawnHooked(driverFor(spec.Harness), s.homePath, spec.Name, spec.Adopt)
 	s.mu.Lock()
@@ -503,6 +509,14 @@ func (s *Supervisor) claudeFor(harnessName string) (string, error) {
 		return s.claudePath, nil
 	}
 	return s.currentClaudePath()
+}
+
+// ClaudeAvailable reports whether a launch on harnessName could start now: for
+// claude, whether the CLI resolves. Callers about to replace a live agent
+// check it before stopping the agent. See agent.Manager.
+func (s *Supervisor) ClaudeAvailable(harnessName string) error {
+	_, err := s.claudeFor(harnessName)
+	return err
 }
 
 // Wait blocks until every supervise loop SpawnAgent started has returned.
@@ -1413,6 +1427,24 @@ func superviseProcess(ctx context.Context, tmuxPath, claudePath string, spec Pro
 				spec.attentionToken = ""
 			}
 		} else {
+			// Every fresh launch looks claude up afresh: a crash-restart after
+			// claude moved, was uninstalled or was installed since spawn.
+			if sv.claudeLookup != nil && harnessName == "claude" {
+				path, err := sv.claudeLookup()
+				if err != nil {
+					sv.setState(name, id, "restarting")
+					fmt.Fprintf(os.Stderr, "[%s] %v, retrying in %s\n", name, err, backoff)
+					select {
+					case <-ctx.Done():
+						sv.setState(name, id, "stopped")
+						return
+					case <-time.After(backoff):
+					}
+					backoff = time.Duration(math.Min(float64(backoff)*2, float64(maxBackoff)))
+					continue
+				}
+				binPath = path
+			}
 			if pl, ok := drv.(harness.PreLauncher); ok {
 				if err := pl.PreLaunch(handleForSpec(spec, id, homePath, tmuxPath)); err != nil {
 					fmt.Fprintf(os.Stderr, "[%s] pre-launch: %v\n", name, err)
