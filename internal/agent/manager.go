@@ -67,6 +67,24 @@ type mailKeeper interface {
 	DropAgentMail(name string)
 }
 
+// claudeGuard is the part of a Supervisor that says whether a launch on a
+// harness could start: for claude, whether the CLI resolves right now (see
+// service.Supervisor.ClaudeAvailable).
+type claudeGuard interface {
+	ClaudeAvailable(harnessName string) error
+}
+
+// checkLaunchable fails with ErrClaudeNotFound when a launch on harnessName
+// could not start. Run BEFORE stopping a live agent that is about to be
+// relaunched, so a missing claude never costs the running session.
+func (m *Manager) checkLaunchable(harnessName string) error {
+	guard, ok := m.sup.(claudeGuard)
+	if !ok {
+		return nil
+	}
+	return guard.ClaudeAvailable(harnessName)
+}
+
 // staleMailGuard is the part of a Supervisor that says whether a name's
 // outbox still holds messages (see service.Supervisor.CheckNoAgentMail).
 type staleMailGuard interface {
@@ -1299,6 +1317,9 @@ func (m *Manager) Reset(name string) error {
 	}
 
 	if _, live := m.sup.EphemeralAgents()[name]; live {
+		if err := m.checkLaunchable(rec.Harness); err != nil {
+			return fmt.Errorf("resetting %q: %w", name, err)
+		}
 		// Not a dormancy transition — the record below is respawned, not
 		// left stopped, so this kill never carries WakeOnMessage.
 		if err := m.sup.StopAgent(name, false); err != nil {
@@ -1429,6 +1450,9 @@ func (m *Manager) Restart(name string) error {
 	}
 
 	if live {
+		if err := m.checkLaunchable(rec.Harness); err != nil {
+			return fmt.Errorf("restarting %q: %w", name, err)
+		}
 		// Not a dormancy transition — the agent is respawned immediately
 		// below, so this kill never carries WakeOnMessage.
 		if err := m.sup.StopAgent(name, false); err != nil {

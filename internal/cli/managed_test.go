@@ -2,11 +2,13 @@ package cli
 
 import (
 	"bytes"
+	"errors"
 	"os"
 	"sync"
 	"testing"
 
 	"github.com/blackpaw-studio/leo/internal/config"
+	claudeharness "github.com/blackpaw-studio/leo/internal/harness/claude"
 	"github.com/blackpaw-studio/leo/internal/managed"
 )
 
@@ -91,7 +93,7 @@ func TestBuildServiceConfigUnmanagedUsesRunningExecutable(t *testing.T) {
 
 // Under launchd's minimal PATH the daemon only finds claude through the
 // marker's PATH, so the marker env must be applied before any lookup.
-func TestResolveClaudeAppliesMarkerEnvBeforeLookup(t *testing.T) {
+func TestDaemonClaudeLookupAppliesMarkerEnvBeforeLookup(t *testing.T) {
 	bin := t.TempDir()
 	fake := bin + "/claude"
 	if err := os.WriteFile(fake, []byte("#!/bin/sh\n"), 0o755); err != nil { //nolint:gosec // test fixture
@@ -100,19 +102,39 @@ func TestResolveClaudeAppliesMarkerEnvBeforeLookup(t *testing.T) {
 	t.Setenv("PATH", "/nonexistent-leo-test-path")
 	stubManaged(t, managed.State{Managed: true, Marker: managed.Marker{Env: map[string]string{"PATH": bin}}})
 
-	got, err := resolveClaude(&config.Config{HomePath: t.TempDir()})
+	look, err := daemonClaudeLookup(&config.Config{HomePath: t.TempDir()})
 	if err != nil {
-		t.Fatalf("resolveClaude: %v", err)
+		t.Fatalf("daemonClaudeLookup: %v", err)
+	}
+	got, err := look()
+	if err != nil {
+		t.Fatalf("lookup: %v", err)
 	}
 	if got != fake {
 		t.Fatalf("claude = %q, want %q", got, fake)
 	}
 }
 
-func TestResolveClaudeWithoutMarkerEnvUsesProcessPath(t *testing.T) {
-	t.Setenv("PATH", "/nonexistent-leo-test-path")
+// A missing claude must not stop the daemon: building the lookup succeeds, the
+// lookup itself reports ErrNotFound, and it finds claude once it is installed.
+func TestDaemonClaudeLookupToleratesMissingClaudeAndFindsItLater(t *testing.T) {
+	bin := t.TempDir()
+	t.Setenv("PATH", bin)
 	stubManaged(t, managed.State{})
-	if got, err := resolveClaude(&config.Config{HomePath: t.TempDir()}); err == nil {
-		t.Fatalf("resolved %q from a PATH that has no claude", got)
+
+	look, err := daemonClaudeLookup(&config.Config{HomePath: t.TempDir()})
+	if err != nil {
+		t.Fatalf("daemonClaudeLookup with no claude installed: %v", err)
+	}
+	if got, err := look(); !errors.Is(err, claudeharness.ErrNotFound) {
+		t.Fatalf("lookup = %q, %v; want ErrNotFound", got, err)
+	}
+
+	fake := bin + "/claude"
+	if err := os.WriteFile(fake, []byte("#!/bin/sh\n"), 0o755); err != nil { //nolint:gosec // test fixture
+		t.Fatal(err)
+	}
+	if got, err := look(); err != nil || got != fake {
+		t.Fatalf("lookup after install = %q, %v; want %q", got, err, fake)
 	}
 }

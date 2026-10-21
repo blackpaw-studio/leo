@@ -3,11 +3,13 @@
 package service
 
 import (
+	"bytes"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"text/template"
 )
 
 func TestUnitNameDefaultHome(t *testing.T) {
@@ -613,5 +615,22 @@ func TestLegacyBaseUnitCollisionSameAsComputedNameIsNoop(t *testing.T) {
 	collided, detail := LegacyBaseLabelCollision(defaultHome)
 	if collided {
 		t.Errorf("expected no collision when the computed unit name IS the base name, got detail: %q", detail)
+	}
+}
+
+// systemd's default KillMode=control-group kills every process in the unit's
+// cgroup on stop/restart, tmux server and agent sessions included. The unit
+// must signal only the daemon so sessions survive a restart for adoption.
+func TestUnitTemplateKillsOnlyTheDaemonProcess(t *testing.T) {
+	var buf bytes.Buffer
+	tmpl, err := template.New("unit").Parse(unitTemplate)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := tmpl.Execute(&buf, unitData{LeoPath: "/bin/leo", ConfigPath: "/c.yaml", WorkDir: "/w", LogPath: "/l"}); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(buf.String(), "\nKillMode=process\n") {
+		t.Fatalf("unit lacks KillMode=process:\n%s", buf.String())
 	}
 }

@@ -13,6 +13,7 @@ import (
 	"github.com/blackpaw-studio/leo/internal/config"
 	"github.com/blackpaw-studio/leo/internal/daemon"
 	"github.com/blackpaw-studio/leo/internal/git"
+	claudeharness "github.com/blackpaw-studio/leo/internal/harness/claude"
 	"github.com/blackpaw-studio/leo/internal/leomcp"
 )
 
@@ -279,7 +280,11 @@ func spawnRestored(homePath string, sv agentSpawner, p restoreSpawn) bool {
 		if r, ok := sv.(adoptionReserver); ok && p.spec.Adopt {
 			r.ReleaseAdoption(name)
 		}
-		if !p.isWorktree {
+		// A worktree record is otherwise left untouched on a failed spawn; a
+		// missing claude is the exception, since leaving it non-stopped with
+		// nothing supervising it would make `leo agent start` refuse it
+		// (ErrAgentNotStopped) after claude is installed.
+		if !p.isWorktree || errors.Is(err, claudeharness.ErrNotFound) {
 			// Keep the record instead of deleting it: a transient
 			// boot-time spawn failure (tmux server hiccup, etc.) must not
 			// permanently destroy the agent's identity. Mark it

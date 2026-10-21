@@ -68,6 +68,37 @@ The managed LaunchAgent runs exactly `<bundle>/Contents/Helpers/leo service
 --supervised`, with no `--config`: the daemon resolves `~/.leo` itself and logs
 to `state/service.log`.
 
+## First start
+
+Leo.app registers its LaunchAgent on a clean account before anything has run
+`leo setup` or installed the Claude CLI, and the app's Claude onboarding needs a
+live daemon. The managed daemon therefore starts without either:
+
+- **No config.** When the marker is valid and the default config
+  (`~/.leo/leo.yaml`) does not exist, the daemon writes the setup wizard's
+  default config (an `assistant` template and the default model and turn
+  limit) before loading it, and logs `managed install: no leo.yaml found;
+  created default config at …`. The file is `0600` and a missing `~/.leo` is
+  created `0700`. The write is atomic and never replaces a file: an existing
+  config, or one that appears concurrently, is used as is. Unmanaged installs
+  keep exiting with `no leo.yaml found — run 'leo setup' first`, and an
+  explicit `--config` is never created.
+- **No `claude`.** A missing Claude CLI never stops the daemon (managed or
+  not). It is looked up again each time something needs it, so installing it
+  needs no restart. Until then:
+  - `GET /health` on the socket reports `"claude": {"found": false}`, and
+    `{"found": true, "path": "/…/claude"}` once it resolves. The lookup uses
+    the marker's `env.PATH` first, like every other binary.
+  - Spawning a claude-harness agent fails with `claude CLI not found; install
+    it from https://claude.com/claude-code`. Where a JSON surface exists the
+    error code is `claude_not_found` (HTTP 424 on `/api/agent/spawn` and the
+    socket's `/agents/spawn`). Agents on other harnesses are unaffected, and a
+    claude agent restored at boot is kept as stopped (`leo agent restart` once
+    claude is installed).
+  - Scheduled and persistent tasks that need claude fail per run with the same
+    message; the daemon keeps running.
+  - `leo doctor` reports `Claude Code: not found`.
+
 ## The tmux version guard
 
 tmux clients and servers must be the same version. The app pins one tmux per

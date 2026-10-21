@@ -33,6 +33,17 @@ All notable user-visible changes to Leo are documented here.
   ones written by earlier versions, are re-checked against the disk. Run
   `leo dispatch prune --dry-run` to see what an existing install still holds.
 
+- **A managed daemon survives a clean first start.** Leo.app registers the
+  daemon before `leo setup` or the Claude CLI exist, and the daemon used to
+  exit ("no leo.yaml found", then "claude not found"), deadlocking the app's
+  Claude onboarding. With a valid `managed.json` the daemon now creates the
+  default `~/.leo/leo.yaml` (0600, atomically, never overwriting), and a missing
+  `claude` is no longer fatal in any mode: `/health` reports
+  `claude: {found, path?}`, claude-harness spawns fail with `claude_not_found`
+  (`claude CLI not found; install it from https://claude.com/claude-code`) and
+  start working once it is installed, with no restart. Scheduled and
+  persistent tasks fail per run with the same error. See
+  [managed install](docs/configuration/managed-install.md#first-start).
 - **`leo service handover --to-cli` recovers a half-finished `--to-app`.** When
   the app failed to write `managed.json` after a successful `--to-app`, there
   was no way back. With no marker and a `<plist>.handed-over` backup,
@@ -44,6 +55,15 @@ All notable user-visible changes to Leo are documented here.
 
 ### Changed
 
+- **Restarts no longer kill agent sessions.** A daemon shutdown (SIGTERM,
+  graceful restart, `handover`, launchd respawn) used to kill every agent's
+  tmux session while an event stream (e.g. Leo.app) held the HTTP shutdown
+  open. Sessions now always survive for the next daemon to adopt, and open
+  streams end at once on shutdown. Only an explicit `leo service stop` /
+  `stop --daemon` tears sessions down.
+  **Linux:** the systemd unit now sets `KillMode=process`. The old default
+  killed every session on restart. Re-run `leo service start --daemon` once
+  to rewrite an existing unit.
 - **One daemon per leo home.** The daemon takes a lock on
   `state/daemon.lock` before anything else. A second daemon exits with
   "another leo daemon owns …" instead of silently replacing the live one's

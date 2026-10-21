@@ -34,6 +34,16 @@ type healthData struct {
 	// Web is set once the web listener is serving, with the address it bound.
 	// Absent means not serving (or a daemon that predates the field).
 	Web *healthWeb `json:"web,omitempty"`
+	// Claude is whether the claude CLI resolves right now, re-checked on every
+	// request. The daemon runs without it, so this is how a client (the app's
+	// onboarding) learns it must be installed. Absent when no lookup is wired.
+	Claude *healthClaude `json:"claude,omitempty"`
+}
+
+// healthClaude is the claude CLI's resolution: Path is set only when Found.
+type healthClaude struct {
+	Found bool   `json:"found"`
+	Path  string `json:"path,omitempty"`
 }
 
 // healthWeb is the web listener's bound address.

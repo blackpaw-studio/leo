@@ -86,16 +86,21 @@ type Server struct {
 	sockPath     string
 	configPath   string
 	httpServer   *http.Server
-	listener     net.Listener
-	scheduler    *cron.Scheduler
-	processes    ProcessStateProvider
-	webServer    *web.Server
-	agentMgr     AgentManager
+	// endStreams cancels every request context (http.Server.BaseContext), so
+	// long-lived handlers (event streams, long polls) return as soon as
+	// shutdown begins instead of holding httpServer.Shutdown for its grace.
+	endStreams context.CancelFunc
+	listener   net.Listener
+	scheduler  *cron.Scheduler
+	processes  ProcessStateProvider
+	webServer  *web.Server
+	agentMgr   AgentManager
 	// attachPlacements holds the per-attach dispatch placements registered
 	// over POST /attach/placement; the web server's dispatcher reads it.
 	attachPlacements *consult.AttachPlacements
 	router           *sessionRouter
-	logPath          string // service log path, set via SetLogPath; threaded into web.Options.LogPath by StartWeb
+	claudeLookup     func() (string, error) // set via SetClaudeLookup; nil omits claude from /health
+	logPath          string                 // service log path, set via SetLogPath; threaded into web.Options.LogPath by StartWeb
 	// resolveHandle backs web.Options.ResolveHandle: resolves a config-defined
 	// process name to its harness name and SessionHandle. Set via
 	// SetResolveHandle by service boot; nil means every process is claude.
@@ -314,8 +319,11 @@ func New(sockPath, configPath string, processes ProcessStateProvider, opts ...Op
 	mux.HandleFunc("GET /api/bridge/{agent}/stream", s.handleBridgeStream)
 	mux.HandleFunc("POST /api/bridge/{agent}/report", s.handleBridgeReport)
 
+	baseCtx, endStreams := context.WithCancel(context.Background())
+	s.endStreams = endStreams
 	s.httpServer = &http.Server{
 		Handler:      mux,
+		BaseContext:  func(net.Listener) context.Context { return baseCtx },
 		ReadTimeout:  30 * time.Second,
 		WriteTimeout: 30 * time.Second,
 	}
@@ -553,6 +561,7 @@ func (s *Server) CloseChatAsksOf(name string) {
 
 // Shutdown gracefully stops the server and removes the socket file.
 func (s *Server) Shutdown() error {
+	s.endStreams()
 	s.scheduler.Stop()
 
 	if s.webServer != nil {
@@ -637,7 +646,24 @@ func (s *Server) MarkReady() {
 }
 
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
-	writeData(w, http.StatusOK, healthData{Version: s.leoVersion, Ready: s.ready.Load(), PID: s.pid, Web: s.webListening.Load()})
+	writeData(w, http.StatusOK, healthData{Version: s.leoVersion, Ready: s.ready.Load(), PID: s.pid, Web: s.webListening.Load(), Claude: s.claudeHealth()})
+}
+
+// SetClaudeLookup wires the claude resolution /health reports. It is called
+// per request, so a CLI installed after the daemon started shows up at once.
+func (s *Server) SetClaudeLookup(lookup func() (string, error)) {
+	s.claudeLookup = lookup
+}
+
+func (s *Server) claudeHealth() *healthClaude {
+	if s.claudeLookup == nil {
+		return nil
+	}
+	path, err := s.claudeLookup()
+	if err != nil {
+		return &healthClaude{}
+	}
+	return &healthClaude{Found: true, Path: path}
 }
 
 // setWebListening records the address the web listener is serving on.

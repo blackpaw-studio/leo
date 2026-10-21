@@ -200,6 +200,10 @@ type Supervisor struct {
 	ctx          context.Context               // parent context from RunSupervised
 	tmuxPath     string
 	claudePath   string
+	// claudeLookup re-resolves the claude binary on every use, so a CLI
+	// installed after the daemon started works without a restart. nil means
+	// claudePath is authoritative (tests, and callers that pin a binary).
+	claudeLookup func() (string, error)
 	homePath     string
 	configPath   string
 	// reportCmd is the `<leo> dispatch report` argv attention hooks call back
@@ -281,14 +285,6 @@ func (s *Supervisor) States() map[string]daemon.ProcessStateInfo {
 func (s *Supervisor) isStaleLocked(name string, id *procIdentity) bool {
 	cur, ok := s.identities[name]
 	return ok && cur != id
-}
-
-// shuttingDown reports whether the whole daemon is going down, i.e. the
-// parent context every supervised process derives from has been cancelled.
-// s.ctx is set once at construction and never written again, so this needs no
-// lock.
-func (s *Supervisor) shuttingDown() bool {
-	return s.ctx != nil && s.ctx.Err() != nil
 }
 
 // setState updates name's status, but only while id is still the live
@@ -401,6 +397,16 @@ func (s *Supervisor) SpawnAgent(spec daemon.AgentSpawnSpec) error {
 	if err != nil {
 		return err
 	}
+	// Adopting a surviving session never needs the claude binary; a fresh
+	// launch resolves it itself (see superviseProcess), so only a spawn that
+	// will launch now fails fast on a missing claude.
+	claudePath := s.claudePath
+	if !spec.Adopt {
+		var err error
+		if claudePath, err = s.claudeFor(spec.Harness); err != nil {
+			return err
+		}
+	}
 	hooked := spawnHooked(driverFor(spec.Harness), s.homePath, spec.Name, spec.Adopt)
 	s.mu.Lock()
 	if _, exists := s.states[spec.Name]; exists {
@@ -471,11 +477,38 @@ func (s *Supervisor) SpawnAgent(spec daemon.AgentSpawnSpec) error {
 		OpeningBriefPath: openingBriefPath,
 	}
 	// Read here, as the go statement this replaced did, not in the loop.
-	tmuxPath, claudePath, homePath := s.tmuxPath, s.claudePath, s.homePath
+	tmuxPath, homePath := s.tmuxPath, s.homePath
 	s.loops.Go(func() {
 		superviseProcess(childCtx, tmuxPath, claudePath, procSpec, homePath, s, id)
 	})
 	return nil
+}
+
+// currentClaudePath is the claude binary a launch now would use: looked up
+// afresh when a lookup is configured, else the pinned claudePath.
+func (s *Supervisor) currentClaudePath() (string, error) {
+	if s.claudeLookup == nil {
+		return s.claudePath, nil
+	}
+	return s.claudeLookup()
+}
+
+// claudeFor resolves the claude binary for a spawn. Only the claude harness
+// needs it: any other harness resolves its own binary, so a missing claude
+// never blocks it.
+func (s *Supervisor) claudeFor(harnessName string) (string, error) {
+	if harnessName != "" && harnessName != "claude" {
+		return s.claudePath, nil
+	}
+	return s.currentClaudePath()
+}
+
+// ClaudeAvailable reports whether a launch on harnessName could start now: for
+// claude, whether the CLI resolves. Callers about to replace a live agent
+// check it before stopping the agent. See agent.Manager.
+func (s *Supervisor) ClaudeAvailable(harnessName string) error {
+	_, err := s.claudeFor(harnessName)
+	return err
 }
 
 // Wait blocks until every supervise loop SpawnAgent started has returned.
@@ -581,7 +614,7 @@ func (s *Supervisor) stopAgentProcess(name string) error {
 
 	// Kill the tmux session, and make sure it actually died. This is the only
 	// teardown there is: the supervise goroutine no longer kills on a
-	// per-agent cancel (see waitForSessionEnd's shuttingDown guard), so a kill
+	// cancel (see waitForSessionEnd), so a kill
 	// that silently failed here would strand a live harness process — leo
 	// forgets the agent entirely while its session keeps running and answering
 	// on its channels.
@@ -842,6 +875,10 @@ func Status(workDir string) (string, error) {
 // struct (rather than growing the positional-string signature further) once
 // Version was added — see RunSupervised's doc comment.
 type RunSupervisedOptions struct {
+	// LookClaude re-resolves the claude binary each time something needs it,
+	// so the daemon starts without claude and picks it up once installed. nil
+	// pins ClaudePath instead.
+	LookClaude func() (string, error)
 	ClaudePath string
 	HomePath   string
 	ConfigPath string
@@ -961,6 +998,7 @@ func defaultSupervisedExec(opts RunSupervisedOptions) error {
 	supervisor := NewSupervisor(ctx)
 	supervisor.tmuxPath = tmuxPath
 	supervisor.claudePath = claudePath
+	supervisor.claudeLookup = opts.LookClaude
 	supervisor.homePath = homePath
 	supervisor.configPath = configPath
 	supervisor.reportCmd = reportCmdFor(executable)
@@ -996,6 +1034,7 @@ func defaultSupervisedExec(opts RunSupervisedOptions) error {
 	// where to read from — service is the only package that can compute
 	// this path (LogPathFor) without an import cycle through daemon -> web.
 	srv.SetLogPath(LogPathFor(homePath))
+	srv.SetClaudeLookup(opts.LookClaude)
 	// Wire the router's injector/aborter to the tmux path directly. Every
 	// persistent-task delivery target is an agent tmux session now (Task 1-3
 	// of the sessions->agents collapse); non-claude ephemeral agents don't
@@ -1380,6 +1419,24 @@ func superviseProcess(ctx context.Context, tmuxPath, claudePath string, spec Pro
 				spec.attentionToken = ""
 			}
 		} else {
+			// Every fresh launch looks claude up afresh: a crash-restart after
+			// claude moved, was uninstalled or was installed since spawn.
+			if sv.claudeLookup != nil && harnessName == "claude" {
+				path, err := sv.claudeLookup()
+				if err != nil {
+					sv.setState(name, id, "restarting")
+					fmt.Fprintf(os.Stderr, "[%s] %v, retrying in %s\n", name, err, backoff)
+					select {
+					case <-ctx.Done():
+						sv.setState(name, id, "stopped")
+						return
+					case <-time.After(backoff):
+					}
+					backoff = time.Duration(math.Min(float64(backoff)*2, float64(maxBackoff)))
+					continue
+				}
+				binPath = path
+			}
 			if pl, ok := drv.(harness.PreLauncher); ok {
 				if err := pl.PreLaunch(handleForSpec(spec, id, homePath, tmuxPath)); err != nil {
 					fmt.Fprintf(os.Stderr, "[%s] pre-launch: %v\n", name, err)
@@ -1550,7 +1607,7 @@ func superviseProcess(ctx context.Context, tmuxPath, claudePath string, spec Pro
 			}(startHandle)
 		}
 
-		ended := waitForSessionEnd(ctx, tmuxPath, id, spec, startTime, paneKey, sv.shuttingDown)
+		ended := waitForSessionEnd(ctx, tmuxPath, id, spec, startTime, paneKey)
 		endLaunch()
 		// This launch is over for this daemon either way; its late hooks
 		// must go nowhere. The stored token stays on a shutdown (the
@@ -1681,22 +1738,18 @@ func superviseProcess(ctx context.Context, tmuxPath, claudePath string, spec Pro
 // a captured pane (see harness.PaneCare). nil means the driver has no pane
 // care to offer, so dismissal is skipped entirely.
 //
-// shuttingDown separates the two reasons this context can be cancelled.
-// Daemon shutdown is the only one that makes tearing the session down this
-// goroutine's job; a per-agent cancel comes from stopAgentProcess, which
-// already killed the session itself and may since have handed the name to a
-// successor whose freshly created session must not be killed. Unlike a
-// name-keyed ownership lookup, the shutdown condition is monotonic — once
-// true it stays true — so checking it and acting on it cannot race.
-func waitForSessionEnd(ctx context.Context, tmuxPath string, id *procIdentity, spec ProcessSpec, startTime time.Time, paneKey func(string) string, shuttingDown func() bool) bool {
+// A cancelled context never kills the session, whatever cancelled it. Daemon
+// shutdown (SIGTERM, graceful restart, handover bootout, kickstart -k) must
+// leave every session running for the next daemon to adopt, and a per-agent
+// cancel comes from stopAgentProcess, which already killed the session itself
+// and may since have handed the name to a successor whose fresh session must
+// not be touched. Only an explicit stop or delete kills a session.
+func waitForSessionEnd(ctx context.Context, tmuxPath string, id *procIdentity, spec ProcessSpec, startTime time.Time, paneKey func(string) string) bool {
 	_ = spec      // kept in signature for future lifecycle hooks
 	_ = startTime // kept in signature for future lifecycle hooks
 	for {
 		select {
 		case <-ctx.Done():
-			if shuttingDown() {
-				exec.Command(tmuxPath, tmux.Args("kill-session", "-t", tmux.Target(id.SessionName()))...).Run()
-			}
 			return true
 		case <-time.After(sessionPollInterval):
 		}

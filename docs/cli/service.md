@@ -43,7 +43,9 @@ Starts the daemon in the background with automatic restart on crash for supervis
 
 ### `leo service stop`
 
-Stops the running daemon and tears down its supervised tmux sessions. Session IDs are preserved so a subsequent start resumes where each agent left off.
+Stops the running daemon, then tears down every agent's tmux session by exact name. Session IDs are preserved so a subsequent start resumes where each agent left off.
+
+`stop` is the only thing that kills agent sessions. The daemon itself never does on shutdown: a restart (any form, including a [graceful restart](#leo-service-restart)), a [handover](#leo-service-handover), a crash, a launchd or systemd respawn, and a bare `SIGTERM` (for example Leo.app unregistering its daemon) all leave the sessions running for the next daemon to adopt. The generated systemd unit sets `KillMode=process` for the same reason, so systemd does not kill the tmux server with the daemon; reinstall with `leo service start --daemon` to pick that up on an existing install.
 
 **Flags:**
 

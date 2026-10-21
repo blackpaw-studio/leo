@@ -143,6 +143,9 @@ func (m *Manager) SetEnvironments(name string, names []string) (SetEnvironmentsR
 		return result, nil
 	}
 
+	if err := m.checkLaunchable(rec.Harness); err != nil {
+		return SetEnvironmentsResult{}, fmt.Errorf("setting environments of %q: %w", name, err)
+	}
 	if err := m.sup.StopAgent(name, false); err != nil {
 		return SetEnvironmentsResult{}, fmt.Errorf("stopping agent to change its environments: %w", err)
 	}

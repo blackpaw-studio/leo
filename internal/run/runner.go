@@ -174,6 +174,9 @@ func RunWith(cfg *config.Config, taskName string, sessions *session.Store, mcp l
 	// deliberately skips this check — previews must work without the binary
 	// installed.
 	if _, err := lookPathFn(h.Binary()); err != nil {
+		if h.Name() == "claude" {
+			return fmt.Errorf("task %q: %w", taskName, claudeharness.ErrNotFound)
+		}
 		return fmt.Errorf("task %q uses the %s harness, but %q was not found in PATH — install it or change the task's harness", taskName, h.Name(), h.Binary())
 	}
 

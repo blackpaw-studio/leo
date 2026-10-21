@@ -178,7 +178,7 @@ func TestPrimaryPaneShutdown(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		waitForSessionEnd(ctx, tmuxPath, id, ProcessSpec{}, time.Now(), nil, sv.shuttingDown)
+		waitForSessionEnd(ctx, tmuxPath, id, ProcessSpec{}, time.Now(), nil)
 	}()
 	if err := sv.stopAgentProcess("shutdown"); err != nil {
 		t.Fatal(err)
@@ -234,4 +234,35 @@ func containsTmuxArgvPrefix(lines []string, want string) bool {
 		}
 	}
 	return false
+}
+
+// A daemon shutdown (SIGTERM, graceful restart, handover bootout) must leave
+// every agent's tmux session alive for the next daemon to adopt. Only an
+// explicit stop may kill one.
+func TestWaitForSessionEnd_DaemonShutdownLeavesSessionAlive(t *testing.T) {
+	origPoll := sessionPollInterval
+	sessionPollInterval = time.Millisecond
+	defer func() { sessionPollInterval = origPoll }()
+
+	tmuxPath, logPath := writePrimaryPaneTmux(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	id := newProcIdentity("survivor", nil)
+	done := make(chan bool, 1)
+	go func() {
+		done <- waitForSessionEnd(ctx, tmuxPath, id, ProcessSpec{}, time.Now(), nil)
+	}()
+	waitForTmuxArgs(t, logPath, 1, "has-session")
+
+	cancel() // the daemon's signal context
+	if stopped := <-done; !stopped {
+		t.Fatal("watcher must report a cancelled context as stop")
+	}
+
+	lines, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(lines), "kill-session") {
+		t.Fatalf("daemon shutdown killed the agent session; tmux argv:\n%s", lines)
+	}
 }
