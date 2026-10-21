@@ -250,9 +250,8 @@ func summarizePrune(dryRun bool, entries []*pruneEntry, git gitFunc, pruneRepos 
 // diskUsage is the disk space under root, in allocated bytes, counting each
 // hard-linked file once and ignoring what cannot be read.
 func diskUsage(root string) int64 {
-	type inode struct{ dev, ino uint64 }
 	var total int64
-	seen := map[inode]bool{}
+	seen := map[string]bool{}
 	_ = filepath.WalkDir(root, func(_ string, d os.DirEntry, err error) error {
 		if err != nil {
 			return nil
@@ -267,7 +266,9 @@ func diskUsage(root string) int64 {
 			return nil
 		}
 		if st.Nlink > 1 && !info.IsDir() {
-			key := inode{uint64(st.Dev), uint64(st.Ino)} //nolint:gosec // dev/ino are opaque identifiers
+			// Dev and Ino differ in width across platforms; a string key
+			// avoids converting them.
+			key := fmt.Sprint(st.Dev, ":", st.Ino)
 			if seen[key] {
 				return nil
 			}

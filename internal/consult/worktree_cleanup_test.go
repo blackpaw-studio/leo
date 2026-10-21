@@ -83,7 +83,7 @@ func (r *paneRuntime) PaneAlive(string) (bool, error) {
 	if r.probeErr != nil {
 		return false, r.probeErr
 	}
-	return r.fakeInteractiveRuntime.Alive(""), nil
+	return r.Alive(""), nil
 }
 
 func (r *paneRuntime) killedPanes() []string {
