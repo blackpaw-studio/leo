@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -27,8 +28,11 @@ func worktreeSlug(s string) string {
 	return s
 }
 
-func (d *Dispatcher) git(args ...string) ([]byte, error) {
-	cmd := d.GitCommand("git", args...)
+func (d *Dispatcher) git(args ...string) ([]byte, error) { return execGit(d.GitCommand, args...) }
+
+// execGit runs git through newCmd, the injectable seam tests replace.
+func execGit(newCmd func(name string, args ...string) *exec.Cmd, args ...string) ([]byte, error) {
+	cmd := newCmd("git", args...)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return nil, fmt.Errorf("git %s: %w: %s", strings.Join(args, " "), err, strings.TrimSpace(string(out)))

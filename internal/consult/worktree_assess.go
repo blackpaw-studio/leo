@@ -132,7 +132,7 @@ func assessWorktree(git gitFunc, rec Record) worktreeAssessment {
 	case entry.branch != "refs/heads/"+rec.Branch:
 		return assessed(verdictUnverifiable, "worktree is on %q, not %s", entry.branch, rec.Branch)
 	}
-	status, err := git("-C", rec.Worktree, "status", "--porcelain")
+	status, err := git("-C", rec.Worktree, "--no-optional-locks", "status", "--porcelain")
 	switch {
 	case err != nil:
 		return assessed(verdictUnverifiable, "git status: %v", err)
