@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"github.com/blackpaw-studio/leo/internal/daemon"
-	"github.com/blackpaw-studio/leo/internal/service"
 )
 
 // daemonReadyTimeout bounds the wait for a restarted daemon to bind its
@@ -29,7 +28,7 @@ type daemonRestartDeps struct {
 
 var defaultDaemonRestartDeps = daemonRestartDeps{
 	currentPID: daemon.DaemonPID,
-	restart:    service.RestartDaemon,
+	restart:    func(home string) error { return restartDaemonFn(home) },
 	waitReady:  daemon.WaitReady,
 }
 

@@ -29,6 +29,8 @@ leo service status --daemon
 
 ## Subcommands
 
+When [Leo.app manages the install](../configuration/managed-install.md), `start`, `stop` (and their `--daemon` forms) refuse with a message naming Leo.app and its launchd label, and `restart` acts on that label.
+
 ### `leo service start`
 
 Starts the daemon in the background with automatic restart on crash for supervised agents. Uses exponential backoff (5s initial, 60s max) to avoid rapid restart loops.
@@ -131,6 +133,11 @@ agent's drain covers the parent turn.
 | `--no-graceful` | `false` | Restart at once even if agents are busy, without asking. |
 | `--drain-timeout` | `10m` | How long to wait for busy agents to pause (at most `24h`). |
 | `--force` | `false` | When the drain times out, restart anyway instead of asking (interactive) or aborting (non-interactive). |
+| `--json` | `false` | Print one JSON object on stdout (see below); progress goes to stderr. Never asks a question. |
+
+When [Leo.app manages the install](../configuration/managed-install.md), the restart is `launchctl kickstart -k gui/<uid>/<launchd_label>` for the marker's label, never `com.blackpaw.leo`.
+
+With `--json`, stdout is `{"ok":true,"drained":false,"restarted":true}` on success (`drained` is true when busy agents were paused first; `warnings` appears if the daemon restarted but was not ready in time). A daemon that is down but whose launchd job is loaded restarts and exits 0. Failures are `{"error":"<code>","message":"…"}` with exit 1: `not_registered` (no job is loaded, so nothing was done), `drain_timeout` (busy agents did not pause and `--force` was not set; they were told to resume), `restart_failed`, `drain_failed`, `config_error`.
 
 ```bash
 $ leo service restart --graceful
@@ -177,6 +184,10 @@ Recycle the tmux server? This terminates 15 live agent session(s) and 25 dormant
 tmux server killed; waiting for the daemon to start a fresh one...
 new tmux server pid 41022, owned by live leo pid 33666
 ```
+
+### `leo service handover`
+
+Moves the daemon between the CLI install and Leo.app. Called by the app, not by hand: `--to-app --label <label>` drains agents, boots out the CLI's launchd job and moves its plist aside; `--to-cli` reverses it. Both support `--json` and `--dry-run`. See [Managed install](../configuration/managed-install.md#handover) for the steps, rollback behaviour and JSON shape.
 
 ### `leo service logs`
 

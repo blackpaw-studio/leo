@@ -1,7 +1,11 @@
 package cli
 
 import (
+	"errors"
 	"io"
+	"os"
+	"strconv"
+	"strings"
 
 	"github.com/blackpaw-studio/leo/internal/config"
 	"github.com/spf13/cobra"
@@ -100,5 +104,54 @@ func runRootNoArgs(out io.Writer, cfgPath string) {
 }
 
 func Execute() error {
-	return newRootCmd().Execute()
+	return executeRoot(newRootCmd(), os.Args[1:])
+}
+
+// jsonAnnotation marks a command whose --json mode promises exactly one JSON
+// object on stdout for every outcome, failures included.
+const jsonAnnotation = "leo/json"
+
+// markJSON flags cmd as keeping the --json promise.
+func markJSON(cmd *cobra.Command) *cobra.Command {
+	if cmd.Annotations == nil {
+		cmd.Annotations = map[string]string{}
+	}
+	cmd.Annotations[jsonAnnotation] = "true"
+	return cmd
+}
+
+// executeRoot runs root with args. A --json command that fails before its own
+// code runs (an unknown flag, a wrong argument count, mutually exclusive
+// flags) still answers with {error: "invalid_args", message}: cobra raises
+// those, so only a wrapper around the whole run can keep the JSON rule.
+func executeRoot(root *cobra.Command, args []string) error {
+	root.SetArgs(args)
+	cmd, err := root.ExecuteC()
+	if err == nil || errors.Is(err, errJSONReported) {
+		return err
+	}
+	if cmd == nil || cmd.Annotations[jsonAnnotation] != "true" || !jsonRequested(args) {
+		return err
+	}
+	if werr := writeJSON(root.OutOrStdout(), jsonFailure{Error: "invalid_args", Message: err.Error()}); werr != nil {
+		return werr
+	}
+	return errJSONReported
+}
+
+// jsonRequested reports whether args ask for --json (before any "--").
+func jsonRequested(args []string) bool {
+	for _, a := range args {
+		if a == "--" {
+			return false
+		}
+		if a == "--json" {
+			return true
+		}
+		if v, ok := strings.CutPrefix(a, "--json="); ok {
+			on, err := strconv.ParseBool(v)
+			return err == nil && on
+		}
+	}
+	return false
 }

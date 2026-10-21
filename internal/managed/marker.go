@@ -205,3 +205,9 @@ func SelfExecutable(st State, exe func() (string, error)) func() (string, error)
 	}
 	return func() (string, error) { return st.SelfPath, nil }
 }
+
+// ValidLabel reports whether label may name a Leo.app launchd job: reverse-DNS
+// and not the CLI install's own label.
+func ValidLabel(label string) bool {
+	return reverseDNS.MatchString(label) && label != CLILaunchdLabel
+}

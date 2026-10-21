@@ -13,7 +13,7 @@ func newWebCmd() *cobra.Command {
 		Use:   "web",
 		Short: "Web UI utilities",
 	}
-	cmd.AddCommand(newWebLoginURLCmd())
+	cmd.AddCommand(newWebLoginURLCmd(), newWebEnableCmd())
 	return cmd
 }
 

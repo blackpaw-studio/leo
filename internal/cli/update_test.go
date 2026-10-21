@@ -58,7 +58,20 @@ func TestAllowUnsignedFromEnv(t *testing.T) {
 	}
 }
 
+// isolateUpdate keeps a command that runs refuseManagedUpdate off the real
+// machine: a temp config instead of whatever FindConfig walks up to, no
+// marker, and no package-manager probe of the test binary.
+func isolateUpdate(t *testing.T) {
+	t.Helper()
+	useTempConfig(t, nil)
+	stubManaged(t, managed.State{})
+	orig := packageManagerInstall
+	t.Cleanup(func() { packageManagerInstall = orig })
+	packageManagerInstall = func() (string, string) { return "", "" }
+}
+
 func TestUpdateCmd_RejectsPRAndVersionTogether(t *testing.T) {
+	isolateUpdate(t)
 	cmd := newUpdateCmd()
 	cmd.SetArgs([]string{"--pr", "42", "--version", "pr-99-a1b2c3d"})
 	var buf bytes.Buffer
@@ -75,6 +88,7 @@ func TestUpdateCmd_RejectsPRAndVersionTogether(t *testing.T) {
 }
 
 func TestUpdateCmd_RejectsNonPrereleaseVersion(t *testing.T) {
+	isolateUpdate(t)
 	cmd := newUpdateCmd()
 	cmd.SetArgs([]string{"--version", "v0.5.0"})
 	var buf bytes.Buffer
@@ -91,6 +105,7 @@ func TestUpdateCmd_RejectsNonPrereleaseVersion(t *testing.T) {
 }
 
 func TestUpdateCmd_UnstableAndPRMutuallyExclusive(t *testing.T) {
+	isolateUpdate(t)
 	cmd := newUpdateCmd()
 	cmd.SetArgs([]string{"--unstable", "--pr", "5"})
 	var buf bytes.Buffer
@@ -107,6 +122,7 @@ func TestUpdateCmd_UnstableAndPRMutuallyExclusive(t *testing.T) {
 }
 
 func TestUpdateCmd_UnstableAndVersionMutuallyExclusive(t *testing.T) {
+	isolateUpdate(t)
 	cmd := newUpdateCmd()
 	cmd.SetArgs([]string{"--unstable", "--version", "main-a1b2c3d"})
 	var buf bytes.Buffer
@@ -123,6 +139,7 @@ func TestUpdateCmd_UnstableAndVersionMutuallyExclusive(t *testing.T) {
 }
 
 func TestUpdateCmd_RefusesWhenManagedBeforeAnythingElse(t *testing.T) {
+	useTempConfig(t, nil)
 	stubManaged(t, managed.State{Managed: true, Marker: managed.Marker{SelfPath: "/app/leo"}})
 	orig := packageManagerInstall
 	t.Cleanup(func() { packageManagerInstall = orig })
@@ -154,6 +171,7 @@ func TestUpdateCmd_RefusesWhenManagedBeforeAnythingElse(t *testing.T) {
 // A binary inside an app bundle is refused even when the marker is invalid,
 // since replacing it would break the app's code signature.
 func TestUpdateCmd_RefusesAppBundleBinaryWithoutMarker(t *testing.T) {
+	useTempConfig(t, nil)
 	stubManaged(t, managed.State{Warning: "managed.json ignored: bad"})
 	orig := packageManagerInstall
 	t.Cleanup(func() { packageManagerInstall = orig })

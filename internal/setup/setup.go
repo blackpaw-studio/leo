@@ -257,6 +257,9 @@ func buildConfig(workspace string, existing *config.Config) *config.Config {
 // identity (launchd label / systemd unit name), so the name matters.
 func promptDaemonInstall(reader *bufio.Reader, leoHome, cfgPath string) {
 	fmt.Println()
+	if skipManaged(leoHome) {
+		return
+	}
 	daemonStatus, daemonErr := daemonStatusFn(leoHome)
 	if daemonErr != nil {
 		prompt.Warn.Printf("  Could not check daemon status: %v\n", daemonErr)

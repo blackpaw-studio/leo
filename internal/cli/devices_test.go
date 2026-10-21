@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -158,5 +159,69 @@ func TestRenderQRRoundTrips(t *testing.T) {
 	}
 	if len(grid[0]) != code.Size+2*quiet {
 		t.Fatalf("row width %d, want %d", len(grid[0]), code.Size+2*quiet)
+	}
+}
+
+func TestPairJSONPrintsPayloadFieldsWarningsExpiryAndQRPayload(t *testing.T) {
+	cfg := pairTestConfig(t, config.WebConfig{Enabled: true, PublicURLs: []string{"https://leo.example.com"}})
+	var out bytes.Buffer
+
+	err := runJSON(&out, func() (any, error) { return pairJSON(cfg, "studio-mac", noIfaces) })
+
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got struct {
+		devices.Payload
+		Warnings  []string  `json:"warnings"`
+		ExpiresAt time.Time `json:"expires_at"`
+		QRPayload string    `json:"qr_payload"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("stdout is not one JSON object: %q", out.String())
+	}
+	if got.Name != "studio-mac" || got.PairingCode == "" || len(got.URLs) != 1 {
+		t.Fatalf("payload = %+v", got.Payload)
+	}
+	if !strings.Contains(out.String(), `"warnings":[]`) {
+		t.Fatalf("warnings must be an empty array, not null: %s", out.String())
+	}
+	if !got.ExpiresAt.After(time.Now()) {
+		t.Fatalf("expires_at = %v", got.ExpiresAt)
+	}
+	var fromQR devices.Payload
+	if err := json.Unmarshal([]byte(got.QRPayload), &fromQR); err != nil || !reflect.DeepEqual(fromQR, got.Payload) {
+		t.Fatalf("qr_payload %q does not decode to the payload (%v)", got.QRPayload, err)
+	}
+	if _, _, err := devices.NewStore(cfg.StatePath(), nil).Pair(got.PairingCode, "phone"); err != nil {
+		t.Fatalf("redeeming the JSON code: %v", err)
+	}
+}
+
+func TestPairJSONCarriesReachabilityWarnings(t *testing.T) {
+	cfg := pairTestConfig(t, config.WebConfig{Enabled: true})
+	var out bytes.Buffer
+
+	_ = runJSON(&out, func() (any, error) { return pairJSON(cfg, "mac", noIfaces) })
+
+	var got struct {
+		Warnings []string `json:"warnings"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil || len(got.Warnings) == 0 || !strings.Contains(got.Warnings[0], "web.public_urls") {
+		t.Fatalf("stdout = %s", out.String())
+	}
+}
+
+func TestPairJSONWebDisabledIsTheExactCodedObjectAndNonZero(t *testing.T) {
+	cfg := pairTestConfig(t, config.WebConfig{Enabled: false})
+	var out bytes.Buffer
+
+	err := runJSON(&out, func() (any, error) { return pairJSON(cfg, "mac", noIfaces) })
+
+	if got, want := out.String(), "{\"error\":\"web_disabled\"}\n"; got != want {
+		t.Fatalf("stdout = %q, want %q", got, want)
+	}
+	if ExitCode(err) != 1 {
+		t.Fatalf("exit = %d", ExitCode(err))
 	}
 }

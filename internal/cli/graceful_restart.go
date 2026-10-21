@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/blackpaw-studio/leo/internal/config"
 	"github.com/blackpaw-studio/leo/internal/daemon"
 	"github.com/blackpaw-studio/leo/internal/drain"
 	"github.com/blackpaw-studio/leo/internal/prompt"
@@ -27,6 +28,10 @@ const (
 
 // errGracefulAborted is a drain the operator abandoned at the timeout.
 var errGracefulAborted = errors.New("graceful restart aborted; the daemon was not restarted and agents were told to resume")
+
+// errDrainTimeout is a drain that outlasted --drain-timeout without --force,
+// in a run with nobody to ask.
+var errDrainTimeout = errors.New("timed out waiting for agents to pause")
 
 // gracefulOptions are the restart commands' graceful-restart flags.
 type gracefulOptions struct {
@@ -101,17 +106,23 @@ type gracefulDeps struct {
 	pollInterval time.Duration
 }
 
-func newGracefulDeps(home string) gracefulDeps {
+func newGracefulDeps(cfg *config.Config) gracefulDeps { return newGracefulDepsTo(cfg, os.Stdout) }
+
+// newGracefulDepsTo is newGracefulDeps with progress written to out (stderr
+// for --json commands, whose stdout carries only the result).
+func newGracefulDepsTo(cfg *config.Config, out io.Writer) gracefulDeps {
+	home := cfg.HomePath
+	restartDeps := newDaemonRestartDeps(cfg)
 	return gracefulDeps{
 		drain: daemonDrainClient{home: home},
 		restart: func(ctx context.Context) error {
-			fmt.Println("Restarting daemon (waiting for agents to restore)...")
-			return restartDaemonAndWait(ctx, home, defaultDaemonRestartDeps)
+			fmt.Fprintln(out, "Restarting daemon (waiting for agents to restore)...")
+			return restartDaemonAndWait(ctx, home, restartDeps)
 		},
 		isInteractive: prompt.IsInteractive,
 		ask:           newStdinAsker(os.Stdin, os.Stdout),
 		clock:         drain.SystemClock{},
-		out:           os.Stdout,
+		out:           out,
 		pollInterval:  drainPollInterval,
 	}
 }
@@ -322,7 +333,7 @@ func (w *drainWatch) timedOut(ctx context.Context, st drain.Status) (finished bo
 		return w.commitAndRestart(ctx, true)
 	case !w.d.isInteractive():
 		w.cancel(ctx)
-		return true, fmt.Errorf("timed out waiting for agents to pause (%s); restart cancelled (pass --force to restart anyway)", stragglers)
+		return true, fmt.Errorf("%w (%s); restart cancelled (pass --force to restart anyway)", errDrainTimeout, stragglers)
 	}
 	question := fmt.Sprintf("[r]estart anyway / [w]ait another %s / [a]bort? ", formatDrainTimeout(w.opts.drainTimeout))
 	for {

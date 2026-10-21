@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/blackpaw-studio/leo/internal/config"
+	"github.com/blackpaw-studio/leo/internal/managed"
 )
 
 // TestBuildStatusReport_Version verifies the report captures the current
@@ -151,5 +152,31 @@ func TestJoinNames(t *testing.T) {
 		if got := joinNames(tc.in); got != tc.want {
 			t.Errorf("joinNames(%v) = %q; want %q", tc.in, got, tc.want)
 		}
+	}
+}
+
+func TestBuildStatusReport_ReportsTheManagedLabelAndItsStatus(t *testing.T) {
+	useTempConfig(t, nil)
+	stubManaged(t, managedTestState())
+	old := daemonStatusLabelFn
+	t.Cleanup(func() { daemonStatusLabelFn = old })
+	daemonStatusLabelFn = func(string) (string, error) { return "running (pid 9)", nil }
+
+	report := buildStatusReport(context.Background())
+
+	if report.Managed == nil || report.Managed.Manager != "Leo.app" || report.Managed.Label != managedTestLabel {
+		t.Fatalf("Managed = %+v", report.Managed)
+	}
+	if report.Daemon != "running (pid 9)" {
+		t.Errorf("Daemon = %q, want the managed job's status", report.Daemon)
+	}
+}
+
+func TestBuildStatusReport_UnmanagedHasNoManagedBlock(t *testing.T) {
+	useTempConfig(t, nil)
+	stubManaged(t, managed.State{})
+
+	if report := buildStatusReport(context.Background()); report.Managed != nil {
+		t.Fatalf("Managed = %+v, want nil", report.Managed)
 	}
 }

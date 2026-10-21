@@ -183,19 +183,7 @@ func InstallDaemon(sc ServiceConfig) error {
 		return fmt.Errorf("installing plist: %w", err)
 	}
 
-	uid := fmt.Sprintf("%d", os.Getuid())
-	var bootstrapErr error
-	for i := 0; i < 3; i++ {
-		if _, bootstrapErr = runCommand("launchctl", "bootstrap", "gui/"+uid, path); bootstrapErr == nil {
-			break
-		}
-		time.Sleep(time.Duration(i+1) * 500 * time.Millisecond)
-	}
-	if bootstrapErr != nil {
-		return fmt.Errorf("launchctl bootstrap: %w", bootstrapErr)
-	}
-
-	return nil
+	return bootstrapWithRetry(path, time.Sleep)
 }
 
 // RemoveDaemon stops and removes the launchd service registered for home.

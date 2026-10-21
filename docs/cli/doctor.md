@@ -33,6 +33,10 @@ works fine from an interactive Terminal window. `leo doctor`:
    currently granted, by classifying the outcome of a TCP connect attempt
    to a known on-subnet LAN host.
 
+### Managed install
+
+`leo doctor` also reports whether [Leo.app manages the install](../configuration/managed-install.md): the marker (or why an invalid one was ignored), the manager's launchd job and its status, `self_path` and where its symlink points, `tmux_path` checked against the version its directory name claims, which tmux binary leo uses for commands and for new servers (with any pending upgrade or missing copy), and a warning when the CLI's own `com.blackpaw.leo` job is still loaded, since its daemon loses the `daemon.lock` race and respawns every 10 seconds. Unmanaged installs print one `Managed: no` line.
+
 ### Two probes, and why the second one is the real check
 
 macOS attributes a connection to the *responsible* process, not necessarily
