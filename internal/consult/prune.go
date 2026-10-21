@@ -16,13 +16,17 @@ import (
 // Actions a prune report assigns to a worktree. The first four are
 // assessWorktree's verdicts; the rest are decided here.
 const (
-	PruneRemove        = string(verdictRemove)
-	PruneKeepDirty     = string(verdictDirty)
-	PruneKeepUnmerged  = string(verdictUnmerged)
-	PruneKeepUnverif   = string(verdictUnverifiable)
-	PruneMissingRepo   = string(verdictMissingRepo)
-	PruneKeepNotTerm   = "keep:not-terminal"
-	PruneOrphan        = "orphan"
+	PruneRemove       = string(verdictRemove)
+	PruneKeepDirty    = string(verdictDirty)
+	PruneKeepUnmerged = string(verdictUnmerged)
+	PruneKeepUnverif  = string(verdictUnverifiable)
+	PruneMissingRepo  = string(verdictMissingRepo)
+	PruneKeepNotTerm  = "keep:not-terminal"
+	PruneOrphan       = "orphan"
+	// PruneStale is a terminal record whose worktree directory is already
+	// gone: nothing to remove, only the record and git's registration to
+	// reconcile.
+	PruneStale         = "stale-record"
 	pruneDefaultWorker = 8
 )
 
@@ -73,10 +77,10 @@ type PruneReport struct {
 }
 
 // PruneWorktrees reconciles the dispatch worktrees under stateDir. It looks
-// only at terminal dispatches whose worktree is still on disk, applies the
-// same assessWorktree rules cleanup does, and (unless DryRun) removes each
-// safe worktree and its merged branch, then runs `git worktree prune` in each
-// repository it touched. Running dispatches are never touched; a dispatch
+// only at terminal dispatches, applies the same assessWorktree rules cleanup
+// does, and (unless DryRun) removes each safe worktree and its merged branch,
+// marks records whose worktree is already gone as removed, then runs
+// `git worktree prune` in each repository it touched. Running dispatches are never touched; a dispatch
 // whose repository or record is gone is reported, never deleted.
 func PruneWorktrees(stateDir string, opts PruneOptions) (PruneReport, error) {
 	records, err := Load(stateDir)
@@ -94,10 +98,11 @@ func PruneWorktrees(stateDir string, opts PruneOptions) (PruneReport, error) {
 		return PruneReport{}, err
 	}
 	pruneAssess(git, items, opts.Workers)
+	report := summarizePrune(opts.DryRun, items)
 	if !opts.DryRun {
-		pruneApply(git, stateDir, items)
+		report = pruneApply(git, stateDir, items, report)
 	}
-	return summarizePrune(opts.DryRun, items, git, !opts.DryRun), nil
+	return report, nil
 }
 
 // pruneEntry is an item plus what applying it needs.
@@ -116,7 +121,7 @@ func pruneCandidates(stateDir string, records []Record) ([]*pruneEntry, error) {
 		if rec.Isolation != "worktree" || rec.Worktree == "" {
 			continue
 		}
-		if _, err := os.Lstat(rec.Worktree); err != nil {
+		if _, err := os.Lstat(rec.Worktree); err != nil && !staleRecordCandidate(rec) {
 			continue
 		}
 		entries = append(entries, &pruneEntry{rec: rec, item: PruneItem{
@@ -139,6 +144,17 @@ func pruneCandidates(stateDir string, records []Record) ([]*pruneEntry, error) {
 	return entries, nil
 }
 
+// staleRecordCandidate reports whether rec, whose worktree directory is
+// missing, still claims a worktree on a dispatch that has ended.
+func staleRecordCandidate(rec Record) bool {
+	return rec.WorktreeState != WorktreeRemoved && rec.Status.Terminal() && (rec.Mode != ModeInteractive || rec.PaneID == "")
+}
+
+func repositoryExists(root string) bool {
+	info, err := os.Stat(root)
+	return root != "" && err == nil && info.IsDir()
+}
+
 // pruneDecide is the one decision both the dry run and the apply pass make,
 // from the record as it stands now.
 func pruneDecide(git gitFunc, rec Record) (action, reason string) {
@@ -147,11 +163,18 @@ func pruneDecide(git gitFunc, rec Record) (action, reason string) {
 		return PruneKeepNotTerm, fmt.Sprintf("dispatch is %s", rec.Status)
 	case rec.Mode == ModeInteractive && rec.PaneID != "":
 		return PruneKeepNotTerm, fmt.Sprintf("pane %s is still recorded", rec.PaneID)
+	case rec.WorktreeState != WorktreeRemoved && missingOnDisk(rec.Worktree):
+		return PruneStale, fmt.Sprintf("worktree directory is gone but the record says %q", rec.WorktreeState)
 	case rec.Mode != ModeInteractive && rec.Error == "daemon restarted":
 		return PruneKeepUnverif, "headless run was interrupted by a daemon restart; its writers are unknown"
 	}
 	a := assessWorktree(git, rec)
 	return string(a.Verdict), a.Reason
+}
+
+func missingOnDisk(path string) bool {
+	_, err := os.Lstat(path)
+	return os.IsNotExist(err)
 }
 
 func pruneAssess(git gitFunc, entries []*pruneEntry, workers int) {
@@ -174,12 +197,20 @@ func pruneAssess(git gitFunc, entries []*pruneEntry, workers int) {
 	wg.Wait()
 }
 
-// pruneApply removes the "remove" entries one at a time, re-reading and
-// re-assessing each record first: assessment of a large state dir takes long
-// enough for a dispatch to come back to life.
-func pruneApply(git gitFunc, stateDir string, entries []*pruneEntry) {
+// pruneApply removes the "remove" entries and reconciles the "stale-record"
+// ones one at a time, re-reading and re-assessing each record first:
+// assessment of a large state dir takes long enough for a dispatch to come
+// back to life. It then runs `git worktree prune` once in each repository
+// still on disk and returns the report with the outcomes folded in.
+func pruneApply(git gitFunc, stateDir string, entries []*pruneEntry, report PruneReport) PruneReport {
+	pruned := map[string]bool{}
+	pruneRepo := func(repo string) {
+		if _, done := pruned[repo]; !done {
+			pruned[repo] = pruneRepositoryWorktrees(git, repo) == nil
+		}
+	}
 	for _, e := range entries {
-		if e.orphan || e.item.Action != PruneRemove {
+		if e.orphan || (e.item.Action != PruneRemove && e.item.Action != PruneStale) {
 			continue
 		}
 		rec, err := LoadOne(stateDir, e.item.ID)
@@ -187,29 +218,57 @@ func pruneApply(git gitFunc, stateDir string, entries []*pruneEntry) {
 			e.item.Error = fmt.Sprintf("re-reading record: %v", err)
 			continue
 		}
-		if action, reason := pruneDecide(git, rec); action != PruneRemove {
+		action, reason := pruneDecide(git, rec)
+		if action != e.item.Action {
 			e.item.Action, e.item.Reason = action, "changed since assessment: "+reason
 			continue
 		}
-		if err := removeWorktreeCheckout(git, rec); err != nil {
-			e.item.Error = err.Error()
-			continue
+		var tip string
+		switch action {
+		case PruneRemove:
+			if err := removeWorktreeCheckout(git, rec); err != nil {
+				e.item.Error = err.Error()
+				continue
+			}
+			tip, e.item.BranchDeleted = deleteMergedBranch(git, rec)
+		case PruneStale:
+			if repositoryExists(rec.RepositoryRoot) {
+				// Git refuses to delete a branch still checked out in a
+				// registered worktree, even one whose directory is gone.
+				pruneRepo(rec.RepositoryRoot)
+				tip, e.item.BranchDeleted = deleteMergedBranch(git, rec)
+			}
 		}
-		tip, deleted := deleteMergedBranch(git, rec)
 		rec.WorktreeState = WorktreeRemoved
 		if tip != "" {
 			rec.BranchTip = tip
 		}
-		e.item.Removed, e.item.BranchDeleted = true, deleted
+		e.item.Removed = true
 		if err := writeRecord(Dir(stateDir), rec); err != nil {
-			e.item.Error = fmt.Sprintf("worktree removed but its record was not updated: %v", err)
+			e.item.Error = fmt.Sprintf("worktree handled but its record was not updated: %v", err)
 		}
 	}
+	for _, e := range entries {
+		if !e.orphan && repositoryExists(e.item.Repository) {
+			pruneRepo(e.item.Repository)
+		}
+	}
+	return summarizeOutcome(report, entries, pruned)
 }
 
-func summarizePrune(dryRun bool, entries []*pruneEntry, git gitFunc, pruneRepos bool) PruneReport {
+// summarizeOutcome rebuilds the report from the entries after an apply pass.
+func summarizeOutcome(report PruneReport, entries []*pruneEntry, pruned map[string]bool) PruneReport {
+	out := summarizePrune(report.DryRun, entries)
+	for _, repo := range slices.Sorted(maps.Keys(pruned)) {
+		if pruned[repo] {
+			out.PrunedRepositories = append(out.PrunedRepositories, repo)
+		}
+	}
+	return out
+}
+
+func summarizePrune(dryRun bool, entries []*pruneEntry) PruneReport {
 	report := PruneReport{DryRun: dryRun, Items: make([]PruneItem, 0, len(entries)), Totals: map[string]PruneTotal{}}
-	repos := map[string]bool{}
 	for _, e := range entries {
 		it := e.item
 		report.Items = append(report.Items, it)
@@ -223,9 +282,6 @@ func summarizePrune(dryRun bool, entries []*pruneEntry, git gitFunc, pruneRepos 
 			report.Reclaimed.Count++
 			report.Reclaimed.Bytes += it.Bytes
 		}
-		if !e.orphan && it.Action != PruneMissingRepo && it.Repository != "" {
-			repos[it.Repository] = true
-		}
 	}
 	sort.SliceStable(report.Items, func(i, j int) bool {
 		a, b := report.Items[i], report.Items[j]
@@ -237,13 +293,6 @@ func summarizePrune(dryRun bool, entries []*pruneEntry, git gitFunc, pruneRepos 
 		}
 		return a.ID < b.ID
 	})
-	if pruneRepos {
-		for _, repo := range slices.Sorted(maps.Keys(repos)) {
-			if pruneRepositoryWorktrees(git, repo) == nil {
-				report.PrunedRepositories = append(report.PrunedRepositories, repo)
-			}
-		}
-	}
 	return report
 }
 

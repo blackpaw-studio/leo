@@ -28,7 +28,6 @@ type pruneFixture struct {
 	recs               map[string]Record
 	orphan             string
 	missingRepo        string
-	missingGoneID      string
 }
 
 func newPruneFixture(t *testing.T) pruneFixture {
@@ -66,10 +65,27 @@ func newPruneFixture(t *testing.T) pruneFixture {
 	seed("d-restarted", f.repo, func(r *Record) { r.Mode, r.Status, r.Error = ModeHeadless, StatusFailed, "daemon restarted" })
 	missing := seed("d-norepo", f.repo3, nil)
 	f.missingRepo = missing.ID
-	// A record whose worktree directory is already gone is out of scope.
+	// Records whose worktree directory is already gone (deleted by hand, so
+	// git still lists the checkout as prunable): one in a live repository,
+	// one whose repository is gone too.
 	gone := seed("d-gone", f.repo, nil)
-	runGit(t, f.repo, "worktree", "remove", gone.Worktree)
-	f.missingGoneID = gone.ID
+	if err := os.RemoveAll(gone.Worktree); err != nil {
+		t.Fatal(err)
+	}
+	goneNoRepo := seed("d-gone-norepo", f.repo3, nil)
+	if err := os.RemoveAll(goneNoRepo.Worktree); err != nil {
+		t.Fatal(err)
+	}
+	// A removed record with no directory is simply done, and a running one is
+	// not prune's business: neither is listed.
+	seed("d-done", f.repo, func(r *Record) { r.WorktreeState = WorktreeRemoved })
+	if err := os.RemoveAll(f.recs["d-done"].Worktree); err != nil {
+		t.Fatal(err)
+	}
+	seed("d-live-gone", f.repo, func(r *Record) { r.Status, r.PaneID, r.EndedAt = StatusRunning, "%9", time.Time{} })
+	if err := os.RemoveAll(f.recs["d-live-gone"].Worktree); err != nil {
+		t.Fatal(err)
+	}
 	f.orphan = filepath.Join(f.stateDir, worktreesDirName, "d-orphan")
 	if err := os.MkdirAll(f.orphan, 0o700); err != nil {
 		t.Fatal(err)
@@ -123,15 +139,26 @@ func dryRunChangesNothing(t *testing.T, f pruneFixture) {
 		"d-running": "keep:not-terminal", "d-idle": "keep:not-terminal", "d-pane": "keep:not-terminal",
 		"d-restarted": "keep:unverifiable",
 		"d-norepo":    "missing-repo",
-		"d-orphan":    "orphan",
+		"d-gone":      "stale-record", "d-gone-norepo": "stale-record",
+		"d-orphan": "orphan",
 	}
 	for id, action := range want {
 		if got[id].Action != action {
 			t.Errorf("%s action = %q, want %q (%+v)", id, got[id].Action, action, got[id])
 		}
 	}
-	if _, listed := got[f.missingGoneID]; listed {
-		t.Errorf("a record with no worktree on disk was listed: %+v", got[f.missingGoneID])
+	for _, id := range []string{"d-done", "d-live-gone"} {
+		if _, listed := got[id]; listed {
+			t.Errorf("%s has no worktree to reconcile but was listed: %+v", id, got[id])
+		}
+	}
+	for _, id := range []string{"d-gone", "d-gone-norepo"} {
+		if got[id].Bytes != 0 {
+			t.Errorf("%s stale record has size %d, want 0", id, got[id].Bytes)
+		}
+	}
+	if report.Totals["stale-record"].Count != 2 || report.Totals["stale-record"].Bytes != 0 {
+		t.Errorf("stale-record total = %+v", report.Totals["stale-record"])
 	}
 	if len(got) != len(want) {
 		t.Errorf("items = %d, want %d: %+v", len(got), len(want), report.Items)
@@ -153,12 +180,12 @@ func dryRunChangesNothing(t *testing.T, f pruneFixture) {
 		t.Errorf("dry run reported work done: %+v", report)
 	}
 	for id, rec := range f.recs {
-		if id == f.missingGoneID {
-			continue
-		}
-		if !dirExists(rec.Worktree) && id != "d-norepo" {
+		if !dirExists(rec.Worktree) && !slices.Contains([]string{"d-gone", "d-gone-norepo", "d-done", "d-live-gone"}, id) {
 			t.Errorf("dry run removed %s", id)
 		}
+	}
+	if !branchExists(t, f.repo, f.recs["d-gone"].Branch) {
+		t.Error("dry run deleted a stale record's branch")
 	}
 	if _, err := os.Stat(filepath.Join(f.orphan, "keep.txt")); err != nil {
 		t.Errorf("orphan touched: %v", err)
@@ -201,6 +228,15 @@ func realRunHonoursSafetyRules(t *testing.T, f pruneFixture) {
 			t.Errorf("%s: merged branch %s not deleted", id, rec.Branch)
 		}
 	}
+	for _, id := range []string{"d-gone", "d-gone-norepo"} {
+		persisted, _ := LoadOne(f.stateDir, id)
+		if persisted.WorktreeState != WorktreeRemoved {
+			t.Errorf("%s: stale record state = %q, want removed", id, persisted.WorktreeState)
+		}
+	}
+	if branchExists(t, f.repo, f.recs["d-gone"].Branch) {
+		t.Error("d-gone: its branch is merged elsewhere and should be deleted once the stale checkout is pruned")
+	}
 	for _, id := range []string{"d-dirty", "d-unmerged", "d-running", "d-idle", "d-pane", "d-restarted", "d-norepo"} {
 		rec := f.recs[id]
 		if !dirExists(rec.Worktree) {
@@ -213,7 +249,7 @@ func realRunHonoursSafetyRules(t *testing.T, f pruneFixture) {
 	if _, err := os.Stat(filepath.Join(f.orphan, "keep.txt")); err != nil {
 		t.Errorf("orphan touched: %v", err)
 	}
-	if report.Reclaimed.Count != 4 || itemsByID(report)["d-norepo"].Removed {
+	if report.Reclaimed.Count != 6 || itemsByID(report)["d-norepo"].Removed {
 		t.Errorf("reclaimed = %+v items=%+v", report.Reclaimed, itemsByID(report)["d-base2"])
 	}
 	// d-norepo's repository is gone: nothing to prune there.
@@ -241,6 +277,9 @@ func realRunHonoursSafetyRules(t *testing.T, f pruneFixture) {
 	again, err := PruneWorktrees(f.stateDir, PruneOptions{DryRun: true})
 	if err != nil {
 		t.Fatal(err)
+	}
+	if again.Totals["stale-record"].Count != 0 {
+		t.Errorf("second pass still finds stale records: %+v", again.Totals)
 	}
 	if again.Reclaimable.Count != 0 {
 		t.Errorf("second pass still finds %d removable: %+v", again.Reclaimable.Count, again.Items)

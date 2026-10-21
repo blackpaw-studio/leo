@@ -17,7 +17,7 @@ Run it with `--dry-run` first. It reads dispatch records from `~/.leo/state/disp
 
 ## What it considers
 
-Only dispatches that have **ended** and whose worktree is **still on disk**. A running, idle or waiting dispatch, and one whose pane is still recorded, is listed as `keep:not-terminal` and never touched. The rules for the rest are the ones cleanup applies when a dispatch finishes (see [Worktree cleanup](../configuration/dispatches.md#worktree-cleanup)); they run against the dispatch's canonical repository.
+Only dispatches that have **ended** (their worktree on disk, or a stale record of one). A running, idle or waiting dispatch, and one whose pane is still recorded, is listed as `keep:not-terminal` and never touched. The rules for the rest are the ones cleanup applies when a dispatch finishes (see [Worktree cleanup](../configuration/dispatches.md#worktree-cleanup)); they run against the dispatch's canonical repository.
 
 | Action | Meaning |
 |--------|---------|
@@ -27,9 +27,10 @@ Only dispatches that have **ended** and whose worktree is **still on disk**. A r
 | `keep:unverifiable` | The rules could not be applied: git failed, the worktree is locked, its checkout is on a branch other than the recorded `leo/*` one, or a headless run was interrupted by a daemon restart. |
 | `keep:not-terminal` | The dispatch has not ended, or its pane is still recorded. |
 | `missing-repo` | The canonical repository no longer exists. Reported, never deleted. |
+| `stale-record` | The dispatch has ended and its record still claims a worktree, but the directory is already gone (removed by hand). Size 0. A real run marks the record removed, runs `git worktree prune` in its repository (skipped if the repository is gone), and deletes the `leo/*` branch only under the same merged-elsewhere rule. |
 | `orphan` | A directory under `state/worktrees/` with no dispatch record. Reported, never deleted. |
 
-A dispatch whose worktree directory is already gone is not listed.
+A record already marked `removed`, and one whose dispatch has not ended, is not listed when its directory is missing.
 
 ## Output
 

@@ -7,15 +7,17 @@ All notable user-visible changes to Leo are documented here.
 ### Added
 
 - **`leo dispatch prune [--dry-run] [--json]`.** Reclaims the disk held by
-  worktrees of finished dispatches. It considers only terminal dispatches whose
-  worktree is still on disk and applies the same safety rules as cleanup
+  worktrees of finished dispatches. It considers only terminal dispatches and
+  applies the same safety rules as cleanup
   (never a dirty worktree, never commits only its own branch holds; plain
   `git worktree remove`; the `leo/*` branch is deleted only when merged
   elsewhere). `--dry-run` lists every worktree with its action (`remove`,
   `keep:dirty`, `keep:unmerged`, `keep:unverifiable`, `keep:not-terminal`,
-  `missing-repo`, `orphan`) and size, plus the reclaimable total. Directories
-  with no record and dispatches whose repository is gone are reported, never
-  deleted. See [the CLI reference](docs/cli/dispatch-prune.md).
+  `missing-repo`, `stale-record`, `orphan`) and size, plus the reclaimable
+  total. A terminal record whose worktree directory is already gone is a
+  `stale-record`: a real run marks it removed, prunes git's registration, and
+  deletes its merged branch. Directories with no record and dispatches whose
+  repository is gone are reported, never deleted. See [the CLI reference](docs/cli/dispatch-prune.md).
 
 ### Fixed
 
