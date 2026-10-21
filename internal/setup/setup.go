@@ -221,6 +221,14 @@ func parseUserProfile(path string) templates.UserProfileData {
 	return result
 }
 
+// DefaultConfig is the config a fresh install starts from, without prompting:
+// what the wizard writes when nothing exists yet, rooted at leoHome.
+func DefaultConfig(leoHome string) *config.Config {
+	cfg := buildConfig(filepath.Join(leoHome, "workspace"), nil)
+	cfg.HomePath = leoHome
+	return cfg
+}
+
 func buildConfig(workspace string, existing *config.Config) *config.Config {
 	cfg := &config.Config{
 		Defaults: config.DefaultsConfig{

@@ -54,7 +54,7 @@ demand. Subcommands (start/stop/restart/logs) manage the background daemon.`,
 }
 
 func runService(cmd *cobra.Command, args []string) error {
-	cfg, err := loadConfig()
+	cfg, err := loadDaemonConfig(os.Stderr)
 	if err != nil {
 		return err
 	}
