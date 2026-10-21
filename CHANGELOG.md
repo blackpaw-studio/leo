@@ -9,9 +9,10 @@ All notable user-visible changes to Leo are documented here.
 - **`leo service handover --to-cli` recovers a half-finished `--to-app`.** When
   the app failed to write `managed.json` after a successful `--to-app`, there
   was no way back. With no marker and a `<plist>.handed-over` backup,
-  `--to-cli` now restores and bootstraps the CLI job (no drain, no bootout),
-  fails `daemon_running` if a daemon holds `daemon.lock`, and reports
-  `restored_without_marker`. `managed_stopped` is now always present in the
+  `--to-cli --label <app label>` now restores and bootstraps the CLI job (no
+  drain, no bootout). It fails `managed_job_loaded` if the app's job is still
+  registered in launchd, `daemon_running` if a daemon holds `daemon.lock`, and
+  reports `restored_without_marker`. `managed_stopped` is now always present in the
   JSON result.
 
 ### Changed

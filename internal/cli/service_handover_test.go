@@ -30,6 +30,8 @@ type hoFixture struct {
 	g      *gracefulFixture
 	deps   handoverDeps
 	failOn map[string]error // op log line -> error
+	// appLoaded is what the no-marker recovery sees for the app's job.
+	appLoaded bool
 }
 
 func newHoFixture(t *testing.T, busy ...string) *hoFixture {
@@ -504,19 +506,29 @@ func noMarkerHo(f *hoFixture) {
 	f.deps.marker = managed.State{}
 	f.deps.daemonAlive = func() bool { return false }
 	f.deps.exists = func(p string) bool { return p == hoBackup || p == "/opt/homebrew/bin/leo" }
+	f.deps.jobLoaded = f.loaded
 }
+
+// loaded logs the app-label check and answers from f.appLoaded.
+func (f *hoFixture) loaded(label string) bool {
+	f.g.drain.record("loaded? " + label)
+	return f.appLoaded
+}
+
+// recovery is the option set the app passes on the no-marker path.
+var recovery = handoverOptions{label: hoAppLabel}
 
 func TestHandoverToCLIWithoutMarkerRestoresTheBackup(t *testing.T) {
 	f := newHoFixture(t, "worker")
 	noMarkerHo(f)
 
-	res := f.run(t, handoverToCLI, handoverOptions{})
+	res := f.run(t, handoverToCLI, recovery)
 
 	if !res.OK || !res.RestoredWithoutMarker || res.ManagedStopped || res.PlistBackup != hoBackup {
 		t.Fatalf("result = %+v", res)
 	}
 	f.wantLog(t,
-		"plutil-program "+hoBackup, "version /opt/homebrew/bin/leo",
+		"loaded? "+hoAppLabel, "plutil-program "+hoBackup, "version /opt/homebrew/bin/leo",
 		"rename "+hoBackup+" "+hoPlist, "bootstrap "+hoPlist, "wait-ready")
 	b, _ := json.Marshal(res)
 	for _, want := range []string{`"ok":true`, `"managed_stopped":false`, `"restored_without_marker":true`} {
@@ -531,12 +543,12 @@ func TestHandoverToCLIWithoutMarkerFailsWhileADaemonHoldsTheLock(t *testing.T) {
 	noMarkerHo(f)
 	f.deps.daemonAlive = func() bool { return true }
 
-	res := f.run(t, handoverToCLI, handoverOptions{})
+	res := f.run(t, handoverToCLI, recovery)
 
 	if res.OK || res.Step != "preflight" || res.Error != "daemon_running" {
 		t.Fatalf("result = %+v", res)
 	}
-	f.wantLog(t)
+	f.wantLog(t, "loaded? "+hoAppLabel)
 }
 
 func TestHandoverToCLIWithoutMarkerRollsBackAFailedBootstrap(t *testing.T) {
@@ -544,15 +556,28 @@ func TestHandoverToCLIWithoutMarkerRollsBackAFailedBootstrap(t *testing.T) {
 	noMarkerHo(f)
 	f.failOn["bootstrap "+hoPlist] = errors.New("boom")
 
-	res := f.run(t, handoverToCLI, handoverOptions{})
+	res := f.run(t, handoverToCLI, recovery)
 
 	if res.OK || res.Step != "bootstrap" || res.Error != "bootstrap_failed" || res.RolledBack == nil || !*res.RolledBack || res.ManagedStopped {
 		t.Fatalf("result = %+v", res)
 	}
 	f.wantLog(t,
-		"plutil-program "+hoBackup, "version /opt/homebrew/bin/leo",
+		"loaded? "+hoAppLabel, "plutil-program "+hoBackup, "version /opt/homebrew/bin/leo",
 		"rename "+hoBackup+" "+hoPlist, "bootstrap "+hoPlist,
-		"rename "+hoPlist+" "+hoBackup)
+		"bootout "+hoPrevLabel, "rename "+hoPlist+" "+hoBackup)
+}
+
+func TestHandoverToCLIWithoutMarkerIgnoresABootoutFailureAfterABootstrapFailure(t *testing.T) {
+	f := newHoFixture(t)
+	noMarkerHo(f)
+	f.failOn["bootstrap "+hoPlist] = errors.New("boom")
+	f.failOn["bootout "+hoPrevLabel] = errors.New("no such job")
+
+	res := f.run(t, handoverToCLI, recovery)
+
+	if res.Error != "bootstrap_failed" || res.RolledBack == nil || !*res.RolledBack {
+		t.Fatalf("result = %+v", res)
+	}
 }
 
 func TestHandoverToCLIWithoutMarkerBootsTheJobOutWhenItNeverGetsReady(t *testing.T) {
@@ -560,13 +585,13 @@ func TestHandoverToCLIWithoutMarkerBootsTheJobOutWhenItNeverGetsReady(t *testing
 	noMarkerHo(f)
 	f.failOn["wait-ready"] = errors.New("boom")
 
-	res := f.run(t, handoverToCLI, handoverOptions{})
+	res := f.run(t, handoverToCLI, recovery)
 
 	if res.OK || res.Error != "not_ready" || res.RolledBack == nil || !*res.RolledBack {
 		t.Fatalf("result = %+v", res)
 	}
 	f.wantLog(t,
-		"plutil-program "+hoBackup, "version /opt/homebrew/bin/leo",
+		"loaded? "+hoAppLabel, "plutil-program "+hoBackup, "version /opt/homebrew/bin/leo",
 		"rename "+hoBackup+" "+hoPlist, "bootstrap "+hoPlist, "wait-ready",
 		"bootout "+hoPrevLabel, "rename "+hoPlist+" "+hoBackup)
 }
@@ -576,7 +601,7 @@ func TestHandoverToCLIWithoutMarkerAndWithoutBackupIsNotManaged(t *testing.T) {
 	noMarkerHo(f)
 	f.deps.exists = func(string) bool { return false }
 
-	res := f.run(t, handoverToCLI, handoverOptions{})
+	res := f.run(t, handoverToCLI, recovery)
 
 	if res.OK || res.Step != "preflight" || res.Error != "not_managed" {
 		t.Fatalf("result = %+v", res)
@@ -589,7 +614,7 @@ func TestHandoverToCLIWithAnInvalidMarkerDoesNotTakeTheRecoveryPath(t *testing.T
 	noMarkerHo(f)
 	f.deps.marker = managed.State{Warning: "managed.json ignored: malformed JSON"}
 
-	res := f.run(t, handoverToCLI, handoverOptions{})
+	res := f.run(t, handoverToCLI, recovery)
 
 	if res.OK || res.Error != "not_managed" {
 		t.Fatalf("result = %+v", res)
@@ -601,9 +626,10 @@ func TestHandoverToCLIWithoutMarkerDryRunPlansTheRecovery(t *testing.T) {
 	f := newHoFixture(t)
 	noMarkerHo(f)
 
-	res := f.run(t, handoverToCLI, handoverOptions{dryRun: true})
+	res := f.run(t, handoverToCLI, handoverOptions{label: hoAppLabel, dryRun: true})
 
 	want := []string{
+		"check " + hoAppLabel + " is not loaded in launchd",
 		"rename " + hoBackup + " " + hoPlist,
 		"launchctl bootstrap " + hoPlist,
 		"wait for the daemon to be ready",
@@ -612,9 +638,46 @@ func TestHandoverToCLIWithoutMarkerDryRunPlansTheRecovery(t *testing.T) {
 		t.Fatalf("result = %+v, want plan %v", res, want)
 	}
 	for _, c := range f.g.log {
-		if !strings.HasPrefix(c, "plutil-") && !strings.HasPrefix(c, "version") {
+		if !strings.HasPrefix(c, "plutil-") && !strings.HasPrefix(c, "version") && !strings.HasPrefix(c, "loaded?") {
 			t.Fatalf("dry run changed state: %v", f.g.log)
 		}
+	}
+}
+
+func TestHandoverToCLIWithoutMarkerRefusesWhileTheAppJobIsLoaded(t *testing.T) {
+	f := newHoFixture(t)
+	noMarkerHo(f)
+	f.appLoaded = true
+
+	res := f.run(t, handoverToCLI, recovery)
+
+	if res.OK || res.Step != "preflight" || res.Error != "managed_job_loaded" || !strings.Contains(res.Message, "unregister") {
+		t.Fatalf("result = %+v", res)
+	}
+	f.wantLog(t, "loaded? "+hoAppLabel)
+}
+
+func TestHandoverToCLIWithoutMarkerNeedsAValidAppLabel(t *testing.T) {
+	tests := []struct {
+		name, label, wantErr string
+	}{
+		{name: "missing", label: "", wantErr: "invalid_args"},
+		{name: "malformed", label: "nodots", wantErr: "invalid_label"},
+		{name: "the CLI's own label", label: "com.blackpaw.leo", wantErr: "invalid_label"},
+		{name: "the CLI install's label", label: hoPrevLabel, wantErr: "label_conflict"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			f := newHoFixture(t)
+			noMarkerHo(f)
+
+			res := f.run(t, handoverToCLI, handoverOptions{label: tt.label})
+
+			if res.OK || res.Step != "preflight" || res.Error != tt.wantErr {
+				t.Fatalf("result = %+v, want preflight/%s", res, tt.wantErr)
+			}
+			f.wantLog(t)
+		})
 	}
 }
 
