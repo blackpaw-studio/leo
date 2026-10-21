@@ -19,7 +19,7 @@ type NotificationCommand func(context.Context, string, ...string) *exec.Cmd
 type TmuxNotificationDelivery struct {
 	TmuxPath       string
 	Command        NotificationCommand
-	ResolveSocket  func(context.Context, peerinbox.ExecFunc, string) (string, error)
+	ResolveSocket  func(context.Context, peerinbox.ExecFunc, string, string) (string, error)
 	DeliverSocket  func(context.Context, string, string) error
 	CommandTimeout time.Duration
 }
@@ -78,7 +78,7 @@ func (d *TmuxNotificationDelivery) Deliver(ctx context.Context, rec Record, line
 		return fmt.Errorf("%w: stale caller pane", ErrNotificationNotSent)
 	}
 	if rec.CallerHarness == "claude" {
-		socket, err := d.ResolveSocket(ctx, peerinbox.ExecFunc(d.Command), rec.CallerPaneID)
+		socket, err := d.ResolveSocket(ctx, peerinbox.ExecFunc(d.Command), d.TmuxPath, rec.CallerPaneID)
 		if err != nil {
 			return fmt.Errorf("%w: %v", ErrNotificationNotSent, err)
 		}

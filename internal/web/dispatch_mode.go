@@ -17,8 +17,10 @@ func (s *Server) defaultDispatchMode(cfg *config.Config, template string) (consu
 	if tmpl, ok := cfg.Templates[template]; ok && cfg.TemplateHarness(tmpl) == "opencode" {
 		return consult.ModeHeadless, "ran headless: the opencode harness has no interactive dispatch"
 	}
-	if _, err := locateTmux(); err != nil {
-		return consult.ModeHeadless, "ran headless: tmux is not available for an interactive dispatch"
+	if s.tmuxBin == "" {
+		if _, err := locateTmux(); err != nil {
+			return consult.ModeHeadless, "ran headless: tmux is not available for an interactive dispatch"
+		}
 	}
 	if !s.consults.InteractiveAvailable() {
 		return consult.ModeHeadless, "ran headless: the interactive runtime is not configured"

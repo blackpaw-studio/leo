@@ -16,7 +16,7 @@ import (
 )
 
 var viewerExecCommandContext = exec.CommandContext
-var viewerLocateTmux = tmux.Locate
+var viewerLocateTmux = resolveTmux
 var viewerExecutable = os.Executable
 
 type viewerOverrides struct {

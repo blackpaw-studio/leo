@@ -46,6 +46,7 @@ var (
 	openLogFile      = defaultOpenLogFile
 	supervisedExecFn = defaultSupervisedExec
 	setenvFn         = os.Setenv
+	resolveTmuxFn    = tmux.Resolve
 )
 
 func resolveViewerMenuBinding(executable func() (string, error), configPath string) (tmux.ViewerMenuBinding, error) {
@@ -858,6 +859,8 @@ type RunSupervisedOptions struct {
 	// (hooks, MCP config, tmux key bindings, bridge env). nil means
 	// os.Executable; a managed install passes its stable self_path.
 	Executable func() (string, error)
+	// TmuxPath is the managed marker's tmux_path; empty when unmanaged.
+	TmuxPath string
 	// Env holds variables applied to the daemon's own process environment
 	// before anything launches, so agents inherit them (a managed install's
 	// marker env). They override inherited values.
@@ -937,7 +940,7 @@ func defaultSupervisedExec(opts RunSupervisedOptions) error {
 	}
 
 	// Find tmux early so we can cache it
-	tmuxPath, err := findTmux()
+	tmuxPath, err := resolveDaemonTmux(opts.TmuxPath, os.Stderr)
 	if err != nil {
 		return err
 	}
@@ -982,6 +985,7 @@ func defaultSupervisedExec(opts RunSupervisedOptions) error {
 	leoMCP := leomcp.ResolveServer(executable, os.Stderr)
 	srv := daemon.New(sockPath, configPath, supervisor,
 		daemon.WithLeoMCP(leoMCP),
+		daemon.WithTmuxPath(tmuxPath),
 		daemon.WithBridge(bridgeHub),
 		daemon.WithBridgeLaunches(bridgeLauncher, supervisor.BridgeRouter()))
 	srv.SetParentContext(ctx)
@@ -1216,7 +1220,7 @@ func driverFor(harnessName string) harness.SessionDriver {
 }
 
 // handleForSpec builds the SessionHandle superviseProcess hands to drivers.
-func handleForSpec(spec ProcessSpec, id *procIdentity, homePath string) harness.SessionHandle {
+func handleForSpec(spec ProcessSpec, id *procIdentity, homePath, tmuxPath string) harness.SessionHandle {
 	kind := spec.Kind
 	if kind == "" {
 		kind = harness.KindAgent
@@ -1228,6 +1232,7 @@ func handleForSpec(spec ProcessSpec, id *procIdentity, homePath string) harness.
 		Workspace:     spec.WorkDir,
 		HomePath:      homePath,
 		Env:           spec.Env,
+		TmuxPath:      tmuxPath,
 		OpeningPrompt: spec.OpeningPrompt,
 		IDs:           agentOrProcessIDs(homePath, id.Name()),
 	}
@@ -1376,7 +1381,7 @@ func superviseProcess(ctx context.Context, tmuxPath, claudePath string, spec Pro
 			}
 		} else {
 			if pl, ok := drv.(harness.PreLauncher); ok {
-				if err := pl.PreLaunch(handleForSpec(spec, id, homePath)); err != nil {
+				if err := pl.PreLaunch(handleForSpec(spec, id, homePath, tmuxPath)); err != nil {
 					fmt.Fprintf(os.Stderr, "[%s] pre-launch: %v\n", name, err)
 				}
 			}
@@ -1387,7 +1392,7 @@ func superviseProcess(ctx context.Context, tmuxPath, claudePath string, spec Pro
 
 			// launchArgs carries this launch's attention hooks; currentArgs
 			// (and the stored args behind it) never do.
-			launchArgs, hooked := attentionLaunchArgs(drv, handleForSpec(spec, id, homePath), currentArgs, spec, name, sv.reportCmdOrDefault())
+			launchArgs, hooked := attentionLaunchArgs(drv, handleForSpec(spec, id, homePath, tmuxPath), currentArgs, spec, name, sv.reportCmdOrDefault())
 			spec.attentionToken = ""
 			if hooked {
 				if token, ok := launchAttentionToken(homePath, name); ok {
@@ -1535,7 +1540,7 @@ func superviseProcess(ctx context.Context, tmuxPath, claudePath string, spec Pro
 		// The opening prompt is one-shot: cleared after the first launch
 		// (create or adopt) so an in-loop restart never replays it.
 		if drv != nil {
-			startHandle := handleForSpec(spec, id, homePath)
+			startHandle := handleForSpec(spec, id, homePath, tmuxPath)
 			startHandle.OpeningPrompt = openingPrompt
 			openingPrompt = ""
 			go func(h harness.SessionHandle) {
@@ -1829,8 +1834,23 @@ func recoverQuickExit(drv harness.SessionDriver, args []string) ([]string, harne
 	return args, harness.QuickExitClearSession
 }
 
-func findTmux() (string, error) {
-	return tmux.Locate()
+// resolveDaemonTmux picks the tmux binary every daemon call uses: Client, the
+// binary matching a running server's version. Start only matters when a new
+// server is created, and a crash restart of the supervised server reuses
+// Client, so every path cached as a string stays valid. A pending upgrade or
+// a server version with no copy is logged once, never fatal.
+func resolveDaemonTmux(managedPath string, logw io.Writer) (string, error) {
+	res := resolveTmuxFn(tmux.ResolveOptions{ManagedPath: managedPath})
+	if res.Client == "" {
+		return "", res.Err
+	}
+	if res.Pending != "" {
+		fmt.Fprintln(logw, res.Pending)
+	}
+	if res.Err != nil {
+		fmt.Fprintf(logw, "error: %v\n", res.Err)
+	}
+	return res.Client, nil
 }
 
 // markAgentNoResume sets NoResume=true and clears SessionID on the agentstore

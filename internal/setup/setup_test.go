@@ -289,52 +289,38 @@ func TestScaffoldWorkspace_CreatesFiles(t *testing.T) {
 
 func TestCheckPrerequisites_ClaudeMissing(t *testing.T) {
 	origClaude := checkClaudeFn
-	origTmux := checkTmuxFn
-	t.Cleanup(func() {
-		checkClaudeFn = origClaude
-		checkTmuxFn = origTmux
-	})
+	t.Cleanup(func() { checkClaudeFn = origClaude })
 
 	checkClaudeFn = func() prereq.BinaryResult { return prereq.BinaryResult{OK: false} }
-	checkTmuxFn = func() bool { return true }
-
-	if err := checkPrerequisites(); err == nil {
+	if err := checkPrerequisites(foundTmux("/usr/bin/tmux")); err == nil {
 		t.Error("expected error when claude missing")
 	}
 }
 
 func TestCheckPrerequisites_TmuxMissing(t *testing.T) {
 	origClaude := checkClaudeFn
-	origTmux := checkTmuxFn
-	t.Cleanup(func() {
-		checkClaudeFn = origClaude
-		checkTmuxFn = origTmux
-	})
+	t.Cleanup(func() { checkClaudeFn = origClaude })
 
 	checkClaudeFn = func() prereq.BinaryResult {
 		return prereq.BinaryResult{OK: true, Path: "/usr/bin/claude", Version: "1.0.0"}
 	}
-	checkTmuxFn = func() bool { return false }
-
-	if err := checkPrerequisites(); err == nil {
+	if err := checkPrerequisites(func() (string, error) { return "", errors.New("tmux not found") }); err == nil {
 		t.Error("expected error when tmux missing")
 	}
 }
 
 func TestCheckPrerequisites_AllPresent(t *testing.T) {
 	origClaude := checkClaudeFn
-	origTmux := checkTmuxFn
-	t.Cleanup(func() {
-		checkClaudeFn = origClaude
-		checkTmuxFn = origTmux
-	})
+	t.Cleanup(func() { checkClaudeFn = origClaude })
 
 	checkClaudeFn = func() prereq.BinaryResult {
 		return prereq.BinaryResult{OK: true, Path: "/usr/bin/claude", Version: "1.0.0"}
 	}
-	checkTmuxFn = func() bool { return true }
+	origVersion := tmuxVersionFn
+	t.Cleanup(func() { tmuxVersionFn = origVersion })
+	tmuxVersionFn = func(string) (string, bool) { return "tmux 3.6a", true }
 
-	if err := checkPrerequisites(); err != nil {
+	if err := checkPrerequisites(foundTmux("/usr/bin/tmux")); err != nil {
 		t.Errorf("unexpected error: %v", err)
 	}
 }
@@ -740,16 +726,15 @@ func TestPromptClientHost_EOFStopsRetryLoop(t *testing.T) {
 // gate setup finishes clean and every agent spawn then fails forever in the
 // restart loop.
 func TestCheckPrerequisites_TmuxTooOld(t *testing.T) {
-	origClaude, origTmux, origVersion := checkClaudeFn, checkTmuxFn, tmuxVersionFn
+	origClaude, origVersion := checkClaudeFn, tmuxVersionFn
 	t.Cleanup(func() {
-		checkClaudeFn, checkTmuxFn, tmuxVersionFn = origClaude, origTmux, origVersion
+		checkClaudeFn, tmuxVersionFn = origClaude, origVersion
 	})
 
 	checkClaudeFn = func() prereq.BinaryResult { return prereq.BinaryResult{OK: true, Version: "claude 1.0.0"} }
-	checkTmuxFn = func() bool { return true }
-	tmuxVersionFn = func() (string, bool) { return "tmux 3.0a", false }
+	tmuxVersionFn = func(string) (string, bool) { return "tmux 3.0a", false }
 
-	err := checkPrerequisites()
+	err := checkPrerequisites(foundTmux("/usr/bin/tmux"))
 	if err == nil {
 		t.Fatal("expected an error when tmux is too old")
 	}
@@ -761,16 +746,60 @@ func TestCheckPrerequisites_TmuxTooOld(t *testing.T) {
 // TestCheckPrerequisites_TmuxNewEnough is the companion: a supported tmux
 // must not block setup.
 func TestCheckPrerequisites_TmuxNewEnough(t *testing.T) {
-	origClaude, origTmux, origVersion := checkClaudeFn, checkTmuxFn, tmuxVersionFn
+	origClaude, origVersion := checkClaudeFn, tmuxVersionFn
 	t.Cleanup(func() {
-		checkClaudeFn, checkTmuxFn, tmuxVersionFn = origClaude, origTmux, origVersion
+		checkClaudeFn, tmuxVersionFn = origClaude, origVersion
 	})
 
 	checkClaudeFn = func() prereq.BinaryResult { return prereq.BinaryResult{OK: true, Version: "claude 1.0.0"} }
-	checkTmuxFn = func() bool { return true }
-	tmuxVersionFn = func() (string, bool) { return "tmux 3.6a", true }
+	tmuxVersionFn = func(string) (string, bool) { return "tmux 3.6a", true }
 
-	if err := checkPrerequisites(); err != nil {
+	if err := checkPrerequisites(foundTmux("/usr/bin/tmux")); err != nil {
 		t.Errorf("supported tmux should pass prerequisites, got: %v", err)
+	}
+}
+
+func foundTmux(path string) func() (string, error) {
+	return func() (string, error) { return path, nil }
+}
+
+// A managed install ships its own tmux and may have none on PATH: the prereq
+// check inspects the resolver's binary, not a PATH lookup.
+func TestCheckPrerequisites_ChecksTheResolvedTmuxVersion(t *testing.T) {
+	origClaude, origVersion := checkClaudeFn, tmuxVersionFn
+	t.Cleanup(func() { checkClaudeFn, tmuxVersionFn = origClaude, origVersion })
+	checkClaudeFn = func() prereq.BinaryResult { return prereq.BinaryResult{OK: true, Version: "claude 1.0.0"} }
+	t.Setenv("PATH", t.TempDir())
+	var inspected string
+	tmuxVersionFn = func(path string) (string, bool) {
+		inspected = path
+		return "tmux 3.6a", true
+	}
+
+	err := checkPrerequisites(foundTmux("/managed/3.6a/tmux"))
+
+	if err != nil {
+		t.Fatalf("bundled tmux should pass prerequisites, got: %v", err)
+	}
+	if inspected != "/managed/3.6a/tmux" {
+		t.Errorf("version check inspected %q, want the bundled /managed/3.6a/tmux", inspected)
+	}
+}
+
+// An old tmux elsewhere on the machine must not block a managed install whose
+// bundled tmux is new enough: the bundled binary is the one that gets judged.
+func TestCheckPrerequisites_OldSystemTmuxDoesNotBlockBundledOne(t *testing.T) {
+	origClaude, origVersion := checkClaudeFn, tmuxVersionFn
+	t.Cleanup(func() { checkClaudeFn, tmuxVersionFn = origClaude, origVersion })
+	checkClaudeFn = func() prereq.BinaryResult { return prereq.BinaryResult{OK: true, Version: "claude 1.0.0"} }
+	tmuxVersionFn = func(path string) (string, bool) {
+		if path == "/usr/bin/tmux" {
+			return "tmux 2.9", false
+		}
+		return "tmux 3.6a", true
+	}
+
+	if err := checkPrerequisites(foundTmux("/managed/3.6a/tmux")); err != nil {
+		t.Errorf("old system tmux blocked setup: %v", err)
 	}
 }

@@ -63,11 +63,19 @@ func (d Driver) Start(ctx context.Context, h harness.SessionHandle) error {
 	return nil
 }
 
+// tmuxBinary is the tmux the daemon resolved for h, else a PATH lookup.
+func tmuxBinary(h harness.SessionHandle) (string, error) {
+	if h.TmuxPath != "" {
+		return h.TmuxPath, nil
+	}
+	return locateTmuxFn()
+}
+
 // Inject pastes msg into the live TUI (readiness-probed). Delivery is
 // asynchronous — the turn outcome lives in the pane — so Result is always
 // nil (claude parity for every harness).
 func (d Driver) Inject(ctx context.Context, h harness.SessionHandle, msg string) (*harness.Result, error) {
-	tmuxPath, err := locateTmuxFn()
+	tmuxPath, err := tmuxBinary(h)
 	if err != nil {
 		return nil, err
 	}
@@ -114,7 +122,7 @@ func (d Driver) Attach(h harness.SessionHandle) (harness.AttachSpec, error) {
 // AbortTurn cancels a mid-turn TUI by sending Escape then Ctrl-C — the same
 // keys for every harness.
 func (d Driver) AbortTurn(h harness.SessionHandle) error {
-	tmuxPath, err := locateTmuxFn()
+	tmuxPath, err := tmuxBinary(h)
 	if err != nil {
 		return err
 	}

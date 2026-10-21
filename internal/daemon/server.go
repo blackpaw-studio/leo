@@ -8,7 +8,6 @@ import (
 	"net"
 	"net/http"
 	"os"
-	"os/exec"
 	"sync/atomic"
 	"syscall"
 	"time"
@@ -127,6 +126,9 @@ type Server struct {
 	// handed to the web server's consult runtime (see WithLeoMCP).
 	leoMCP       leomcp.Server
 	bridgeRouter *bridge.Router
+	// tmuxBin is the tmux binary the daemon resolved (see WithTmuxPath);
+	// empty falls back to a PATH lookup.
+	tmuxBin string
 
 	// control serves the agent control routes; set by StartWeb (see
 	// setControl).
@@ -170,6 +172,12 @@ func WithBridge(hub *bridge.Hub) Option {
 // web UI's manual runs exec.
 func WithLeoMCP(s leomcp.Server) Option {
 	return func(srv *Server) { srv.leoMCP = s }
+}
+
+// WithTmuxPath sets the tmux binary the daemon resolved with tmux.Resolve, so
+// the IPC aborter and the web server talk to the running server's version.
+func WithTmuxPath(path string) Option {
+	return func(s *Server) { s.tmuxBin = path }
 }
 
 // WithBridgeLaunches hands the web server what it needs to drive claude
@@ -232,7 +240,7 @@ func New(sockPath, configPath string, processes ProcessStateProvider, opts ...Op
 	// SetInjector with a harness-aware closure after New() returns. Tests
 	// that need a fake call SetInjector directly.
 	s.router.SetAborter(func(tmuxSession string) error {
-		return tmux.AbortPrompt(context.Background(), tmuxPath(), tmuxSession)
+		return tmux.AbortPrompt(context.Background(), s.tmuxPath(), tmuxSession)
 	})
 
 	mux := http.NewServeMux()
@@ -483,6 +491,7 @@ func (s *Server) StartWeb(cfg *config.Config, agentSvc web.AgentService) error {
 		ConsultRecorder:  consult.NewFileRecorder(cfg.StatePath()),
 		ParentContext:    s.parentContext,
 		LeoMCP:           s.leoMCP,
+		TmuxPath:         s.tmuxBin,
 		AttachPlacements: s.attachPlacements,
 		// Paired phones (leo pair): device tokens and POST /api/v1/pair.
 		Devices:    devices.NewStore(cfg.StatePath(), nil),
@@ -841,11 +850,14 @@ func writeError(w http.ResponseWriter, status int, msg string) {
 	writeJSON(w, status, Response{OK: false, Error: msg})
 }
 
-// tmuxPath resolves the tmux binary path, falling back to "tmux" on the PATH
-// when LookPath fails. Resolved lazily on each call so PATH changes in tests
-// are observable.
-func tmuxPath() string {
-	p, err := exec.LookPath("tmux")
+// tmuxPath is the daemon-resolved tmux binary, else a PATH lookup falling
+// back to "tmux". The lookup runs on each call so PATH changes in tests are
+// observable.
+func (s *Server) tmuxPath() string {
+	if s.tmuxBin != "" {
+		return s.tmuxBin
+	}
+	p, err := tmux.Locate()
 	if err != nil {
 		return "tmux"
 	}

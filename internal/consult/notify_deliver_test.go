@@ -63,7 +63,7 @@ func TestClaudeNotificationDeliveryWritesExactSocketEnvelope(t *testing.T) {
 		bytes <- string(raw)
 	}()
 	d := NewTmuxNotificationDelivery("tmux", func(context.Context, string, ...string) *exec.Cmd { return exec.Command("printf", "$1") })
-	d.ResolveSocket = func(context.Context, peerinbox.ExecFunc, string) (string, error) { return path, nil }
+	d.ResolveSocket = func(context.Context, peerinbox.ExecFunc, string, string) (string, error) { return path, nil }
 	line := "[leo] dispatch d-x (job) done · active 0:01 — collect with leo_wait"
 	if err := d.Deliver(context.Background(), Record{CallerPaneID: "%7", CallerSessionID: "$1", CallerHarness: "claude"}, line); err != nil {
 		t.Fatal(err)

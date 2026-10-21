@@ -133,6 +133,50 @@ func TestManagedDaemonUsesStableSelfPathAndRefusesSecondDaemon(t *testing.T) {
 		}
 	})
 
+	// A marker pinning a tmux whose version differs from the running server's
+	// (an app update landed while agents kept running) must not make the CLI
+	// speak to the server with the wrong client: it follows the server to the
+	// matching copy under the same root.
+	t.Run("CLI follows the running server's tmux when the pinned copy is another version", func(t *testing.T) {
+		markerPath := filepath.Join(s.ws, "state", "managed.json")
+		original, err := os.ReadFile(markerPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = os.WriteFile(markerPath, original, 0o600) })
+		var marker map[string]any
+		if err := json.Unmarshal(original, &marker); err != nil {
+			t.Fatal(err)
+		}
+		root := filepath.Dir(filepath.Dir(marker["tmux_path"].(string)))
+		newer := filepath.Join(root, "99.0", "tmux")
+		if err := os.MkdirAll(filepath.Dir(newer), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		// The pinned copy cannot speak to the running server and cannot even
+		// report its own version.
+		if err := os.WriteFile(newer, []byte("#!/bin/sh\nexit 1\n"), 0o755); err != nil { //nolint:gosec // fixture must be executable
+			t.Fatal(err)
+		}
+		marker["tmux_path"] = newer
+		skewed, err := json.Marshal(marker)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(markerPath, skewed, 0o600); err != nil {
+			t.Fatal(err)
+		}
+
+		cmd := exec.Command(leoBin, "validate", "-c", s.cfgPath)
+		cmd.Dir = s.ws
+		cmd.Env = append(append(s.daemonEnv(), "PATH="+filepath.Dir(fakeclaude)+":"+os.Getenv("PATH")), s.extraEnv...)
+		out, _ := cmd.CombinedOutput() // other checks may fail; only the tmux line matters
+
+		if want := "tmux " + tmuxVersionDir(t); !strings.Contains(string(out), want) {
+			t.Fatalf("validate did not report the server's tmux (%q):\n%s", want, out)
+		}
+	})
+
 	t.Run("second daemon on the same home is refused", func(t *testing.T) {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()

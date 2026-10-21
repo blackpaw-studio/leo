@@ -195,3 +195,26 @@ func TestTmuxVersionAtLeast(t *testing.T) {
 		}
 	}
 }
+
+// TmuxVersionAt inspects exactly the binary it is given, never a located one:
+// a managed install checks its bundled tmux, not whatever is on PATH.
+func TestTmuxVersionAtRunsTheGivenBinary(t *testing.T) {
+	originalLocate, originalRun := locateTmux, runCommand
+	defer func() { locateTmux, runCommand = originalLocate, originalRun }()
+	locateTmux = func() (string, error) { return "", fmt.Errorf("must not locate") }
+	var gotPath string
+	var gotArgs []string
+	runCommand = func(path string, args ...string) ([]byte, error) {
+		gotPath, gotArgs = path, args
+		return []byte("tmux 3.6a\n"), nil
+	}
+
+	raw, ok := TmuxVersionAt("/managed/3.6a/tmux")
+
+	if !ok || raw != "tmux 3.6a" {
+		t.Errorf("TmuxVersionAt = (%q, %v), want (\"tmux 3.6a\", true)", raw, ok)
+	}
+	if gotPath != "/managed/3.6a/tmux" || len(gotArgs) != 1 || gotArgs[0] != "-V" {
+		t.Errorf("ran %q %v, want /managed/3.6a/tmux [-V]", gotPath, gotArgs)
+	}
+}

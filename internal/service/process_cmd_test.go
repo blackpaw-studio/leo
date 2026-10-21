@@ -468,7 +468,7 @@ func TestPreLaunchTrustsWorkspaceInAccountConfigDir(t *testing.T) {
 	t.Setenv("CLAUDE_CONFIG_DIR", "")
 	home, acct, ws := t.TempDir(), t.TempDir(), t.TempDir()
 	spec := ProcessSpec{Name: "alpha", WorkDir: ws, Env: map[string]string{"HOME": home, "CLAUDE_CONFIG_DIR": acct}}
-	h := handleForSpec(spec, newProcIdentity("alpha", nil), t.TempDir())
+	h := handleForSpec(spec, newProcIdentity("alpha", nil), t.TempDir(), "")
 
 	pl, ok := claudeharness.Claude{}.Driver().(interface {
 		PreLaunch(harness.SessionHandle) error

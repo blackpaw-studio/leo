@@ -121,6 +121,21 @@ func TestAPIDispatchOmittedModeFallsBackToHeadlessWithoutTmux(t *testing.T) {
 	}
 }
 
+// A daemon that resolved its own tmux (a managed install) needs no tmux on
+// PATH to run interactive dispatches.
+func TestAPIDispatchOmittedModeIsInteractiveWithDaemonResolvedTmuxAndNoSystemTmux(t *testing.T) {
+	s, rt, _ := newModeTestServer(t)
+	locateTmux = func() (string, error) { return "", os.ErrNotExist }
+	s.tmuxBin = "/managed/3.6a/tmux"
+	got := postDispatch(t, s, `{"template":"coding","prompt":"work","cwd":"/tmp"}`)
+	if got.Data.Mode != consult.ModeInteractive || got.Data.Note != "" {
+		t.Fatalf("mode=%q note=%q, want interactive", got.Data.Mode, got.Data.Note)
+	}
+	if rt.count() != 1 {
+		t.Fatalf("launches=%d, want 1", rt.count())
+	}
+}
+
 func TestAPIDispatchOmittedModeFallsBackToHeadlessForOpencode(t *testing.T) {
 	s, rt, dir := newModeTestServer(t)
 	cfg := testConfigWithTemplatesYAML + "  local:\n    harness: opencode\n    model: lmstudio/qwen\n"

@@ -136,3 +136,16 @@ func TestManagerRename_LiveIntoStoppedNameCollision(t *testing.T) {
 		t.Fatal("leo-a record lost")
 	}
 }
+
+// Drivers acting on an agent's handle talk to the daemon's resolved tmux, so
+// they never need one on PATH.
+func TestHandleForRecordCarriesTheManagersTmux(t *testing.T) {
+	loader := func() (*config.Config, error) { return &config.Config{HomePath: t.TempDir()}, nil }
+	m := New(loader, &fakeSupervisor{}, "/managed/3.5/tmux", "")
+
+	h := m.handleForRecord(t.TempDir(), agentstore.Record{Name: "leo-a"})
+
+	if h.TmuxPath != "/managed/3.5/tmux" {
+		t.Errorf("TmuxPath = %q, want /managed/3.5/tmux", h.TmuxPath)
+	}
+}

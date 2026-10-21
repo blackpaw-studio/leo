@@ -486,6 +486,15 @@ func (s *Server) handleTaskPromptSave(w http.ResponseWriter, r *http.Request) {
 	s.renderFlash(w, typ, msg)
 }
 
+// tmuxPath is the tmux binary every web-initiated tmux call runs: the one the
+// daemon resolved (matching the running server's version), else a PATH lookup.
+func (s *Server) tmuxPath() string {
+	if s.tmuxBin != "" {
+		return s.tmuxBin
+	}
+	return findTmuxPath()
+}
+
 func findTmuxPath() string {
 	// Fall back to bare "tmux" on error — preserves prior behavior for call
 	// sites that pass this directly to exec.Command without checking errors.

@@ -101,7 +101,13 @@ func CheckTmux() bool {
 // minimum. ok is true when tmux is missing (callers report absence
 // separately) or when the version cannot be parsed.
 func TmuxVersion() (raw string, ok bool) {
-	path := TmuxPath()
+	return TmuxVersionAt(TmuxPath())
+}
+
+// TmuxVersionAt is TmuxVersion for a specific binary, for callers (the CLI,
+// under a managed install) that resolved tmux themselves. An empty path is
+// treated as a missing tmux.
+func TmuxVersionAt(path string) (raw string, ok bool) {
 	if path == "" {
 		return "", true
 	}
