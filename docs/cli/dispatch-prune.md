@@ -21,10 +21,10 @@ Only dispatches that have **ended** (their worktree on disk, or a stale record o
 
 | Action | Meaning |
 |--------|---------|
-| `remove` | Clean, and at its base commit or with every commit reachable from a ref other than its own `leo/*` branch. Removed with a plain `git worktree remove` (never `--force`; ignored build output does not block it). The `leo/*` branch is deleted only if its tip is reachable from another ref. |
+| `remove` | Clean, and at its base commit or with every commit reachable from a ref other than its own `leo/*` branch. A checkout moved onto another branch (or detached) is judged the same way, with that branch excluded as well; it is never deleted. Removed with a plain `git worktree remove` (never `--force`; ignored build output does not block it). The `leo/*` branch is deleted only if its tip is reachable from another ref. |
 | `keep:dirty` | Modified tracked files or untracked (non-ignored) files. |
-| `keep:unmerged` | Clean, but has commits no other ref reaches. |
-| `keep:unverifiable` | The rules could not be applied: git failed, the worktree is locked, its checkout is on a branch other than the recorded `leo/*` one, or a headless run was interrupted by a daemon restart. |
+| `keep:unmerged` | Clean, but has commits no other ref reaches (for a checkout on another branch, no ref besides that branch and `leo/*`). |
+| `keep:unverifiable` | The rules could not be applied: git failed, the worktree is locked or unregistered, or a headless run was interrupted by a daemon restart. |
 | `keep:deferred` | The daemon postponed this cleanup because a writer may be live (`worktree_state: deferred`), and prune cannot confirm the writer is gone: a headless run needs a recorded process group that is verifiably empty; an interactive run is confirmed only if it was released. |
 | `keep:not-terminal` | The dispatch has not ended, or its pane is still recorded. |
 | `missing-repo` | The canonical repository no longer exists. Reported, never deleted. |

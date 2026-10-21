@@ -11,7 +11,9 @@ All notable user-visible changes to Leo are documented here.
   applies the same safety rules as cleanup
   (never a dirty worktree, never commits only its own branch holds; plain
   `git worktree remove`; the `leo/*` branch is deleted only when merged
-  elsewhere). `--dry-run` lists every worktree with its action (`remove`,
+  elsewhere). A worktree checked out on another branch, or detached, is assessed
+  on its own commits and changes rather than skipped as unverifiable, and that
+  branch is never deleted. `--dry-run` lists every worktree with its action (`remove`,
   `keep:dirty`, `keep:unmerged`, `keep:unverifiable`, `keep:not-terminal`,
   `keep:deferred`, `missing-repo`, `stale-record`, `orphan`) and size, plus the reclaimable
   total. A terminal record whose worktree directory is already gone is a

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 )
 
@@ -14,14 +15,15 @@ type worktreeVerdict string
 
 const (
 	// verdictRemove: clean, and either still at the base commit or with every
-	// commit reachable from a ref other than its own branch.
+	// commit reachable from a ref other than its own branch (and, for a
+	// checkout moved onto another branch, other than that branch).
 	verdictRemove worktreeVerdict = "remove"
 	// verdictDirty: modified tracked files or untracked (non-ignored) files.
 	verdictDirty worktreeVerdict = "keep:dirty"
 	// verdictUnmerged: clean, but commits no other ref reaches.
 	verdictUnmerged worktreeVerdict = "keep:unmerged"
 	// verdictUnverifiable: the rules could not be applied (git failed, the
-	// worktree is locked, on another branch, or unregistered).
+	// worktree is locked, or unregistered).
 	verdictUnverifiable worktreeVerdict = "keep:unverifiable"
 	// verdictMissingRepo: the canonical repository is gone, so nothing can
 	// be checked or removed through it.
@@ -90,18 +92,17 @@ func findRegisteredWorktree(git gitFunc, root, path string) (registeredWorktree,
 	return entry, ok, nil
 }
 
-// refsReaching lists the refs, other than refs/heads/<ownBranch>, whose
+// refsReaching lists the refs, other than the excluded full ref names, whose
 // history contains commit.
-func refsReaching(git gitFunc, root, commit, ownBranch string) ([]string, error) {
+func refsReaching(git gitFunc, root, commit string, excluded ...string) ([]string, error) {
 	out, err := git("-C", root, "for-each-ref", "--contains", commit, "--format=%(refname)")
 	if err != nil {
 		return nil, err
 	}
-	own := "refs/heads/" + ownBranch
 	var refs []string
 	for _, line := range strings.Split(string(out), "\n") {
 		// Only lines that are refs count; anything else is not evidence.
-		if ref := strings.TrimSpace(line); strings.HasPrefix(ref, "refs/") && ref != own {
+		if ref := strings.TrimSpace(line); strings.HasPrefix(ref, "refs/") && !slices.Contains(excluded, ref) {
 			refs = append(refs, ref)
 		}
 	}
@@ -130,8 +131,14 @@ func assessWorktree(git gitFunc, rec Record) worktreeAssessment {
 		return assessed(verdictUnverifiable, "worktree is not registered with %s", rec.RepositoryRoot)
 	case entry.locked:
 		return assessed(verdictUnverifiable, "worktree is locked")
-	case entry.branch != "refs/heads/"+rec.Branch:
-		return assessed(verdictUnverifiable, "worktree is on %q, not %s", entry.branch, rec.Branch)
+	}
+	ownRef := "refs/heads/" + rec.Branch
+	// A checkout moved onto another branch (or detached) is judged on the
+	// commits it holds. That branch is never evidence of its own safety, and
+	// is never deleted: only leo/<id> ever is.
+	excluded := []string{ownRef}
+	if entry.branch != "" {
+		excluded = append(excluded, entry.branch)
 	}
 	status, err := git("-C", rec.Worktree, "--no-optional-locks", "status", "--porcelain")
 	switch {
@@ -140,10 +147,10 @@ func assessWorktree(git gitFunc, rec Record) worktreeAssessment {
 	case len(status) != 0:
 		return assessed(verdictDirty, "uncommitted changes")
 	}
-	if entry.head == rec.BaseCommit {
+	if entry.branch == ownRef && entry.head == rec.BaseCommit {
 		return assessed(verdictRemove, "clean at base commit")
 	}
-	refs, err := refsReaching(git, rec.RepositoryRoot, entry.head, rec.Branch)
+	refs, err := refsReaching(git, rec.RepositoryRoot, entry.head, excluded...)
 	switch {
 	case err != nil:
 		return assessed(verdictUnverifiable, "checking reachability: %v", err)
@@ -170,7 +177,7 @@ func deleteMergedBranch(git gitFunc, rec Record) (tip string, deleted bool) {
 		return "", false
 	}
 	tip = string(out)
-	refs, err := refsReaching(git, rec.RepositoryRoot, tip, rec.Branch)
+	refs, err := refsReaching(git, rec.RepositoryRoot, tip, "refs/heads/"+rec.Branch)
 	if err != nil || len(refs) == 0 {
 		return "", false
 	}

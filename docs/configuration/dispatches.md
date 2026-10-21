@@ -168,8 +168,13 @@ killed, after a daemon restart, and in
 - The `leo/<id>` branch is deleted only when its tip is reachable from another
   ref. A follow-up to a run whose branch was deleted at the base commit
   recreates the worktree from that commit.
-- A worktree that cannot be checked (git fails, it is locked, or its checkout
-  is on a branch other than the recorded one) is kept as unverifiable.
+- A worktree whose checkout was moved onto a branch other than its own
+  `leo/<id>` (or detached) is judged on what it holds: uncommitted changes keep
+  it as dirty, and a commit on `HEAD` that no ref other than that branch and
+  `leo/<id>` reaches keeps it as unmerged. Otherwise it is removed. That other
+  branch is never deleted.
+- A worktree that cannot be checked (git fails, or it is locked or
+  unregistered) is kept as unverifiable.
 
 Cleanup never runs while a writer may be live. A run whose pane is alive, or
 whose liveness cannot be determined, is **deferred**: its record says
