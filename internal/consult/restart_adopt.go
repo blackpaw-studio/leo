@@ -400,11 +400,14 @@ func (d *Dispatcher) settleRestarted(rec Record, reason string) {
 		alive, certain := panePresent(d.interactiveRuntime, rec.PaneID)
 		if !certain {
 			if rec.Isolation == "worktree" {
-				rec.WorktreeState = WorktreeKept
+				rec.WorktreeState = WorktreeDeferred
 			}
 		} else if alive {
 			cleaned, killErr := d.closeRestartPane(rec)
 			if killErr != nil {
+				if rec.Isolation == "worktree" && rec.WorktreeState != WorktreeRemoved {
+					rec.WorktreeState = WorktreeDeferred
+				}
 				d.trackRestartKill(rec)
 			} else {
 				rec = cleaned
@@ -421,7 +424,7 @@ func (d *Dispatcher) persistRestartSettle(recorder *FileRecorder, rec Record) {
 	if err := writeRecord(recorder.dir, rec); err != nil {
 		fmt.Fprintf(os.Stderr, "dispatch %s: recording: %v\n", rec.ID, err)
 	}
-	if rec.Status.Terminal() && rec.WorktreeState != WorktreeKept {
+	if rec.Status.Terminal() {
 		rec = d.cleanupWorktree(rec.ID)
 	}
 	d.restorePendingNotifications(rec)

@@ -4,7 +4,34 @@ All notable user-visible changes to Leo are documented here.
 
 ## [Unreleased]
 
+### Added
+
+- **`leo dispatch prune [--dry-run] [--json]`.** Reclaims the disk held by
+  worktrees of finished dispatches. It considers only terminal dispatches and
+  applies the same safety rules as cleanup
+  (never a dirty worktree, never commits only its own branch holds; plain
+  `git worktree remove`; the `leo/*` branch is deleted only when merged
+  elsewhere). A worktree checked out on another branch, or detached, is assessed
+  on its own commits and changes rather than skipped as unverifiable, and that
+  branch is never deleted. `--dry-run` lists every worktree with its action (`remove`,
+  `keep:dirty`, `keep:unmerged`, `keep:unverifiable`, `keep:not-terminal`,
+  `keep:deferred`, `missing-repo`, `stale-record`, `orphan`) and size, plus the reclaimable
+  total. A terminal record whose worktree directory is already gone is a
+  `stale-record`: a real run marks it removed, prunes git's registration, and
+  deletes its merged branch. Directories with no record and dispatches whose
+  repository is gone are reported, never deleted. See [the CLI reference](docs/cli/dispatch-prune.md).
+
 ### Fixed
+
+- **Dispatch worktrees no longer leak.** Cleanup marked an interactive
+  dispatch's worktree `kept` whenever its pane was alive or its liveness
+  uncertain (nearly every turn end), `kept` was never re-evaluated, and
+  release, close and release-on-finish killed the pane without re-running
+  cleanup. Worktrees piled up (971, about 393 GB on one host). A cleanup
+  postponed for a live pane is now `deferred` and retried on release, close,
+  release-on-finish, pane kill, and daemon restart; `kept` records, including
+  ones written by earlier versions, are re-checked against the disk. Run
+  `leo dispatch prune --dry-run` to see what an existing install still holds.
 
 - **A managed daemon survives a clean first start.** Leo.app registers the
   daemon before `leo setup` or the Claude CLI exist, and the daemon used to

@@ -145,10 +145,44 @@ Dispatch notifications default to enabled. Set `notify: false` (or CLI
 `leo_consult` calls never notify. Set `isolation: "worktree"` or CLI
 `--isolation worktree` to run from a managed Git worktree created at the
 repository's committed HEAD. Leo keeps worktrees containing uncommitted or
-committed changes and reports their path and branch when the result is collected;
-unchanged worktrees are removed while their branches remain available.
+unmerged work and reports their path and branch when the result is collected;
+clean worktrees are removed (see [Worktree cleanup](#worktree-cleanup)).
 A subagent that deliberately daemonizes a writer outside its process group can
 outlive collection; such writes after a clean removal are lost.
+
+#### Worktree cleanup
+
+Cleanup runs against the dispatch's canonical repository (not the worktree's
+directory) and applies the same rules everywhere: when a result is collected,
+when a run is released, closed, or released on finish, after its pane is
+killed, after a daemon restart, and in
+[`leo dispatch prune`](../cli/dispatch-prune.md).
+
+- A worktree with modified tracked files or untracked (non-ignored) files is
+  **kept**. Ignored build output never blocks removal.
+- A worktree with commits that no ref other than its own `leo/*` branch reaches
+  is **kept**.
+- A worktree that is clean and still at its base commit, or clean with every
+  commit reachable from another ref (merged, or backed up), is **removed** with
+  a plain `git worktree remove`, never `--force`.
+- The `leo/<id>` branch is deleted only when its tip is reachable from another
+  ref. A follow-up to a run whose branch was deleted at the base commit
+  recreates the worktree from that commit.
+- A worktree whose checkout was moved onto a branch other than its own
+  `leo/<id>` (or detached) is judged on what it holds: uncommitted changes keep
+  it as dirty, and a commit on `HEAD` that no ref other than that branch and
+  `leo/<id>` reaches keeps it as unmerged. Otherwise it is removed. That other
+  branch is never deleted.
+- A worktree that cannot be checked (git fails, or it is locked or
+  unregistered) is kept as unverifiable.
+
+Cleanup never runs while a writer may be live. A run whose pane is alive, or
+whose liveness cannot be determined, is **deferred**: its record says
+`worktree_state: deferred` and the work is retried the next time the run
+reaches a terminal transition, instead of being forgotten. `kept` always means
+work worth keeping, and records written by earlier versions as `kept` are
+re-checked against the disk rather than trusted. Run
+`leo dispatch prune --dry-run` to see what is still on disk and why.
 
 A template can make this the default with `isolation: worktree` (see
 [templates](config-reference.md#templates)); an explicit `isolation` argument
@@ -542,7 +576,8 @@ a wait on an explicit older turn ID remains bound to that invocation.
 Continuation requires the original session ID, unchanged template harness,
 and an available workspace. A kept isolated worktree resumes in place without
 resetting changes. A clean removed worktree is recreated from its retained
-branch only while that branch still points to the recorded base commit. Active
+branch only while that branch still points to the recorded base commit, or from
+the base commit itself when cleanup deleted a branch that pointed at it. Active
 or still-reaping runs, missing sessions/templates/workspaces, changed
 harnesses, unsupported adapters, and exhausted capacity (headless continuation
 does not queue) are rejected before
@@ -567,7 +602,8 @@ truncated to 24 characters. It runs `leo dispatch watch <id>` with
 is collected: via `leo_wait`, `leo dispatch run`, or web `/api/dispatch/wait`,
 or when its completion notification is delivered inline and confirmed (claude
 callers; a pointer-only codex/opencode notification collects nothing). Collection also
-removes a clean isolated worktree, keeping a dirty or unmerged one, and a
+removes a clean isolated worktree, keeping a dirty or unmerged one (an interactive run's
+is deferred until its pane is gone), and a
 second collection is a no-op; `leo_dispatch_output` keeps working afterwards.
 An interactive dispatch's pane is never closed by collection. Failed, canceled, and timed-out runs remain open for
 about one hour for post-mortem inspection. Use `leo dispatch watch <id>` to

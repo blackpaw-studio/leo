@@ -119,7 +119,16 @@ const (
 	WorktreeCreating WorktreeState = "creating"
 	WorktreePresent  WorktreeState = "present"
 	WorktreeRemoved  WorktreeState = "removed"
-	WorktreeKept     WorktreeState = "kept"
+	// WorktreeKept holds work worth keeping: uncommitted changes, commits no
+	// other ref has, or a worktree whose state could not be verified. It is
+	// re-evaluated at every terminal transition and by `leo dispatch prune`,
+	// so records written when "kept" also meant "deferred" still clean up.
+	WorktreeKept WorktreeState = "kept"
+	// WorktreeDeferred is a cleanup postponed because a writer may still be
+	// live (the pane is alive or its liveness uncertain, a headless process
+	// group may remain). Nothing is known about the work itself; it is
+	// retried once the writer is gone.
+	WorktreeDeferred WorktreeState = "deferred"
 )
 
 // Record describes one consult. It is persisted next to the consult's event
@@ -185,24 +194,32 @@ type Record struct {
 	SlotExempt bool `json:"slot_exempt,omitempty"`
 	// CallerBridgeLaunch is the caller's launch id (see
 	// Request.CallerBridgeLaunch): a digest, never the launch token.
-	CallerBridgeLaunch string                  `json:"caller_bridge_launch,omitempty"`
-	InputTokens        *int64                  `json:"input_tokens,omitempty"`
-	OutputTokens       *int64                  `json:"output_tokens,omitempty"`
-	CostUSD            *float64                `json:"cost_usd,omitempty"`
-	UsageTurns         *int                    `json:"usage_turns,omitempty"`
-	ToolCalls          *int                    `json:"tool_calls,omitempty"`
-	UsageIncomplete    bool                    `json:"usage_incomplete,omitempty"`
-	UsageInvocations   []InvocationUsage       `json:"usage_invocations,omitempty"`
-	Isolation          string                  `json:"isolation,omitempty"`
-	Worktree           string                  `json:"worktree,omitempty"`
-	Branch             string                  `json:"branch,omitempty"`
-	BaseCommit         string                  `json:"base_commit,omitempty"`
-	SourceCwd          string                  `json:"source_cwd,omitempty"`
-	RepositoryRoot     string                  `json:"repository_root,omitempty"`
-	WorktreeState      WorktreeState           `json:"worktree_state,omitempty"`
-	Notifications      map[string]Notification `json:"notifications,omitempty"`
-	Turns              []Turn                  `json:"turns,omitempty"`
-	Steered            bool                    `json:"steered,omitempty"`
+	CallerBridgeLaunch string            `json:"caller_bridge_launch,omitempty"`
+	InputTokens        *int64            `json:"input_tokens,omitempty"`
+	OutputTokens       *int64            `json:"output_tokens,omitempty"`
+	CostUSD            *float64          `json:"cost_usd,omitempty"`
+	UsageTurns         *int              `json:"usage_turns,omitempty"`
+	ToolCalls          *int              `json:"tool_calls,omitempty"`
+	UsageIncomplete    bool              `json:"usage_incomplete,omitempty"`
+	UsageInvocations   []InvocationUsage `json:"usage_invocations,omitempty"`
+	Isolation          string            `json:"isolation,omitempty"`
+	Worktree           string            `json:"worktree,omitempty"`
+	Branch             string            `json:"branch,omitempty"`
+	BaseCommit         string            `json:"base_commit,omitempty"`
+	SourceCwd          string            `json:"source_cwd,omitempty"`
+	RepositoryRoot     string            `json:"repository_root,omitempty"`
+	WorktreeState      WorktreeState     `json:"worktree_state,omitempty"`
+	// BranchTip is the tip of Branch when cleanup deleted it along with the
+	// worktree (its commits being reachable from another ref). A follow-up
+	// uses it to tell whether the branch can be recreated from BaseCommit.
+	BranchTip string `json:"branch_tip,omitempty"`
+	// ProcessGroup is the headless command's private process group, kept
+	// for an isolated run so a later process (prune) can tell whether a
+	// writer may still be alive. Zero when unknown.
+	ProcessGroup  int                     `json:"process_group,omitempty"`
+	Notifications map[string]Notification `json:"notifications,omitempty"`
+	Turns         []Turn                  `json:"turns,omitempty"`
+	Steered       bool                    `json:"steered,omitempty"`
 	// NeedsInput is what a needs_input run waits on (see RequestPermission).
 	NeedsInput *NeedsInput `json:"needs_input,omitempty"`
 	// PendingWork is the background work a waiting run is paused on.

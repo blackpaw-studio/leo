@@ -81,6 +81,11 @@ func (d *Dispatcher) closeRecordedPane(rec Record, pane string, kill func(string
 	if wasSplit && rec.CallerWindowID != "" && layout != nil {
 		_ = layout(rec.CallerWindowID)
 	}
+	// A finished run whose pane was the last writer: decide its worktree now
+	// rather than leaving the cleanup that found the pane alive deferred.
+	if rec.Mode == ModeInteractive && rec.Isolation == "worktree" && rec.Status.Terminal() && rec.PaneID == "" && rec.WorktreeState != WorktreeRemoved {
+		rec = d.cleanupWorktree(rec.ID)
+	}
 	return rec, nil
 }
 

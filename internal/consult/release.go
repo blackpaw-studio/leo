@@ -111,5 +111,11 @@ func (d *Dispatcher) releaseLocked(id string, layout func(string) error) (Record
 	d.mu.Lock()
 	d.releaseRunFilesLocked(id)
 	d.mu.Unlock()
+	// The pane is gone, so a cleanup deferred (or kept) while it was alive
+	// can finally be decided. This is the path manual release, close and
+	// release_on_finish all take.
+	if rec.Isolation == "worktree" {
+		rec = d.cleanupWorktree(id)
+	}
 	return rec, nil
 }
