@@ -581,6 +581,7 @@ const (
 	codeUnknownEnvironment  = "unknown_environment"
 	codePersistentTask      = "persistent_task"
 	codeHarnessMismatch     = "harness_mismatch"
+	codeClaudeNotFound      = "claude_not_found"
 	CodeConfigUnavailable   = "config_unavailable"
 	codeUnknownTemplate     = "unknown_template"
 	codeInvalidEnvironments = "invalid_environments"
@@ -612,6 +613,8 @@ func ClassifyEnvironmentError(err error) (int, string) {
 		return http.StatusConflict, codePersistentTask
 	case errors.As(err, &mismatch):
 		return http.StatusConflict, codeHarnessMismatch
+	case errors.Is(err, agent.ErrClaudeNotFound):
+		return http.StatusFailedDependency, codeClaudeNotFound
 	}
 	return http.StatusInternalServerError, ""
 }

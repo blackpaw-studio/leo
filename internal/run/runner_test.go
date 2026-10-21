@@ -15,6 +15,7 @@ import (
 	"github.com/blackpaw-studio/leo/internal/config"
 	"github.com/blackpaw-studio/leo/internal/daemon"
 	"github.com/blackpaw-studio/leo/internal/harness"
+	claudeharness "github.com/blackpaw-studio/leo/internal/harness/claude"
 	"github.com/blackpaw-studio/leo/internal/history"
 	"github.com/blackpaw-studio/leo/internal/leomcp"
 	"github.com/blackpaw-studio/leo/internal/observe"
@@ -2024,7 +2025,10 @@ func TestRunPrereqCheckFailsFast(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error when harness binary is not on PATH")
 	}
-	wantMsg := `task "mytask" uses the claude harness, but "claude" was not found in PATH — install it or change the task's harness`
+	if !errors.Is(err, claudeharness.ErrNotFound) {
+		t.Errorf("error = %v, want claudeharness.ErrNotFound", err)
+	}
+	wantMsg := `task "mytask": claude CLI not found; install it from https://claude.com/claude-code`
 	if err.Error() != wantMsg {
 		t.Errorf("error = %q, want %q", err.Error(), wantMsg)
 	}

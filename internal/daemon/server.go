@@ -95,7 +95,8 @@ type Server struct {
 	// over POST /attach/placement; the web server's dispatcher reads it.
 	attachPlacements *consult.AttachPlacements
 	router           *sessionRouter
-	logPath          string // service log path, set via SetLogPath; threaded into web.Options.LogPath by StartWeb
+	claudeLookup     func() (string, error) // set via SetClaudeLookup; nil omits claude from /health
+	logPath          string                 // service log path, set via SetLogPath; threaded into web.Options.LogPath by StartWeb
 	// resolveHandle backs web.Options.ResolveHandle: resolves a config-defined
 	// process name to its harness name and SessionHandle. Set via
 	// SetResolveHandle by service boot; nil means every process is claude.
@@ -637,7 +638,24 @@ func (s *Server) MarkReady() {
 }
 
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
-	writeData(w, http.StatusOK, healthData{Version: s.leoVersion, Ready: s.ready.Load(), PID: s.pid, Web: s.webListening.Load()})
+	writeData(w, http.StatusOK, healthData{Version: s.leoVersion, Ready: s.ready.Load(), PID: s.pid, Web: s.webListening.Load(), Claude: s.claudeHealth()})
+}
+
+// SetClaudeLookup wires the claude resolution /health reports. It is called
+// per request, so a CLI installed after the daemon started shows up at once.
+func (s *Server) SetClaudeLookup(lookup func() (string, error)) {
+	s.claudeLookup = lookup
+}
+
+func (s *Server) claudeHealth() *healthClaude {
+	if s.claudeLookup == nil {
+		return nil
+	}
+	path, err := s.claudeLookup()
+	if err != nil {
+		return &healthClaude{}
+	}
+	return &healthClaude{Found: true, Path: path}
 }
 
 // setWebListening records the address the web listener is serving on.

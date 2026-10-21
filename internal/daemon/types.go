@@ -35,6 +35,7 @@ const (
 	ErrorCodeDrainInProgress     = "drain_in_progress"
 	ErrorCodeDrainNotDrained     = "drain_not_drained"
 	ErrorCodeDrainNone           = "drain_none"
+	ErrorCodeClaudeNotFound      = "claude_not_found"
 )
 
 // TaskAddRequest is the body for POST /task/add.

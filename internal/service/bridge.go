@@ -162,7 +162,11 @@ func (s *Supervisor) BridgeRouter() *bridge.Router {
 // bridge, so its opening prompt need not fit on argv.
 func (s *Supervisor) BridgeCapable() bool {
 	w := s.bridgeWiring()
-	return w != nil && w.launcher != nil && w.launcher.Capable(s.ctx, s.claudePath)
+	if w == nil || w.launcher == nil {
+		return false
+	}
+	claudePath, err := s.currentClaudePath()
+	return err == nil && w.launcher.Capable(s.ctx, claudePath)
 }
 
 // allocBridgeKey picks the key name's launch connects under: the name

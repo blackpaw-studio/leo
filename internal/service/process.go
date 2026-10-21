@@ -200,6 +200,10 @@ type Supervisor struct {
 	ctx          context.Context               // parent context from RunSupervised
 	tmuxPath     string
 	claudePath   string
+	// claudeLookup re-resolves the claude binary on every use, so a CLI
+	// installed after the daemon started works without a restart. nil means
+	// claudePath is authoritative (tests, and callers that pin a binary).
+	claudeLookup func() (string, error)
 	homePath     string
 	configPath   string
 	// reportCmd is the `<leo> dispatch report` argv attention hooks call back
@@ -401,6 +405,10 @@ func (s *Supervisor) SpawnAgent(spec daemon.AgentSpawnSpec) error {
 	if err != nil {
 		return err
 	}
+	claudePath, err := s.claudeFor(spec.Harness)
+	if err != nil {
+		return err
+	}
 	hooked := spawnHooked(driverFor(spec.Harness), s.homePath, spec.Name, spec.Adopt)
 	s.mu.Lock()
 	if _, exists := s.states[spec.Name]; exists {
@@ -471,11 +479,30 @@ func (s *Supervisor) SpawnAgent(spec daemon.AgentSpawnSpec) error {
 		OpeningBriefPath: openingBriefPath,
 	}
 	// Read here, as the go statement this replaced did, not in the loop.
-	tmuxPath, claudePath, homePath := s.tmuxPath, s.claudePath, s.homePath
+	tmuxPath, homePath := s.tmuxPath, s.homePath
 	s.loops.Go(func() {
 		superviseProcess(childCtx, tmuxPath, claudePath, procSpec, homePath, s, id)
 	})
 	return nil
+}
+
+// currentClaudePath is the claude binary a launch now would use: looked up
+// afresh when a lookup is configured, else the pinned claudePath.
+func (s *Supervisor) currentClaudePath() (string, error) {
+	if s.claudeLookup == nil {
+		return s.claudePath, nil
+	}
+	return s.claudeLookup()
+}
+
+// claudeFor resolves the claude binary for a spawn. Only the claude harness
+// needs it: any other harness resolves its own binary, so a missing claude
+// never blocks it.
+func (s *Supervisor) claudeFor(harnessName string) (string, error) {
+	if harnessName != "" && harnessName != "claude" {
+		return s.claudePath, nil
+	}
+	return s.currentClaudePath()
 }
 
 // Wait blocks until every supervise loop SpawnAgent started has returned.
@@ -842,6 +869,10 @@ func Status(workDir string) (string, error) {
 // struct (rather than growing the positional-string signature further) once
 // Version was added — see RunSupervised's doc comment.
 type RunSupervisedOptions struct {
+	// LookClaude re-resolves the claude binary each time something needs it,
+	// so the daemon starts without claude and picks it up once installed. nil
+	// pins ClaudePath instead.
+	LookClaude func() (string, error)
 	ClaudePath string
 	HomePath   string
 	ConfigPath string
@@ -961,6 +992,7 @@ func defaultSupervisedExec(opts RunSupervisedOptions) error {
 	supervisor := NewSupervisor(ctx)
 	supervisor.tmuxPath = tmuxPath
 	supervisor.claudePath = claudePath
+	supervisor.claudeLookup = opts.LookClaude
 	supervisor.homePath = homePath
 	supervisor.configPath = configPath
 	supervisor.reportCmd = reportCmdFor(executable)
@@ -996,6 +1028,7 @@ func defaultSupervisedExec(opts RunSupervisedOptions) error {
 	// where to read from — service is the only package that can compute
 	// this path (LogPathFor) without an import cycle through daemon -> web.
 	srv.SetLogPath(LogPathFor(homePath))
+	srv.SetClaudeLookup(opts.LookClaude)
 	// Wire the router's injector/aborter to the tmux path directly. Every
 	// persistent-task delivery target is an agent tmux session now (Task 1-3
 	// of the sessions->agents collapse); non-claude ephemeral agents don't
