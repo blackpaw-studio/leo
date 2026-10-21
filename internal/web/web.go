@@ -107,6 +107,11 @@ type Server struct {
 	tmuxBin    string
 	templates  *template.Template
 	httpServer *http.Server
+	// endStreams cancels every request context (http.Server.BaseContext), so
+	// event streams and long polls return as soon as Shutdown begins instead
+	// of holding httpServer.Shutdown for its grace. Nil on a Server not built
+	// by New (tests).
+	endStreams context.CancelFunc
 	listener   net.Listener
 	// serviceRestartNeeded is set when a Web UI config save (port/bind/
 	// enabled) changes settings that only take effect when the daemon's TCP
@@ -764,8 +769,11 @@ func New(configPath string, processes ProcessStateProvider, scheduler SchedulerP
 	handler := hostOriginMiddleware(s.port, s.allowedHosts, s.trustedProxies, root, publicOrigins(opts.PublicURLs)...)
 	handler = bodySizeMiddleware(maxRequestBodyBytes, handler, bodyLimit{path: chatUploadPath, max: maxChatUploadBody})
 	handler = securityHeadersMiddleware(handler)
+	baseCtx, endStreams := context.WithCancel(context.Background())
+	s.endStreams = endStreams
 	s.httpServer = &http.Server{
 		Handler:      handler,
+		BaseContext:  func(net.Listener) context.Context { return baseCtx },
 		ReadTimeout:  30 * time.Second,
 		WriteTimeout: 30 * time.Second,
 	}
@@ -798,6 +806,9 @@ func (s *Server) ListenAndServe(addr string) error {
 // and deliveries cancelled and drained — so none outlives the chat store,
 // which the daemon closes after this returns.
 func (s *Server) Shutdown() error {
+	if s.endStreams != nil {
+		s.endStreams()
+	}
 	if s.stopConsultLoop != nil {
 		s.stopConsultLoop()
 	}

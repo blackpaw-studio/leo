@@ -86,11 +86,15 @@ type Server struct {
 	sockPath     string
 	configPath   string
 	httpServer   *http.Server
-	listener     net.Listener
-	scheduler    *cron.Scheduler
-	processes    ProcessStateProvider
-	webServer    *web.Server
-	agentMgr     AgentManager
+	// endStreams cancels every request context (http.Server.BaseContext), so
+	// long-lived handlers (event streams, long polls) return as soon as
+	// shutdown begins instead of holding httpServer.Shutdown for its grace.
+	endStreams context.CancelFunc
+	listener   net.Listener
+	scheduler  *cron.Scheduler
+	processes  ProcessStateProvider
+	webServer  *web.Server
+	agentMgr   AgentManager
 	// attachPlacements holds the per-attach dispatch placements registered
 	// over POST /attach/placement; the web server's dispatcher reads it.
 	attachPlacements *consult.AttachPlacements
@@ -314,8 +318,11 @@ func New(sockPath, configPath string, processes ProcessStateProvider, opts ...Op
 	mux.HandleFunc("GET /api/bridge/{agent}/stream", s.handleBridgeStream)
 	mux.HandleFunc("POST /api/bridge/{agent}/report", s.handleBridgeReport)
 
+	baseCtx, endStreams := context.WithCancel(context.Background())
+	s.endStreams = endStreams
 	s.httpServer = &http.Server{
 		Handler:      mux,
+		BaseContext:  func(net.Listener) context.Context { return baseCtx },
 		ReadTimeout:  30 * time.Second,
 		WriteTimeout: 30 * time.Second,
 	}
@@ -553,6 +560,7 @@ func (s *Server) CloseChatAsksOf(name string) {
 
 // Shutdown gracefully stops the server and removes the socket file.
 func (s *Server) Shutdown() error {
+	s.endStreams()
 	s.scheduler.Stop()
 
 	if s.webServer != nil {

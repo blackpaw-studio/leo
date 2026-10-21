@@ -946,3 +946,39 @@ func TestBuildSnapshotEmitsEmptyDispatchesArray(t *testing.T) {
 		})
 	}
 }
+
+// An open /api/v1/events stream must end as soon as Shutdown begins, not hold
+// httpServer.Shutdown (and the daemon's exit sequence behind it) for its grace.
+func TestShutdownEndsOpenAPIEventStream(t *testing.T) {
+	s, _ := newTestServerWithObserveDeps(t, nil, nil)
+	if err := s.ListenAndServe("127.0.0.1:0"); err != nil {
+		t.Fatalf("ListenAndServe: %v", err)
+	}
+	req, err := http.NewRequest("GET", "http://"+s.Addr()+"/api/v1/events", nil)
+	if err != nil {
+		t.Fatalf("building request: %v", err)
+	}
+	req.Host = testHost
+	req.Header.Set("Authorization", "Bearer "+testAPIToken)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("starting SSE request: %v", err)
+	}
+	defer resp.Body.Close()
+	r := bufio.NewReader(resp.Body)
+	if event, _ := readSSEFrame(t, r); event != string(observe.EventHello) {
+		t.Fatalf("first event = %q, want hello", event)
+	}
+
+	shutdownDone := make(chan error, 1)
+	go func() { shutdownDone <- s.Shutdown() }()
+
+	select {
+	case err := <-shutdownDone:
+		if err != nil {
+			t.Fatalf("Shutdown() = %v, want nil (no stream left to wait out)", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("Shutdown still waiting on the open event stream after 2s")
+	}
+}
