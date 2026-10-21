@@ -13,6 +13,7 @@ There are 4 PR-sized slices. Slice A goes first. B and C can run in parallel aft
   - File absent: unmanaged, no warning.
   - `version` must be 1. Unknown JSON fields are ignored.
   - `~` is expanded. Both paths must be absolute and exist.
+  - Optional `env` (string to string): keys non-empty with no `=` and no NUL, values with no NUL; any violation invalidates the whole marker. `managed.ApplyEnv(env, setenv)` sets entries in key order; the daemon applies it first thing in `defaultSupervisedExec` through the `setenvFn` seam (`RunSupervisedOptions.Env`, filled by `runService`), so agents inherit it and it overrides inherited values.
   - `tmux_path` must look like `<root>/<ver>/tmux`.
   - `launchd_label` must be reverse-DNS and must not be `com.blackpaw.leo`.
   - The marker file must not be group- or world-writable, because it controls a path written into hooks.
@@ -56,13 +57,14 @@ There are 4 PR-sized slices. Slice A goes first. B and C can run in parallel aft
 
 **A4. Self-update defers (item 5)**
 - At the top of the `cli/update.go` RunE, before `--pr`, `--unstable`, `--version`, `--check` or `CheckLatestVersion`: if managed, return the exact spec error.
-- Beyond spec, recommended: add `update.PackageManagerLeoApp` for any resolved executable matching `\.app/Contents/MacOS/leo$`. `DownloadAndReplace*` (update.go:241, prerelease.go:300) refuses on it, even if the marker is invalid. Replacing a signed nested binary would break the app's code signature.
+- Beyond spec, recommended: add `update.PackageManagerLeoApp` for any resolved executable under `*.app/Contents/` (pattern `\.app/Contents/.+`; the app ships leo at `Contents/Helpers/leo`, tmux at `Contents/Helpers/tmux`). `DownloadAndReplace*` (update.go:241, prerelease.go:300) refuses on it, even if the marker is invalid. Replacing a signed nested binary would break the app's code signature.
 - Test: marker present gives the exact message, a non-nil error, and zero download-seam calls. A bundle path with no marker is refused too.
 
 **A5. e2e (`e2e/managed_test.go`)**
 - Setup in a temp home:
+  - The managed root has no spaces (`~/.leo/app` in the product); the test uses a root with a space deliberately, to catch quoting regressions.
   - `bin/leo` is a symlink to the built `leoBin`.
-  - `tmux/<ver>/tmux` is a symlink to the system tmux, where `<ver>` comes from `tmux -V`.
+  - `tmux/<ver>/tmux` is a symlink to a tmux, where `<ver>` comes from `tmux -V` (the e2e uses its isolated tmux wrapper).
   - The marker points at both.
 - Assertions:
   - `state/leo-mcp.json` command equals `self_path`.
@@ -112,6 +114,7 @@ There are 4 PR-sized slices. Slice A goes first. B and C can run in parallel aft
 ## Slice C: service routing, handover, doctor, pairing (items 6, 8, 9)
 
 **C1. The manager owns the service (item 6)**
+- The managed plist's argv is `[Helpers/leo, service, --supervised]` with no `--config`; the daemon resolves `~/.leo` itself and logs to `state/service.log`.
 - New in `daemon_darwin.go`:
   - `RestartLabel(label)` runs `kickstart -k gui/<uid>/<label>`. On failure it does not consult `plistPath`.
   - `DaemonStatusLabel(label)`.
@@ -123,24 +126,27 @@ There are 4 PR-sized slices. Slice A goes first. B and C can run in parallel aft
   - The setup wizard's daemon install (`setup/daemon.go`), which becomes a skip with an info line.
 - The spec's install/uninstall commands are really `start --daemon` and `stop --daemon`; no separate `install`/`uninstall` subcommands exist.
 - `leo status` (status.go:134) reports the managed label.
+- **JSON rule** (every `--json` command in this plan: `service restart`, `handover`, `pair`, `web enable`): stdout is only the JSON object; logs go to stderr; a failure is `{error:<stable code>, message?}` with a non-zero exit.
+- `leo service restart --json`: down but job loaded gives exit 0 and `{ok:true, drained:false, restarted:true}`; job not loaded gives exit 1 and `not_registered`; a drain timeout without `--force` gives exit 1 and `drain_timeout`.
 - Tests:
   - Managed restart argv is exactly `[[launchctl kickstart -k gui/<uid>/studio.blackpaw.leo.daemon]]`, and no recorded argv contains `com.blackpaw.leo`.
   - Each refused command records zero `runCommand`/`startProcess` calls.
 
 **C2. `leo service handover` (item 8)**
 - Files: new `cli/service_handover.go`, `service/handover_darwin.go` and `_other.go` (which returns `{ok:false, step:"preflight", error:"unsupported"}`).
-- Result: `{ok, step, error, previous_label, env, plist_backup, rolled_back, managed_stopped}`.
+- Result: `{ok, step, error, previous_label, env, plist_backup, rolled_back, managed_stopped}` (failures follow the JSON rule in C1: stable `error` code, non-zero exit).
 - In `--json` mode stdout carries exactly one JSON object, drain progress goes to stderr, and `ok:false` exits non-zero.
 - Drain: reuse `drainWatch` with `restart` set to the critical section below. Mode is non-interactive `graceful:true`; `--drain-timeout`/`--force` are as in restart.
 - `previous_label` is `daemonLabel(home)`, not hard-coded. That keeps the live test on an isolated home's hashed label.
 
 `--to-app --label L`:
-1. Preflight: no marker, L valid and ≠ `previous_label`, `launchctl print` shows the job loaded, the plist exists. A non-launchd daemon fails here (see Q3).
+1. Preflight: no marker, L valid and ≠ `previous_label`, the plist exists. A running daemon with no launchd job fails with `error=no_launchd_job` (see Q3). If the plist exists but the job is **not loaded** (no daemon running), skip steps 3 and 4 (drain, bootout) and only move the plist aside (step 5).
 2. Capture env with `plutil -extract EnvironmentVariables json -o - <plist>`. A missing key means `{}`.
 3. Drain, then commit.
 4. `launchctl bootout gui/<uid>/<prev>`. On failure: cancel the drain.
 5. Rename the plist to `<plist>.handed-over`. On failure: `bootstrap` the plist again and cancel the drain.
 6. Wait (bounded) until `daemon.lock` can be acquired. On failure: rename back and bootstrap.
+- If a rollback step itself fails, the result reports `rolled_back:false` (with the failing `step`); a successful rollback reports `rolled_back:true`.
 
 `--to-cli`:
 1. Preflight: marker valid, backup exists, and the backup's `ProgramArguments.0` exists and is executable (`plutil -extract ProgramArguments.0 raw`). Q7 covers downgrades.

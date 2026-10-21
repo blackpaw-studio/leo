@@ -13,6 +13,7 @@ import (
 	"github.com/blackpaw-studio/leo/internal/daemon"
 	"github.com/blackpaw-studio/leo/internal/env"
 	claudeharness "github.com/blackpaw-studio/leo/internal/harness/claude"
+	"github.com/blackpaw-studio/leo/internal/managed"
 	"github.com/blackpaw-studio/leo/internal/service"
 	"github.com/blackpaw-studio/leo/internal/web"
 	"github.com/spf13/cobra"
@@ -57,9 +58,9 @@ func runService(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	claudePath, err := exec.LookPath(claudeharness.Claude{}.Binary())
+	claudePath, err := resolveClaude(cfg)
 	if err != nil {
-		return fmt.Errorf("claude not found: %w", err)
+		return err
 	}
 	cfgPath, err := resolveConfigPath(cfg)
 	if err != nil {
@@ -85,7 +86,24 @@ func runService(cmd *cobra.Command, args []string) error {
 		ConfigPath: cfgPath,
 		WebToken:   webToken,
 		Version:    Version,
+		Executable: selfExecutable(cfg),
+		Env:        managedState(cfg).Env,
 	})
+}
+
+// resolveClaude finds the claude binary after applying a managed marker's env
+// to this process: under launchd's minimal PATH, the marker's PATH is the only
+// way to find a Homebrew or ~/.local/bin claude. Anything that looks up a
+// binary must run after this.
+func resolveClaude(cfg *config.Config) (string, error) {
+	if err := managed.ApplyEnv(managedState(cfg).Env, os.Setenv); err != nil {
+		return "", err
+	}
+	path, err := exec.LookPath(claudeharness.Claude{}.Binary())
+	if err != nil {
+		return "", fmt.Errorf("claude not found: %w", err)
+	}
+	return path, nil
 }
 
 func newServiceStartCmd() *cobra.Command {
@@ -323,7 +341,7 @@ func newServiceReloadCmd() *cobra.Command {
 }
 
 func buildServiceConfig(cfg *config.Config) (service.ServiceConfig, error) {
-	leoPath, err := leoExecutablePath()
+	leoPath, err := leoExecutablePath(cfg)
 	if err != nil {
 		return service.ServiceConfig{}, fmt.Errorf("finding leo binary: %w", err)
 	}

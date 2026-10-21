@@ -2,13 +2,16 @@ package leomcp
 
 import (
 	"encoding/json"
+	"io"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/blackpaw-studio/leo/internal/config"
 	"github.com/blackpaw-studio/leo/internal/harness"
 	claudeharness "github.com/blackpaw-studio/leo/internal/harness/claude"
+	"github.com/blackpaw-studio/leo/internal/managed"
 )
 
 func TestEnsureConfigWritesFile(t *testing.T) {
@@ -238,4 +241,52 @@ func TestDelegationBlockMergesWithClaudeUserPrompt(t *testing.T) {
 		}
 	}
 	t.Fatalf("args=%q", args)
+}
+
+// A managed install persists its stable self_path in leo-mcp.json; an
+// unmanaged one keeps the running executable.
+func TestEnsureConfigCommandFollowsSelfPath(t *testing.T) {
+	selfPath := filepath.Join(t.TempDir(), "bin", "leo")
+	if err := os.MkdirAll(filepath.Dir(selfPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(selfPath, nil, 0o755); err != nil { //nolint:gosec // test fixture
+		t.Fatal(err)
+	}
+	running := filepath.Join(t.TempDir(), "brew-leo")
+	if err := os.WriteFile(running, nil, 0o755); err != nil { //nolint:gosec // test fixture
+		t.Fatal(err)
+	}
+	exe := func() (string, error) { return running, nil }
+	tests := []struct {
+		name string
+		st   managed.State
+		want string
+	}{
+		{"managed uses self_path", managed.State{Managed: true, Marker: managed.Marker{SelfPath: selfPath}}, selfPath},
+		{"unmanaged uses the running executable", managed.State{}, running},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := &config.Config{HomePath: t.TempDir()}
+			server := ResolveServer(managed.SelfExecutable(tc.st, exe), io.Discard)
+
+			path, err := server.EnsureConfig(cfg)
+			if err != nil {
+				t.Fatal(err)
+			}
+			raw, _ := os.ReadFile(path)
+			var parsed struct {
+				MCPServers map[string]struct {
+					Command string `json:"command"`
+				} `json:"mcpServers"`
+			}
+			if err := json.Unmarshal(raw, &parsed); err != nil {
+				t.Fatal(err)
+			}
+			if got := parsed.MCPServers["leo"].Command; got != tc.want {
+				t.Fatalf("command = %q, want %q", got, tc.want)
+			}
+		})
+	}
 }

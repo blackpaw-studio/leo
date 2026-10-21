@@ -220,7 +220,7 @@ func (r *TmuxInteractiveRuntime) Launch(ctx context.Context, req LaunchRequest) 
 		env["CODEX_HOME"] = codex.CodexHome(env)
 	}
 	if p, ok := h.(harness.InteractivePreparer); ok {
-		if err := p.PrepareInteractive(env, req.Cwd); err != nil {
+		if err := p.PrepareInteractive(env, req.Cwd, r.leoPath); err != nil {
 			return "", "", err
 		}
 	}

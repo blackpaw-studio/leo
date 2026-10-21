@@ -2,8 +2,10 @@ package setup
 
 import (
 	"os"
+	"path/filepath"
 
 	"github.com/blackpaw-studio/leo/internal/env"
+	"github.com/blackpaw-studio/leo/internal/managed"
 	"github.com/blackpaw-studio/leo/internal/prompt"
 	"github.com/blackpaw-studio/leo/internal/service"
 )
@@ -12,6 +14,7 @@ var (
 	osExecutableFn  = os.Executable
 	envCaptureFn    = env.Capture
 	installDaemonFn = service.InstallDaemon
+	loadManagedFn   = func(stateDir string) managed.State { return managed.Load(stateDir, managed.DefaultDeps()) }
 )
 
 // installDaemon installs the LaunchAgent/systemd service. leoHome is the
@@ -20,7 +23,8 @@ var (
 // label / systemd unit name), so this name is load-bearing.
 // daemonStatusFn is declared in setup.go (same package).
 func installDaemon(leoHome, cfgPath string) {
-	leoPath, _ := osExecutableFn()
+	// A managed install persists its stable self_path, not the running binary.
+	leoPath, _ := managed.SelfExecutable(loadManagedFn(filepath.Join(leoHome, "state")), osExecutableFn)()
 	if leoPath == "" {
 		leoPath = "leo"
 	}

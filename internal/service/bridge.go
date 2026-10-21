@@ -501,7 +501,7 @@ const devModVersion = "dev"
 // state dir that keeps agent delivers until their claude takes them. probe
 // nil means the real `claude --version`. Without a resolvable leo binary
 // launches stay legacy.
-func wireBridge(sv *Supervisor, homePath, version string, probe bridgemod.VersionProbe) (*bridge.Hub, *bridgemod.Launcher) {
+func wireBridge(sv *Supervisor, homePath, version string, executable func() (string, error), probe bridgemod.VersionProbe) (*bridge.Hub, *bridgemod.Launcher) {
 	hub := bridge.New(bridge.Options{})
 	// The outbox holds no more than the hub's cap: a launch carries it over
 	// whole, behind an opening that takes no slot (see carryMail).
@@ -509,7 +509,7 @@ func wireBridge(sv *Supervisor, homePath, version string, probe bridgemod.Versio
 	if version == "" {
 		version = devModVersion
 	}
-	leoBin, err := os.Executable()
+	leoBin, err := executable()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "warning: leo bridge disabled, cannot resolve the leo binary: %v\n", err)
 		sv.SetBridge(hub, nil, 0)

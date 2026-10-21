@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 	"sync"
 	"time"
 
@@ -24,7 +23,7 @@ func (Claude) TurnHooks(reportCmd []string) ([]string, error) {
 	}
 	settings := map[string]any{"crossSessionInbound": "accept", "hooks": map[string]any{}}
 	hooks := settings["hooks"].(map[string]any)
-	command := shellCommand(reportCmd)
+	command := harness.ShellCommand(reportCmd)
 	for _, event := range []string{"Stop", "UserPromptSubmit", "SessionEnd"} {
 		hooks[event] = []any{map[string]any{"hooks": []any{map[string]any{"type": "command", "command": command}}}}
 	}
@@ -48,7 +47,7 @@ func ToolActivityHooks(reportCmd []string) ([]string, error) {
 	if len(reportCmd) == 0 {
 		return nil, fmt.Errorf("claude: empty dispatch report command")
 	}
-	command := shellCommand(reportCmd)
+	command := harness.ShellCommand(reportCmd)
 	hooks := map[string]any{}
 	for _, event := range toolActivityEvents {
 		hooks[event] = []any{map[string]any{"hooks": []any{map[string]any{"type": "command", "command": command}}}}
@@ -88,13 +87,13 @@ func preLaunch(h harness.SessionHandle) error {
 	if home, err := session.HomeDir(h.Env); err == nil && filepath.Clean(dir) == filepath.Join(home, ".claude") {
 		return nil
 	}
-	return (Claude{}).PrepareInteractive(h.Env, h.Workspace)
+	return (Claude{}).PrepareInteractive(h.Env, h.Workspace, "")
 }
 
 // PrepareInteractive accepts Claude's workspace trust dialog before launch.
 // Its settings file contains unrelated user configuration, so only the
 // dispatch project entry is changed and the result replaces the file atomically.
-func (Claude) PrepareInteractive(env map[string]string, cwd string) error {
+func (Claude) PrepareInteractive(env map[string]string, cwd, _ string) error {
 	prepareInteractiveMu.Lock()
 	defer prepareInteractiveMu.Unlock()
 	path, err := StateFile(env)
@@ -183,18 +182,6 @@ func canonicalPath(path string) (string, error) {
 	return abs, nil
 }
 
-func shellCommand(args []string) string {
-	words := make([]string, 0, len(args))
-	for _, arg := range args {
-		if arg != "" && !strings.ContainsAny(arg, " \t\n\r'\"\\$`;&|<>()*?[]{}!") {
-			words = append(words, arg)
-			continue
-		}
-		words = append(words, "'"+strings.ReplaceAll(arg, "'", `'\''`)+"'")
-	}
-	return strings.Join(words, " ")
-}
-
 // permissionHookGrace is how much longer claude lets the PermissionRequest
 // hook run than the hook itself waits, so the hook always exits on its own
 // (no decision: the TUI prompt shows) rather than being killed.
@@ -207,7 +194,7 @@ func PermissionHooks(permissionCmd []string, wait time.Duration) ([]string, erro
 	if len(permissionCmd) == 0 {
 		return nil, fmt.Errorf("claude: empty dispatch permission command")
 	}
-	hook := map[string]any{"type": "command", "command": shellCommand(permissionCmd), "timeout": int((wait + permissionHookGrace).Seconds())}
+	hook := map[string]any{"type": "command", "command": harness.ShellCommand(permissionCmd), "timeout": int((wait + permissionHookGrace).Seconds())}
 	encoded, err := json.Marshal(map[string]any{"hooks": map[string]any{
 		"PermissionRequest": []any{map[string]any{"hooks": []any{hook}}},
 	}})

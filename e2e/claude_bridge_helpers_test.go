@@ -103,7 +103,7 @@ func bridgeWorkspace(t *testing.T) string {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := (claudeharness.Claude{}).PrepareInteractive(map[string]string{"HOME": home}, ws); err != nil {
+	if err := (claudeharness.Claude{}).PrepareInteractive(map[string]string{"HOME": home}, ws, ""); err != nil {
 		t.Fatal(err)
 	}
 	return ws

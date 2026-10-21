@@ -37,7 +37,7 @@ func newRunCmd() *cobra.Command {
 			sessions := session.NewStore(cfg.HomePath)
 
 			if dryRun {
-				prompt, cliArgs, err := run.Preview(cfg, taskName, sessions, leomcp.ResolveServer(os.Executable, os.Stderr))
+				prompt, cliArgs, err := run.Preview(cfg, taskName, sessions, leomcp.ResolveServer(selfExecutable(cfg), os.Stderr))
 				if err != nil {
 					return err
 				}
@@ -78,7 +78,7 @@ func newRunCmd() *cobra.Command {
 			// daemon.ObservePublisher's doc comment for the non-fatal contract:
 			// a daemon that isn't running must never break or slow this run.
 			run.SetPublisher(daemon.NewObservePublisher(cfg.HomePath))
-			return run.RunWith(cfg, taskName, sessions, leomcp.ResolveServer(os.Executable, os.Stderr), config.Expander{})
+			return run.RunWith(cfg, taskName, sessions, leomcp.ResolveServer(selfExecutable(cfg), os.Stderr), config.Expander{})
 		},
 	}
 

@@ -3,6 +3,7 @@ package codex
 import (
 	"encoding/json"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"strconv"
@@ -56,9 +57,7 @@ func TestPrepareInteractiveIdempotent(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(home, "config.toml"), []byte(trustEntry(canonicalHooks+":stop:0:0", userHash)+"\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	prepareLeoHookCommand = func() string { return "/opt/leo dispatch report" }
-	t.Cleanup(func() { prepareLeoHookCommand = defaultLeoHookCommand })
-	if err := (Codex{}).PrepareInteractive(map[string]string{"CODEX_HOME": home}, ""); err != nil {
+	if err := (Codex{}).PrepareInteractive(map[string]string{"CODEX_HOME": home}, "", "/opt/leo"); err != nil {
 		t.Fatal(err)
 	}
 	firstHooks, _ := os.ReadFile(path)
@@ -66,7 +65,7 @@ func TestPrepareInteractiveIdempotent(t *testing.T) {
 	if !strings.Contains(string(firstHooks), "/usr/bin/user-hook") {
 		t.Fatal("user hook was not preserved")
 	}
-	if err := (Codex{}).PrepareInteractive(map[string]string{"CODEX_HOME": home}, ""); err != nil {
+	if err := (Codex{}).PrepareInteractive(map[string]string{"CODEX_HOME": home}, "", "/opt/leo"); err != nil {
 		t.Fatal(err)
 	}
 	secondHooks, _ := os.ReadFile(path)
@@ -78,15 +77,13 @@ func TestPrepareInteractiveIdempotent(t *testing.T) {
 
 func TestPrepareInteractivePreservesExistingFileModes(t *testing.T) {
 	home := t.TempDir()
-	prepareLeoHookCommand = func() string { return "/opt/leo dispatch report" }
-	t.Cleanup(func() { prepareLeoHookCommand = defaultLeoHookCommand })
 	for _, name := range []string{"hooks.json", "config.toml"} {
 		path := filepath.Join(home, name)
 		if err := os.WriteFile(path, []byte("{}\n"), 0o640); err != nil {
 			t.Fatal(err)
 		}
 	}
-	if err := (Codex{}).PrepareInteractive(map[string]string{"CODEX_HOME": home}, ""); err != nil {
+	if err := (Codex{}).PrepareInteractive(map[string]string{"CODEX_HOME": home}, "", "/opt/leo"); err != nil {
 		t.Fatal(err)
 	}
 	for _, name := range []string{"hooks.json", "config.toml"} {
@@ -105,7 +102,7 @@ func TestPrepareInteractiveDetectsUntrusted(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(home, "hooks.json"), []byte(`{"hooks":{"Stop":[{"hooks":[{"type":"command","command":"/usr/bin/user-hook"}]}]}}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	err := (Codex{}).PrepareInteractive(map[string]string{"CODEX_HOME": home}, "")
+	err := (Codex{}).PrepareInteractive(map[string]string{"CODEX_HOME": home}, "", "/opt/leo")
 	if err == nil || !strings.Contains(err.Error(), "/usr/bin/user-hook") {
 		t.Fatalf("PrepareInteractive() error = %v, want untrusted user hook", err)
 	}
@@ -114,8 +111,6 @@ func TestPrepareInteractiveDetectsUntrusted(t *testing.T) {
 func TestPrepareInteractiveUpsertsExistingTrustHash(t *testing.T) {
 	home := t.TempDir()
 	command := "/opt/leo dispatch report"
-	prepareLeoHookCommand = func() string { return command }
-	t.Cleanup(func() { prepareLeoHookCommand = defaultLeoHookCommand })
 	hooksPath := filepath.Join(home, "hooks.json")
 	canonicalHooks, err := canonicalPath(hooksPath)
 	if err != nil {
@@ -126,7 +121,7 @@ func TestPrepareInteractiveUpsertsExistingTrustHash(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(home, "config.toml"), []byte(before), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := (Codex{}).PrepareInteractive(map[string]string{"CODEX_HOME": home}, ""); err != nil {
+	if err := (Codex{}).PrepareInteractive(map[string]string{"CODEX_HOME": home}, "", "/opt/leo"); err != nil {
 		t.Fatal(err)
 	}
 	after, err := os.ReadFile(filepath.Join(home, "config.toml"))
@@ -149,8 +144,6 @@ func TestPrepareInteractiveUpsertsExistingTrustHash(t *testing.T) {
 func TestPrepareInteractiveDeduplicatesStaleLeoHooksAndRewritesTrust(t *testing.T) {
 	home := t.TempDir()
 	current := "/opt/leo dispatch report"
-	prepareLeoHookCommand = func() string { return current }
-	t.Cleanup(func() { prepareLeoHookCommand = defaultLeoHookCommand })
 	hooksPath := filepath.Join(home, "hooks.json")
 	if err := os.WriteFile(hooksPath, []byte(`{"hooks":{"Stop":[{"hooks":[{"type":"command","command":"/tmp/leo-x/leo dispatch report"}]},{"hooks":[{"type":"command","command":"/usr/local/bin/other dispatch report"}]},{"hooks":[{"type":"command","command":"/Users/x/.worktrees/leo/bin/leo dispatch report"}]},{"hooks":[{"type":"command","command":"/opt/leo dispatch report"}]}]}}`), 0o600); err != nil {
 		t.Fatal(err)
@@ -170,7 +163,7 @@ func TestPrepareInteractiveDeduplicatesStaleLeoHooksAndRewritesTrust(t *testing.
 		t.Fatal(err)
 	}
 
-	if err := (Codex{}).PrepareInteractive(map[string]string{"CODEX_HOME": home}, ""); err != nil {
+	if err := (Codex{}).PrepareInteractive(map[string]string{"CODEX_HOME": home}, "", "/opt/leo"); err != nil {
 		t.Fatal(err)
 	}
 	hooks, err := readHooks(hooksPath)
@@ -230,15 +223,13 @@ func TestMergeLeoHooksPreservesForeignHandlerInMixedGroup(t *testing.T) {
 
 func TestPrepareInteractiveConcurrent(t *testing.T) {
 	home := t.TempDir()
-	prepareLeoHookCommand = func() string { return "/opt/leo dispatch report" }
-	t.Cleanup(func() { prepareLeoHookCommand = defaultLeoHookCommand })
 	var wg sync.WaitGroup
 	errs := make(chan error, 20)
 	for range 20 {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			errs <- (Codex{}).PrepareInteractive(map[string]string{"CODEX_HOME": home}, "")
+			errs <- (Codex{}).PrepareInteractive(map[string]string{"CODEX_HOME": home}, "", "/opt/leo")
 		}()
 	}
 	wg.Wait()
@@ -252,7 +243,7 @@ func TestPrepareInteractiveConcurrent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	entries, untrusted := hookTrustEntries(filepath.Join(home, "hooks.json"), hooks, nil)
+	entries, untrusted := hookTrustEntries(filepath.Join(home, "hooks.json"), hooks, nil, "/opt/leo dispatch report")
 	if len(untrusted) != 0 || len(entries) != len(codexHookEvents) {
 		t.Fatalf("Leo entries = %d, untrusted = %v; want %d, none", len(entries), untrusted, len(codexHookEvents))
 	}
@@ -288,14 +279,12 @@ func TestTrustHash(t *testing.T) {
 func TestPrepareInteractiveInstallsTrustedToolHooks(t *testing.T) {
 	home := t.TempDir()
 	const command = "/opt/leo dispatch report"
-	prepareLeoHookCommand = func() string { return command }
-	t.Cleanup(func() { prepareLeoHookCommand = defaultLeoHookCommand })
 	// Resolved before the file exists, as PrepareInteractive keys it.
 	hooksPath, err := canonicalPath(filepath.Join(home, "hooks.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := (Codex{}).PrepareInteractive(map[string]string{"CODEX_HOME": home}, ""); err != nil {
+	if err := (Codex{}).PrepareInteractive(map[string]string{"CODEX_HOME": home}, "", "/opt/leo"); err != nil {
 		t.Fatal(err)
 	}
 	raw, err := os.ReadFile(hooksPath)
@@ -327,5 +316,132 @@ func TestPrepareInteractiveInstallsTrustedToolHooks(t *testing.T) {
 	}
 	if _, ok := file.Hooks["PostToolUseFailure"]; ok {
 		t.Fatal("PostToolUseFailure installed; codex has no such event")
+	}
+}
+
+// A managed install persists its stable self_path (which contains spaces under
+// ~/Library/Application Support) into hooks.json and trusts that exact string;
+// a hook left by an earlier brew-path leo is replaced, not duplicated.
+func TestPrepareInteractiveUsesGivenLeoBinaryAndReplacesBrewHook(t *testing.T) {
+	home := t.TempDir()
+	selfPath := "/Users/x/Library/Application Support/Leo/bin/leo"
+	wantCommand := "'" + selfPath + "' dispatch report"
+	hooksPath, err := canonicalPath(filepath.Join(home, "hooks.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	brew := "/opt/homebrew/bin/leo dispatch report"
+	if err := os.WriteFile(hooksPath, []byte(`{"hooks":{"Stop":[{"hooks":[{"type":"command","command":"`+brew+`"}]}]}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	brewHash := trustHash("Stop", nil, map[string]any{"type": "command", "command": brew})
+	if err := os.WriteFile(filepath.Join(home, "config.toml"), []byte(trustEntry(hooksPath+":stop:0:0", brewHash)+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := (Codex{}).PrepareInteractive(map[string]string{"CODEX_HOME": home}, "", selfPath); err != nil {
+		t.Fatal(err)
+	}
+
+	hooks, err := readHooks(hooksPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stop := hooks["hooks"].(map[string]any)["Stop"].([]any)
+	if len(stop) != 1 || !containsCommand(stop, wantCommand) || containsCommand(stop, brew) {
+		t.Fatalf("Stop groups = %#v, want only %q", stop, wantCommand)
+	}
+	config, _ := os.ReadFile(filepath.Join(home, "config.toml"))
+	wantHash := trustHash("Stop", nil, map[string]any{"type": "command", "command": wantCommand})
+	if !strings.Contains(string(config), "trusted_hash = "+strconv.Quote(wantHash)) {
+		t.Fatalf("config.toml lacks trust for %q:\n%s", wantCommand, config)
+	}
+}
+
+func TestPrepareInteractiveFallsBackToBareLeoWithoutBinary(t *testing.T) {
+	home := t.TempDir()
+	if err := (Codex{}).PrepareInteractive(map[string]string{"CODEX_HOME": home}, "", ""); err != nil {
+		t.Fatal(err)
+	}
+	raw, _ := os.ReadFile(filepath.Join(home, "hooks.json"))
+	if !strings.Contains(string(raw), `"command": "leo dispatch report"`) {
+		t.Fatalf("hooks.json = %s, want bare leo fallback", raw)
+	}
+}
+
+// Codex runs the hook command through a shell, so the generated string must
+// round-trip any leo path as exactly one argv[0], and never execute a path's
+// contents. The command is run with printf standing in for leo.
+func TestLeoHookCommandShellRoundTrip(t *testing.T) {
+	for _, path := range []string{"/a b/leo", "/O'Connor/leo", "/x'; printf INJECTED; #/leo", `/q"d$HOME/leo`} {
+		t.Run(path, func(t *testing.T) {
+			command := leoHookCommand(path)
+			out, err := exec.Command("sh", "-c", `printf '%s\0' `+command).Output()
+			if err != nil {
+				t.Fatalf("sh -c failed for %s: %v", command, err)
+			}
+			got := strings.Split(strings.TrimSuffix(string(out), "\x00"), "\x00")
+			want := []string{path, "dispatch", "report"}
+			if !reflect.DeepEqual(got, want) {
+				t.Fatalf("argv = %q, want %q (command %s)", got, want, command)
+			}
+		})
+	}
+}
+
+// A hook left by an earlier leo at a quoted path (it has a space) must be
+// recognised as leo's and replaced, not kept beside the new one.
+func TestPrepareInteractiveReplacesOldQuotedPathHookAndTrust(t *testing.T) {
+	home := t.TempDir()
+	oldCommand := "'/Users/Evan Coleman/bin/leo' dispatch report"
+	newBin := "/Users/Evan Coleman/.leo/app/bin/leo"
+	newCommand := leoHookCommand(newBin)
+	// The file must exist before canonicalising, so the seeded trust key
+	// matches the symlink-resolved key PrepareInteractive uses.
+	if err := os.WriteFile(filepath.Join(home, "hooks.json"), []byte(`{"hooks":{"Stop":[{"hooks":[{"type":"command","command":"`+oldCommand+`"}]}]}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	hooksPath, err := canonicalPath(filepath.Join(home, "hooks.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	oldHash := trustHash("Stop", nil, map[string]any{"type": "command", "command": oldCommand})
+	if err := os.WriteFile(filepath.Join(home, "config.toml"), []byte(trustEntry(hooksPath+":stop:0:0", oldHash)+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := (Codex{}).PrepareInteractive(map[string]string{"CODEX_HOME": home}, "", newBin); err != nil {
+		t.Fatal(err)
+	}
+
+	hooks, err := readHooks(hooksPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stop := hooks["hooks"].(map[string]any)["Stop"].([]any)
+	if len(stop) != 1 || !containsCommand(stop, newCommand) || containsCommand(stop, oldCommand) {
+		t.Fatalf("Stop groups = %#v, want only %q", stop, newCommand)
+	}
+	config, _ := os.ReadFile(filepath.Join(home, "config.toml"))
+	newHash := trustHash("Stop", nil, map[string]any{"type": "command", "command": newCommand})
+	if !strings.Contains(string(config), strconv.Quote(newHash)) || strings.Contains(string(config), oldHash) {
+		t.Fatalf("config.toml trust not switched to the new hook:\n%s", config)
+	}
+}
+
+func TestIsLeoDispatchReportCommandUnquotesTheExecutable(t *testing.T) {
+	for command, want := range map[string]bool{
+		"/opt/homebrew/bin/leo dispatch report":               true,
+		"'/Users/Evan Coleman/bin/leo' dispatch report":       true,
+		"'/O'\\''Connor/leo' dispatch report":                 true,
+		"'/Users/x/not-leo tool' dispatch report":             false,
+		"'/Users/Evan Coleman/bin/other' dispatch report":     false,
+		"/usr/local/bin/other dispatch report":                false,
+		"leo dispatch report":                                 true,
+		"'/Users/Evan Coleman/bin/leo' extra dispatch report": false,
+	} {
+		if got := isLeoDispatchReportCommand(command, "/unrelated dispatch report"); got != want {
+			t.Errorf("isLeoDispatchReportCommand(%q) = %v, want %v", command, got, want)
+		}
 	}
 }

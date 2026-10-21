@@ -752,7 +752,8 @@ func TestWireBridge(t *testing.T) {
 	home := t.TempDir()
 	sv := NewSupervisor(context.Background())
 	probe := func(context.Context, string) (string, error) { return "2.1.289 (Claude Code)", nil }
-	hub, launcher := wireBridge(sv, home, "v9.9.9", probe)
+	exe := func() (string, error) { return "/stable/leo", nil }
+	hub, launcher := wireBridge(sv, home, "v9.9.9", exe, probe)
 	defer hub.Close()
 	if sv.BridgeRouter() == nil || sv.BridgeRouter().Hub != hub {
 		t.Fatal("supervisor not wired to the returned hub")
@@ -777,9 +778,8 @@ func TestWireBridge(t *testing.T) {
 	if !strings.HasPrefix(plan.PluginDir, filepath.Join(home, "state", "mods", "leo-bridge", "v9.9.9-")) {
 		t.Fatalf("mod materialized at %q, want under the home's state dir", plan.PluginDir)
 	}
-	exe, _ := os.Executable()
-	if plan.Env[bridgemod.EnvBin] != exe {
-		t.Fatalf("LEO_BRIDGE_BIN = %q, want the running executable %q", plan.Env[bridgemod.EnvBin], exe)
+	if plan.Env[bridgemod.EnvBin] != "/stable/leo" {
+		t.Fatalf("LEO_BRIDGE_BIN = %q, want the injected executable /stable/leo", plan.Env[bridgemod.EnvBin])
 	}
 	// The mod's link dials this daemon, not whichever LEO_HOME or default
 	// home its environment would otherwise resolve.
@@ -787,7 +787,7 @@ func TestWireBridge(t *testing.T) {
 		t.Fatalf("LEO_BRIDGE_HOME = %q, want the daemon's home %q", plan.Env[bridgemod.EnvHome], home)
 	}
 	// An unversioned dev build still gets a mod directory.
-	_, dev := wireBridge(NewSupervisor(context.Background()), t.TempDir(), "", probe)
+	_, dev := wireBridge(NewSupervisor(context.Background()), t.TempDir(), "", exe, probe)
 	if _, ok := dev.Plan(context.Background(), "/fake/claude", "alpha"); !ok {
 		t.Fatal("a build without a version must still bridge")
 	}

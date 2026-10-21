@@ -161,9 +161,10 @@ type TurnHooker interface {
 // InteractivePreparer is an optional adapter capability for launch-scoped
 // interactive setup that must finish before the TUI starts. env is the
 // launch's resolved environment: adapters derive their config directories
-// (CLAUDE_CONFIG_DIR, CODEX_HOME) from it rather than from $HOME.
+// (CLAUDE_CONFIG_DIR, CODEX_HOME) from it rather than from $HOME. leoBin is
+// the leo binary any persisted hook should call back into ("" when unknown).
 type InteractivePreparer interface {
-	PrepareInteractive(env map[string]string, cwd string) error
+	PrepareInteractive(env map[string]string, cwd, leoBin string) error
 }
 
 // FallbackString returns primary if non-empty, else fallback. Callers use

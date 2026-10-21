@@ -6,8 +6,12 @@ import "github.com/blackpaw-studio/leo/internal/harness"
 // Codex ignores hooks.* overrides on the command line, so the hooks live in
 // the session's CODEX_HOME (shared with interactive dispatch, reporting via
 // the same fixed `leo dispatch report` command); argv is unchanged.
-func attentionLaunch(h harness.SessionHandle, args, _ []string) ([]string, error) {
-	if err := (Codex{}).PrepareInteractive(h.Env, h.Workspace); err != nil {
+func attentionLaunch(h harness.SessionHandle, args, reportCmd []string) ([]string, error) {
+	leoBin := ""
+	if len(reportCmd) > 0 {
+		leoBin = reportCmd[0]
+	}
+	if err := (Codex{}).PrepareInteractive(h.Env, h.Workspace, leoBin); err != nil {
 		return nil, err
 	}
 	return args, nil

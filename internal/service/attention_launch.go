@@ -10,21 +10,31 @@ import (
 	"github.com/blackpaw-studio/leo/internal/harness"
 )
 
-// attentionReportCmd is the hook callback argv. It must stay
-// `<leo> dispatch report`: codex trusts hooks by hash, and interactive
-// dispatch installs the identical command. A seam for tests.
-var attentionReportCmd = func() []string {
-	exe, err := os.Executable()
+// reportCmdFor is the hook callback argv for the leo that executable
+// resolves. It must stay `<leo> dispatch report`: codex trusts hooks by hash,
+// and interactive dispatch installs the identical command. A failed resolve
+// falls back to the bare command, found through the agent's PATH.
+func reportCmdFor(executable func() (string, error)) []string {
+	exe, err := executable()
 	if err != nil {
 		return []string{"leo", "dispatch", "report"}
 	}
 	return []string{exe, "dispatch", "report"}
 }
 
+// reportCmdOrDefault is the supervisor's hook callback argv, or the bare
+// `leo dispatch report` when the daemon never set one.
+func (sv *Supervisor) reportCmdOrDefault() []string {
+	if sv.reportCmd == nil {
+		return []string{"leo", "dispatch", "report"}
+	}
+	return sv.reportCmd
+}
+
 // attentionLaunchArgs returns the argv for one fresh agent launch with the
 // driver's attention hooks applied, and whether hooks are in place. Failure
 // is logged and the launch proceeds unhooked.
-func attentionLaunchArgs(drv harness.SessionDriver, h harness.SessionHandle, args []string, spec ProcessSpec, name string) ([]string, bool) {
+func attentionLaunchArgs(drv harness.SessionDriver, h harness.SessionHandle, args []string, spec ProcessSpec, name string, reportCmd []string) ([]string, bool) {
 	if spec.Kind != harness.KindAgent {
 		return args, false
 	}
@@ -32,7 +42,7 @@ func attentionLaunchArgs(drv harness.SessionDriver, h harness.SessionHandle, arg
 	if !ok {
 		return args, false
 	}
-	out, supported, err := hooker.AttentionLaunch(h, args, attentionReportCmd())
+	out, supported, err := hooker.AttentionLaunch(h, args, reportCmd)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "[%s] attention hooks unavailable: %v\n", name, err)
 		return args, false

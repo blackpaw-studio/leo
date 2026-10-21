@@ -257,6 +257,9 @@ type interactiveOptions struct {
 	// extraConfig returns YAML appended to the generated leo.yaml (e.g. a
 	// tasks: block) for the test's workspace, which is also the leo home.
 	extraConfig func(ws string) string
+	// beforeStart runs after leo.yaml is written and before the daemon starts
+	// (e.g. to drop a managed-install marker into ws/state).
+	beforeStart func(ws string)
 }
 
 func newInteractiveE2E(t *testing.T) *interactiveE2E {
@@ -320,6 +323,9 @@ templates:
 		t.Fatal(err)
 	}
 
+	if opts.beforeStart != nil {
+		opts.beforeStart(ws)
+	}
 	s := &interactiveE2E{t: t, ws: ws, cfgPath: cfgPath, port: port, tmux: tmuxPath, stripLocale: opts.stripLocale, extraEnv: opts.daemonEnv}
 	s.startDaemon(t)
 	t.Cleanup(func() {

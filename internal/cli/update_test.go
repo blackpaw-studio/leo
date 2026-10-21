@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/blackpaw-studio/leo/internal/managed"
 	"github.com/blackpaw-studio/leo/internal/update"
 )
 
@@ -118,5 +119,56 @@ func TestUpdateCmd_UnstableAndVersionMutuallyExclusive(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "mutually exclusive") {
 		t.Errorf("error should explain conflict; got %q", err)
+	}
+}
+
+func TestUpdateCmd_RefusesWhenManagedBeforeAnythingElse(t *testing.T) {
+	stubManaged(t, managed.State{Managed: true, Marker: managed.Marker{SelfPath: "/app/leo"}})
+	orig := packageManagerInstall
+	t.Cleanup(func() { packageManagerInstall = orig })
+	packageManagerInstall = func() (string, string) { t.Fatal("consulted the package manager before refusing"); return "", "" }
+
+	const want = "leo is managed by Leo.app; update the app (Leo ▸ Check for Updates)"
+	for _, args := range [][]string{
+		nil,
+		{"--check"},
+		{"--unstable"},
+		{"--pr", "42"},
+		{"--version", "main-a1b2c3d"},
+		{"--version", "v0.5.0"},
+	} {
+		cmd := newUpdateCmd()
+		cmd.SetArgs(args)
+		var buf bytes.Buffer
+		cmd.SetOut(&buf)
+		cmd.SetErr(&buf)
+
+		err := cmd.Execute()
+
+		if err == nil || err.Error() != want {
+			t.Errorf("args %v: err = %v, want %q", args, err, want)
+		}
+	}
+}
+
+// A binary inside an app bundle is refused even when the marker is invalid,
+// since replacing it would break the app's code signature.
+func TestUpdateCmd_RefusesAppBundleBinaryWithoutMarker(t *testing.T) {
+	stubManaged(t, managed.State{Warning: "managed.json ignored: bad"})
+	orig := packageManagerInstall
+	t.Cleanup(func() { packageManagerInstall = orig })
+	packageManagerInstall = func() (string, string) {
+		return update.PackageManagerLeoApp, "/Applications/Leo.app/Contents/MacOS/leo"
+	}
+	cmd := newUpdateCmd()
+	cmd.SetArgs([]string{"--unstable"})
+	var buf bytes.Buffer
+	cmd.SetOut(&buf)
+	cmd.SetErr(&buf)
+
+	err := cmd.Execute()
+
+	if err == nil || !strings.Contains(err.Error(), "Leo.app") {
+		t.Fatalf("err = %v, want a Leo.app refusal", err)
 	}
 }

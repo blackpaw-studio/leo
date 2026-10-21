@@ -79,11 +79,7 @@ func (s *Server) setupConsultRuntime(opts Options, resolveCallerSession func(str
 	viewer.ClosePane = s.consults.CloseRecordedPane
 	s.consults.SetCloseFinishedViewer(viewer.CloseFinished)
 	s.consults.SetNotificationDelivery(s.notificationDelivery(opts.Bridge.Router))
-	interactiveLeoPath, err := os.Executable()
-	if err != nil {
-		interactiveLeoPath, _ = filepath.Abs(s.leoPath)
-	}
-	runtime := consult.NewInteractiveRuntime(s.configPath, s.loadConfig, resolveCallerSession, findTmuxPath(), interactiveLeoPath)
+	runtime := consult.NewInteractiveRuntime(s.configPath, s.loadConfig, resolveCallerSession, findTmuxPath(), interactiveLeoPath(opts.LeoMCP.Bin, os.Executable, s.leoPath))
 	runtime.ExecCommandContext = s.execCommandContext
 	runtime.AgentTokenFile = func(cfg *config.Config) string { return AgentTokenPath(cfg.StatePath()) }
 	s.consults.AgentToken = s.agentToken
@@ -259,4 +255,19 @@ func (s *Server) bridgeLaunchID(key string) string {
 	}
 	id, _ := s.bridgeRouter.Hub.LaunchID(key)
 	return id
+}
+
+// interactiveLeoPath is the leo binary interactive dispatch hooks call back
+// into. daemonBin is the daemon's resolved binary (a managed install's stable
+// self_path); without it the running executable is used, and when that fails
+// too the absolute form of fallback.
+func interactiveLeoPath(daemonBin string, executable func() (string, error), fallback string) string {
+	if daemonBin != "" {
+		return daemonBin
+	}
+	if path, err := executable(); err == nil {
+		return path
+	}
+	abs, _ := filepath.Abs(fallback)
+	return abs
 }

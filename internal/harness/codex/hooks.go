@@ -11,17 +11,20 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+
+	"github.com/blackpaw-studio/leo/internal/harness"
 )
 
-var defaultLeoHookCommand = func() string {
-	path, err := os.Executable()
-	if err != nil {
+// leoHookCommand is the hook command line installed for leoBin. An empty
+// leoBin (unknown binary) falls back to the bare command, resolved through the
+// agent's PATH. Attention and interactive hooks must produce byte-identical
+// commands for the same binary: codex trusts hooks by hash.
+func leoHookCommand(leoBin string) string {
+	if leoBin == "" {
 		return "leo dispatch report"
 	}
-	return shellCommand([]string{path, "dispatch", "report"})
+	return harness.ShellCommand([]string{leoBin, "dispatch", "report"})
 }
-
-var prepareLeoHookCommand = defaultLeoHookCommand
 
 // codexHookEvents are the events leo's report command is installed for.
 // PreToolUse and PostToolUse are activity only: a foreground tool sends no
@@ -62,12 +65,13 @@ func (Codex) TurnHooks(_ []string) ([]string, error) {
 // PrepareInteractive installs and trusts Leo's home-file hooks before an
 // interactive dispatch launch. Existing user hooks are retained; an untrusted
 // one fails fast rather than allowing Codex to show its review dialog.
-func (Codex) PrepareInteractive(env map[string]string, _ string) error {
+// leoBin is the leo binary the hooks call back into.
+func (Codex) PrepareInteractive(env map[string]string, _, leoBin string) error {
 	home := CodexHome(env)
 	prepareInteractiveMu.Lock()
 	defer prepareInteractiveMu.Unlock()
 
-	command := prepareLeoHookCommand()
+	command := leoHookCommand(leoBin)
 	hooksPath, err := canonicalPath(filepath.Join(home, "hooks.json"))
 	if err != nil {
 		return fmt.Errorf("codex: resolving hooks path: %w", err)
@@ -87,7 +91,7 @@ func (Codex) PrepareInteractive(env map[string]string, _ string) error {
 		return fmt.Errorf("codex: reading %s: %w", configPath, err)
 	}
 	trusted := trustedHashes(string(config))
-	entries, untrusted := hookTrustEntries(hooksPath, hooks, trusted)
+	entries, untrusted := hookTrustEntries(hooksPath, hooks, trusted, command)
 	if len(untrusted) > 0 {
 		return fmt.Errorf("codex: untrusted hooks would trigger review: %s", strings.Join(untrusted, ", "))
 	}
@@ -150,7 +154,7 @@ func mergeLeoHooks(file map[string]any, command string) {
 		kept := make([]any, 0, len(groups)+1)
 		for _, raw := range groups {
 			group, _ := raw.(map[string]any)
-			filtered, changed := withoutLeoHandlers(group)
+			filtered, changed := withoutLeoHandlers(group, command)
 			if !changed {
 				kept = append(kept, raw)
 			} else if len(asSlice(filtered["hooks"])) > 0 {
@@ -161,13 +165,13 @@ func mergeLeoHooks(file map[string]any, command string) {
 	}
 }
 
-func withoutLeoHandlers(group map[string]any) (map[string]any, bool) {
+func withoutLeoHandlers(group map[string]any, current string) (map[string]any, bool) {
 	filtered := make([]any, 0, len(asSlice(group["hooks"])))
 	changed := false
 	for _, raw := range asSlice(group["hooks"]) {
 		handler, _ := raw.(map[string]any)
 		command, _ := handler["command"].(string)
-		if handler["type"] == "command" && isLeoDispatchReportCommand(command) {
+		if handler["type"] == "command" && isLeoDispatchReportCommand(command, current) {
 			changed = true
 			continue
 		}
@@ -184,22 +188,19 @@ func withoutLeoHandlers(group map[string]any) (map[string]any, bool) {
 	return copy, true
 }
 
-func isLeoDispatchReportCommand(command string) bool {
+func isLeoDispatchReportCommand(command, current string) bool {
 	const suffix = " dispatch report"
 	if !strings.HasSuffix(command, suffix) {
 		return false
 	}
-	path := strings.TrimSuffix(command, suffix)
-	if path == "" {
-		return false
-	}
-	if filepath.Base(path) == "leo" {
+	// The executable may be shell-quoted (a path with a space or apostrophe),
+	// so judge its unquoted form, not the raw text.
+	words := harness.ShellWords(command)
+	if len(words) == 3 && filepath.Base(words[0]) == "leo" {
 		return true
 	}
-	// shellCommand quotes executable paths containing whitespace, so retain an
-	// exact match for the running executable in addition to the conventional
-	// binary name check above.
-	return command == defaultLeoHookCommand()
+	// Retain an exact match for the command being installed too.
+	return command == current
 }
 
 func containsCommand(groups []any, command string) bool {
@@ -227,7 +228,7 @@ func writeHooks(path string, hooks map[string]any) error {
 	return writeFileAtomically(path, encoded)
 }
 
-func hookTrustEntries(path string, file map[string]any, trusted map[string]string) ([]string, []string) {
+func hookTrustEntries(path string, file map[string]any, trusted map[string]string, current string) ([]string, []string) {
 	var entries, untrusted []string
 	trustedValues := make(map[string]bool, len(trusted))
 	for _, hash := range trusted {
@@ -250,7 +251,7 @@ func hookTrustEntries(path string, file map[string]any, trusted map[string]strin
 				key := fmt.Sprintf("%s:%s:%d:%d", path, eventLabel(event), gi, hi)
 				hash := trustHash(event, matcherPtr(matcher), handler)
 				command, _ := handler["command"].(string)
-				if trusted[key] == hash || trustedValues[hash] || command == prepareLeoHookCommand() {
+				if trusted[key] == hash || trustedValues[hash] || command == current {
 					entries = append(entries, trustEntry(key, hash))
 				} else {
 					untrusted = append(untrusted, command)
@@ -487,19 +488,4 @@ func sortedKeys(values map[string]any) []string {
 	}
 	sort.Strings(keys)
 	return keys
-}
-
-// shellCommand joins an argv as POSIX-shell words because Codex executes a
-// command hook through a shell. Keeping safe words bare preserves the
-// documented command shape while protecting executable paths with spaces.
-func shellCommand(args []string) string {
-	words := make([]string, 0, len(args))
-	for _, arg := range args {
-		if arg != "" && !strings.ContainsAny(arg, " \t\n\r'\"\\$`;&|<>()*?[]{}!") {
-			words = append(words, arg)
-			continue
-		}
-		words = append(words, "'"+strings.ReplaceAll(arg, "'", "'\\\"'\\\"'")+"'")
-	}
-	return strings.Join(words, " ")
 }
