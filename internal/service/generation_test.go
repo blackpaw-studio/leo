@@ -121,9 +121,10 @@ func TestStaleSuperviseGoroutineDoesNotStompSuccessor(t *testing.T) {
 }
 
 // The flip side of the guard above: when the DAEMON shuts down (the parent
-// context every supervise goroutine derives from is cancelled) nobody else
-// tears the tmux sessions down, so each goroutine must still kill its own.
-func TestShutdownStillKillsOwnSession(t *testing.T) {
+// context every supervise goroutine derives from is cancelled) no goroutine
+// may kill its session. The next daemon adopts the survivors; killing them
+// is what a restart with an open event stream used to do.
+func TestShutdownLeavesOwnSessionAlive(t *testing.T) {
 	origPoll := sessionPollInterval
 	sessionPollInterval = 10 * time.Millisecond
 	defer func() { sessionPollInterval = origPoll }()
@@ -158,8 +159,8 @@ func TestShutdownStillKillsOwnSession(t *testing.T) {
 	<-done
 
 	logged, _ := os.ReadFile(logPath)
-	if !strings.Contains(string(logged), "kill-session") {
-		t.Errorf("daemon shutdown must kill the agent's tmux session; tmux calls after cancel:\n%s", logged)
+	if strings.Contains(string(logged), "kill-session") {
+		t.Errorf("daemon shutdown killed the agent's tmux session; tmux calls after cancel:\n%s", logged)
 	}
 }
 

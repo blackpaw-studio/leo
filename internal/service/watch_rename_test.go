@@ -45,7 +45,7 @@ func TestWaitForSessionEnd_FollowsLiveRename(t *testing.T) {
 
 	done := make(chan bool, 1)
 	go func() {
-		done <- waitForSessionEnd(ctx, "tmux", id, ProcessSpec{}, time.Now(), nil, func() bool { return true })
+		done <- waitForSessionEnd(ctx, "tmux", id, ProcessSpec{}, time.Now(), nil)
 	}()
 
 	// waitForQuery blocks until the watcher polls the given session name (or the
@@ -103,9 +103,7 @@ func TestWaitForSessionEnd_FollowsLiveRename(t *testing.T) {
 }
 
 // TestWaitForSessionEnd_ContextCancelReturnsTrue verifies the ctx.Done() path
-// returns true ("stop"). The tmuxPath is "false" so the best-effort kill-session
-// exec returns immediately (non-zero exit, ignored) without depending on a real
-// tmux being installed.
+// returns true ("stop"). The tmuxPath is "false" so no real tmux is needed.
 func TestWaitForSessionEnd_ContextCancelReturnsTrue(t *testing.T) {
 	origInterval := sessionPollInterval
 	sessionPollInterval = 5 * time.Millisecond
@@ -119,7 +117,7 @@ func TestWaitForSessionEnd_ContextCancelReturnsTrue(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan bool, 1)
 	go func() {
-		done <- waitForSessionEnd(ctx, "false", id, ProcessSpec{}, time.Now(), nil, func() bool { return true })
+		done <- waitForSessionEnd(ctx, "false", id, ProcessSpec{}, time.Now(), nil)
 	}()
 	cancel()
 	select {

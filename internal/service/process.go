@@ -283,14 +283,6 @@ func (s *Supervisor) isStaleLocked(name string, id *procIdentity) bool {
 	return ok && cur != id
 }
 
-// shuttingDown reports whether the whole daemon is going down, i.e. the
-// parent context every supervised process derives from has been cancelled.
-// s.ctx is set once at construction and never written again, so this needs no
-// lock.
-func (s *Supervisor) shuttingDown() bool {
-	return s.ctx != nil && s.ctx.Err() != nil
-}
-
 // setState updates name's status, but only while id is still the live
 // generation for that name — see isStaleLocked. A stale goroutine's final
 // setState(name, "stopped") would otherwise mark its successor's running
@@ -581,7 +573,7 @@ func (s *Supervisor) stopAgentProcess(name string) error {
 
 	// Kill the tmux session, and make sure it actually died. This is the only
 	// teardown there is: the supervise goroutine no longer kills on a
-	// per-agent cancel (see waitForSessionEnd's shuttingDown guard), so a kill
+	// cancel (see waitForSessionEnd), so a kill
 	// that silently failed here would strand a live harness process — leo
 	// forgets the agent entirely while its session keeps running and answering
 	// on its channels.
@@ -1550,7 +1542,7 @@ func superviseProcess(ctx context.Context, tmuxPath, claudePath string, spec Pro
 			}(startHandle)
 		}
 
-		ended := waitForSessionEnd(ctx, tmuxPath, id, spec, startTime, paneKey, sv.shuttingDown)
+		ended := waitForSessionEnd(ctx, tmuxPath, id, spec, startTime, paneKey)
 		endLaunch()
 		// This launch is over for this daemon either way; its late hooks
 		// must go nowhere. The stored token stays on a shutdown (the
@@ -1681,22 +1673,18 @@ func superviseProcess(ctx context.Context, tmuxPath, claudePath string, spec Pro
 // a captured pane (see harness.PaneCare). nil means the driver has no pane
 // care to offer, so dismissal is skipped entirely.
 //
-// shuttingDown separates the two reasons this context can be cancelled.
-// Daemon shutdown is the only one that makes tearing the session down this
-// goroutine's job; a per-agent cancel comes from stopAgentProcess, which
-// already killed the session itself and may since have handed the name to a
-// successor whose freshly created session must not be killed. Unlike a
-// name-keyed ownership lookup, the shutdown condition is monotonic — once
-// true it stays true — so checking it and acting on it cannot race.
-func waitForSessionEnd(ctx context.Context, tmuxPath string, id *procIdentity, spec ProcessSpec, startTime time.Time, paneKey func(string) string, shuttingDown func() bool) bool {
+// A cancelled context never kills the session, whatever cancelled it. Daemon
+// shutdown (SIGTERM, graceful restart, handover bootout, kickstart -k) must
+// leave every session running for the next daemon to adopt, and a per-agent
+// cancel comes from stopAgentProcess, which already killed the session itself
+// and may since have handed the name to a successor whose fresh session must
+// not be touched. Only an explicit stop or delete kills a session.
+func waitForSessionEnd(ctx context.Context, tmuxPath string, id *procIdentity, spec ProcessSpec, startTime time.Time, paneKey func(string) string) bool {
 	_ = spec      // kept in signature for future lifecycle hooks
 	_ = startTime // kept in signature for future lifecycle hooks
 	for {
 		select {
 		case <-ctx.Done():
-			if shuttingDown() {
-				exec.Command(tmuxPath, tmux.Args("kill-session", "-t", tmux.Target(id.SessionName()))...).Run()
-			}
 			return true
 		case <-time.After(sessionPollInterval):
 		}
