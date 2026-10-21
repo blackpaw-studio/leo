@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"reflect"
@@ -454,7 +455,10 @@ func TestHandoverToCLIPreflight(t *testing.T) {
 		tweak   func(*hoFixture)
 		wantErr string
 	}{
-		{name: "not managed", tweak: func(f *hoFixture) { f.deps.marker = managed.State{} }, wantErr: "not_managed"},
+		{name: "not managed", tweak: func(f *hoFixture) {
+			f.deps.marker = managed.State{}
+			f.deps.exists = func(p string) bool { return p != hoBackup }
+		}, wantErr: "not_managed"},
 		{name: "no backup", tweak: func(f *hoFixture) { f.deps.exists = func(p string) bool { return p != hoBackup } }, wantErr: "backup_missing"},
 		{name: "backup's program is gone", tweak: func(f *hoFixture) { f.deps.executable = func(string) bool { return false } }, wantErr: "backup_unusable"},
 	}
@@ -489,6 +493,126 @@ func TestHandoverToCLIDryRunPlansWithoutChangingAnything(t *testing.T) {
 	}
 	for _, c := range f.g.log {
 		if strings.HasPrefix(c, "bootout") || strings.HasPrefix(c, "bootstrap") || strings.HasPrefix(c, "rename") || c == "busy" {
+			t.Fatalf("dry run changed state: %v", f.g.log)
+		}
+	}
+}
+
+// noMarkerHo is the --to-app-succeeded-but-the-app-never-wrote-managed.json
+// state: no marker, no daemon holding the lock, the plist parked as a backup.
+func noMarkerHo(f *hoFixture) {
+	f.deps.marker = managed.State{}
+	f.deps.daemonAlive = func() bool { return false }
+	f.deps.exists = func(p string) bool { return p == hoBackup || p == "/opt/homebrew/bin/leo" }
+}
+
+func TestHandoverToCLIWithoutMarkerRestoresTheBackup(t *testing.T) {
+	f := newHoFixture(t, "worker")
+	noMarkerHo(f)
+
+	res := f.run(t, handoverToCLI, handoverOptions{})
+
+	if !res.OK || !res.RestoredWithoutMarker || res.ManagedStopped || res.PlistBackup != hoBackup {
+		t.Fatalf("result = %+v", res)
+	}
+	f.wantLog(t,
+		"plutil-program "+hoBackup, "version /opt/homebrew/bin/leo",
+		"rename "+hoBackup+" "+hoPlist, "bootstrap "+hoPlist, "wait-ready")
+	b, _ := json.Marshal(res)
+	for _, want := range []string{`"ok":true`, `"managed_stopped":false`, `"restored_without_marker":true`} {
+		if !strings.Contains(string(b), want) {
+			t.Fatalf("json %s lacks %s", b, want)
+		}
+	}
+}
+
+func TestHandoverToCLIWithoutMarkerFailsWhileADaemonHoldsTheLock(t *testing.T) {
+	f := newHoFixture(t)
+	noMarkerHo(f)
+	f.deps.daemonAlive = func() bool { return true }
+
+	res := f.run(t, handoverToCLI, handoverOptions{})
+
+	if res.OK || res.Step != "preflight" || res.Error != "daemon_running" {
+		t.Fatalf("result = %+v", res)
+	}
+	f.wantLog(t)
+}
+
+func TestHandoverToCLIWithoutMarkerRollsBackAFailedBootstrap(t *testing.T) {
+	f := newHoFixture(t)
+	noMarkerHo(f)
+	f.failOn["bootstrap "+hoPlist] = errors.New("boom")
+
+	res := f.run(t, handoverToCLI, handoverOptions{})
+
+	if res.OK || res.Step != "bootstrap" || res.Error != "bootstrap_failed" || res.RolledBack == nil || !*res.RolledBack || res.ManagedStopped {
+		t.Fatalf("result = %+v", res)
+	}
+	f.wantLog(t,
+		"plutil-program "+hoBackup, "version /opt/homebrew/bin/leo",
+		"rename "+hoBackup+" "+hoPlist, "bootstrap "+hoPlist,
+		"rename "+hoPlist+" "+hoBackup)
+}
+
+func TestHandoverToCLIWithoutMarkerBootsTheJobOutWhenItNeverGetsReady(t *testing.T) {
+	f := newHoFixture(t)
+	noMarkerHo(f)
+	f.failOn["wait-ready"] = errors.New("boom")
+
+	res := f.run(t, handoverToCLI, handoverOptions{})
+
+	if res.OK || res.Error != "not_ready" || res.RolledBack == nil || !*res.RolledBack {
+		t.Fatalf("result = %+v", res)
+	}
+	f.wantLog(t,
+		"plutil-program "+hoBackup, "version /opt/homebrew/bin/leo",
+		"rename "+hoBackup+" "+hoPlist, "bootstrap "+hoPlist, "wait-ready",
+		"bootout "+hoPrevLabel, "rename "+hoPlist+" "+hoBackup)
+}
+
+func TestHandoverToCLIWithoutMarkerAndWithoutBackupIsNotManaged(t *testing.T) {
+	f := newHoFixture(t)
+	noMarkerHo(f)
+	f.deps.exists = func(string) bool { return false }
+
+	res := f.run(t, handoverToCLI, handoverOptions{})
+
+	if res.OK || res.Step != "preflight" || res.Error != "not_managed" {
+		t.Fatalf("result = %+v", res)
+	}
+	f.wantLog(t)
+}
+
+func TestHandoverToCLIWithAnInvalidMarkerDoesNotTakeTheRecoveryPath(t *testing.T) {
+	f := newHoFixture(t)
+	noMarkerHo(f)
+	f.deps.marker = managed.State{Warning: "managed.json ignored: malformed JSON"}
+
+	res := f.run(t, handoverToCLI, handoverOptions{})
+
+	if res.OK || res.Error != "not_managed" {
+		t.Fatalf("result = %+v", res)
+	}
+	f.wantLog(t)
+}
+
+func TestHandoverToCLIWithoutMarkerDryRunPlansTheRecovery(t *testing.T) {
+	f := newHoFixture(t)
+	noMarkerHo(f)
+
+	res := f.run(t, handoverToCLI, handoverOptions{dryRun: true})
+
+	want := []string{
+		"rename " + hoBackup + " " + hoPlist,
+		"launchctl bootstrap " + hoPlist,
+		"wait for the daemon to be ready",
+	}
+	if !res.OK || !res.DryRun || !res.RestoredWithoutMarker || !reflect.DeepEqual(res.Plan, want) {
+		t.Fatalf("result = %+v, want plan %v", res, want)
+	}
+	for _, c := range f.g.log {
+		if !strings.HasPrefix(c, "plutil-") && !strings.HasPrefix(c, "version") {
 			t.Fatalf("dry run changed state: %v", f.g.log)
 		}
 	}
