@@ -134,6 +134,25 @@ would persist the app's `self_path` everywhere. If the restored binary is older
 than the one doing the handover, the result carries a warning and the release
 continues.
 
+**`--to-cli` without a marker (recovery).** If `--to-app` succeeded but the app
+then failed to write `managed.json`, the CLI job is already booted out and its
+plist sits at `<plist>.handed-over`, with no managed job to release. With no
+marker (absent, not merely invalid) and that backup present, `--to-cli` needs
+`--label <the app's launchd label>` (leo cannot know it without the marker;
+missing is `invalid_args`, and it is validated like `--to-app`'s). It then
+skips the drain and the bootout and fails `managed_job_loaded` if
+`launchctl print gui/<uid>/<label>` finds the app's job still registered (a
+crashed or restarting app job would otherwise run beside the restored CLI
+job; the app must unregister it first). It fails `daemon_running` if a daemon
+holds `daemon.lock`, validates the backup's `ProgramArguments[0]` as above,
+moves the backup back to the plist, bootstraps it and waits until the daemon
+is ready. The result is `ok: true` with `managed_stopped: false` and
+`restored_without_marker: true`. A failure moves the plist back to
+`.handed-over` (after a best-effort bootout of the CLI job, in case launchd
+registered it in part) and reports `rolled_back`. With no marker and no backup
+the error is still `not_managed`; an invalid marker is never treated as
+absent. `--dry-run` prints the plan for this path too.
+
 ### Result
 
 ```json
@@ -152,7 +171,8 @@ marker's label for `--to-cli`. `env` is only set by `--to-app`. A failure is
 | Field | Meaning |
 |-------|---------|
 | `rolled_back` | Present only when an undo was attempted. `true`: the files and job were restored. `false`: the undo failed too, so the previous state was **not** restored. |
-| `managed_stopped` | `--to-cli` only. The managed job was booted out and leo cannot re-register an app-owned job, so the app must register its LaunchAgent again. |
+| `managed_stopped` | Always present (`false` unless set). `--to-cli` only. The managed job was booted out and leo cannot re-register an app-owned job, so the app must register its LaunchAgent again. |
+| `restored_without_marker` | `--to-cli` recovery only: the restore ran with no marker, so no managed job was stopped. |
 | `warnings` | Non-fatal notes (an older restored binary, a leftover `.releasing` file). |
 | `plan` | With `--dry-run`: the steps that would run. |
 
@@ -162,7 +182,7 @@ Steps: `preflight`, `env`, `drain`, `bootout`, `plist`, `lock`, `marker`,
 `plist_missing`, `env_unreadable`, `drain_timeout`, `drain_failed`,
 `bootout_failed`, `plist_move_failed`, `lock_timeout`, `not_managed`,
 `backup_missing`, `backup_unusable`, `marker_move_failed`,
-`plist_restore_failed`, `bootstrap_failed`, `not_ready`, `config_error`, plus `invalid_args` and `not_permitted` for bad flags and denied agents.
+`plist_restore_failed`, `bootstrap_failed`, `not_ready`, `daemon_running`, `managed_job_loaded`, `config_error`, plus `invalid_args` and `not_permitted` for bad flags and denied agents.
 
 ## The JSON rule
 

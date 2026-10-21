@@ -76,9 +76,12 @@ type handoverResult struct {
 	Env            map[string]string `json:"env,omitempty"`
 	PlistBackup    string            `json:"plist_backup,omitempty"`
 	RolledBack     *bool             `json:"rolled_back,omitempty"`
-	ManagedStopped bool              `json:"managed_stopped,omitempty"`
-	Warnings       []string          `json:"warnings,omitempty"`
-	Plan           []string          `json:"plan,omitempty"`
+	ManagedStopped bool              `json:"managed_stopped"`
+	// RestoredWithoutMarker marks the recovery path: no marker existed, so
+	// there was no managed job to stop.
+	RestoredWithoutMarker bool     `json:"restored_without_marker,omitempty"`
+	Warnings              []string `json:"warnings,omitempty"`
+	Plan                  []string `json:"plan,omitempty"`
 }
 
 // handoverDeps are the side effects a handover drives. Every filesystem and
@@ -251,8 +254,16 @@ func toAppCritical(ctx context.Context, d handoverDeps, res *handoverResult) *st
 func handOverToCLI(ctx context.Context, opts handoverOptions, d handoverDeps, res *handoverResult) *stepError {
 	res.PreviousLabel = d.marker.LaunchdLabel
 	backup := d.backupPath()
-	if !d.marker.Managed {
+	// Recovery: --to-app moved the plist aside but the app never wrote the
+	// marker. An invalid marker (Warning set) is not this case.
+	recovery := !d.marker.Managed && d.marker.Warning == "" && d.exists(backup)
+	if !d.marker.Managed && !recovery {
 		return failf(stepPreflight, "not_managed", "this install is not managed by Leo.app")
+	}
+	if recovery {
+		if err := recoveryPreflight(opts, d); err != nil {
+			return err
+		}
 	}
 	if !d.exists(backup) {
 		return failf(stepPreflight, "backup_missing", "no handed-over plist at %s to restore", backup)
@@ -263,6 +274,21 @@ func handOverToCLI(ctx context.Context, opts handoverOptions, d handoverDeps, re
 	}
 	if v, err := d.binaryVersion(program); err == nil && versionOlder(v, d.currentVersion) {
 		res.Warnings = append(res.Warnings, fmt.Sprintf("the restored leo (%s) is older than the one managing this install (%s); its on-disk state may be newer than it understands", strings.TrimSpace(v), d.currentVersion))
+	}
+
+	if recovery {
+		res.RestoredWithoutMarker = true
+		if opts.dryRun {
+			res.DryRun = true
+			res.Plan = []string{
+				"check " + opts.label + " is not loaded in launchd",
+				"rename " + backup + " " + d.plist,
+				"launchctl bootstrap " + d.plist,
+				"wait for the daemon to be ready",
+			}
+			return nil
+		}
+		return restoreWithoutMarker(ctx, d, res)
 	}
 
 	if opts.dryRun {
@@ -282,6 +308,49 @@ func handOverToCLI(ctx context.Context, opts handoverOptions, d handoverDeps, re
 	return drainThen(ctx, opts, d, func(ctx context.Context) *stepError {
 		return toCLICritical(ctx, d, res)
 	})
+}
+
+// recoveryPreflight guards the no-marker restore. Without a marker leo does
+// not know the app's label, so the caller names it, and an app job still
+// registered under it (crashed, or waiting on a restart) would run beside the
+// restored CLI job even when the lock is momentarily free.
+func recoveryPreflight(opts handoverOptions, d handoverDeps) *stepError {
+	switch {
+	case opts.label == "":
+		return failf(stepPreflight, "invalid_args", "--to-cli with no managed.json needs --label <the app's launchd label>")
+	case !managed.ValidLabel(opts.label):
+		return failf(stepPreflight, "invalid_label", "--label %q must be reverse-DNS and not %s", opts.label, managed.CLILaunchdLabel)
+	case opts.label == d.prevLabel:
+		return failf(stepPreflight, "label_conflict", "--label must differ from the CLI install's label %s", d.prevLabel)
+	case d.jobLoaded(opts.label):
+		return failf(stepPreflight, "managed_job_loaded", "launchd still has the app's job %s; have the app unregister it before restoring the CLI job", opts.label)
+	case d.daemonAlive():
+		return failf(stepPreflight, "daemon_running", "no managed.json, but a leo daemon holds daemon.lock; stop it before restoring %s", d.backupPath())
+	}
+	return nil
+}
+
+// restoreWithoutMarker is the recovery for a --to-app whose app never wrote
+// the marker: no managed job exists, so nothing is drained or booted out. A
+// failure puts the plist back aside and says whether that worked.
+func restoreWithoutMarker(ctx context.Context, d handoverDeps, res *handoverResult) *stepError {
+	if err := d.rename(d.backupPath(), d.plist); err != nil {
+		return fail(stepPlist, "plist_restore_failed", err)
+	}
+	if err := d.bootstrap(d.plist); err != nil {
+		// A failed bootstrap may still have registered the job in part; the
+		// bootout is best effort and does not decide rolled_back.
+		_ = d.bootout(d.prevLabel)
+		res.RolledBack = ptrTo(d.rename(d.plist, d.backupPath()) == nil)
+		return fail(stepBootstrap, "bootstrap_failed", err)
+	}
+	if err := d.waitReady(ctx); err != nil {
+		ok := d.bootout(d.prevLabel) == nil
+		ok = d.rename(d.plist, d.backupPath()) == nil && ok
+		res.RolledBack = ptrTo(ok)
+		return fail(stepReady, "not_ready", err)
+	}
+	return nil
 }
 
 // toCLICritical swaps the managed job for the CLI's. Once the managed job is
@@ -403,11 +472,16 @@ its own LaunchAgent; agents are adopted from the surviving tmux sessions.
 
 --to-cli is the inverse: it drains through the managed daemon, boots out the
 marker's job, restores the plist and bootstraps it, and removes managed.json
-only once the CLI daemon is up.
+only once the CLI daemon is up. With no managed.json at all but a
+<plist>.handed-over backup (the app failed to write the marker after
+--to-app), it needs --label <the app's label>, skips the drain and bootout,
+requires that label to be unloaded (else managed_job_loaded) and daemon.lock
+to be free (else daemon_running), and restores the plist and bootstraps it; the result
+carries restored_without_marker.
 
 A step that fails is rolled back and reported. With --json stdout carries one
 object ({ok, step, error, previous_label, env, plist_backup, rolled_back,
-managed_stopped, warnings}); progress goes to stderr and a failure exits
+managed_stopped, restored_without_marker, warnings}); progress goes to stderr and a failure exits
 non-zero. --dry-run runs the read-only checks and prints the plan.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
@@ -452,7 +526,7 @@ non-zero. --dry-run runs the read-only checks and prints the plan.`,
 	f := cmd.Flags()
 	f.BoolVar(&toApp, "to-app", false, "hand the daemon to Leo.app")
 	f.BoolVar(&toCLI, "to-cli", false, "release the daemon back to the CLI install")
-	f.StringVar(&label, "label", "", "launchd label Leo.app registers (--to-app)")
+	f.StringVar(&label, "label", "", "launchd label Leo.app registers (--to-app; also --to-cli when managed.json is missing)")
 	f.BoolVar(&asJSON, "json", false, "print one JSON result on stdout; progress goes to stderr")
 	f.BoolVar(&dryRun, "dry-run", false, "check and print the plan without changing anything")
 	f.DurationVar(&drainTimeout, "drain-timeout", defaultDrainTimeout, "how long to wait for busy agents to pause")
