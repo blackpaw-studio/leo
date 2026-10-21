@@ -1,7 +1,8 @@
 version: 2
 
 builds:
-  - main: ./cmd/leo
+  - id: leo
+    main: ./cmd/leo
     binary: leo
     ldflags:
       - -s -w -X github.com/blackpaw-studio/leo/internal/cli.Version={{.Version}}
@@ -14,6 +15,15 @@ builds:
     env:
       - CGO_ENABLED=0
 
+# Fat darwin binary for the Leo.app bundle (one artifact for both Mac archs).
+# replace: false keeps the per-arch darwin binaries, which `leo update` and
+# the cask still consume.
+universal_binaries:
+  - id: leo-universal
+    ids: [leo]
+    replace: false
+    name_template: leo
+
 # Sign + notarize the darwin binaries with Apple via quill (built into
 # goreleaser), so Gatekeeper accepts browser-downloaded copies. Runs
 # cross-platform — no macOS runner needed. Gated on the signing cert being
@@ -21,6 +31,9 @@ builds:
 notarize:
   macos:
     - enabled: '{{ isEnvSet "MACOS_SIGN_P12" }}'
+      # The default is the project name only; the universal build has its own
+      # id and must be listed explicitly.
+      ids: [leo, leo-universal]
       sign:
         certificate: "{{.Env.MACOS_SIGN_P12}}"
         password: "{{.Env.MACOS_SIGN_PASSWORD}}"
@@ -32,8 +45,17 @@ notarize:
         timeout: 20m
 
 archives:
-  - formats: [tar.gz]
+  # Per-arch archives: `leo update` and the cask depend on these names.
+  - id: default
+    ids: [leo]
+    formats: [tar.gz]
     name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+  # Universal darwin archive for Leo.app. .Arch is "all" for universal
+  # binaries, so the name is spelled out.
+  - id: universal
+    ids: [leo-universal]
+    formats: [tar.gz]
+    name_template: "{{ .ProjectName }}_{{ .Version }}_darwin_universal"
 
 checksum:
   name_template: checksums.txt
@@ -69,6 +91,9 @@ changelog:
 # formula path never did.
 homebrew_casks:
   - name: leo
+    # Pin to the per-arch archives; the universal archive would otherwise
+    # compete for the same darwin slot.
+    ids: [default]
     repository:
       owner: blackpaw-studio
       name: homebrew-tap
