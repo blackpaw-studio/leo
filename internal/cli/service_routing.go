@@ -21,6 +21,7 @@ var (
 	daemonStatusLabelFn = service.DaemonStatusLabel
 	daemonRegisteredFn  = service.DaemonRegistered
 	labelLoadedFn       = service.LabelLoaded
+	teardownSessionsFn  = service.TeardownSessions
 )
 
 // managedServiceRefusal is why start/stop/install/uninstall do nothing when

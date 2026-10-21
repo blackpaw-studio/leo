@@ -27,6 +27,10 @@ ExecStart={{.LeoPath}} service --supervised --config {{.ConfigPath}}
 WorkingDirectory={{.WorkDir}}
 Restart=always
 RestartSec=5
+# Signal only the daemon: the default control-group mode would also kill the
+# tmux server and every agent session on stop/restart, defeating adoption.
+# 'leo service stop' tears sessions down explicitly.
+KillMode=process
 StandardOutput=append:{{.LogPath}}
 StandardError=append:{{.LogPath}}
 {{- range $k, $v := .Env}}

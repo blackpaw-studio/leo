@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"reflect"
 	"strings"
 	"testing"
@@ -54,7 +55,9 @@ func stubServiceSeams(t *testing.T) *serviceCalls {
 	c := &serviceCalls{}
 	oldStart, oldStop, oldInstall, oldRemove := startServiceFn, stopServiceFn, installDaemonFn, removeDaemonFn
 	oldRestartLabel, oldRestartDaemon := restartLabelFn, restartDaemonFn
+	oldTeardown := teardownSessionsFn
 	t.Cleanup(func() {
+		teardownSessionsFn = oldTeardown
 		startServiceFn, stopServiceFn, installDaemonFn, removeDaemonFn = oldStart, oldStop, oldInstall, oldRemove
 		restartLabelFn, restartDaemonFn = oldRestartLabel, oldRestartDaemon
 	})
@@ -64,6 +67,7 @@ func stubServiceSeams(t *testing.T) *serviceCalls {
 	removeDaemonFn = func(string) error { c.record("remove"); return nil }
 	restartLabelFn = func(l string) error { c.record("restart-label " + l); return nil }
 	restartDaemonFn = func(string) error { c.record("restart-own"); return nil }
+	teardownSessionsFn = func(string, string, io.Writer) error { c.record("teardown"); return nil }
 	return c
 }
 
@@ -309,5 +313,50 @@ func TestServiceRestartCmdJSONBadArgsAreJSONToo(t *testing.T) {
 
 	if !strings.HasPrefix(stdout, `{"error":"invalid_args"`) {
 		t.Fatalf("stdout = %q", stdout)
+	}
+}
+
+// A permanent stop tears the sessions down, and only once the daemon is gone:
+// a live daemon would respawn them. Failure to stop tears nothing down.
+func TestServiceStopTearsDownSessionsAfterTheDaemonStops(t *testing.T) {
+	for _, tc := range []struct {
+		args []string
+		want []string
+	}{
+		{[]string{"stop"}, []string{"stop", "teardown"}},
+		{[]string{"stop", "--daemon"}, []string{"remove", "teardown"}},
+	} {
+		t.Run(strings.Join(tc.args, " "), func(t *testing.T) {
+			useTempConfig(t, nil)
+			stubManaged(t, managed.State{})
+			calls := stubServiceSeams(t)
+			cmd := newServiceCmd()
+			cmd.SetArgs(tc.args)
+			cmd.SetOut(&bytes.Buffer{})
+
+			if err := cmd.Execute(); err != nil {
+				t.Fatal(err)
+			}
+			if strings.Join(calls.log, ",") != strings.Join(tc.want, ",") {
+				t.Fatalf("calls = %v, want %v", calls.log, tc.want)
+			}
+		})
+	}
+}
+
+func TestServiceStopFailureLeavesSessionsAlone(t *testing.T) {
+	useTempConfig(t, nil)
+	stubManaged(t, managed.State{})
+	calls := stubServiceSeams(t)
+	stopServiceFn = func(string) error { calls.record("stop"); return errors.New("not running") }
+	cmd := newServiceCmd()
+	cmd.SetArgs([]string{"stop"})
+	cmd.SetOut(&bytes.Buffer{})
+
+	if err := cmd.Execute(); err == nil {
+		t.Fatal("want the stop error")
+	}
+	if strings.Join(calls.log, ",") != "stop" {
+		t.Fatalf("calls = %v, want only stop", calls.log)
 	}
 }
