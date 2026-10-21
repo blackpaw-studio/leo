@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -74,6 +75,10 @@ func tmuxVersionDir(t *testing.T) string {
 // runs from) everywhere it persists leo's path, and refuses a second daemon on
 // the same home without disturbing the first.
 func TestManagedDaemonUsesStableSelfPathAndRefusesSecondDaemon(t *testing.T) {
+	// managed.Load rejects the marker off darwin, so the daemon would ignore it.
+	if runtime.GOOS != "darwin" {
+		t.Skip("managed installs are darwin-only")
+	}
 	var selfPath string
 	s := newInteractiveE2EWithOptions(t, interactiveOptions{
 		beforeStart: func(ws string) { selfPath = writeManagedMarker(t, ws) },
