@@ -2,6 +2,7 @@ package consult
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
@@ -33,11 +34,14 @@ func (d *Dispatcher) git(args ...string) ([]byte, error) { return execGit(d.GitC
 // execGit runs git through newCmd, the injectable seam tests replace.
 func execGit(newCmd func(name string, args ...string) *exec.Cmd, args ...string) ([]byte, error) {
 	cmd := newCmd("git", args...)
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		return nil, fmt.Errorf("git %s: %w: %s", strings.Join(args, " "), err, strings.TrimSpace(string(out)))
+	// Callers parse the output, so it is stdout alone: a warning on stderr
+	// (a broken ref, say) must never read as data. Stderr only explains a failure.
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout, cmd.Stderr = &stdout, &stderr
+	if err := cmd.Run(); err != nil {
+		return nil, fmt.Errorf("git %s: %w: %s", strings.Join(args, " "), err, strings.TrimSpace(stderr.String()))
 	}
-	return bytes.TrimSpace(out), nil
+	return bytes.TrimSpace(stdout.Bytes()), nil
 }
 
 func (d *Dispatcher) prepareWorktree(state *runState, req Request) error {
@@ -190,10 +194,17 @@ func (d *Dispatcher) headlessWritersGone(state *runState) bool {
 	if !state.headlessStarted {
 		return true
 	}
-	if state.pgid <= 1 || state.pgid == syscall.Getpgrp() {
+	return processGroupGone(d.ProcessCommand, state.pgid)
+}
+
+// processGroupGone reports positive confirmation that no process of pgid
+// remains. An unknown group (0, 1, or the caller's own) or an unreadable
+// process table is not confirmation. The daemon and prune share this check.
+func processGroupGone(command func(context.Context, string, ...string) *exec.Cmd, pgid int) bool {
+	if pgid <= 1 || pgid == syscall.Getpgrp() {
 		return false
 	}
-	present, known := d.processGroupPresent(state.pgid)
+	present, known := processGroupPresent(command, pgid)
 	return known && !present
 }
 

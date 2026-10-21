@@ -624,6 +624,7 @@ func (d *Dispatcher) runInvocation(parent context.Context, state *runState, done
 		if state.record.Isolation == "worktree" {
 			state.headlessStarted = true
 			state.pgid = startedProcessGroup(cmd)
+			state.record.ProcessGroup = state.pgid
 		}
 		if !state.record.Status.Terminal() {
 			state.record.Status = StatusRunning

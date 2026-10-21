@@ -25,6 +25,7 @@ Only dispatches that have **ended** (their worktree on disk, or a stale record o
 | `keep:dirty` | Modified tracked files or untracked (non-ignored) files. |
 | `keep:unmerged` | Clean, but has commits no other ref reaches. |
 | `keep:unverifiable` | The rules could not be applied: git failed, the worktree is locked, its checkout is on a branch other than the recorded `leo/*` one, or a headless run was interrupted by a daemon restart. |
+| `keep:deferred` | The daemon postponed this cleanup because a writer may be live (`worktree_state: deferred`), and prune cannot confirm the writer is gone: a headless run needs a recorded process group that is verifiably empty; an interactive run is confirmed only if it was released. |
 | `keep:not-terminal` | The dispatch has not ended, or its pane is still recorded. |
 | `missing-repo` | The canonical repository no longer exists. Reported, never deleted. |
 | `stale-record` | The dispatch has ended and its record still claims a worktree, but the directory is already gone (removed by hand). Size 0. A real run marks the record removed, runs `git worktree prune` in its repository (skipped if the repository is gone), and deletes the `leo/*` branch only under the same merged-elsewhere rule. |

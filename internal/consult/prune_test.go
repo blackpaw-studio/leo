@@ -1,6 +1,7 @@
 package consult
 
 import (
+	"context"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -335,5 +336,107 @@ func recordingGit(mu *sync.Mutex, argvs *[][]string) func(string, ...string) *ex
 			panic("prune ran " + strings.Join(append([]string{name}, args...), " "))
 		}
 		return exec.Command(name, args...)
+	}
+}
+
+func TestPruneBrokenRefWarningKeepsUnmergedWork(t *testing.T) {
+	repo, stateDir := gitTestRepo(t), t.TempDir()
+	rec := seedIsolated(t, repo, stateDir, "d-brk2", nil)
+	commitInWorktree(t, rec.Worktree, "unmerged.txt")
+	brokenRef(t, repo)
+
+	report, err := PruneWorktrees(stateDir, PruneOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if got := itemsByID(report)[rec.ID].Action; got != "keep:unmerged" {
+		t.Fatalf("action = %q", got)
+	}
+	if !dirExists(rec.Worktree) || !branchExists(t, repo, rec.Branch) {
+		t.Fatal("prune removed unmerged work")
+	}
+}
+
+// psTable fakes the process table `ps -A -o pid= -o pgid= -o ppid=` reads.
+func psTable(rows string, fail bool) func(context.Context, string, ...string) *exec.Cmd {
+	return func(ctx context.Context, name string, args ...string) *exec.Cmd {
+		if name != "ps" || !slices.Equal(args, []string{"-A", "-o", "pid=", "-o", "pgid=", "-o", "ppid="}) {
+			panic("unexpected process command: " + name + " " + strings.Join(args, " "))
+		}
+		if fail {
+			return exec.CommandContext(ctx, "false")
+		}
+		return exec.CommandContext(ctx, "printf", rows)
+	}
+}
+
+func TestPruneDeferredHeadlessRunNeedsProofItsProcessGroupIsGone(t *testing.T) {
+	const group = 4242
+	cases := []struct {
+		name   string
+		group  int
+		proc   func(context.Context, string, ...string) *exec.Cmd
+		action string
+	}{
+		{"live group", group, psTable("1 1 0\n9001 4242 1\n", false), "keep:deferred"},
+		{"dead group", group, psTable("1 1 0\n9001 77 1\n", false), "remove"},
+		{"process table unreadable", group, psTable("", true), "keep:deferred"},
+		{"group never recorded", 0, psTable("1 1 0\n", false), "keep:deferred"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			repo, stateDir := gitTestRepo(t), t.TempDir()
+			rec := seedIsolated(t, repo, stateDir, "d-hdl1", func(r *Record) {
+				r.Mode, r.WorktreeState, r.ProcessGroup = ModeHeadless, WorktreeDeferred, tc.group
+			})
+
+			report, err := PruneWorktrees(stateDir, PruneOptions{DryRun: true, ProcessCommand: tc.proc})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := itemsByID(report)[rec.ID].Action; got != tc.action {
+				t.Fatalf("action = %q (%s), want %q", got, itemsByID(report)[rec.ID].Reason, tc.action)
+			}
+
+			real, err := PruneWorktrees(stateDir, PruneOptions{ProcessCommand: tc.proc})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if removed := itemsByID(real)[rec.ID].Removed; removed != (tc.action == "remove") || dirExists(rec.Worktree) == (tc.action == "remove") {
+				t.Fatalf("removed=%v dir=%v for %q", removed, dirExists(rec.Worktree), tc.action)
+			}
+		})
+	}
+}
+
+func TestPruneDeferredInteractiveRunWithoutARecordedPaneIsKeptUnlessReleased(t *testing.T) {
+	for status, want := range map[Status]string{StatusClosed: "keep:deferred", StatusReleased: "remove"} {
+		t.Run(string(status), func(t *testing.T) {
+			repo, stateDir := gitTestRepo(t), t.TempDir()
+			rec := seedIsolated(t, repo, stateDir, "d-int1", func(r *Record) { r.Status, r.WorktreeState = status, WorktreeDeferred })
+
+			report, err := PruneWorktrees(stateDir, PruneOptions{DryRun: true})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := itemsByID(report)[rec.ID].Action; got != want {
+				t.Fatalf("action = %q, want %q", got, want)
+			}
+		})
+	}
+}
+
+func TestHeadlessRunRecordsItsProcessGroup(t *testing.T) {
+	repo, stateDir := gitTestRepo(t), t.TempDir()
+	d := worktreeDispatcher(t, stateDir, "printf dirty > untracked.txt")
+	started, err := d.Start(context.Background(), testConfig(), Request{Template: "claude", Prompt: "q", Cwd: repo, Isolation: "worktree"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	d.Wait(context.Background(), []string{started.ID}, RunTimeout)
+	persisted, err := LoadOne(stateDir, started.ID)
+	if err != nil || persisted.ProcessGroup <= 1 {
+		t.Fatalf("persisted process group = %d (%v)", persisted.ProcessGroup, err)
 	}
 }

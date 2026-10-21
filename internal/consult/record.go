@@ -212,7 +212,11 @@ type Record struct {
 	// BranchTip is the tip of Branch when cleanup deleted it along with the
 	// worktree (its commits being reachable from another ref). A follow-up
 	// uses it to tell whether the branch can be recreated from BaseCommit.
-	BranchTip     string                  `json:"branch_tip,omitempty"`
+	BranchTip string `json:"branch_tip,omitempty"`
+	// ProcessGroup is the headless command's private process group, kept
+	// for an isolated run so a later process (prune) can tell whether a
+	// writer may still be alive. Zero when unknown.
+	ProcessGroup  int                     `json:"process_group,omitempty"`
 	Notifications map[string]Notification `json:"notifications,omitempty"`
 	Turns         []Turn                  `json:"turns,omitempty"`
 	Steered       bool                    `json:"steered,omitempty"`

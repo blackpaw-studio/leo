@@ -99,8 +99,9 @@ func refsReaching(git gitFunc, root, commit, ownBranch string) ([]string, error)
 	}
 	own := "refs/heads/" + ownBranch
 	var refs []string
-	for _, ref := range strings.Fields(string(out)) {
-		if ref != own {
+	for _, line := range strings.Split(string(out), "\n") {
+		// Only lines that are refs count; anything else is not evidence.
+		if ref := strings.TrimSpace(line); strings.HasPrefix(ref, "refs/") && ref != own {
 			refs = append(refs, ref)
 		}
 	}

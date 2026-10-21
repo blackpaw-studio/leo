@@ -29,7 +29,11 @@ func startedProcessGroup(cmd *exec.Cmd) int {
 // This only detects descendants that remain in the harness process group: a
 // deliberate setsid-style daemon escape is not portably discoverable here.
 func (d *Dispatcher) processGroupPresent(pgid int) (bool, bool) {
-	out, err := d.ProcessCommand(context.Background(), "ps", "-A", "-o", "pid=", "-o", "pgid=", "-o", "ppid=").Output()
+	return processGroupPresent(d.ProcessCommand, pgid)
+}
+
+func processGroupPresent(command func(context.Context, string, ...string) *exec.Cmd, pgid int) (bool, bool) {
+	out, err := command(context.Background(), "ps", "-A", "-o", "pid=", "-o", "pgid=", "-o", "ppid=").Output()
 	if err != nil {
 		return false, false
 	}

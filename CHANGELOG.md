@@ -13,7 +13,7 @@ All notable user-visible changes to Leo are documented here.
   `git worktree remove`; the `leo/*` branch is deleted only when merged
   elsewhere). `--dry-run` lists every worktree with its action (`remove`,
   `keep:dirty`, `keep:unmerged`, `keep:unverifiable`, `keep:not-terminal`,
-  `missing-repo`, `stale-record`, `orphan`) and size, plus the reclaimable
+  `keep:deferred`, `missing-repo`, `stale-record`, `orphan`) and size, plus the reclaimable
   total. A terminal record whose worktree directory is already gone is a
   `stale-record`: a real run marks it removed, prunes git's registration, and
   deletes its merged branch. Directories with no record and dispatches whose

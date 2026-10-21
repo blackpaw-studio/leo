@@ -1,6 +1,7 @@
 package consult
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"maps"
@@ -22,6 +23,9 @@ const (
 	PruneKeepUnverif  = string(verdictUnverifiable)
 	PruneMissingRepo  = string(verdictMissingRepo)
 	PruneKeepNotTerm  = "keep:not-terminal"
+	// PruneKeepDeferred: the daemon deferred this cleanup because a writer
+	// may be live, and prune cannot positively confirm it is gone.
+	PruneKeepDeferred = "keep:deferred"
 	PruneOrphan       = "orphan"
 	// PruneStale is a terminal record whose worktree directory is already
 	// gone: nothing to remove, only the record and git's registration to
@@ -36,6 +40,9 @@ type PruneOptions struct {
 	DryRun bool
 	// GitCommand builds git invocations; nil uses exec.Command.
 	GitCommand func(name string, args ...string) *exec.Cmd
+	// ProcessCommand builds the process-table snapshot command used to check
+	// a headless run's process group; nil uses exec.CommandContext.
+	ProcessCommand func(ctx context.Context, name string, args ...string) *exec.Cmd
 	// Workers bounds the concurrent assessments; 0 uses a default.
 	Workers int
 }
@@ -92,15 +99,19 @@ func PruneWorktrees(stateDir string, opts PruneOptions) (PruneReport, error) {
 		newCmd = exec.Command
 	}
 	git := func(args ...string) ([]byte, error) { return execGit(newCmd, args...) }
+	ps := opts.ProcessCommand
+	if ps == nil {
+		ps = exec.CommandContext
+	}
 
 	items, err := pruneCandidates(stateDir, records)
 	if err != nil {
 		return PruneReport{}, err
 	}
-	pruneAssess(git, items, opts.Workers)
+	pruneAssess(git, ps, items, opts.Workers)
 	report := summarizePrune(opts.DryRun, items)
 	if !opts.DryRun {
-		report = pruneApply(git, stateDir, items, report)
+		report = pruneApply(git, ps, stateDir, items, report)
 	}
 	return report, nil
 }
@@ -155,9 +166,12 @@ func repositoryExists(root string) bool {
 	return root != "" && err == nil && info.IsDir()
 }
 
+// psFunc builds the process-table command; see processGroupGone.
+type psFunc = func(ctx context.Context, name string, args ...string) *exec.Cmd
+
 // pruneDecide is the one decision both the dry run and the apply pass make,
 // from the record as it stands now.
-func pruneDecide(git gitFunc, rec Record) (action, reason string) {
+func pruneDecide(git gitFunc, ps psFunc, rec Record) (action, reason string) {
 	switch {
 	case !rec.Status.Terminal():
 		return PruneKeepNotTerm, fmt.Sprintf("dispatch is %s", rec.Status)
@@ -165,6 +179,12 @@ func pruneDecide(git gitFunc, rec Record) (action, reason string) {
 		return PruneKeepNotTerm, fmt.Sprintf("pane %s is still recorded", rec.PaneID)
 	case rec.WorktreeState != WorktreeRemoved && missingOnDisk(rec.Worktree):
 		return PruneStale, fmt.Sprintf("worktree directory is gone but the record says %q", rec.WorktreeState)
+	case rec.WorktreeState == WorktreeDeferred:
+		if reason := deferredWriterReason(ps, rec); reason != "" {
+			return PruneKeepDeferred, reason
+		}
+		a := assessWorktree(git, rec)
+		return string(a.Verdict), a.Reason
 	case rec.Mode != ModeInteractive && rec.Error == "daemon restarted":
 		return PruneKeepUnverif, "headless run was interrupted by a daemon restart; its writers are unknown"
 	}
@@ -172,12 +192,32 @@ func pruneDecide(git gitFunc, rec Record) (action, reason string) {
 	return string(a.Verdict), a.Reason
 }
 
+// deferredWriterReason is why a deferred record's writers cannot be ruled
+// out, or "" when they positively are gone. A headless run is gone when its
+// recorded process group is empty (the daemon's own check); an interactive
+// run when its pane was killed, which only a release does for certain.
+func deferredWriterReason(ps psFunc, rec Record) string {
+	if rec.Mode == ModeInteractive {
+		if rec.Status != StatusReleased {
+			return "cleanup was deferred and the pane's absence cannot be confirmed"
+		}
+		return ""
+	}
+	if rec.ProcessGroup <= 1 {
+		return "cleanup was deferred and no process group was recorded to check"
+	}
+	if !processGroupGone(ps, rec.ProcessGroup) {
+		return fmt.Sprintf("cleanup was deferred and process group %d may still be alive", rec.ProcessGroup)
+	}
+	return ""
+}
+
 func missingOnDisk(path string) bool {
 	_, err := os.Lstat(path)
 	return os.IsNotExist(err)
 }
 
-func pruneAssess(git gitFunc, entries []*pruneEntry, workers int) {
+func pruneAssess(git gitFunc, ps psFunc, entries []*pruneEntry, workers int) {
 	if workers <= 0 {
 		workers = pruneDefaultWorker
 	}
@@ -189,7 +229,7 @@ func pruneAssess(git gitFunc, entries []*pruneEntry, workers int) {
 		go func() {
 			defer func() { <-sem; wg.Done() }()
 			if !e.orphan {
-				e.item.Action, e.item.Reason = pruneDecide(git, e.rec)
+				e.item.Action, e.item.Reason = pruneDecide(git, ps, e.rec)
 			}
 			e.item.Bytes = diskUsage(e.item.Worktree)
 		}()
@@ -202,7 +242,7 @@ func pruneAssess(git gitFunc, entries []*pruneEntry, workers int) {
 // assessment of a large state dir takes long enough for a dispatch to come
 // back to life. It then runs `git worktree prune` once in each repository
 // still on disk and returns the report with the outcomes folded in.
-func pruneApply(git gitFunc, stateDir string, entries []*pruneEntry, report PruneReport) PruneReport {
+func pruneApply(git gitFunc, ps psFunc, stateDir string, entries []*pruneEntry, report PruneReport) PruneReport {
 	pruned := map[string]bool{}
 	pruneRepo := func(repo string) {
 		if _, done := pruned[repo]; !done {
@@ -218,7 +258,7 @@ func pruneApply(git gitFunc, stateDir string, entries []*pruneEntry, report Prun
 			e.item.Error = fmt.Sprintf("re-reading record: %v", err)
 			continue
 		}
-		action, reason := pruneDecide(git, rec)
+		action, reason := pruneDecide(git, ps, rec)
 		if action != e.item.Action {
 			e.item.Action, e.item.Reason = action, "changed since assessment: "+reason
 			continue

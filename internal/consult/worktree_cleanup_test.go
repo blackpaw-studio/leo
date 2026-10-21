@@ -384,3 +384,51 @@ func TestFollowUpRecreatesAWorktreeWhoseBranchCleanupDeleted(t *testing.T) {
 		t.Fatalf("recreated branch = %q", got)
 	}
 }
+
+// brokenRef writes a garbage loose ref, which makes git print
+// "warning: ignoring broken ref ..." on stderr while for-each-ref still exits 0.
+func brokenRef(t *testing.T, repo string) {
+	t.Helper()
+	path := filepath.Join(repo, ".git", "refs", "heads", "garbage")
+	if err := os.WriteFile(path, []byte("not a sha\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestBrokenRefWarningDoesNotCountAsAnotherRefReachingTheCommit(t *testing.T) {
+	repo, stateDir := gitTestRepo(t), t.TempDir()
+	rec := seedIsolated(t, repo, stateDir, "d-brk1", nil)
+	commitInWorktree(t, rec.Worktree, "unmerged.txt")
+	brokenRef(t, repo)
+	d := NewDispatcher(NewFileRecorder(stateDir))
+	d.SetInteractiveRuntime(newPaneRuntime(false))
+
+	got := d.Collect(rec)
+
+	if got.WorktreeState != WorktreeKept || !dirExists(rec.Worktree) {
+		t.Fatalf("unmerged work removed on a stderr warning: state=%q dir=%v", got.WorktreeState, dirExists(rec.Worktree))
+	}
+	if !branchExists(t, repo, rec.Branch) {
+		t.Fatal("branch holding unmerged work was deleted")
+	}
+	if assessed := assessWorktree(d.git, rec); assessed.Verdict != verdictUnmerged {
+		t.Fatalf("verdict = %q (%s), want keep:unmerged", assessed.Verdict, assessed.Reason)
+	}
+}
+
+func TestGitOutputParsedByCleanupExcludesStderr(t *testing.T) {
+	d := NewDispatcher(nil)
+	d.GitCommand = func(string, ...string) *exec.Cmd {
+		return exec.Command("sh", "-c", "echo 'warning: noise' >&2; echo refs/heads/main")
+	}
+	out, err := d.git("anything")
+	if err != nil || string(out) != "refs/heads/main" {
+		t.Fatalf("out=%q err=%v", out, err)
+	}
+	d.GitCommand = func(string, ...string) *exec.Cmd {
+		return exec.Command("sh", "-c", "echo 'fatal: reason' >&2; exit 3")
+	}
+	if _, err := d.git("anything"); err == nil || !strings.Contains(err.Error(), "fatal: reason") {
+		t.Fatalf("error should carry stderr: %v", err)
+	}
+}
