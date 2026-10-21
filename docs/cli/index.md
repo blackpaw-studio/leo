@@ -24,6 +24,7 @@ Leo provides commands for setup, agent supervision, task scheduling, template ma
 | [`leo agent`](agent.md) | Spawn and control ephemeral agents (local or via SSH) |
 | [`leo attach`](attach.md) | Attach to a running agent (with optional interactive picker) |
 | [`leo run`](run.md) | Run a scheduled task once |
+| [`leo dispatch prune`](dispatch-prune.md) | Remove the worktrees of finished dispatches (`--dry-run` first) |
 
 ### Observability
 
