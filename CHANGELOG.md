@@ -17,6 +17,15 @@ All notable user-visible changes to Leo are documented here.
 
 ### Changed
 
+- **Restarts no longer kill agent sessions.** A daemon shutdown (SIGTERM,
+  graceful restart, `handover`, launchd respawn) used to kill every agent's
+  tmux session while an event stream (e.g. Leo.app) held the HTTP shutdown
+  open. Sessions now always survive for the next daemon to adopt, and open
+  streams end at once on shutdown. Only an explicit `leo service stop` /
+  `stop --daemon` tears sessions down.
+  **Linux:** the systemd unit now sets `KillMode=process`. The old default
+  killed every session on restart. Re-run `leo service start --daemon` once
+  to rewrite an existing unit.
 - **One daemon per leo home.** The daemon takes a lock on
   `state/daemon.lock` before anything else. A second daemon exits with
   "another leo daemon owns …" instead of silently replacing the live one's
