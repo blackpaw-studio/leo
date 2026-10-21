@@ -180,10 +180,14 @@ func newServiceStopCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "stop",
 		Short: "Stop background service",
-		Long: `Stop the background supervisor and tear down every supervised tmux
+		Long: `Stop the background supervisor, then tear down every supervised tmux
 session. Per-process session IDs are preserved so a subsequent start will
 pick up where each process left off. Pass --daemon to also remove the
-installed OS service (launchd/systemd).`,
+installed OS service (launchd/systemd).
+
+Only an explicit stop kills sessions. Restarts, handovers, crashes and a bare
+SIGTERM to the daemon (e.g. Leo.app unregistering it) leave them running for
+the next daemon to adopt.`,
 		Example: `  leo service stop
   leo service stop --daemon`,
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -203,20 +207,30 @@ installed OS service (launchd/systemd).`,
 					return fmt.Errorf("removing daemon: %w", err)
 				}
 				success.Println("Daemon removed.")
-				return nil
+				return teardownSessions(cfg, cmd)
 			}
 
 			if err := stopServiceFn(cfg.HomePath); err != nil {
 				return err
 			}
 			success.Println("Service stopped.")
-			return nil
+			return teardownSessions(cfg, cmd)
 		},
 	}
 
 	cmd.Flags().BoolVar(&daemon, "daemon", false, "remove OS service (launchd/systemd)")
 
 	return cmd
+}
+
+// teardownSessions kills every agent's tmux session once the daemon is gone.
+// Only a permanent stop does this; the daemon itself never kills sessions on
+// shutdown, so restarts and handovers keep them for adoption.
+func teardownSessions(cfg *config.Config, cmd *cobra.Command) error {
+	if err := teardownSessionsFn(cfg.HomePath, managedState(cfg).TmuxPath, cmd.ErrOrStderr()); err != nil {
+		return fmt.Errorf("tearing down agent sessions: %w", err)
+	}
+	return nil
 }
 
 func newServiceRestartCmd() *cobra.Command {
