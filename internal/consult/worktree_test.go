@@ -162,7 +162,9 @@ func TestMarkInterruptedReconcilesCreatingWorktree(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if rec.Status != StatusFailed || rec.WorktreeState != WorktreeKept {
+	// The interrupted headless run's writers are unknowable, so cleanup is
+	// deferred rather than decided.
+	if rec.Status != StatusFailed || rec.WorktreeState != WorktreeDeferred {
 		t.Fatalf("record=%+v", rec)
 	}
 }
@@ -343,7 +345,7 @@ func TestCancelTerminalHeadlessDoesNotSignalCachedProcessGroup(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if rec.WorktreeState != WorktreeKept {
+	if rec.WorktreeState != WorktreeDeferred {
 		t.Fatalf("cancel record = %+v", rec)
 	}
 	if _, err := os.Stat(rec.Worktree); err != nil {
@@ -449,7 +451,7 @@ func worktreeDispatcher(t *testing.T, stateDir string, mutate string) *Dispatche
 	return d
 }
 
-func TestWorktreeCleanCollectionRemovesCheckoutAndKeepsBranch(t *testing.T) {
+func TestWorktreeCleanCollectionRemovesCheckoutAndDeletesTheMergedBranch(t *testing.T) {
 	repo, stateDir := gitTestRepo(t), t.TempDir()
 	d := worktreeDispatcher(t, stateDir, "")
 	started, err := d.Start(context.Background(), testConfig(), Request{Template: "claude", Prompt: "q", Cwd: repo, Name: "Review API", Isolation: "worktree"})
@@ -474,9 +476,10 @@ func TestWorktreeCleanCollectionRemovesCheckoutAndKeepsBranch(t *testing.T) {
 	if _, err := os.Stat(rec.Worktree); !os.IsNotExist(err) {
 		t.Fatalf("worktree still exists: %v", err)
 	}
-	cmd := exec.Command("git", "-C", repo, "show-ref", "--verify", "refs/heads/"+rec.Branch)
-	if out, err := cmd.CombinedOutput(); err != nil {
-		t.Fatalf("branch removed: %v: %s", err, out)
+	// The branch only pointed at the base commit, which the default branch
+	// reaches, so nothing is lost by deleting it.
+	if branchExists(t, repo, rec.Branch) {
+		t.Fatalf("branch %s should be deleted", rec.Branch)
 	}
 }
 

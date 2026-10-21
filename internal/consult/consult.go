@@ -740,7 +740,7 @@ func (d *Dispatcher) Wait(ctx context.Context, ids []string, timeout time.Durati
 				continue
 			}
 			entries[i].Worktree, entries[i].Branch = "", ""
-			if rec.WorktreeState == WorktreeKept {
+			if rec.WorktreeState == WorktreeKept || rec.WorktreeState == WorktreeDeferred {
 				entries[i].Worktree, entries[i].Branch = rec.Worktree, rec.Branch
 			}
 		}
@@ -1217,7 +1217,10 @@ func (d *Dispatcher) MarkInterrupted() {
 			if rec.Isolation == "worktree" && rec.WorktreeState != WorktreeRemoved && rec.Mode != ModeInteractive {
 				writerUncertain = true
 			}
-			if rec.Isolation == "worktree" && rec.WorktreeState != WorktreeRemoved && rec.Mode == ModeInteractive && rec.PaneID == "" {
+			// A released run's pane was killed (release fails otherwise); any
+			// other interactive run without a recorded pane may still have an
+			// unrecorded one.
+			if rec.Isolation == "worktree" && rec.WorktreeState != WorktreeRemoved && rec.Mode == ModeInteractive && rec.PaneID == "" && rec.Status != StatusReleased {
 				writerUncertain = true
 			}
 			if rec.Mode == ModeInteractive && rec.PaneID != "" && d.interactiveRuntime != nil {
@@ -1227,10 +1230,11 @@ func (d *Dispatcher) MarkInterrupted() {
 				} else if alive {
 					cleaned, killErr := d.closeRestartPane(rec)
 					if killErr != nil {
-						d.trackRestartKill(rec)
 						if rec.Isolation == "worktree" && rec.WorktreeState != WorktreeRemoved {
+							rec.WorktreeState = WorktreeDeferred
 							writerUncertain = true
 						}
+						d.trackRestartKill(rec)
 					} else {
 						rec = cleaned
 						_ = writeRecord(recorder.dir, rec)
@@ -1238,7 +1242,7 @@ func (d *Dispatcher) MarkInterrupted() {
 				}
 			}
 			if writerUncertain {
-				rec = d.setWorktreeState(rec, nil, WorktreeKept)
+				rec = d.setWorktreeState(rec, nil, WorktreeDeferred)
 			} else {
 				rec = d.cleanupWorktree(rec.ID)
 			}
@@ -1265,7 +1269,7 @@ func (d *Dispatcher) MarkInterrupted() {
 			}
 		}
 		if rec.Isolation == "worktree" && rec.WorktreeState != WorktreeRemoved {
-			rec.WorktreeState = WorktreeKept
+			rec.WorktreeState = WorktreeDeferred
 		}
 		rec.foldActive(markedAt)
 		d.mu.Lock()

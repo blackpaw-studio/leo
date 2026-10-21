@@ -104,27 +104,34 @@ func (d *Dispatcher) persistIsolationLocked(state *runState) error {
 	return h.SetRecord(cloneRecord(state.record))
 }
 
+// cleanupWorktree removes id's isolated worktree when the safety rules allow
+// it. A run whose writer may still be live is deferred, not kept: deferred and
+// kept records are both re-evaluated on every later terminal transition (pane
+// closed, release, restart) and by `leo dispatch prune`, so a postponed
+// cleanup is never lost and a kept one is re-checked against the disk.
 func (d *Dispatcher) cleanupWorktree(id string) Record {
 	rec, state, err := d.lookup(id)
-	if err != nil || rec.Isolation != "worktree" || rec.WorktreeState == WorktreeRemoved || rec.WorktreeState == WorktreeKept {
+	if err != nil || rec.Isolation != "worktree" || rec.WorktreeState == WorktreeRemoved {
 		return rec
 	}
+	deferCleanup := func() Record { return d.setWorktreeState(rec, state, WorktreeDeferred) }
 	if rec.Mode == ModeInteractive {
-		if rec.PaneID == "" {
-			return d.setWorktreeState(rec, state, WorktreeKept)
+		switch {
+		case rec.PaneID != "":
+			d.mu.Lock()
+			rt := d.interactiveRuntime
+			d.mu.Unlock()
+			if rt == nil {
+				return deferCleanup()
+			}
+			alive, certain := paneAlive(rt, rec.PaneID)
+			if !certain || alive {
+				return deferCleanup()
+			}
+		case !rec.Status.Terminal():
+			return deferCleanup()
 		}
-		d.mu.Lock()
-		rt := d.interactiveRuntime
-		d.mu.Unlock()
-		if rt == nil {
-			return d.setWorktreeState(rec, state, WorktreeKept)
-		}
-		alive, certain := paneAlive(rt, rec.PaneID)
-		if !certain || alive {
-			return d.setWorktreeState(rec, state, WorktreeKept)
-		}
-	}
-	if rec.Mode != ModeInteractive {
+	} else {
 		if !rec.Status.Terminal() {
 			return rec
 		}
@@ -135,38 +142,44 @@ func (d *Dispatcher) cleanupWorktree(id string) Record {
 				return rec
 			}
 		}
-	}
-	if rec.Mode != ModeInteractive && state != nil && state.headlessStarted {
-		if !d.headlessWritersGone(state) {
-			return d.setWorktreeState(rec, state, WorktreeKept)
+		if state == nil || (state.headlessStarted && !d.headlessWritersGone(state)) {
+			return deferCleanup()
 		}
-	} else if rec.Mode != ModeInteractive && state == nil {
-		return d.setWorktreeState(rec, state, WorktreeKept)
 	}
+	return d.applyWorktreeAssessment(rec, state)
+}
+
+// applyWorktreeAssessment acts on assessWorktree's verdict for a worktree
+// whose writers are known to be gone.
+func (d *Dispatcher) applyWorktreeAssessment(rec Record, state *runState) Record {
 	keep := func() Record { return d.setWorktreeState(rec, state, WorktreeKept) }
-	if rec.Worktree == "" || rec.RepositoryRoot == "" || rec.BaseCommit == "" || rec.Branch == "" {
+	switch assessWorktree(d.git, rec).Verdict {
+	case verdictRemove:
+		if err := removeWorktreeCheckout(d.git, rec); err != nil {
+			return keep()
+		}
+		tip, _ := deleteMergedBranch(d.git, rec)
+		return d.setWorktreeStateTip(rec, state, WorktreeRemoved, tip)
+	case verdictGone:
+		if err := pruneRepositoryWorktrees(d.git, rec.RepositoryRoot); err != nil {
+			return keep()
+		}
+		tip, _ := deleteMergedBranch(d.git, rec)
+		return d.setWorktreeStateTip(rec, state, WorktreeRemoved, tip)
+	default:
 		return keep()
 	}
-	branch, err := d.git("-C", rec.Worktree, "symbolic-ref", "--quiet", "--short", "HEAD")
-	if err != nil || string(branch) != rec.Branch {
-		return keep()
+}
+
+// addWorktree recreates rec's removed worktree, from its branch or, when
+// cleanup deleted the branch, from the base commit it pointed at.
+func (d *Dispatcher) addWorktree(rec Record) error {
+	if _, err := d.git("-C", rec.RepositoryRoot, "show-ref", "--verify", "--quiet", "refs/heads/"+rec.Branch); err == nil {
+		_, err = d.git("-C", rec.RepositoryRoot, "worktree", "add", rec.Worktree, rec.Branch)
+		return err
 	}
-	head, err := d.git("-C", rec.Worktree, "rev-parse", "--verify", "HEAD^{commit}")
-	if err != nil || string(head) != rec.BaseCommit {
-		return keep()
-	}
-	status, err := d.git("-C", rec.Worktree, "status", "--porcelain")
-	if err != nil || len(status) != 0 {
-		return keep()
-	}
-	commits, err := d.git("-C", rec.Worktree, "rev-list", rec.BaseCommit+"..HEAD")
-	if err != nil || len(commits) != 0 {
-		return keep()
-	}
-	if _, err := d.git("-C", rec.RepositoryRoot, "worktree", "remove", rec.Worktree); err != nil {
-		return keep()
-	}
-	return d.setWorktreeState(rec, state, WorktreeRemoved)
+	_, err := d.git("-C", rec.RepositoryRoot, "worktree", "add", "-b", rec.Branch, rec.Worktree, rec.BaseCommit)
+	return err
 }
 
 func (d *Dispatcher) headlessWritersGone(state *runState) bool {
@@ -181,9 +194,18 @@ func (d *Dispatcher) headlessWritersGone(state *runState) bool {
 }
 
 func (d *Dispatcher) setWorktreeState(rec Record, state *runState, disposition WorktreeState) Record {
+	return d.setWorktreeStateTip(rec, state, disposition, "")
+}
+
+// setWorktreeStateTip records disposition, plus branchTip when cleanup
+// deleted the branch (empty leaves BranchTip as it was).
+func (d *Dispatcher) setWorktreeStateTip(rec Record, state *runState, disposition WorktreeState, branchTip string) Record {
 	if state != nil {
 		d.mu.Lock()
 		state.record.WorktreeState = disposition
+		if branchTip != "" {
+			state.record.BranchTip = branchTip
+		}
 		rec = cloneRecord(state.record)
 		if h, ok := state.handle.(recordHandle); ok {
 			if err := h.SetRecord(rec); err != nil {
@@ -202,6 +224,9 @@ func (d *Dispatcher) setWorktreeState(rec Record, state *runState, disposition W
 	}
 	original := rec
 	rec.WorktreeState = disposition
+	if branchTip != "" {
+		rec.BranchTip = branchTip
+	}
 	if recorder, ok := d.recorder.(*FileRecorder); ok {
 		if err := writeRecord(recorder.dir, rec); err != nil {
 			fmt.Fprintf(os.Stderr, "dispatch %s: recording worktree: %v\n", rec.ID, err)
@@ -219,7 +244,7 @@ func (d *Dispatcher) reconcileCreating(rec Record) Record {
 	}
 	out, err := d.git("-C", rec.RepositoryRoot, "worktree", "list", "--porcelain")
 	if err != nil {
-		return d.setWorktreeState(rec, nil, WorktreeKept)
+		return d.setWorktreeState(rec, nil, WorktreeDeferred)
 	}
 	wantPath := rec.Worktree
 	if canonical, err := filepath.EvalSymlinks(rec.Worktree); err == nil {
@@ -238,7 +263,7 @@ func (d *Dispatcher) reconcileCreating(rec Record) Record {
 		}
 	}
 	if _, err := os.Lstat(rec.Worktree); err == nil || !os.IsNotExist(err) {
-		return d.setWorktreeState(rec, nil, WorktreeKept)
+		return d.setWorktreeState(rec, nil, WorktreeDeferred)
 	}
 	return d.setWorktreeState(rec, nil, WorktreeRemoved)
 }

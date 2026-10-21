@@ -134,7 +134,7 @@ func (d *Dispatcher) continueHeadless(cfg *config.Config, rec Record, message st
 			d.mu.Unlock()
 			return SendResult{}, err
 		}
-		if _, err := d.git("-C", rec.RepositoryRoot, "worktree", "add", rec.Worktree, rec.Branch); err != nil {
+		if err := d.addWorktree(rec); err != nil {
 			giveUpSlot()
 			d.mu.Unlock()
 			return SendResult{}, fmt.Errorf("recreating retained worktree: %w", err)
@@ -257,7 +257,7 @@ func (d *Dispatcher) resumeWorkspace(rec Record) (string, bool, error) {
 		return rec.Cwd, false, nil
 	}
 	switch rec.WorktreeState {
-	case WorktreeKept, WorktreePresent:
+	case WorktreeKept, WorktreeDeferred, WorktreePresent:
 		// A completed run's worktree not yet collected is as good as a kept
 		// one: its caller can follow up before the collection runs.
 		if info, err := os.Stat(rec.Worktree); err != nil || !info.IsDir() {
@@ -266,7 +266,17 @@ func (d *Dispatcher) resumeWorkspace(rec Record) (string, bool, error) {
 		return rec.Worktree, false, nil
 	case WorktreeRemoved:
 		head, err := d.git("-C", rec.RepositoryRoot, "rev-parse", "--verify", rec.Branch+"^{commit}")
-		if err != nil || strings.TrimSpace(string(head)) != rec.BaseCommit {
+		if err != nil {
+			// Cleanup deletes a branch whose tip another ref reaches. When
+			// that tip was the base commit, the branch is recreated from it.
+			if rec.BranchTip != "" && rec.BranchTip == rec.BaseCommit {
+				if _, baseErr := d.git("-C", rec.RepositoryRoot, "rev-parse", "--verify", "--quiet", rec.BaseCommit+"^{commit}"); baseErr == nil {
+					return rec.Worktree, true, nil
+				}
+			}
+			return "", false, errors.New("retained worktree branch is gone")
+		}
+		if strings.TrimSpace(string(head)) != rec.BaseCommit {
 			return "", false, errors.New("retained worktree branch no longer points at base commit")
 		}
 		return rec.Worktree, true, nil
