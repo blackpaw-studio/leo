@@ -6,6 +6,13 @@ All notable user-visible changes to Leo are documented here.
 
 ### Changed
 
+- **One daemon per leo home.** The daemon takes a lock on
+  `state/daemon.lock` before anything else. A second daemon exits with
+  "another leo daemon owns …" instead of silently replacing the live one's
+  socket.
+- **Codex hook commands quote paths correctly.** Paths containing `'` no
+  longer break the hook, and an old hook at a quoted path is replaced rather
+  than duplicated.
 - **Dispatches inherit their caller's environments.** A `leo_dispatch` (or
   consult) child used to run under its template's environments only, so a
   dispatch from an agent on another account ran on the default account. It
@@ -17,6 +24,27 @@ All notable user-visible changes to Leo are documented here.
 
 ### Added
 
+- **Managed installs (Leo.app).** When the Leo Mac app bundles leo, it writes
+  `~/.leo/state/managed.json` and leo defers to it:
+  - The marker sets a stable `self_path`, which leo writes into hooks, MCP
+    config and tmux bindings.
+  - It sets a pinned `tmux_path`. leo keeps using the tmux copy whose version
+    matches the running server and never kills the server to upgrade.
+  - It can carry an `env` map that the daemon applies at startup.
+  - The app owns the LaunchAgent.
+  - `leo update` refuses and points at the app.
+  - `leo service start|stop` refuse, and `restart` targets the app's label.
+
+  Without a marker nothing changes. See
+  `docs/configuration/managed-install.md`.
+- **`leo service handover --to-app|--to-cli`** moves an existing CLI daemon
+  under the app's LaunchAgent and back. It drains first, keeps agents' tmux
+  sessions alive, and rolls back each step on failure.
+- **JSON output for app integrations:** `leo pair --json`, `leo web enable
+  [--bind] [--allow-host]`, and `leo service restart --json`. Every `--json`
+  failure prints one `{error, message?}` object and exits non-zero.
+- **Universal macOS binary.** Releases also publish
+  `leo_<ver>_darwin_universal.tar.gz`.
 - **Interactive dispatches survive a daemon restart.** `leo update`, `leo
   service restart` or a crash no longer cut off a working interactive
   dispatch: if its pane is still alive, the new daemon adopts it under the
