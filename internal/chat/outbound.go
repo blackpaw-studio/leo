@@ -120,7 +120,44 @@ func (s *Service) Post(_ context.Context, req PostRequest) (Message, error) {
 	if err != nil {
 		return Message{}, err
 	}
-	m, err = s.insert(m, files, nil, nil)
+	return s.storeOutbound(m, files)
+}
+
+// SenderClientPrefix starts the Sender of a message an API client posted;
+// the client's name follows.
+const SenderClientPrefix = "client:"
+
+// ClientPostRequest is a message an API client drops into an agent's thread.
+type ClientPostRequest struct {
+	Agent  string
+	Client string
+	Text   string
+}
+
+// PostFromClient adds an API client's text to agent's thread as an outbound
+// message, like Post. It delivers nothing, so no turn starts and no agent
+// wakes, and it never joins an agent's in-flight task.
+func (s *Service) PostFromClient(_ context.Context, req ClientPostRequest) (Message, error) {
+	if err := s.enter(); err != nil {
+		return Message{}, err
+	}
+	defer s.leave()
+	text := strings.TrimSpace(req.Text)
+	switch {
+	case text == "":
+		return Message{}, fmt.Errorf("%w: post needs text", ErrInvalid)
+	case len(req.Text) > MaxTextBytes:
+		return Message{}, fmt.Errorf("%w: text exceeds %d bytes", ErrInvalid, MaxTextBytes)
+	case !s.knownAgent(req.Agent):
+		return Message{}, fmt.Errorf("%w: %s", ErrUnknownAgent, req.Agent)
+	}
+	return s.storeOutbound(Message{Agent: req.Agent, Direction: DirectionOut, Kind: KindText, Text: text, Sender: SenderClientPrefix + req.Client}, nil)
+}
+
+// storeOutbound inserts m with its attachments, then publishes the stored
+// message. On an insert failure the attachment copies are removed.
+func (s *Service) storeOutbound(m Message, files []Attachment) (Message, error) {
+	m, err := s.insert(m, files, nil, nil)
 	if err != nil {
 		s.removeFiles(files)
 		return Message{}, err
