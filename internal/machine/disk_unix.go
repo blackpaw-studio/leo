@@ -14,5 +14,5 @@ func statfsDisk(path string) (Disk, error) {
 	if err := unix.Statfs(path, &st); err != nil {
 		return Disk{}, fmt.Errorf("statfs %s: %w", path, err)
 	}
-	return diskFromStatfs(path, st.Blocks, st.Bavail, uint64(st.Bsize)), nil
+	return diskFromStatfs(path, st.Blocks, st.Bavail, uint64(st.Bsize)), nil // #nosec G115 -- kernel block size is positive
 }
