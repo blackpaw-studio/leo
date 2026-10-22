@@ -120,8 +120,9 @@ func (s *Sampler) read() reading {
 	return r
 }
 
-// guard converts a probe panic (the macOS probes call into libSystem) into an
-// error so one bad section can't wedge the in-flight call.
+// guard converts a Go-side probe panic into an error so one bad section can't
+// wedge the in-flight call. It cannot recover a fault inside libSystem (a
+// SIGSEGV in the macOS FFI calls kills the process).
 func guard[T any](f func() (T, error)) (v T, err error) {
 	defer func() {
 		if p := recover(); p != nil {
