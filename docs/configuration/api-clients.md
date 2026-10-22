@@ -1,14 +1,20 @@
 # API Clients
 
 An **API client** is an agent Leo does not supervise — typically running in a
-container, on another machine, or inside CI — that needs to message one Leo
-agent. It authenticates with a bearer token of its own, scoped to exactly that.
+container, on another machine, or inside CI — that needs to message a Leo agent
+or post into its chat thread. It authenticates with a bearer token of its own,
+scoped to exactly that.
 
 ```yaml
 api_clients:
   docker-scout:
-    can_message: [rocket]
+    can_message: [rocket]      # start a turn in rocket
+  pipe:
+    can_post: ["pipe-*"]       # drop text into a chat thread, no turn
 ```
+
+The two scopes are independent: `can_post` never grants `message`, and
+`can_message` never grants `chat/post`. A client needs at least one.
 
 This is not the same thing as the `client:` section, which configures *this*
 machine's CLI as an SSH client of a remote leo daemon. Different direction,
@@ -30,7 +36,10 @@ spawn, stop, run tasks, message anyone. An API client token is **default-deny**
 
 ```bash
 leo client add docker-scout --can-message rocket
+leo client add pipe --can-post 'pipe-*' --can-post wharf
 ```
+
+`--can-message` and `--can-post` are repeatable and take agent names or globs.
 
 This writes the `api_clients` entry, generates a token at
 `~/.leo/state/clients/docker-scout.token` (mode 0600), and prints it once.
@@ -40,29 +49,66 @@ leo client list          # names, allowed targets, whether the token file exists
 leo client rm docker-scout
 ```
 
-Both `add` and `rm` require a daemon restart to take effect. That cuts both
-ways: **`leo client rm` does not revoke immediately** — the running daemon
-holds the old token in memory and keeps accepting it until you restart it.
+`add` and `rm` reload a running daemon, so a new client works and a removed one
+loses access (401) immediately, with no restart. If the daemon is not running,
+the change applies when it next starts. If the reload fails, the command says
+the change was saved but is **not active** (or **not revoked**); run
+`leo service reload` once the daemon is healthy. Editing `leo.yaml` by hand
+takes effect on `leo service reload`.
 
 ## What the token can do
 
-Exactly one thing:
+Up to two things, one per scope:
 
 ```
-POST /web/agent/<target>/message
+POST /web/agent/<target>/message     # target matches can_message
+POST /web/agent/<target>/chat/post   # target matches can_post
 ```
 
-…where `<target>` matches `can_message`. Everything else is refused with 403 —
+Everything else is refused with 403 —
 every `/api/*` route, every other agent verb (`interrupt`, `send`, `stop`), the
 whole browser UI, and `/login`. The check runs before the request reaches the
 middleware the operator and agent tokens use, so there is no path by which a
 client token falls through to them.
 
-`can_message` entries match the literal path segment, exactly or as a glob
+`can_message` and `can_post` entries match the literal path segment, exactly or as a glob
 (`scout-*`). Unlike [template permissions](permissions.md), **an empty list
 denies everything** and is rejected at config load. The inversion is
 deliberate: an empty allowlist meaning "unrestricted" is a safe default for an
 agent Leo spawned, and the wrong one for a token living outside Leo.
+
+## Posting into a chat thread
+
+`chat/post` stores a message in `<target>`'s [Leo Chat](chat.md) thread and
+pushes it to paired devices, exactly as the agent's own `leo_chat_post` would.
+It injects no turn and wakes no agent, so a pipeline can notify without costing
+a model call.
+
+```bash
+curl -X POST http://leo:8370/web/agent/pipe-cam/chat/post \
+  -H "Authorization: Bearer $TOKEN" \
+  -d '{"from": "pipe", "text": "cam offline"}'
+# {"ok":true,"data":{"id":"01J…"}}
+```
+
+`from` follows the same rule as `/message`: the client's name, or
+`<name>#<session>`. `text` is required and capped like `leo_chat_post`;
+newlines and tabs are kept (chat renders Markdown) and other control
+characters are stripped. Attachments are not supported.
+
+| Status | Meaning |
+|---|---|
+| 200 | stored; `data.id` is the message id |
+| 400 | bad `from`, empty or oversized text, invalid JSON |
+| 401 | missing or unknown token |
+| 403 | target outside `can_post`, wrong scope, any other path, method or `/api` route |
+| 404 | target is in scope but is not a known agent |
+| 503 | Leo Chat is not available on this daemon |
+
+Scope is checked before the agent is looked up, so a client cannot probe which
+agents exist outside its `can_post`. The stored message carries
+`"sender": "client:<name>"` (never the `#session` suffix), and the push body is
+prefixed `<name>: `.
 
 ## Sender identity is enforced, not asserted
 
