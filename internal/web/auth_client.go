@@ -93,6 +93,15 @@ func validSessionSuffix(s string) bool {
 	return true
 }
 
+// SetClients replaces the API client policies of a running server, so a
+// client added to the config works, and a removed one loses access, without a
+// restart. The policies are vetted as New vets them, then published as one
+// immutable slice that readers load without a lock.
+func (s *Server) SetClients(clients []ClientPolicy) {
+	valid := validClients(clients, s.apiToken, s.agentToken)
+	s.clients.Store(&valid)
+}
+
 // lookupClient returns the policy owning token. It compares against every
 // configured client without an early return, so the work done does not depend
 // on which client matched — same discipline as matchesAnyToken.
@@ -102,7 +111,12 @@ func (s *Server) lookupClient(token string) (ClientPolicy, bool) {
 	}
 	var found ClientPolicy
 	ok := false
-	for _, c := range s.clients {
+	// One load: a request sees a single snapshot even while SetClients swaps.
+	var clients []ClientPolicy
+	if p := s.clients.Load(); p != nil {
+		clients = *p
+	}
+	for _, c := range clients {
 		if subtle.ConstantTimeCompare([]byte(token), []byte(c.Token)) == 1 {
 			found, ok = c, true
 		}

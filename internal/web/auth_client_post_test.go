@@ -21,10 +21,10 @@ func newClientChatServer(t *testing.T) chatServer {
 	t.Helper()
 	cs := newChatServer(t)
 	cs.svc.records = []agent.Record{{Name: "pipe-cam", Workspace: "/ws"}, {Name: "other", Workspace: "/ws"}}
-	cs.s.clients = validClients([]ClientPolicy{
+	cs.s.SetClients([]ClientPolicy{
 		{Name: "pipe", Token: testPostToken, CanPost: []string{"pipe-*"}},
 		{Name: "docker-scout", Token: testClientToken, CanMessage: []string{"pipe-cam"}},
-	}, testAPIToken, testAgentToken)
+	})
 	cs.s.injectPrompt = func(context.Context, string, string) error {
 		t.Error("a client post injected a prompt")
 		return nil
