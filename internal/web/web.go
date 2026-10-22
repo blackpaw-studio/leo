@@ -274,6 +274,10 @@ type Server struct {
 	// empty means the caller didn't provide one.
 	version string
 
+	// machineStats backs GET /api/v1/machine; nil answers 503 (see
+	// WithMachineStats).
+	machineStats MachineSampler
+
 	// sseHeartbeat is the interval between SSE comment heartbeats on
 	// GET /api/v1/events. Defaults to defaultSSEHeartbeat; tests shrink it
 	// directly (same package) to avoid a 20s wait.
@@ -696,6 +700,8 @@ func New(configPath string, processes ProcessStateProvider, scheduler SchedulerP
 	// macOS app). Lives on apiMux so it inherits bearer auth unchanged — no new
 	// auth mechanism, per the spec's Access section.
 	apiMux.HandleFunc("GET /api/v1/state", s.handleAPIState)
+	// Machine stats: same auth as /api/v1/state (docs/specs/2026-10-21-machine-stats.md).
+	apiMux.HandleFunc("GET /api/v1/machine", s.handleAPIMachine)
 	apiMux.HandleFunc("GET /api/v1/events", s.handleAPIEvents)
 	// Agent control (docs/specs/2026-10-06-bridge-observe.md): operator
 	// only. The agent token passes the bearer check below, so each route

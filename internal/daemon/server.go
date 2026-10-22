@@ -488,6 +488,9 @@ func (s *Server) StartWeb(cfg *config.Config, agentSvc web.AgentService) error {
 	if s.leoVersion != "" {
 		observeOpts = append(observeOpts, web.WithVersion(s.leoVersion))
 	}
+	if s.machineStats != nil {
+		observeOpts = append(observeOpts, web.WithMachineStats(s.machineStats))
+	}
 	// Supervised agents' turn hooks complete their in-flight persistent-task
 	// invocations, whatever the harness (see sessionRouter.ObserveTurn).
 	observeOpts = append(observeOpts, web.WithTurnObserver(s.observeAgentTurn))
