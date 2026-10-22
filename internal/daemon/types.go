@@ -36,6 +36,9 @@ const (
 	ErrorCodeDrainNotDrained     = "drain_not_drained"
 	ErrorCodeDrainNone           = "drain_none"
 	ErrorCodeClaudeNotFound      = "claude_not_found"
+
+	// ErrorCodeMachineStatsUnavailable: no machine stats sampler is wired.
+	ErrorCodeMachineStatsUnavailable = "machine_stats_unavailable"
 )
 
 // TaskAddRequest is the body for POST /task/add.

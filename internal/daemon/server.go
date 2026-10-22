@@ -134,6 +134,9 @@ type Server struct {
 	// tmuxBin is the tmux binary the daemon resolved (see WithTmuxPath);
 	// empty falls back to a PATH lookup.
 	tmuxBin string
+	// machineStats backs GET /machine and, via StartWeb, GET /api/v1/machine;
+	// nil answers 503 (see WithMachineStats).
+	machineStats MachineSampler
 
 	// control serves the agent control routes; set by StartWeb (see
 	// setControl).
@@ -256,6 +259,7 @@ func New(sockPath, configPath string, processes ProcessStateProvider, opts ...Op
 	mux.HandleFunc("GET /version", s.handleVersion)
 	mux.HandleFunc("GET /events", s.handleEvents)
 	mux.HandleFunc("GET /state", s.handleState)
+	mux.HandleFunc("GET /machine", s.handleMachine)
 	mux.HandleFunc("GET /templates", s.handleTemplates)
 	mux.HandleFunc("GET /environments", s.handleEnvironments)
 	mux.HandleFunc("POST /cron/install", s.handleCronInstall)
