@@ -24,6 +24,25 @@ func TestAPIClientsValidation(t *testing.T) {
 			wantErr: "can_message",
 		},
 		{
+			name:    "post-only client is valid",
+			clients: map[string]APIClientConfig{"pipe": {CanPost: []string{"pipe-*"}}},
+		},
+		{
+			name:    "neither scope names both fields",
+			clients: map[string]APIClientConfig{"pipe": {}},
+			wantErr: "can_message or can_post",
+		},
+		{
+			name:    "blank can_post entry",
+			clients: map[string]APIClientConfig{"pipe": {CanPost: []string{"ok", " "}}},
+			wantErr: "can_post[1] must not be empty",
+		},
+		{
+			name:    "malformed can_post glob",
+			clients: map[string]APIClientConfig{"pipe": {CanPost: []string{"pipe-["}}},
+			wantErr: "can_post[0]",
+		},
+		{
 			name:    "malformed glob",
 			clients: map[string]APIClientConfig{"docker-scout": {CanMessage: []string{"scout-["}}},
 			wantErr: "not a valid pattern",
