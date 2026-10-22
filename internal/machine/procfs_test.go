@@ -67,6 +67,21 @@ func TestParseProcStat(t *testing.T) {
 	}
 }
 
+func TestParseProcStatSurvivesHugeLinesAfterCPULines(t *testing.T) {
+	// Large hosts have an intr line well past bufio.Scanner's 64 KiB token limit.
+	in := "cpu  1 2 3 4 5 6 7 8 9 10\ncpu0 1 2 3 4 5 6 7 8 9 10\ncpu1 1 2 3 4 5 6 7 8 9 10\n" +
+		"intr " + strings.Repeat("0 ", 100*1024) + "\nctxt 5\n"
+
+	ticks, cores, err := parseProcStat(strings.NewReader(in))
+
+	if err != nil {
+		t.Fatalf("err = %v", err)
+	}
+	if want := (CPUTicks{Busy: 1 + 2 + 3 + 6 + 7 + 8, Idle: 4 + 5}); ticks != want || cores != 2 {
+		t.Fatalf("got %+v/%d, want %+v/2", ticks, cores, want)
+	}
+}
+
 func TestParseMeminfo(t *testing.T) {
 	tests := []struct {
 		name    string

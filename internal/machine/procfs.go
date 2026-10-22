@@ -15,31 +15,40 @@ import (
 // parseProcStat reads the aggregate "cpu" line and counts "cpuN" lines.
 // Busy is user+nice+system+irq+softirq+steal; Idle is idle+iowait. guest and
 // guest_nice are already inside user/nice, so they are not added again.
+//
+// The cpu lines come first in /proc/stat, and reading stops at the first line
+// that doesn't start with "cpu": the intr line after them can run past any
+// fixed token limit on a large host.
 func parseProcStat(r io.Reader) (CPUTicks, int, error) {
 	var (
 		ticks CPUTicks
 		cores int
 		found bool
 	)
-	sc := bufio.NewScanner(r)
-	for sc.Scan() {
-		fields := strings.Fields(sc.Text())
-		if len(fields) == 0 {
-			continue
+	br := bufio.NewReader(r)
+	for {
+		head, err := br.Peek(len("cpu"))
+		if err == io.EOF || (err == nil && string(head) != "cpu") {
+			break
 		}
+		if err != nil {
+			return CPUTicks{}, 0, err
+		}
+		line, err := br.ReadString('\n')
+		if err != nil && err != io.EOF {
+			return CPUTicks{}, 0, err
+		}
+		fields := strings.Fields(line)
 		switch {
 		case fields[0] == "cpu":
-			t, err := ticksFromFields(fields[1:])
-			if err != nil {
-				return CPUTicks{}, 0, err
+			t, terr := ticksFromFields(fields[1:])
+			if terr != nil {
+				return CPUTicks{}, 0, terr
 			}
 			ticks, found = t, true
 		case isCoreLabel(fields[0]):
 			cores++
 		}
-	}
-	if err := sc.Err(); err != nil {
-		return CPUTicks{}, 0, err
 	}
 	if !found {
 		return CPUTicks{}, 0, errors.New("no aggregate cpu line in /proc/stat")
