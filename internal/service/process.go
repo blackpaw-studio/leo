@@ -28,6 +28,7 @@ import (
 	"github.com/blackpaw-studio/leo/internal/harness"
 	claudeharness "github.com/blackpaw-studio/leo/internal/harness/claude"
 	"github.com/blackpaw-studio/leo/internal/leomcp"
+	"github.com/blackpaw-studio/leo/internal/machine"
 	"github.com/blackpaw-studio/leo/internal/managed"
 	"github.com/blackpaw-studio/leo/internal/observe"
 	"github.com/blackpaw-studio/leo/internal/tmux"
@@ -1025,7 +1026,10 @@ func defaultSupervisedExec(opts RunSupervisedOptions) error {
 		daemon.WithLeoMCP(leoMCP),
 		daemon.WithTmuxPath(tmuxPath),
 		daemon.WithBridge(bridgeHub),
-		daemon.WithBridgeLaunches(bridgeLauncher, supervisor.BridgeRouter()))
+		daemon.WithBridgeLaunches(bridgeLauncher, supervisor.BridgeRouter()),
+		// One sampler for both machine routes, so they share the 1s cache
+		// and the CPU baseline. Disk is reported for the state dir.
+		daemon.WithMachineStats(machine.NewSampler(machine.NewProbe(filepath.Dir(sockPath)))))
 	srv.SetParentContext(ctx)
 	// Threaded into web.New's extra Options by StartWeb — see
 	// daemon.Server.SetObservability's doc comment.

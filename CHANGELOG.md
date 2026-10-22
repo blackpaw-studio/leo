@@ -6,6 +6,11 @@ All notable user-visible changes to Leo are documented here.
 
 ### Added
 
+- **Machine stats (`machine_stats`).** `GET /machine` (socket) and
+  `GET /api/v1/machine` (same auth as `/api/v1/state`) report CPU percent and
+  cores, memory used/total, and disk used/total for the state dir. Sampled on
+  request and cached for 1s, with no subprocesses; a section that can't be read
+  is `null`. Advertised as the `machine_stats` feature on the events hello.
 - **`leo dispatch prune [--dry-run] [--json]`.** Reclaims the disk held by
   worktrees of finished dispatches. It considers only terminal dispatches and
   applies the same safety rules as cleanup

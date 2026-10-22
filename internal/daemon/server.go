@@ -134,6 +134,9 @@ type Server struct {
 	// tmuxBin is the tmux binary the daemon resolved (see WithTmuxPath);
 	// empty falls back to a PATH lookup.
 	tmuxBin string
+	// machineStats backs GET /machine and, via StartWeb, GET /api/v1/machine;
+	// nil answers 503 (see WithMachineStats).
+	machineStats MachineSampler
 
 	// control serves the agent control routes; set by StartWeb (see
 	// setControl).
@@ -256,6 +259,7 @@ func New(sockPath, configPath string, processes ProcessStateProvider, opts ...Op
 	mux.HandleFunc("GET /version", s.handleVersion)
 	mux.HandleFunc("GET /events", s.handleEvents)
 	mux.HandleFunc("GET /state", s.handleState)
+	mux.HandleFunc("GET /machine", s.handleMachine)
 	mux.HandleFunc("GET /templates", s.handleTemplates)
 	mux.HandleFunc("GET /environments", s.handleEnvironments)
 	mux.HandleFunc("POST /cron/install", s.handleCronInstall)
@@ -483,6 +487,9 @@ func (s *Server) StartWeb(cfg *config.Config, agentSvc web.AgentService) error {
 	}
 	if s.leoVersion != "" {
 		observeOpts = append(observeOpts, web.WithVersion(s.leoVersion))
+	}
+	if s.machineStats != nil {
+		observeOpts = append(observeOpts, web.WithMachineStats(s.machineStats))
 	}
 	// Supervised agents' turn hooks complete their in-flight persistent-task
 	// invocations, whatever the harness (see sessionRouter.ObserveTurn).
