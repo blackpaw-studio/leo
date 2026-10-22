@@ -260,7 +260,13 @@ func (n *Notifier) chatMessage(m chat.Message) {
 	if n.allow != nil && !n.allow(m.Agent, config.PushStateChat) {
 		return
 	}
-	a := Alert{Agent: m.Agent, Kind: config.PushStateChat, Title: m.Agent, Body: chatBody(m), At: n.now(), MessageID: m.ID, MessageKind: m.Kind}
+	body := chatBody(m)
+	// A client's post names the client, so the sender shows before an app
+	// renders the message's own sender field.
+	if name, ok := strings.CutPrefix(m.Sender, chat.SenderClientPrefix); ok {
+		body = name + ": " + body
+	}
+	a := Alert{Agent: m.Agent, Kind: config.PushStateChat, Title: m.Agent, Body: body, At: n.now(), MessageID: m.ID, MessageKind: m.Kind}
 	if m.Input != nil {
 		a.InputType = m.Input.Type
 		// Only buttons can be answered from a notification action.
