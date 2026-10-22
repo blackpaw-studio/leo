@@ -19,7 +19,7 @@ func TestParseProcStat(t *testing.T) {
 				"cpu0 5 10 15 200 25 3 3 4 450 500\n" +
 				"cpu1 5 10 15 200 25 3 4 4 450 500\n" +
 				"intr 1\n",
-			// busy = user+nice+system+irq+softirq+steal; idle = idle+iowait
+			// Busy sums user, nice, system, irq, softirq and steal; idle adds iowait.
 			wantTicks: CPUTicks{Busy: 10 + 20 + 30 + 6 + 7 + 8, Idle: 400 + 50},
 			wantCores: 2,
 		},

@@ -14,5 +14,5 @@ func statfsDisk(path string) (Disk, error) {
 	if err := unix.Statfs(path, &st); err != nil {
 		return Disk{}, fmt.Errorf("statfs %s: %w", path, err)
 	}
-	return diskFromStatfs(path, uint64(st.Blocks), uint64(st.Bavail), uint64(st.Bsize)), nil
+	return diskFromStatfs(path, st.Blocks, st.Bavail, uint64(st.Bsize)), nil
 }
