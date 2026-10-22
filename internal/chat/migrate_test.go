@@ -181,8 +181,8 @@ func TestOpenStoreUpgradesAV3DatabaseAddsAskColumns(t *testing.T) {
 		t.Fatalf("upgrade: %v", err)
 	}
 	defer func() { _ = st.Close() }()
-	if v := userVersion(t, st); v != 4 {
-		t.Fatalf("user_version = %d, want 4", v)
+	if v := userVersion(t, st); v != schemaVersion {
+		t.Fatalf("user_version = %d, want %d", v, schemaVersion)
 	}
 	open, _ := st.Message("01A")
 	if open.State != StateExpired || open.ClosedReason != ClosedTimeout {
@@ -195,5 +195,47 @@ func TestOpenStoreUpgradesAV3DatabaseAddsAskColumns(t *testing.T) {
 	perm, _ := st.Message("01C")
 	if perm.State != StateOpen {
 		t.Fatalf("open permission prompt changed to %s", perm.State)
+	}
+}
+
+func TestOpenStoreUpgradesAV4DatabaseAddsSender(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "chat.db")
+	raw, err := sql.Open("sqlite", "file:"+path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw.SetMaxOpenConns(1)
+	if err := migrate(raw, migrations[:4]); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := raw.Exec(`INSERT INTO messages (id, agent, direction, kind, text, state, ts) VALUES
+		('01A', 'assistant', 'out', 'text', 'from the agent', '', 1000)`); err != nil {
+		t.Fatal(err)
+	}
+	_ = raw.Close()
+
+	st, err := OpenStore(path)
+	if err != nil {
+		t.Fatalf("upgrade: %v", err)
+	}
+	defer func() { _ = st.Close() }()
+	if v := userVersion(t, st); v != 5 {
+		t.Fatalf("user_version = %d, want 5", v)
+	}
+	old, err := st.Message("01A")
+	if err != nil || old.Sender != "" {
+		t.Fatalf("pre-v5 row = %+v, %v; want an empty sender", old, err)
+	}
+	at := time.Date(2026, 10, 21, 9, 0, 0, 0, time.UTC)
+	if err := st.InsertMessage(Message{ID: "01B", Agent: "assistant", Direction: DirectionOut, Kind: KindText, Text: "cam offline", Sender: "client:pipe", TS: at}); err != nil {
+		t.Fatal(err)
+	}
+	got, err := st.Message("01B")
+	if err != nil || got.Sender != "client:pipe" {
+		t.Fatalf("Message = %+v, %v; want sender client:pipe", got, err)
+	}
+	page, _, err := st.Messages("assistant", Page{})
+	if err != nil || len(page) != 2 || page[0].Sender != "client:pipe" || page[1].Sender != "" {
+		t.Fatalf("Messages = %+v, %v; want the senders to survive paging", page, err)
 	}
 }

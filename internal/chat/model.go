@@ -68,19 +68,22 @@ type Permission struct {
 
 // Message is one chat message.
 type Message struct {
-	ID          string       `json:"id"`
-	Agent       string       `json:"agent"`
-	Direction   string       `json:"direction"`
-	Kind        string       `json:"kind"`
-	Text        string       `json:"text"`
-	Transcript  string       `json:"transcript,omitempty"`
-	ReplyTo     string       `json:"reply_to,omitempty"`
-	Task        string       `json:"task,omitempty"`
-	RunID       string       `json:"run_id,omitempty"`
-	State       string       `json:"state"`
-	Answer      *Answer      `json:"answer,omitempty"`
-	Input       *Input       `json:"input,omitempty"`
-	Permission  *Permission  `json:"permission,omitempty"`
+	ID         string      `json:"id"`
+	Agent      string      `json:"agent"`
+	Direction  string      `json:"direction"`
+	Kind       string      `json:"kind"`
+	Text       string      `json:"text"`
+	Transcript string      `json:"transcript,omitempty"`
+	ReplyTo    string      `json:"reply_to,omitempty"`
+	Task       string      `json:"task,omitempty"`
+	RunID      string      `json:"run_id,omitempty"`
+	State      string      `json:"state"`
+	Answer     *Answer     `json:"answer,omitempty"`
+	Input      *Input      `json:"input,omitempty"`
+	Permission *Permission `json:"permission,omitempty"`
+	// Sender names who posted an outbound message that the agent did not
+	// write: client:<name> for an API client. Empty for agent messages.
+	Sender      string       `json:"sender,omitempty"`
 	Attachments []Attachment `json:"attachments"`
 	TS          time.Time    `json:"ts"`
 	// Deadline is when an open ask times out; zero means it never does.

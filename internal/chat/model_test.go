@@ -42,3 +42,16 @@ func TestMessageJSONOmitsAnEmptyDeadlineAndReason(t *testing.T) {
 		}
 	}
 }
+
+func TestMessageJSONCarriesSenderOnlyWhenSet(t *testing.T) {
+	m := Message{ID: "01X", Agent: "assistant", Kind: KindText}
+	b, _ := json.Marshal(m)
+	if strings.Contains(string(b), `"sender"`) {
+		t.Errorf("%s carries sender for an agent message", b)
+	}
+	m.Sender = "client:pipe"
+	b, _ = json.Marshal(m)
+	if !strings.Contains(string(b), `"sender":"client:pipe"`) {
+		t.Errorf("%s lacks the sender", b)
+	}
+}
