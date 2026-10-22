@@ -8,6 +8,7 @@ require (
 	github.com/charmbracelet/lipgloss v1.1.0
 	github.com/coder/websocket v1.8.15
 	github.com/creack/pty v1.1.24
+	github.com/ebitengine/purego v0.11.2
 	github.com/fatih/color v1.19.0
 	github.com/mattn/go-runewidth v0.0.19
 	github.com/robfig/cron/v3 v3.0.1
