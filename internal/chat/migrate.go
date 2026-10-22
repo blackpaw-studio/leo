@@ -94,6 +94,10 @@ ALTER TABLE messages ADD COLUMN deadline INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE messages ADD COLUMN closed_reason TEXT NOT NULL DEFAULT '';
 ALTER TABLE messages ADD COLUMN asker TEXT NOT NULL DEFAULT '';
 UPDATE messages SET state = 'expired', closed_reason = 'timeout' WHERE kind = 'ask' AND state = 'open';`},
+	// Message sender: who posted an outbound message when it wasn't the agent
+	// itself, as client:<name> for an API client. Empty for agent messages and
+	// every message stored before this step.
+	{version: 5, sql: `ALTER TABLE messages ADD COLUMN sender TEXT NOT NULL DEFAULT '';`},
 }
 
 // schemaVersion is the user_version of a database with every migration

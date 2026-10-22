@@ -12,10 +12,13 @@ import (
 //
 // Unlike a template's permissions — where an empty allowlist means
 // "unrestricted", the right default for an agent Leo spawned itself — a client
-// token is held outside Leo's trust boundary. CanMessage is therefore
-// required, and everything it does not name is denied.
+// token is held outside Leo's trust boundary. At least one scope is therefore
+// required, and everything it does not name is denied. The scopes are
+// independent: CanMessage starts agent turns, CanPost only drops text into a
+// chat thread.
 type APIClientConfig struct {
-	CanMessage []string `yaml:"can_message"`
+	CanMessage []string `yaml:"can_message,omitempty"`
+	CanPost    []string `yaml:"can_post,omitempty"`
 }
 
 // APIClientTokenPath returns the token file for a named client, under the
@@ -41,18 +44,27 @@ func validateAPIClients(clients map[string]APIClientConfig) []string {
 			errs = append(errs, fmt.Sprintf("api_clients[%q] name must not contain '/', '\\' or '#'", name))
 			continue
 		}
-		if len(client.CanMessage) == 0 {
-			errs = append(errs, fmt.Sprintf("api_clients[%q] must set can_message; an empty list can message nothing", name))
+		if len(client.CanMessage) == 0 && len(client.CanPost) == 0 {
+			errs = append(errs, fmt.Sprintf("api_clients[%q] must set can_message or can_post; an empty scope can reach nothing", name))
 			continue
 		}
-		for i, target := range client.CanMessage {
-			if strings.TrimSpace(target) == "" {
-				errs = append(errs, fmt.Sprintf("api_clients[%q].can_message[%d] must not be empty", name, i))
-				continue
-			}
-			if !leotools.ValidPattern(target) {
-				errs = append(errs, fmt.Sprintf("api_clients[%q].can_message[%d] %q is not a valid pattern", name, i, target))
-			}
+		errs = append(errs, validateClientPatterns(name, "can_message", client.CanMessage)...)
+		errs = append(errs, validateClientPatterns(name, "can_post", client.CanPost)...)
+	}
+	return errs
+}
+
+// validateClientPatterns checks one scope list: no blank entries, and every
+// entry a pattern the matcher accepts.
+func validateClientPatterns(name, field string, patterns []string) []string {
+	var errs []string
+	for i, target := range patterns {
+		if strings.TrimSpace(target) == "" {
+			errs = append(errs, fmt.Sprintf("api_clients[%q].%s[%d] must not be empty", name, field, i))
+			continue
+		}
+		if !leotools.ValidPattern(target) {
+			errs = append(errs, fmt.Sprintf("api_clients[%q].%s[%d] %q is not a valid pattern", name, field, i, target))
 		}
 	}
 	return errs

@@ -175,16 +175,29 @@ func saveDelegationAndReload(cmd *cobra.Command, cfg *config.Config) error {
 	for _, warning := range cfg.DelegationWarnings() {
 		fmt.Fprintln(cmd.ErrOrStderr(), "WARN:", warning)
 	}
-	if !daemon.IsRunning(cfg.HomePath) {
+	reloaded, err := reloadIfRunning(cmd, cfg)
+	if err != nil {
+		return err
+	}
+	if !reloaded {
 		fmt.Fprintln(cmd.ErrOrStderr(), "WARN: daemon is not running; the change applies when it starts")
-		return nil
+	}
+	return nil
+}
+
+// reloadIfRunning asks a running daemon to reload its config. It reports
+// whether a reload happened: false, with no error, means no daemon is running
+// and the saved config applies at its next start.
+func reloadIfRunning(cmd *cobra.Command, cfg *config.Config) (reloaded bool, err error) {
+	if !daemon.IsRunning(cfg.HomePath) {
+		return false, nil
 	}
 	resp, err := daemon.Send(cmd.Context(), cfg.HomePath, "POST", "/config/reload", nil)
 	if err != nil {
-		return fmt.Errorf("sending reload: %w", err)
+		return false, fmt.Errorf("sending reload: %w", err)
 	}
 	if !resp.OK {
-		return fmt.Errorf("reload failed: %s", resp.Error)
+		return false, fmt.Errorf("reload failed: %s", resp.Error)
 	}
-	return nil
+	return true, nil
 }

@@ -6,6 +6,21 @@ All notable user-visible changes to Leo are documented here.
 
 ### Added
 
+- **Client chat post (`can_post`).** An API client can now drop text into an
+  agent's Leo Chat thread with no turn: `leo client add <name> --can-post <glob>`
+  (repeatable; a client needs `--can-message` or `--can-post`, and the scopes are
+  independent). `POST /web/agent/<target>/chat/post` with
+  `Authorization: Bearer <client token>` and `{"from","text"}` answers
+  `200 {"ok":true,"data":{"id"}}`; errors are 401 (bad token), 403 (target or path
+  outside the scope), 400 (bad `from`, empty or oversized text) and 404 (unknown
+  agent). It stores an outbound message and pushes it, and injects no turn.
+  Messages gain a `sender` field (`client:<name>`, absent for agent messages;
+  additive schema migration), and the push body is prefixed `<name>: `.
+  See [API clients](docs/configuration/api-clients.md).
+- **Client policies hot-reload.** Config reload (`leo service reload`) rebuilds
+  the API client policies and swaps them into the running web server, and
+  `leo client add` / `rm` reload a running daemon: a new client works, and a
+  removed one gets 401, without a restart.
 - **Machine stats (`machine_stats`).** `GET /machine` (socket) and
   `GET /api/v1/machine` (same auth as `/api/v1/state`) report CPU percent and
   cores, memory used/total, and disk used/total for the state dir. Sampled on
@@ -25,6 +40,11 @@ All notable user-visible changes to Leo are documented here.
   `stale-record`: a real run marks it removed, prunes git's registration, and
   deletes its merged branch. Directories with no record and dispatches whose
   repository is gone are reported, never deleted. See [the CLI reference](docs/cli/dispatch-prune.md).
+
+### Changed
+
+- The socket's `POST /config/reload` now runs the full config reload (client
+  policies, OpenCode context, scheduler) instead of only the scheduler.
 
 ### Fixed
 

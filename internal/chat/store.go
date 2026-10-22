@@ -115,9 +115,9 @@ func insertMessageTx(tx *sql.Tx, m Message, add []Attachment, link []string) err
 	if err != nil {
 		return err
 	}
-	_, err = tx.Exec(`INSERT INTO messages (`+messageColumns+`) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+	_, err = tx.Exec(`INSERT INTO messages (`+messageColumns+`) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		m.ID, m.Agent, m.Direction, m.Kind, m.Text, m.Transcript, m.ReplyTo, m.Task, m.RunID, m.State, answer, input, meta, m.DeliveryRef, m.TS.UnixMilli(),
-		millisOrZero(m.Deadline), m.ClosedReason, m.Asker)
+		millisOrZero(m.Deadline), m.ClosedReason, m.Asker, m.Sender)
 	if err != nil {
 		return fmt.Errorf("inserting chat message: %w", err)
 	}
@@ -165,7 +165,7 @@ func encodeAnswer(a *Answer) (string, error) {
 	return string(b), nil
 }
 
-const messageColumns = `id, agent, direction, kind, text, transcript, reply_to, task, run_id, state, answer, input, meta, delivery_ref, ts, deadline, closed_reason, asker`
+const messageColumns = `id, agent, direction, kind, text, transcript, reply_to, task, run_id, state, answer, input, meta, delivery_ref, ts, deadline, closed_reason, asker, sender`
 
 // millisOrZero stores a zero time as 0 (no deadline) rather than the
 // year-1 millisecond count.
@@ -180,7 +180,7 @@ func scanMessage(row interface{ Scan(...any) error }) (Message, error) {
 	var m Message
 	var input, answer, meta string
 	var ts, deadline int64
-	if err := row.Scan(&m.ID, &m.Agent, &m.Direction, &m.Kind, &m.Text, &m.Transcript, &m.ReplyTo, &m.Task, &m.RunID, &m.State, &answer, &input, &meta, &m.DeliveryRef, &ts, &deadline, &m.ClosedReason, &m.Asker); err != nil {
+	if err := row.Scan(&m.ID, &m.Agent, &m.Direction, &m.Kind, &m.Text, &m.Transcript, &m.ReplyTo, &m.Task, &m.RunID, &m.State, &answer, &input, &meta, &m.DeliveryRef, &ts, &deadline, &m.ClosedReason, &m.Asker, &m.Sender); err != nil {
 		return Message{}, err
 	}
 	m.TS = time.UnixMilli(ts).UTC()

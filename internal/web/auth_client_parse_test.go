@@ -8,31 +8,43 @@ import (
 	"testing"
 )
 
-// TestClientMessageTargetParsing: the parser is the whole boundary. Anything
-// it mis-parses is a route a scoped token reaches that it should not.
-func TestClientMessageTargetParsing(t *testing.T) {
+// TestClientRouteParsing: the parser is the whole boundary. Anything it
+// mis-parses is a route a scoped token reaches that it should not.
+func TestClientRouteParsing(t *testing.T) {
 	tests := []struct {
 		path       string
 		wantTarget string
+		wantVerb   string
 		wantOK     bool
 	}{
-		{"/web/agent/rocket/message", "rocket", true},
-		{"/web/agent/scout-alpha/message", "scout-alpha", true},
-		{"/web/agent//message", "", false},
-		{"/web/agent/a/b/message", "", false},
-		{"/web/agent/./message", "", false},
-		{"/web/agent/../message", "", false},
-		{"/web/agent/rocket/message/", "", false},
-		{"/web/agent/rocket/interrupt", "", false},
-		{"/api/agent/spawn", "", false},
-		{"/web/agent/rocket/message/../../../api/agent/spawn", "", false},
-		{"/WEB/AGENT/rocket/MESSAGE", "", false},
-		{"", "", false},
+		{"/web/agent/rocket/message", "rocket", "message", true},
+		{"/web/agent/scout-alpha/message", "scout-alpha", "message", true},
+		{"/web/agent/pipe-cam/chat/post", "pipe-cam", "chat/post", true},
+		{"/web/agent//message", "", "", false},
+		{"/web/agent//chat/post", "", "", false},
+		{"/web/agent/a/b/message", "", "", false},
+		{"/web/agent/a/b/chat/post", "", "", false},
+		{"/web/agent/../chat/post", "", "", false},
+		{"/web/agent/./chat/post", "", "", false},
+		{"/web/agent/a/chat/post/x", "", "", false},
+		{"/web/agent/a/chat/post/", "", "", false},
+		{"/web/agent/a/chat/message", "", "", false},
+		{"/web/agent/a/chat", "", "", false},
+		{"/web/agent/./message", "", "", false},
+		{"/web/agent/../message", "", "", false},
+		{"/web/agent/rocket/message/", "", "", false},
+		{"/web/agent/rocket/interrupt", "", "", false},
+		{"/api/agent/spawn", "", "", false},
+		{"/api/chat/post", "", "", false},
+		{"/web/agent/rocket/message/../../../api/agent/spawn", "", "", false},
+		{"/WEB/AGENT/rocket/MESSAGE", "", "", false},
+		{"/WEB/AGENT/rocket/CHAT/POST", "", "", false},
+		{"", "", "", false},
 	}
 	for _, tt := range tests {
-		target, ok := clientMessageTarget(tt.path)
-		if ok != tt.wantOK || target != tt.wantTarget {
-			t.Errorf("clientMessageTarget(%q) = (%q, %v), want (%q, %v)", tt.path, target, ok, tt.wantTarget, tt.wantOK)
+		target, verb, ok := clientRoute(tt.path)
+		if ok != tt.wantOK || target != tt.wantTarget || verb != tt.wantVerb {
+			t.Errorf("clientRoute(%q) = (%q, %q, %v), want (%q, %q, %v)", tt.path, target, verb, ok, tt.wantTarget, tt.wantVerb, tt.wantOK)
 		}
 	}
 }

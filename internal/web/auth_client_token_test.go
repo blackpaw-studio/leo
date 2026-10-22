@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 )
 
@@ -167,4 +168,57 @@ func TestExistingTokensUnaffected(t *testing.T) {
 	if w.Code == http.StatusForbidden {
 		t.Error("agent token got 403 on a message route; existing behavior changed")
 	}
+}
+
+// TestSetClientsSwapsThePoliciesOfARunningServer: a client added after New
+// works, and one dropped by a later swap is unauthenticated again.
+func TestSetClientsSwapsThePoliciesOfARunningServer(t *testing.T) {
+	s := newClientTokenServer(t)
+	const lateToken = "late-client-token"
+	path := "/web/agent/scout-alpha/message"
+
+	if code := requestAs(t, s, "POST", path, lateToken, `{}`).Code; code != http.StatusUnauthorized {
+		t.Fatalf("unknown token = %d, want 401", code)
+	}
+	s.SetClients([]ClientPolicy{{Name: "late", Token: lateToken, CanMessage: []string{"scout-*"}}})
+	body, _ := json.Marshal(map[string]string{"text": "hi", "from": "late"})
+	if code := requestAs(t, s, "POST", path, lateToken, string(body)).Code; code == http.StatusUnauthorized || code == http.StatusForbidden {
+		t.Fatalf("added client = %d, want it to reach its route", code)
+	}
+	if code := requestAs(t, s, "POST", path, testClientToken, string(body)).Code; code != http.StatusUnauthorized {
+		t.Fatalf("client dropped by the swap = %d, want 401", code)
+	}
+}
+
+func TestSetClientsStillRefusesTokensCollidingWithTheOperatorTokens(t *testing.T) {
+	s := newClientTokenServer(t)
+	s.SetClients([]ClientPolicy{{Name: "bad", Token: testAPIToken, CanMessage: []string{"*"}}})
+	if w := requestAs(t, s, "GET", "/config/settings", testAPIToken, ""); w.Code != http.StatusOK {
+		t.Fatalf("operator token = %d after a colliding client was swapped in, want 200", w.Code)
+	}
+}
+
+// TestSetClientsIsSafeAgainstConcurrentRequests runs under -race: requests see
+// one whole snapshot of the policies while they are swapped.
+func TestSetClientsIsSafeAgainstConcurrentRequests(t *testing.T) {
+	s := newClientTokenServer(t)
+	policies := []ClientPolicy{{Name: "docker-scout", Token: testClientToken, CanMessage: []string{"scout-*"}}}
+	var wg sync.WaitGroup
+	for range 4 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for range 20 {
+				s.lookupClient(testClientToken)
+			}
+		}()
+	}
+	for i := range 20 {
+		if i%2 == 0 {
+			s.SetClients(nil)
+		} else {
+			s.SetClients(policies)
+		}
+	}
+	wg.Wait()
 }

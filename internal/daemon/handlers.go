@@ -228,17 +228,10 @@ func (s *Server) handleCronList(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleConfigReload(w http.ResponseWriter, r *http.Request) {
-	cfg, err := config.Load(s.configPath)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, fmt.Sprintf("loading config: %v", err))
+	if err := s.ReloadConfig(); err != nil {
+		writeError(w, http.StatusInternalServerError, fmt.Sprintf("reloading config: %v", err))
 		return
 	}
-
-	if err := s.scheduler.Install(cfg); err != nil {
-		writeError(w, http.StatusInternalServerError, fmt.Sprintf("reloading schedules: %v", err))
-		return
-	}
-
 	writeJSON(w, http.StatusOK, Response{OK: true})
 }
 

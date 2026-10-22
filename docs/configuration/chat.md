@@ -353,12 +353,15 @@ An upload without an `agent` belongs to the first message that sends it.
 Audio uploads make that message a `voice` note.
 
 **Message:** `{id, agent, direction (in|out), kind (text|voice|file|task|ask|permission|system),
-text, transcript?, reply_to?, task?, run_id?, state, answer?: {values, text, answers?}, input?: {type, options?, allow_text?, min?, max?, placeholder?, questions?}, permission?: {tool, summary},
+text, sender?, transcript?, reply_to?, task?, run_id?, state, answer?: {values, text, answers?}, input?: {type, options?, allow_text?, min?, max?, placeholder?, questions?}, permission?: {tool, summary},
 attachments: [{id, filename, mime, bytes, available}], ts, deadline?, closed_reason?}`; `state` is always
 present (empty on outbound text) and `attachments` is `[]` when there are none. States: inbound
 `pending|delivered|failed`; `ask` and `permission` `open|answered|expired`. `deadline`
 (RFC3339) is present only on an ask that has one; `closed_reason`
 (`timeout|withdrawn|agent_gone|dismissed`) only on an `expired` ask, never on a permission prompt.
+
+`sender` is `client:<name>` on a message an [API client](api-clients.md) posted
+(`can_post`), and absent on every message the agent wrote.
 
 **Thread:** `{agent, last_message, unread, pinned}`. Only `assistant` is
 pinned.

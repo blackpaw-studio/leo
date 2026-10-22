@@ -123,13 +123,13 @@ type Server struct {
 	// immediately — see applySection). Cleared by handleAgentsRestart on a
 	// restart batch with no failures.
 	agentsRestartNeeded atomic.Bool
-	port                int            // port the listener is expected to bind on; used for Host/Origin checks
-	apiToken            string         // operator bearer token: /api/*, browser routes, and /login
-	agentToken          string         // token exported to agents; /api/* and agent-messaging routes only
-	clients             []ClientPolicy // external API clients; scoped to one message route each
-	allowedHosts        []string       // extra hosts permitted beyond loopback (e.g. LAN IPs)
-	trustedProxies      []netip.Prefix // peers whose Remote-User header is trusted
-	sessions            *sessionStore  // in-memory browser sessions for cookie-based auth
+	port                int                            // port the listener is expected to bind on; used for Host/Origin checks
+	apiToken            string                         // operator bearer token: /api/*, browser routes, and /login
+	agentToken          string                         // token exported to agents; /api/* and agent-messaging routes only
+	clients             atomic.Pointer[[]ClientPolicy] // external API clients, scoped per route; swapped whole by SetClients, never mutated
+	allowedHosts        []string                       // extra hosts permitted beyond loopback (e.g. LAN IPs)
+	trustedProxies      []netip.Prefix                 // peers whose Remote-User header is trusted
+	sessions            *sessionStore                  // in-memory browser sessions for cookie-based auth
 
 	// serviceLogPath is the absolute path to the service log tailed by the
 	// Service page's log viewer. Computed by service.LogPathFor(homePath) —
@@ -501,7 +501,6 @@ func New(configPath string, processes ProcessStateProvider, scheduler SchedulerP
 		port:               opts.Port,
 		apiToken:           opts.APIToken,
 		agentToken:         opts.AgentToken,
-		clients:            validClients(opts.Clients, opts.APIToken, opts.AgentToken),
 		allowedHosts:       opts.AllowedHosts,
 		trustedProxies:     trustedProxies,
 		serviceLogPath:     opts.LogPath,
@@ -519,6 +518,7 @@ func New(configPath string, processes ProcessStateProvider, scheduler SchedulerP
 	for _, opt := range extra {
 		opt(s)
 	}
+	s.SetClients(opts.Clients)
 	s.startAttach = func(session string, cols, rows uint16) (attachProc, error) {
 		return startTmuxAttach(s.tmuxPath(), session, cols, rows)
 	}

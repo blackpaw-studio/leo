@@ -199,6 +199,23 @@ Why `leo_path` exists: SSH runs a non-interactive shell on the remote, which doe
 
 Resolution order for the target host: `--host` flag → `LEO_HOST` env → `default_host` → first entry sorted by key → localhost (only when no hosts are configured). `--host localhost` is a hard override. See the [Remote CLI guide](../guides/remote-cli.md).
 
+## `api_clients`
+
+External API clients — agents or jobs Leo does not supervise — each with a scoped bearer token. Manage them with `leo client add|list|rm`; see [API Clients](api-clients.md).
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `can_message` | list | One of the two | Agent names or globs the client may start a turn in (`POST /web/agent/<target>/message`). |
+| `can_post` | list | One of the two | Agent names or globs the client may post chat text to, with no turn (`POST /web/agent/<target>/chat/post`). |
+
+```yaml
+api_clients:
+  pipe:
+    can_post: ["pipe-*"]
+```
+
+An empty scope denies everything, and a client with neither list is rejected at load.
+
 ## Channels
 
 Leo does not ship with any built-in messaging channel. Channels are Claude Code plugins the user installs separately (e.g. Telegram, Slack, webhook). In `leo.yaml` they are referenced by plugin ID strings like `plugin:telegram@claude-plugins-official` on the `channels:` field of templates and tasks.

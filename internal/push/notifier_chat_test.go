@@ -305,3 +305,15 @@ func TestChatAsksPushTheirInputType(t *testing.T) {
 		t.Errorf("post: InputType = %q, want empty", a.InputType)
 	}
 }
+
+func TestClientPostPushNamesTheSenderInTheBody(t *testing.T) {
+	n, sender, _ := startNotifier(t)
+	n.Publish(chatEvent(chat.Message{ID: "c1", Agent: "pipe-cam", Direction: chat.DirectionOut, Kind: chat.KindText, Text: "cam offline", Sender: chat.SenderClientPrefix + "pipe"}))
+	if a := sender.next(t); a.Title != "pipe-cam" || a.Body != "pipe: cam offline" {
+		t.Fatalf("client alert = %+v, want title pipe-cam and body %q", a, "pipe: cam offline")
+	}
+	n.Publish(chatEvent(chat.Message{ID: "a1", Agent: "pipe-cam", Direction: chat.DirectionOut, Kind: chat.KindText, Text: "all quiet"}))
+	if a := sender.next(t); a.Body != "all quiet" {
+		t.Fatalf("agent alert body = %q, want it unprefixed", a.Body)
+	}
+}

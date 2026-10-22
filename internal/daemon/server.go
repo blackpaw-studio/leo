@@ -141,6 +141,9 @@ type Server struct {
 	// control serves the agent control routes; set by StartWeb (see
 	// setControl).
 	control atomic.Pointer[controlHolder]
+	// clientSink receives the API client policies a config reload rebuilds;
+	// set by StartWeb (see setClientSink), nil until the web server exists.
+	clientSink atomic.Pointer[clientSinkHolder]
 	// chatHandler serves the socket's /api/v1/chat routes; set by StartWeb
 	// when chat is on (see SetChat).
 	chatHandler        atomic.Pointer[controlHolder]
@@ -444,23 +447,7 @@ func (s *Server) StartWeb(cfg *config.Config, agentSvc web.AgentService) error {
 		return fmt.Errorf("preparing agent api token: %w", err)
 	}
 
-	// External API clients (api_clients) each get their own scoped token.
-	// A client whose token cannot be prepared is dropped with a warning
-	// rather than taking the whole daemon down: the fleet must keep running
-	// when one container's credential is unreadable.
-	var clients []web.ClientPolicy
-	for name, client := range cfg.APIClients {
-		token, tokenErr := web.EnsureClientToken(cfg.StatePath(), name)
-		if tokenErr != nil {
-			fmt.Fprintf(os.Stderr, "warning: api client %q disabled: %v\n", name, tokenErr)
-			continue
-		}
-		clients = append(clients, web.ClientPolicy{
-			Name:       name,
-			Token:      token,
-			CanMessage: client.CanMessage,
-		})
-	}
+	clients := clientPolicies(cfg)
 
 	port := cfg.WebPort()
 	var observeOpts []web.Option
@@ -517,6 +504,7 @@ func (s *Server) StartWeb(cfg *config.Config, agentSvc web.AgentService) error {
 		Chat:       web.ChatOptions{Store: s.chatStore, AttachmentsDir: s.chatAttachmentsDir, Publisher: s.chatPublisher, TaskRun: s.TaskRun},
 	}, observeOpts...)
 	s.setControl(s.webServer.ControlHandler())
+	s.setClientSink(s.webServer)
 	s.setDrainNotifier(s.webServer.DrainNotifier())
 	s.setRunningDispatches(s.webServer.RunningDispatches)
 	if s.chatStore != nil {
@@ -543,12 +531,56 @@ func (s *Server) StartWeb(cfg *config.Config, agentSvc web.AgentService) error {
 	return nil
 }
 
-// ReloadConfig reloads config from disk and re-syncs the scheduler.
-// Implements web.ConfigReloader.
+// clientSetter is the part of the web server a reload swaps API client
+// policies into.
+type clientSetter interface {
+	SetClients([]web.ClientPolicy)
+}
+
+// clientSinkHolder lets an interface value sit in an atomic.Pointer.
+type clientSinkHolder struct{ c clientSetter }
+
+// setClientSink installs the web server a reload swaps client policies into.
+// StartWeb sets it after the socket is already serving, hence the atomic.
+func (s *Server) setClientSink(c clientSetter) {
+	s.clientSink.Store(&clientSinkHolder{c: c})
+}
+
+// clientPolicies builds the web policies for cfg's api_clients, each with its
+// scoped token. A client whose token cannot be prepared is dropped with a
+// warning rather than failing the caller: the fleet must keep running when one
+// container's credential is unreadable.
+func clientPolicies(cfg *config.Config) []web.ClientPolicy {
+	var clients []web.ClientPolicy
+	for name, client := range cfg.APIClients {
+		token, err := web.EnsureClientToken(cfg.StatePath(), name)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "warning: api client %q disabled: %v\n", name, err)
+			continue
+		}
+		clients = append(clients, web.ClientPolicy{
+			Name:       name,
+			Token:      token,
+			CanMessage: client.CanMessage,
+			CanPost:    client.CanPost,
+		})
+	}
+	return clients
+}
+
+// ReloadConfig reloads config from disk, swaps the web server's API client
+// policies, and re-syncs the scheduler. Implements web.ConfigReloader.
+//
+// The client swap comes first, so an unrelated reload failure below cannot
+// leave a removed client with access. A config that will not load leaves the
+// running policies untouched.
 func (s *Server) ReloadConfig() error {
 	cfg, err := config.Load(s.configPath)
 	if err != nil {
 		return fmt.Errorf("loading config: %w", err)
+	}
+	if sink := s.clientSink.Load(); sink != nil {
+		sink.c.SetClients(clientPolicies(cfg))
 	}
 	if cfg.UsesHarness("opencode") {
 		if err := leomcp.EnsureOpenCodeContext(cfg); err != nil {
