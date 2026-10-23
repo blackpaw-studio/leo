@@ -43,7 +43,7 @@
           }
         ],
         "recent_consults": [],
-        "revision": "sha256:50143125f025707d10b22b47378dc35ea94745934a1e3f63b43f40c0861353a0",
+        "revision": "sha256:f5802ba2ef4aa9685f186e261a0f3435ce2c39e5cbaaa3d304e0469cc7dbc99e",
         "roles": [
           {
             "declared": true,
@@ -57,6 +57,10 @@
             "name": "coder"
           },
           {
+            "model": "opus",
+            "name": "coder3"
+          },
+          {
             "model": "haiku",
             "name": "reviewer"
           }
@@ -67,7 +71,7 @@
         "agents": true,
         "service": true
       },
-      "revision": "sha256:50143125f025707d10b22b47378dc35ea94745934a1e3f63b43f40c0861353a0"
+      "revision": "sha256:f5802ba2ef4aa9685f186e261a0f3435ce2c39e5cbaaa3d304e0469cc7dbc99e"
     },
     "ok": true
   },

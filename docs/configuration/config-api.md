@@ -33,7 +33,9 @@ Every write must send it back in `If-Match`:
 | 409 `revision_mismatch` | the file changed since the read; the body's `data.revision` is the current one. Re-read, re-apply, retry |
 | 200 / 201 | written; the body carries the new revision |
 
-There is no way to write blindly: `*` is not accepted.
+`If-Match` takes the revision bare (`sha256:...`), quoted as the `ETag` header
+carries it (`"sha256:..."`), or weak (`W/"sha256:..."`). There is no way to
+write blindly: `*` is not accepted.
 
 ## Schema
 
@@ -85,8 +87,13 @@ write-only: they read as `{"set": true|false}`.
 
 `PUT` is a patch: a key you send replaces the value, `null` clears it, a key
 you omit is left alone. Sending a field the schema does not define is 400;
-a bad value is 422. A harness change and its `harness_options` can go in one
-write.
+a bad value is 422. Nested
+objects (`permissions`, `push`, `harness_options`) merge the same way: a key
+inside them replaces, `null` clears just that key, an omitted key is kept, and
+`"harness_options": null` clears every option. Changing `harness` drops the old
+harness's options (they belong to it, as in the browser form), so a switch
+cannot be rejected over a leftover option; options sent in the same write are
+applied to the new harness.
 
 A write answers `{revision, restart_required: {agents, service}, warning?,
 item?}`. `restart_required` reports the **accumulated** flags, not just this
@@ -104,6 +111,17 @@ means the file was saved but the live reload failed.
 `permissions.deny_tools`, `new_name`, ...). A problem outside the edited
 resource (another resource that is already invalid on disk) has `field: ""`.
 A name that is taken is 422 on `name` / `new_name`.
+
+Add, rename and duplicate answer with the same write body, with `item` set to
+the new item's document (status 201 for add and duplicate).
+
+## Web UI pages
+
+The matching web pages (for an "Edit in the web UI" link; there is no `/config`
+index): Defaults `/config/defaults`, Templates `/config/templates[/{name}]`,
+Tasks `/tasks[/{name}]`, Environments `/config/environments`, Delegation
+`/config/delegation`, Web UI, Remote client and Remote hosts
+`/config/settings`, Service `/service`.
 
 ## Delegation
 

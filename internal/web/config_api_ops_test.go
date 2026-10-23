@@ -334,3 +334,19 @@ func TestWebConfigAPIIsOperatorOnly(t *testing.T) {
 		t.Errorf("GET /api/v1/config/schema as operator = %d %s", w.Code, w.Body.String())
 	}
 }
+
+// The apps link "Edit in the web UI" to these pages; there is no /config index.
+func TestWebUIPagesTheAppsLinkTo(t *testing.T) {
+	s := newTokenSplitServer(t)
+	for _, path := range []string{
+		"/tasks", "/tasks/heartbeat", "/config/defaults", "/config/templates", "/config/templates/coding",
+		"/config/environments", "/config/delegation", "/config/settings", "/service",
+	} {
+		if w := requestAs(t, s, http.MethodGet, path, testAPIToken, ""); w.Code != http.StatusOK {
+			t.Errorf("GET %s = %d, want 200", path, w.Code)
+		}
+	}
+	if w := requestAs(t, s, http.MethodGet, "/config", testAPIToken, ""); w.Code != http.StatusNotFound {
+		t.Errorf("GET /config = %d, want 404 (there is no config index page)", w.Code)
+	}
+}

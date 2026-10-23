@@ -3,6 +3,7 @@ package web
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -693,5 +694,90 @@ func TestDeleteItems(t *testing.T) {
 	wantStatus(t, res, http.StatusUnprocessableEntity)
 	if h.fileBytes() != before {
 		t.Error("a refused delete changed leo.yaml")
+	}
+}
+
+// PUT merges nested objects key by key: a key sent replaces, null clears it,
+// a key left out is kept. harness_options: null clears them all.
+func TestPutMergesNestedObjects(t *testing.T) {
+	h := newAPIHarness(t)
+	wantStatus(t, h.put("/config/templates/coder", map[string]any{
+		"permissions":     map[string]any{"deny_tools": []string{"leo_spawn_agent"}},
+		"harness_options": map[string]any{"bypass_permissions": true},
+	}), http.StatusOK)
+	vals := h.readValues("/config/templates/coder")
+	if perms := vals["permissions"].(map[string]any); len(perms["can_spawn"].([]any)) != 1 || len(perms["deny_tools"].([]any)) != 1 {
+		t.Errorf("permissions = %v, want can_spawn kept and deny_tools added", perms)
+	}
+	if ho := vals["harness_options"].(map[string]any); ho["permission_mode"] != "plan" || ho["bypass_permissions"] != true {
+		t.Errorf("harness_options = %v, want permission_mode kept and bypass_permissions added", ho)
+	}
+
+	wantStatus(t, h.put("/config/templates/coder", map[string]any{"harness_options": map[string]any{"permission_mode": nil}}), http.StatusOK)
+	if ho := h.readValues("/config/templates/coder")["harness_options"].(map[string]any); ho["permission_mode"] != nil || ho["bypass_permissions"] != true {
+		t.Errorf("null must clear only its key, got %v", ho)
+	}
+	wantStatus(t, h.put("/config/templates/coder", map[string]any{"harness_options": nil}), http.StatusOK)
+	if ho := h.readValues("/config/templates/coder")["harness_options"].(map[string]any); len(ho) != 0 {
+		t.Errorf("harness_options: null must clear every option, got %v", ho)
+	}
+}
+
+// Options belong to a harness: switching harness drops the old harness's
+// options (as the browser form does) and keeps whatever the same write sets
+// for the new one.
+func TestPutHarnessChangeDropsTheOldHarnessOptions(t *testing.T) {
+	h := newAPIHarness(t)
+	// coder runs claude with permission_mode: plan, which codex would reject.
+	res := h.put("/config/templates/coder", map[string]any{"harness": "codex", "model": "gpt-5"})
+	wantStatus(t, res, http.StatusOK)
+	if ho := h.readValues("/config/templates/coder")["harness_options"].(map[string]any); len(ho) != 0 {
+		t.Errorf("harness_options after the switch = %v, want none", ho)
+	}
+
+	res = h.put("/config/templates/reviewer", map[string]any{"harness": "codex", "model": "gpt-5",
+		"harness_options": map[string]any{"permission_mode": "read-only"}})
+	wantStatus(t, res, http.StatusOK)
+	if ho := h.readValues("/config/templates/reviewer")["harness_options"].(map[string]any); ho["permission_mode"] != "read-only" {
+		t.Errorf("options sent with the switch = %v", ho)
+	}
+
+	// Re-sending the same harness is not a switch: options stay.
+	wantStatus(t, h.put("/config/templates/reviewer", map[string]any{"harness": "codex", "model": "gpt-5.1"}), http.StatusOK)
+	if ho := h.readValues("/config/templates/reviewer")["harness_options"].(map[string]any); ho["permission_mode"] != "read-only" {
+		t.Errorf("options after a same-harness write = %v, want kept", ho)
+	}
+}
+
+// If-Match is accepted bare, quoted (the ETag form) and weak.
+func TestIfMatchForms(t *testing.T) {
+	h := newAPIHarness(t)
+	forms := map[string]func(string) string{
+		"bare":   func(rev string) string { return rev },
+		"quoted": func(rev string) string { return `"` + rev + `"` },
+		"weak":   func(rev string) string { return `W/"` + rev + `"` },
+	}
+	turns := 11
+	for name, form := range forms {
+		turns++
+		body := fmt.Sprintf(`{"values":{"max_turns":%d}}`, turns)
+		req := httptest.NewRequest(http.MethodPut, "/config/defaults", strings.NewReader(body))
+		req.Header.Set("If-Match", form(h.revision()))
+		rec := httptest.NewRecorder()
+		h.mux.ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Errorf("%s If-Match = %d %s", name, rec.Code, rec.Body)
+		}
+		if got := h.loadConfig().Defaults.MaxTurns; got != turns {
+			t.Errorf("%s If-Match: max_turns = %d, want %d (write ignored)", name, got, turns)
+		}
+	}
+	// A stale bare revision is still a conflict.
+	req := httptest.NewRequest(http.MethodPut, "/config/defaults", strings.NewReader(`{"values":{}}`))
+	req.Header.Set("If-Match", "sha256:stale")
+	rec := httptest.NewRecorder()
+	h.mux.ServeHTTP(rec, req)
+	if rec.Code != http.StatusConflict {
+		t.Errorf("stale bare If-Match = %d, want 409", rec.Code)
 	}
 }

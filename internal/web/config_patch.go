@@ -28,7 +28,13 @@ func (c *ConfigService) ApplyPatch(ifMatch string, res *configResource, name str
 			return err
 		}
 		harnessPatch, hasHarness := values["harness_options"]
+		_, before, _ := harnessView(target, cfg)
 		check := func(cfg *config.Config, target any, form url.Values) []schema.Problem {
+			// Options belong to a harness: a switch drops the old harness's, as
+			// the browser form does (it re-renders without them).
+			if _, after, _ := harnessView(target, cfg); after != before {
+				dropHarnessOptions(form)
+			}
 			if !hasHarness {
 				return nil
 			}
@@ -131,6 +137,15 @@ func overlayHarnessOptions(cfg *config.Config, target any, form url.Values, patc
 		form[k] = v
 	}
 	return problems
+}
+
+// dropHarnessOptions removes every harness option from form.
+func dropHarnessOptions(form url.Values) {
+	for k := range form {
+		if strings.HasPrefix(k, schema.HarnessOptionPrefix) {
+			delete(form, k)
+		}
+	}
 }
 
 // baseForm renders item's current state as the form a browser would POST:

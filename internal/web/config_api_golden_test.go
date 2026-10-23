@@ -120,6 +120,15 @@ func TestConfigAPIGolden(t *testing.T) {
 	t.Run("put_web", func(t *testing.T) {
 		checkGolden(t, "put_web", h.put("/config/web", map[string]any{"port": 9000}), home)
 	})
+	t.Run("post_task", func(t *testing.T) {
+		checkGolden(t, "post_task", h.do(http.MethodPost, "/config/tasks", h.revision(), map[string]any{"name": "weekly", "schedule": "0 9 * * 1"}), home)
+	})
+	t.Run("post_template_duplicate", func(t *testing.T) {
+		checkGolden(t, "post_template_duplicate", h.do(http.MethodPost, "/config/templates/coder/duplicate", h.revision(), map[string]any{"new_name": "coder2"}), home)
+	})
+	t.Run("post_template_rename", func(t *testing.T) {
+		checkGolden(t, "post_template_rename", h.do(http.MethodPost, "/config/templates/coder2/rename", h.revision(), map[string]any{"new_name": "coder3"}), home)
+	})
 	t.Run("delegation_cell", func(t *testing.T) {
 		checkGolden(t, "delegation_cell", h.do(http.MethodPut, "/config/delegation/profiles/fast/roles/coder", h.revision(),
 			map[string]any{"template": "coder", "effort": "high"}), home)
