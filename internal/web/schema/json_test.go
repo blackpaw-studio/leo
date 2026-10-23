@@ -164,7 +164,7 @@ func TestValuesJSONTypedPerKind(t *testing.T) {
 	if got, ok := vals["channels"].([]string); !ok || got == nil || len(got) != 0 {
 		t.Errorf("empty list = %#v, want empty non-nil []string", vals["channels"])
 	}
-	if got, ok := vals["env"].(map[string]string); !ok || got == nil {
+	if got, ok := vals["env"].(map[string]any); !ok || got == nil {
 		t.Errorf("empty map = %#v, want non-nil map", vals["env"])
 	}
 	if vals["enabled"] != false {

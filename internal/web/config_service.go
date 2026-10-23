@@ -89,6 +89,12 @@ type ConfigService struct {
 	// document; set by web.New once the consult dispatcher exists.
 	recentConsults atomic.Pointer[func() []consult.Record]
 
+	// restartInFlight is set while a `leo service restart` this service started
+	// is still running; a second restart request is refused until it ends.
+	restartInFlight atomic.Bool
+	// maxLogBytes caps a run-log read; 0 means maxTaskLogBytes.
+	maxLogBytes int64
+
 	// execCommand is the testability seam for exec.Command.
 	execCommand func(name string, args ...string) *exec.Cmd
 

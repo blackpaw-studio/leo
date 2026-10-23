@@ -149,6 +149,13 @@ func (c *ConfigService) readResource(res *configResource, name string, wantItem 
 	if err != nil {
 		return nil, "", err
 	}
+	doc, err := buildResourceDoc(cfg, rev, res, name, wantItem)
+	return doc, rev, err
+}
+
+// buildResourceDoc is the document of a loaded config: a collection's items, one
+// item, or a singleton.
+func buildResourceDoc(cfg *config.Config, rev string, res *configResource, name string, wantItem bool) (any, error) {
 	if res.Collection && !wantItem {
 		items := make([]itemDocument, 0)
 		for _, n := range res.names(cfg) {
@@ -156,13 +163,25 @@ func (c *ConfigService) readResource(res *configResource, name string, wantItem 
 			items = append(items, buildItemDocument(cfg, res, n, target))
 		}
 		sort.Slice(items, func(i, j int) bool { return items[i].Name < items[j].Name })
-		return collectionDocument{Revision: rev, Items: items}, rev, nil
+		return collectionDocument{Revision: rev, Items: items}, nil
 	}
 	target, ok := res.locate(cfg, name)
 	if !ok {
-		return nil, "", errNotFound("%s %q not found", res.Noun, name)
+		return nil, errNotFound("%s %q not found", res.Noun, name)
 	}
-	return resourceDocument{Revision: rev, itemDocument: buildItemDocument(cfg, res, name, target)}, rev, nil
+	return resourceDocument{Revision: rev, itemDocument: buildItemDocument(cfg, res, name, target)}, nil
+}
+
+// itemOf builds mutateOpts.Item for a write that leaves res's item name (a
+// singleton: name "") behind.
+func (c *ConfigService) itemOf(res *configResource, name string) func(*config.Config, string) any {
+	return func(cfg *config.Config, rev string) any {
+		doc, err := buildResourceDoc(cfg, rev, res, name, res.Collection)
+		if err != nil {
+			return nil
+		}
+		return doc
+	}
 }
 
 // loadLocked loads leo.yaml and its revision under the write lock.

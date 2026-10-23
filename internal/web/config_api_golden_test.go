@@ -137,6 +137,11 @@ func TestConfigAPIGolden(t *testing.T) {
 		checkGolden(t, "delegation_cell_422", h.do(http.MethodPut, "/config/delegation/profiles/fast/roles/coder", h.revision(),
 			map[string]any{"template": "coder", "effort": "ludicrous"}), home)
 	})
+	t.Run("put_template_env_secret", func(t *testing.T) {
+		checkGolden(t, "put_template_env_secret", h.put("/config/templates/coder", map[string]any{"env": map[string]any{
+			"ANTHROPIC_AUTH_TOKEN": "sk-golden-never-returned", "ANTHROPIC_BASE_URL": "http://localhost:3325",
+		}}), home)
+	})
 	t.Run("prompt_put", func(t *testing.T) {
 		rev := h.do(http.MethodGet, "/config/tasks/heartbeat/prompt", "", nil).data()["revision"].(string)
 		checkGolden(t, "prompt_put", h.do(http.MethodPut, "/config/tasks/heartbeat/prompt", rev, map[string]any{"content": "New body.\n"}), home)

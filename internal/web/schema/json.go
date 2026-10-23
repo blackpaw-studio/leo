@@ -263,11 +263,7 @@ func ValuesJSON(target any, section Section, defaults any) map[string]any {
 		case KindCSV:
 			out[f.Key] = append([]string{}, val.Interface().([]string)...)
 		case KindEnvMap:
-			m := map[string]string{}
-			for k, s := range val.Interface().(map[string]string) {
-				m[k] = s
-			}
-			out[f.Key] = m
+			out[f.Key] = envJSON(val.Interface().(map[string]string))
 		default:
 			out[f.Key] = val.String()
 		}

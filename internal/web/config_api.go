@@ -21,10 +21,26 @@ const maxConfigBody = 1 << 20
 // POST /config/reload is not registered here: the socket already has its own
 // route for it and the web API adds it separately (see RegisterReloadRoute).
 func (c *ConfigService) RegisterConfigRoutes(mux *http.ServeMux, prefix string, wrap func(http.HandlerFunc) http.HandlerFunc) {
-	route := func(pattern string, h http.HandlerFunc) {
+	c.configRoutes(func(pattern string, h http.HandlerFunc) {
 		method, path, _ := strings.Cut(pattern, " ")
 		mux.HandleFunc(method+" "+prefix+path, wrap(h))
-	}
+	})
+}
+
+// ConfigRoutePatterns lists every route the config API mounts under prefix,
+// POST /config/reload included, as "METHOD /path" patterns. Tests walk it so a
+// route added later is covered by the auth and parity checks without an edit.
+func ConfigRoutePatterns(prefix string) []string {
+	var patterns []string
+	(&ConfigService{}).configRoutes(func(pattern string, _ http.HandlerFunc) {
+		method, path, _ := strings.Cut(pattern, " ")
+		patterns = append(patterns, method+" "+prefix+path)
+	})
+	return append(patterns, "POST "+prefix+"/config/reload")
+}
+
+// configRoutes declares the routes (everything but reload) against route.
+func (c *ConfigService) configRoutes(route func(pattern string, h http.HandlerFunc)) {
 	route("GET /config/schema", c.handleConfigSchema)
 	c.registerDelegationRoutes(route)
 	c.registerOpsRoutes(route)
@@ -136,17 +152,11 @@ type writeResponse struct {
 	Item            any             `json:"item,omitempty"`
 }
 
-// respondWrite renders a successful write, attaching the item's fresh document
-// when item names one.
-func (c *ConfigService) respondWrite(w http.ResponseWriter, status int, res WriteResult, cr *configResource, item string) {
-	out := writeResponse{Revision: res.Revision, RestartRequired: res.Restart, Warning: res.Warning}
-	if cr != nil {
-		if doc, _, err := c.readResource(cr, item, cr.Collection); err == nil {
-			out.Item = doc
-		}
-	}
+// respondWrite renders a successful write. The item document was built inside
+// the write, so its revision is the response's.
+func (c *ConfigService) respondWrite(w http.ResponseWriter, status int, res WriteResult) {
 	w.Header().Set("ETag", `"`+res.Revision+`"`)
-	writeConfigData(w, status, out)
+	writeConfigData(w, status, writeResponse{Revision: res.Revision, RestartRequired: res.Restart, Warning: res.Warning, Item: res.Item})
 }
 
 type putBody struct {
@@ -178,7 +188,7 @@ func (c *ConfigService) handleConfigPut(w http.ResponseWriter, r *http.Request) 
 		writeConfigError(w, err)
 		return
 	}
-	c.respondWrite(w, http.StatusOK, result, res, name)
+	c.respondWrite(w, http.StatusOK, result)
 }
 
 type addBody struct {
@@ -210,7 +220,7 @@ func (c *ConfigService) handleConfigAdd(w http.ResponseWriter, r *http.Request) 
 		writeConfigError(w, err)
 		return
 	}
-	c.respondWrite(w, http.StatusCreated, result, res, body.Name)
+	c.respondWrite(w, http.StatusCreated, result)
 }
 
 type renameBody struct {
@@ -252,7 +262,7 @@ func (c *ConfigService) copyOrRename(w http.ResponseWriter, r *http.Request, act
 		writeConfigError(w, err)
 		return
 	}
-	c.respondWrite(w, status, result, res, body.NewName)
+	c.respondWrite(w, status, result)
 }
 
 func (c *ConfigService) handleConfigDelete(w http.ResponseWriter, r *http.Request) {
@@ -274,5 +284,5 @@ func (c *ConfigService) handleConfigDelete(w http.ResponseWriter, r *http.Reques
 		writeConfigError(w, err)
 		return
 	}
-	c.respondWrite(w, http.StatusOK, result, nil, "")
+	c.respondWrite(w, http.StatusOK, result)
 }

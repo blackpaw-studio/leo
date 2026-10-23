@@ -17,6 +17,7 @@ const (
 	CodeRevisionMismatch    = "revision_mismatch"
 	CodeInvalid             = "invalid"
 	CodeRevisionRequired    = "revision_required"
+	CodeRestartInProgress   = "restart_in_progress"
 	messageNotFoundFallback = "Not found"
 )
 
@@ -66,6 +67,11 @@ func errConflict(current string) *ConfigError {
 func errRevisionRequired() *ConfigError {
 	return &ConfigError{Status: http.StatusPreconditionRequired, Code: CodeRevisionRequired,
 		Message: "If-Match with the current revision is required"}
+}
+
+func errRestartInProgress() *ConfigError {
+	return &ConfigError{Status: http.StatusConflict, Code: CodeRestartInProgress,
+		Message: "a service restart is already in progress"}
 }
 
 func configUnavailable(err error) *ConfigError {

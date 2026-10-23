@@ -1,7 +1,9 @@
 package web
 
 import (
+	"errors"
 	"net/url"
+	"sort"
 	"strings"
 
 	"github.com/blackpaw-studio/leo/internal/config"
@@ -9,38 +11,22 @@ import (
 	"github.com/blackpaw-studio/leo/internal/web/schema"
 )
 
-// The JSON PUT is a patch over the form a browser would POST for the item's
-// current state: a present key replaces its value, null clears it, an absent
-// key keeps it. The patched form then goes through the same applyForm as the
-// HTML save, so parsing, cascade and validation have one implementation.
+// The JSON PUT is a patch applied key by key: a present key replaces its
+// value, null clears it, an absent key is not touched at all — not re-parsed,
+// not re-trimmed, not re-split — so a write of one field cannot change another.
+// Parsing and validation of the keys it does name are the HTML form's
+// (schema.OverlayForm, schema.ApplyKeys, then config Validate).
 
 // ApplyPatch is ApplyValues for a JSON body. values is the decoded
 // {"values": ...} object (numbers as json.Number).
 func (c *ConfigService) ApplyPatch(ifMatch string, res *configResource, name string, values map[string]any) (WriteResult, error) {
-	opts := mutateOpts{IfMatch: ifMatch, Scope: validationScope{Resource: res.Key, Name: name}, Flag: res.flag(c)}
+	opts := mutateOpts{IfMatch: ifMatch, Scope: validationScope{Resource: res.Key, Name: name}, Flag: res.flag(c), Item: c.itemOf(res, name)}
 	return c.Mutate(opts, func(cfg *config.Config) error {
 		target, ok := res.locate(cfg, name)
 		if !ok {
 			return errNotFound("%s %q not found", res.Noun, name)
 		}
-		form, err := patchedForm(cfg, res, target, values)
-		if err != nil {
-			return err
-		}
-		harnessPatch, hasHarness := values["harness_options"]
-		_, before, _ := harnessView(target, cfg)
-		check := func(cfg *config.Config, target any, form url.Values) []schema.Problem {
-			// Options belong to a harness: a switch drops the old harness's, as
-			// the browser form does (it re-renders without them).
-			if _, after, _ := harnessView(target, cfg); after != before {
-				dropHarnessOptions(form)
-			}
-			if !hasHarness {
-				return nil
-			}
-			return overlayHarnessOptions(cfg, target, form, harnessPatch)
-		}
-		if err := applyForm(cfg, res, target, form, check); err != nil {
+		if err := patchTarget(cfg, res, target, values); err != nil {
 			return err
 		}
 		res.put(cfg, name, target)
@@ -48,52 +34,136 @@ func (c *ConfigService) ApplyPatch(ifMatch string, res *configResource, name str
 	})
 }
 
-// patchedForm overlays values onto the item's current form: flat fields, then
-// each subsection's object. harness_options is overlaid later, once the flat
-// fields (a harness change among them) have been applied.
-func patchedForm(cfg *config.Config, res *configResource, target any, values map[string]any) (url.Values, error) {
+// patchTarget applies a patch to target: flat fields, each subsection's
+// object, then harness_options once a harness change among the flat fields is
+// visible. Unknown keys are a 400, bad values a 422.
+func patchTarget(cfg *config.Config, res *configResource, target any, values map[string]any) error {
 	subs := map[string]configSub{}
 	for _, sub := range res.Subs {
 		subs[sub.Key] = sub
 	}
 	flat := map[string]any{}
-	nested := map[string]any{}
+	nested := map[string]map[string]any{}
+	var problems []schema.Problem
+	var unknown []string
 	for key, v := range values {
 		switch {
 		case key == "harness_options" && res.HarnessOptions:
 		case subs[key].Key != "":
-			nested[key] = v
+			obj, ok := v.(map[string]any)
+			if !ok {
+				problems = append(problems, schema.Problem{Field: key, Message: "must be an object"})
+				continue
+			}
+			nested[key] = obj
 		default:
 			flat[key] = v
 		}
 	}
 
-	form := baseForm(cfg, res, target)
-	var problems []schema.Problem
-	var unknown []string
-
-	form, ps := schema.OverlayForm(res.Section, form, flat)
-	problems, unknown = collect(problems, unknown, ps, "")
+	_, harnessBefore, _ := harnessView(target, cfg)
+	problems, unknown = patchSection(target, res.Section, flat, "", problems, unknown)
 	for _, sub := range res.Subs {
-		raw, ok := nested[sub.Key]
-		if !ok {
-			continue
+		if obj, ok := nested[sub.Key]; ok {
+			problems, unknown = patchSection(sub.of(target), sub.Section, obj, sub.Key+".", problems, unknown)
 		}
-		obj, ok := raw.(map[string]any)
-		if !ok {
-			problems = append(problems, schema.Problem{Field: sub.Key, Message: "must be an object"})
-			continue
+	}
+	if res.HarnessOptions {
+		patch, has := values["harness_options"]
+		own, harnessAfter, _ := harnessView(target, cfg)
+		if has || harnessAfter != harnessBefore {
+			// Options belong to a harness: a switch drops the old harness's
+			// (as the browser form does) and keeps what this write sets for
+			// the new one.
+			if harnessAfter != harnessBefore {
+				own = nil
+			}
+			opts, ps := patchHarnessOptions(harnessAfter, own, patch, has)
+			problems = append(problems, ps...)
+			if len(ps) == 0 {
+				res.setHarnessOptions(target, opts)
+			}
 		}
-		form, ps = schema.OverlayForm(sub.Section, form, obj)
-		problems, unknown = collect(problems, unknown, ps, sub.Key+".")
 	}
 	if len(unknown) > 0 {
-		return nil, errBadRequest("unknown field %s", strings.Join(unknown, ", "))
+		sort.Strings(unknown)
+		return errBadRequest("unknown field %s", strings.Join(unknown, ", "))
 	}
 	if len(problems) > 0 {
-		return nil, errInvalidFields(problems)
+		return errInvalidFields(problems)
 	}
-	return form, nil
+	return nil
+}
+
+// patchSection applies obj's keys to one section of target: env-map fields by
+// entry (schema.ApplyEnvPatch), everything else through the form parser for
+// just those keys.
+func patchSection(target any, section schema.Section, obj map[string]any, prefix string,
+	problems []schema.Problem, unknown []string) ([]schema.Problem, []string) {
+	plain := map[string]any{}
+	for key, v := range obj {
+		if kind, ok := schema.KindOf(section, key); ok && kind == schema.KindEnvMap {
+			if err := schema.ApplyEnvPatch(target, section, key, v); err != nil {
+				problems = append(problems, problemOf(err, prefix, key))
+			}
+			continue
+		}
+		plain[key] = v
+	}
+	form, ps := schema.OverlayForm(section, url.Values{}, plain)
+	problems, unknown = collect(problems, unknown, ps, prefix)
+	if len(ps) > 0 {
+		return problems, unknown
+	}
+	keys := make([]string, 0, len(plain))
+	for key := range plain {
+		keys = append(keys, key)
+	}
+	if err := schema.ApplyKeys(target, section, form, keys); err != nil {
+		problems = append(problems, problemOf(err, prefix, ""))
+	}
+	return problems, unknown
+}
+
+// problemOf pins a parse error to its field (fallback when it carries none).
+func problemOf(err error, prefix, fallback string) schema.Problem {
+	var fe *schema.FieldError
+	if errors.As(err, &fe) {
+		return schema.Problem{Field: prefix + fe.Key, Message: err.Error()}
+	}
+	return schema.Problem{Field: prefix + fallback, Message: err.Error()}
+}
+
+// patchHarnessOptions merges a harness_options patch into own for harnessName.
+// A null patch (has && patch == nil) clears every option; otherwise each key
+// sent replaces (null clears just that key) and the rest of own is kept.
+func patchHarnessOptions(harnessName string, own map[string]any, patch any, has bool) (map[string]any, []schema.Problem) {
+	h, err := harness.Get(harnessName)
+	if err != nil {
+		return nil, []schema.Problem{{Field: "harness", Message: "harness " + harnessName + " is not registered"}}
+	}
+	var obj map[string]any
+	switch p := patch.(type) {
+	case nil:
+		return nil, nil
+	case map[string]any:
+		obj = p
+	default:
+		return nil, []schema.Problem{{Field: "harness_options", Message: "must be an object"}}
+	}
+	form, problems := schema.OverlayHarnessForm(h, url.Values{}, obj)
+	if len(problems) > 0 {
+		return nil, problems
+	}
+	keys := make([]string, 0, len(obj))
+	for k := range obj {
+		keys = append(keys, k)
+	}
+	opts, err := schema.ApplyHarnessOptionKeys(h, own, form, keys)
+	if err != nil {
+		return nil, []schema.Problem{problemOf(err, "", "harness_options")}
+	}
+	return opts, nil
 }
 
 // collect splits overlay problems into value problems (422) and unknown keys
@@ -108,78 +178,4 @@ func collect(problems []schema.Problem, unknown []string, ps []schema.Problem, p
 		problems = append(problems, p)
 	}
 	return problems, unknown
-}
-
-// overlayHarnessOptions overlays a harness_options patch onto form for the
-// scope's effective harness (already reflecting a harness change in the same
-// write). null clears every option; a key the harness lacks is a problem on
-// harness_options.<key>.
-func overlayHarnessOptions(cfg *config.Config, target any, form url.Values, patch any) []schema.Problem {
-	_, harnessName, _ := harnessView(target, cfg)
-	h, err := harness.Get(harnessName)
-	if err != nil {
-		return []schema.Problem{{Field: "harness", Message: "harness " + harnessName + " is not registered"}}
-	}
-	var obj map[string]any
-	switch p := patch.(type) {
-	case nil:
-		obj = map[string]any{}
-		for _, f := range h.OptionsSchema() {
-			obj[f.Key] = nil
-		}
-	case map[string]any:
-		obj = p
-	default:
-		return []schema.Problem{{Field: "harness_options", Message: "must be an object"}}
-	}
-	out, problems := schema.OverlayHarnessForm(h, form, obj)
-	for k, v := range out {
-		form[k] = v
-	}
-	return problems
-}
-
-// dropHarnessOptions removes every harness option from form.
-func dropHarnessOptions(form url.Values) {
-	for k := range form {
-		if strings.HasPrefix(k, schema.HarnessOptionPrefix) {
-			delete(form, k)
-		}
-	}
-}
-
-// baseForm renders item's current state as the form a browser would POST:
-// every flat field, each subsection's fields and the current harness options.
-func baseForm(cfg *config.Config, res *configResource, target any) url.Values {
-	form := url.Values{}
-	renderInto(form, schema.Values(target, res.Section, nil))
-	for _, sub := range res.Subs {
-		renderInto(form, schema.Values(sub.of(target), sub.Section, nil))
-	}
-	if res.HarnessOptions {
-		own, harnessName, _ := harnessView(target, cfg)
-		if h, err := harness.Get(harnessName); err == nil {
-			for _, fv := range schema.HarnessOptionValues(h, own, nil, schema.OptionSources{Cfg: cfg}) {
-				form.Set(fv.InputName, fv.Value)
-			}
-		}
-	}
-	return form
-}
-
-func renderInto(form url.Values, fvs []schema.FieldValue) {
-	for _, fv := range fvs {
-		if fv.Kind == schema.KindBool {
-			form.Set(fv.Key, boolForm(fv.Checked))
-			continue
-		}
-		form.Set(fv.Key, fv.Value)
-	}
-}
-
-func boolForm(on bool) string {
-	if on {
-		return "true"
-	}
-	return "false"
 }

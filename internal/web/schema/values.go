@@ -74,8 +74,26 @@ func Values(target any, section Section, defaults any) []FieldValue {
 // happens for KindBool (unchecked checkbox), which the hidden-false input
 // covers. Returns the first parse error encountered.
 func Apply(target any, section Section, form url.Values) error {
+	return apply(target, section, form, nil)
+}
+
+// ApplyKeys is Apply restricted to the named fields: every other field of
+// target is left exactly as it is (no re-parse, no trimming), which is what a
+// partial JSON patch needs.
+func ApplyKeys(target any, section Section, form url.Values, keys []string) error {
+	only := make(map[string]bool, len(keys))
+	for _, k := range keys {
+		only[k] = true
+	}
+	return apply(target, section, form, only)
+}
+
+func apply(target any, section Section, form url.Values, only map[string]bool) error {
 	v := reflect.ValueOf(target).Elem()
 	for _, f := range FieldsFor(section) {
+		if only != nil && !only[f.Key] {
+			continue
+		}
 		sf := mustFieldByYAMLKey(v.Type(), section, f.Key)
 		val := v.FieldByIndex(sf.Index)
 		raw := form.Get(f.Key)

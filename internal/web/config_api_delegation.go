@@ -122,17 +122,14 @@ func (c *ConfigService) delegationWrite(w http.ResponseWriter, r *http.Request, 
 		return
 	}
 	scope.Resource = "delegation"
-	result, err := c.Mutate(mutateOpts{IfMatch: ifMatch, Scope: scope}, mut)
+	result, err := c.Mutate(mutateOpts{IfMatch: ifMatch, Scope: scope, Item: func(cfg *config.Config, rev string) any {
+		return c.buildDelegationDocument(cfg, rev)
+	}}, mut)
 	if err != nil {
 		writeConfigError(w, err)
 		return
 	}
-	out := writeResponse{Revision: result.Revision, RestartRequired: result.Restart, Warning: result.Warning}
-	if doc, err := c.readDelegation(); err == nil {
-		out.Item = doc
-	}
-	w.Header().Set("ETag", `"`+result.Revision+`"`)
-	writeConfigData(w, status, out)
+	c.respondWrite(w, status, result)
 }
 
 // delegationBody decodes a request body, writing the 400 itself on failure.

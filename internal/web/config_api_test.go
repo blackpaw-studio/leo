@@ -7,7 +7,9 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"reflect"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/blackpaw-studio/leo/internal/config"
@@ -779,5 +781,146 @@ func TestIfMatchForms(t *testing.T) {
 	h.mux.ServeHTTP(rec, req)
 	if rec.Code != http.StatusConflict {
 		t.Errorf("stale bare If-Match = %d, want 409", rec.Code)
+	}
+}
+
+// Credential env entries never leave the daemon: reads and write responses
+// carry {"set": bool}, and a write keeps, replaces or clears each entry.
+func TestSecretEnvEntriesAreRedactedAndKeepReplaceClear(t *testing.T) {
+	h := newAPIHarness(t)
+	const secret = "sk-live-do-not-leak"
+	env := func() map[string]any {
+		return h.readValues("/config/templates/coder")["env"].(map[string]any)
+	}
+	fileEnv := func() map[string]string { return h.loadConfig().Templates["coder"].Env }
+
+	res := h.put("/config/templates/coder", map[string]any{"env": map[string]any{
+		"ANTHROPIC_AUTH_TOKEN": secret, "ANTHROPIC_BASE_URL": "http://localhost:3325",
+	}})
+	wantStatus(t, res, http.StatusOK)
+	if strings.Contains(string(res.Raw), secret) {
+		t.Errorf("write response leaks the secret: %s", res.Raw)
+	}
+	if fileEnv()["ANTHROPIC_AUTH_TOKEN"] != secret {
+		t.Fatal("secret was not stored")
+	}
+	raw := h.do(http.MethodGet, "/config/templates/coder", "", nil)
+	if strings.Contains(string(raw.Raw), secret) {
+		t.Errorf("GET leaks the secret: %s", raw.Raw)
+	}
+	if got := env(); !reflect.DeepEqual(got["ANTHROPIC_AUTH_TOKEN"], map[string]any{"set": true}) || got["ANTHROPIC_BASE_URL"] != "http://localhost:3325" {
+		t.Errorf("env = %v", got)
+	}
+	collection := h.do(http.MethodGet, "/config/templates", "", nil)
+	if strings.Contains(string(collection.Raw), secret) {
+		t.Errorf("collection GET leaks the secret")
+	}
+
+	// keep: echoing what was read changes nothing; omitting the entry keeps it too.
+	wantStatus(t, h.put("/config/templates/coder", map[string]any{"env": env()}), http.StatusOK)
+	wantStatus(t, h.put("/config/templates/coder", map[string]any{"env": map[string]any{"EXTRA": "1"}}), http.StatusOK)
+	if got := fileEnv(); got["ANTHROPIC_AUTH_TOKEN"] != secret || got["ANTHROPIC_BASE_URL"] != "http://localhost:3325" || got["EXTRA"] != "1" {
+		t.Errorf("after keep: %v", got)
+	}
+
+	// replace
+	wantStatus(t, h.put("/config/templates/coder", map[string]any{"env": map[string]any{"ANTHROPIC_AUTH_TOKEN": "sk-new"}}), http.StatusOK)
+	if fileEnv()["ANTHROPIC_AUTH_TOKEN"] != "sk-new" {
+		t.Errorf("replace: %v", fileEnv())
+	}
+
+	// keeping an entry that has no value is a 422 on env
+	res = h.put("/config/templates/coder", map[string]any{"env": map[string]any{"MISSING_TOKEN": map[string]any{"set": true}}})
+	wantStatus(t, res, http.StatusUnprocessableEntity)
+	if f := res.errorFields(); len(f) != 1 || f[0]["field"] != "env" {
+		t.Errorf("errors = %v", f)
+	}
+
+	// clear one entry, then all of them
+	wantStatus(t, h.put("/config/templates/coder", map[string]any{"env": map[string]any{"ANTHROPIC_AUTH_TOKEN": nil}}), http.StatusOK)
+	if _, ok := fileEnv()["ANTHROPIC_AUTH_TOKEN"]; ok || fileEnv()["EXTRA"] != "1" {
+		t.Errorf("clear one: %v", fileEnv())
+	}
+	wantStatus(t, h.put("/config/templates/coder", map[string]any{"env": nil}), http.StatusOK)
+	if len(fileEnv()) != 0 {
+		t.Errorf("clear all: %v", fileEnv())
+	}
+}
+
+func TestEnvironmentSecretsAreRedactedToo(t *testing.T) {
+	h := newAPIHarness(t)
+	res := h.put("/config/environments/base", map[string]any{"env": map[string]any{"OP_SERVICE_ACCOUNT_TOKEN": "ops-secret", "REGION": "us"}})
+	wantStatus(t, res, http.StatusOK)
+	if strings.Contains(string(res.Raw), "ops-secret") {
+		t.Errorf("response leaks the secret: %s", res.Raw)
+	}
+	env := h.readValues("/config/environments/base")["env"].(map[string]any)
+	if !reflect.DeepEqual(env["OP_SERVICE_ACCOUNT_TOKEN"], map[string]any{"set": true}) || env["REGION"] != "us" {
+		t.Errorf("env = %v", env)
+	}
+}
+
+// A PUT re-applies only the keys it names: everything else is byte-for-byte
+// what was on disk (no CSV re-split of a comma inside a list item, no trimming).
+func TestPutLeavesUnsentKeysUntouched(t *testing.T) {
+	h := newAPIHarness(t)
+	yaml := strings.Replace(h.fileBytes(), "      permission_mode: plan\n",
+		"      permission_mode: plan\n      allowed_tools:\n        - \"Bash(a,b)\"\n      append_system_prompt: \"  keep  \\n\"\n", 1)
+	yaml = strings.Replace(yaml, "    workspace: /tmp/coder\n", "    workspace: /tmp/coder\n    add_dirs:\n      - /tmp/a,b\n", 1)
+	if err := os.WriteFile(h.path, []byte(yaml), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	before := h.loadConfig().Templates["coder"]
+
+	wantStatus(t, h.put("/config/templates/coder", map[string]any{"model": "sonnet"}), http.StatusOK)
+
+	after := h.loadConfig().Templates["coder"]
+	if after.Model != "sonnet" {
+		t.Fatalf("model = %q", after.Model)
+	}
+	after.Model = before.Model
+	if !reflect.DeepEqual(after, before) {
+		t.Errorf("a PUT of model changed other keys:\n before %#v\n after  %#v", before, after)
+	}
+	if tools := after.HarnessOptions["allowed_tools"].([]any); len(tools) != 1 || tools[0] != "Bash(a,b)" {
+		t.Errorf("allowed_tools = %v", tools)
+	}
+	if after.HarnessOptions["append_system_prompt"] != "  keep  \n" {
+		t.Errorf("append_system_prompt = %q", after.HarnessOptions["append_system_prompt"])
+	}
+}
+
+// data.revision and data.item.revision come from one read under the write
+// lock, however many writers are racing.
+func TestWriteResponseRevisionsAgree(t *testing.T) {
+	h := newAPIHarness(t)
+	var wg sync.WaitGroup
+	errs := make(chan string, 64)
+	for w := 0; w < 6; w++ {
+		wg.Add(1)
+		go func(w int) {
+			defer wg.Done()
+			for i := 0; i < 15; i++ {
+				res := h.do(http.MethodPut, "/config/defaults", h.revision(), map[string]any{"values": map[string]any{"max_turns": 20 + w*20 + i}})
+				if res.Status == http.StatusConflict {
+					continue // lost the race for the revision; nothing to compare
+				}
+				if res.Status != http.StatusOK {
+					errs <- fmt.Sprintf("status %d: %s", res.Status, res.Raw)
+					return
+				}
+				d := res.data()
+				item, _ := d["item"].(map[string]any)
+				if d["revision"] != item["revision"] || res.Header.Get("ETag") != `"`+d["revision"].(string)+`"` {
+					errs <- fmt.Sprintf("data.revision %v, item.revision %v, ETag %s", d["revision"], item["revision"], res.Header.Get("ETag"))
+					return
+				}
+			}
+		}(w)
+	}
+	wg.Wait()
+	close(errs)
+	for e := range errs {
+		t.Error(e)
 	}
 }

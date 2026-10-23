@@ -212,6 +212,17 @@ func roundTrip(t *testing.T, res resourceDoc, sub string, f schema.FieldDoc, sec
 	if secret {
 		want = map[string]any{"set": true}
 	}
+	if f.Type == "map" {
+		// A map patch merges entry by entry: the sample's entries are present
+		// (others the item already had are kept).
+		gotMap, _ := got.(map[string]any)
+		for k, v := range want.(map[string]any) {
+			if !reflect.DeepEqual(gotMap[k], v) {
+				t.Errorf("wrote %s=%#v, read back %#v", k, v, gotMap[k])
+			}
+		}
+		return
+	}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("wrote %#v, read back %#v", want, got)
 	}

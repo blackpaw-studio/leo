@@ -140,7 +140,7 @@ func TestMutateUnloadableConfigIs503(t *testing.T) {
 func TestApplyValuesUpdatesTemplateAndFlagsAgents(t *testing.T) {
 	svc, path := newConfigService(t, nil)
 	form := url.Values{"model": {"sonnet"}, "workspace": {"/tmp/coder"}}
-	res, err := svc.ApplyValues("", resourceByKey("templates"), "coder", form, nil)
+	res, err := svc.ApplyValues("", resourceByKey("templates"), "coder", form)
 	if err != nil {
 		t.Fatalf("ApplyValues: %v", err)
 	}
@@ -155,7 +155,7 @@ func TestApplyValuesUpdatesTemplateAndFlagsAgents(t *testing.T) {
 
 func TestApplyValuesPinsParseErrorsToTheirField(t *testing.T) {
 	svc, _ := newConfigService(t, nil)
-	_, err := svc.ApplyValues("", resourceByKey("tasks"), "heartbeat", url.Values{"schedule": {"0 * * * *"}, "retries": {"x"}}, nil)
+	_, err := svc.ApplyValues("", resourceByKey("tasks"), "heartbeat", url.Values{"schedule": {"0 * * * *"}, "retries": {"x"}})
 	ce := mustConfigError(t, err)
 	if ce.Status != http.StatusUnprocessableEntity || len(ce.Fields) != 1 || ce.Fields[0].Field != "retries" {
 		t.Errorf("got %d %+v, want 422 on retries", ce.Status, ce.Fields)
@@ -164,7 +164,7 @@ func TestApplyValuesPinsParseErrorsToTheirField(t *testing.T) {
 
 func TestApplyValuesUnknownItemIs404(t *testing.T) {
 	svc, _ := newConfigService(t, nil)
-	_, err := svc.ApplyValues("", resourceByKey("templates"), "nope", url.Values{}, nil)
+	_, err := svc.ApplyValues("", resourceByKey("templates"), "nope", url.Values{})
 	if ce := mustConfigError(t, err); ce.Status != http.StatusNotFound || ce.Code != CodeNotFound {
 		t.Errorf("got %d %q, want 404 not_found", ce.Status, ce.Code)
 	}
@@ -173,7 +173,7 @@ func TestApplyValuesUnknownItemIs404(t *testing.T) {
 func TestApplyValuesPrefixesSubsectionAndHarnessErrors(t *testing.T) {
 	svc, _ := newConfigService(t, nil)
 	form := url.Values{"model": {"opus"}, "harness_options.bypass_permissions": {"maybe"}}
-	_, err := svc.ApplyValues("", resourceByKey("templates"), "coder", form, nil)
+	_, err := svc.ApplyValues("", resourceByKey("templates"), "coder", form)
 	ce := mustConfigError(t, err)
 	if len(ce.Fields) != 1 || ce.Fields[0].Field != "harness_options.bypass_permissions" {
 		t.Errorf("fields = %+v, want harness_options.bypass_permissions", ce.Fields)

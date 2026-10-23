@@ -167,7 +167,7 @@ func (s *Server) applyResource(w http.ResponseWriter, r *http.Request, res *conf
 		s.renderFlash(w, "error", "Invalid form: "+err.Error())
 		return
 	}
-	result, err := s.ApplyValues("", res, name, r.Form, nil)
+	result, err := s.ApplyValues("", res, name, r.Form)
 	if err != nil {
 		s.renderFlash(w, "error", err.Error())
 		return

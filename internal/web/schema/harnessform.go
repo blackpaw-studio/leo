@@ -89,42 +89,90 @@ func renderOptionValue(v any, t harness.OptionType) string {
 // adapters' DecodeOptions type-assert exactly those.
 func ApplyHarnessOptions(h harness.Harness, form url.Values) (map[string]any, error) {
 	var out map[string]any
-	set := func(k string, v any) {
-		if out == nil {
-			out = map[string]any{}
-		}
-		out[k] = v
-	}
 	for _, f := range h.OptionsSchema() {
-		raw := strings.TrimSpace(form.Get(HarnessOptionPrefix + f.Key))
-		if raw == "" {
-			continue
+		v, ok, err := parseOption(f, form.Get(HarnessOptionPrefix+f.Key))
+		if err != nil {
+			return nil, err
 		}
-		switch f.Type {
-		case harness.OptionBool:
-			b, err := strconv.ParseBool(raw)
-			if err != nil {
-				return nil, &FieldError{Key: HarnessOptionPrefix + f.Key, Err: fmt.Errorf("harness option %s: %q is not true/false", f.Key, raw)}
+		if ok {
+			if out == nil {
+				out = map[string]any{}
 			}
-			set(f.Key, b)
-		case harness.OptionStringList:
-			items := parseCSV(raw)
-			vals := make([]any, 0, len(items))
-			for _, it := range items {
-				vals = append(vals, it)
-			}
-			set(f.Key, vals)
-		case harness.OptionYAMLMap:
-			var m map[string]any
-			if err := yaml.Unmarshal([]byte(raw), &m); err != nil {
-				return nil, &FieldError{Key: HarnessOptionPrefix + f.Key, Err: fmt.Errorf("harness option %s: %v", f.Key, err)}
-			}
-			if len(m) > 0 {
-				set(f.Key, m)
-			}
-		default: // OptionString, OptionText, OptionEnum
-			set(f.Key, raw)
+			out[f.Key] = v
 		}
 	}
 	return out, nil
+}
+
+// ApplyHarnessOptionKeys merges the named options from form into a copy of
+// current: an empty input deletes its key, anything else sets it, and every
+// option not named is left exactly as it was. current is not modified.
+func ApplyHarnessOptionKeys(h harness.Harness, current map[string]any, form url.Values, keys []string) (map[string]any, error) {
+	byKey := map[string]harness.OptionField{}
+	for _, f := range h.OptionsSchema() {
+		byKey[f.Key] = f
+	}
+	var out map[string]any
+	if len(current) > 0 {
+		out = make(map[string]any, len(current))
+		for k, v := range current {
+			out[k] = v
+		}
+	}
+	for _, key := range keys {
+		f, ok := byKey[key]
+		if !ok {
+			return nil, &FieldError{Key: HarnessOptionPrefix + key, Err: fmt.Errorf("not an option of the %s harness", h.Name())}
+		}
+		v, set, err := parseOption(f, form.Get(HarnessOptionPrefix+key))
+		if err != nil {
+			return nil, err
+		}
+		if !set {
+			delete(out, key)
+			continue
+		}
+		if out == nil {
+			out = map[string]any{}
+		}
+		out[key] = v
+	}
+	if len(out) == 0 {
+		return nil, nil
+	}
+	return out, nil
+}
+
+// parseOption parses one option's form input; ok is false for an empty input.
+func parseOption(f harness.OptionField, rawInput string) (value any, ok bool, err error) {
+	raw := strings.TrimSpace(rawInput)
+	if raw == "" {
+		return nil, false, nil
+	}
+	switch f.Type {
+	case harness.OptionBool:
+		b, perr := strconv.ParseBool(raw)
+		if perr != nil {
+			return nil, false, &FieldError{Key: HarnessOptionPrefix + f.Key, Err: fmt.Errorf("harness option %s: %q is not true/false", f.Key, raw)}
+		}
+		return b, true, nil
+	case harness.OptionStringList:
+		items := parseCSV(raw)
+		vals := make([]any, 0, len(items))
+		for _, it := range items {
+			vals = append(vals, it)
+		}
+		return vals, true, nil
+	case harness.OptionYAMLMap:
+		var m map[string]any
+		if uerr := yaml.Unmarshal([]byte(raw), &m); uerr != nil {
+			return nil, false, &FieldError{Key: HarnessOptionPrefix + f.Key, Err: fmt.Errorf("harness option %s: %v", f.Key, uerr)}
+		}
+		if len(m) == 0 {
+			return nil, false, nil
+		}
+		return m, true, nil
+	default: // OptionString, OptionText, OptionEnum
+		return raw, true, nil
+	}
 }

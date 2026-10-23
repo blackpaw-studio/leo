@@ -23,6 +23,9 @@ type WriteResult struct {
 	Restart RestartRequired
 	// Warning is set when the config was saved but the reload failed.
 	Warning string
+	// Item is mutateOpts.Item's document, built from the file as it is after
+	// this write.
+	Item any
 }
 
 // errNoWrite is returned by a Mutate apply func that found nothing to change:
@@ -40,6 +43,10 @@ type mutateOpts struct {
 	Flag *atomic.Bool
 	// AfterSave runs under the lock once leo.yaml is written, before the reload.
 	AfterSave func(*config.Config)
+	// Item, when non-nil, builds the document a JSON write returns, from the
+	// file as written and its revision. It runs under the lock, so the
+	// document and the response's revision always describe the same bytes.
+	Item func(cfg *config.Config, revision string) any
 }
 
 // Mutate is the single write path: under the config write lock it loads
@@ -58,7 +65,11 @@ func (c *ConfigService) Mutate(opts mutateOpts, apply func(*config.Config) error
 	}
 	if err := apply(cfg); err != nil {
 		if errors.Is(err, errNoWrite) {
-			return WriteResult{Revision: rev, Restart: c.RestartFlags()}, nil
+			res := WriteResult{Revision: rev, Restart: c.RestartFlags()}
+			if opts.Item != nil {
+				res.Item = opts.Item(cfg, rev)
+			}
+			return res, nil
 		}
 		return WriteResult{}, asConfigError(err)
 	}
@@ -81,7 +92,15 @@ func (c *ConfigService) Mutate(opts mutateOpts, apply func(*config.Config) error
 	if opts.Flag != nil {
 		opts.Flag.Store(true)
 	}
-	return WriteResult{Revision: c.currentRevision(rev), Restart: c.RestartFlags(), Warning: warn}, nil
+	res := WriteResult{Revision: c.currentRevision(rev), Restart: c.RestartFlags(), Warning: warn}
+	if opts.Item != nil {
+		// Read back what is on disk now: the revision and the document are
+		// one read, taken before the lock is released.
+		if fresh, freshRev, err := config.LoadWithRevision(c.configPath); err == nil {
+			res.Revision, res.Item = freshRev, opts.Item(fresh, freshRev)
+		}
+	}
+	return res, nil
 }
 
 // currentRevision re-reads leo.yaml's revision after a save, falling back to
@@ -116,18 +135,16 @@ func (c *ConfigService) mutateConfig(apply func(*config.Config) error) (warn, er
 }
 
 // ApplyValues saves a section form into one item: the single save path for
-// every schema-driven editor. form is what schema.Apply parses (a browser's
-// POST, or the JSON overlay's rendering); check, when non-nil, runs after the
-// flat fields are applied and may reject the write with field problems.
-func (c *ConfigService) ApplyValues(ifMatch string, res *configResource, name string, form url.Values,
-	check func(cfg *config.Config, target any, form url.Values) []schema.Problem) (WriteResult, error) {
+// every schema-driven editor. form is what schema.Apply parses: a browser's
+// POST. (The JSON API patches key by key instead, see ApplyPatch.)
+func (c *ConfigService) ApplyValues(ifMatch string, res *configResource, name string, form url.Values) (WriteResult, error) {
 	opts := mutateOpts{IfMatch: ifMatch, Scope: validationScope{Resource: res.Key, Name: name}, Flag: res.flag(c)}
 	return c.Mutate(opts, func(cfg *config.Config) error {
 		target, ok := res.locate(cfg, name)
 		if !ok {
 			return errNotFound(messageNotFoundFallback)
 		}
-		if err := applyForm(cfg, res, target, form, check); err != nil {
+		if err := applyForm(cfg, res, target, form); err != nil {
 			return err
 		}
 		res.put(cfg, name, target)
@@ -138,15 +155,9 @@ func (c *ConfigService) ApplyValues(ifMatch string, res *configResource, name st
 // applyForm parses form into target: flat fields first, then (after a harness
 // change in the same form is already reflected) harness_options, then the
 // nested subsections.
-func applyForm(cfg *config.Config, res *configResource, target any, form url.Values,
-	check func(*config.Config, any, url.Values) []schema.Problem) error {
+func applyForm(cfg *config.Config, res *configResource, target any, form url.Values) error {
 	if err := schema.Apply(target, res.Section, form); err != nil {
 		return fieldError(err, "")
-	}
-	if check != nil {
-		if problems := check(cfg, target, form); len(problems) > 0 {
-			return errInvalidFields(problems)
-		}
 	}
 	if res.HarnessOptions {
 		_, harnessName, _ := harnessView(target, cfg)
@@ -184,7 +195,7 @@ func (c *ConfigService) AddItem(ifMatch string, res *configResource, name string
 	if res.Key == "tasks" && extra["schedule"] == "" {
 		return WriteResult{}, errInvalid("schedule", "Schedule is required")
 	}
-	return c.Mutate(mutateOpts{IfMatch: ifMatch, Scope: validationScope{Resource: res.Key, Name: name}}, func(cfg *config.Config) error {
+	return c.Mutate(mutateOpts{IfMatch: ifMatch, Scope: validationScope{Resource: res.Key, Name: name}, Item: c.itemOf(res, name)}, func(cfg *config.Config) error {
 		if ce := res.add(cfg, name, extra); ce != nil {
 			return ce
 		}
@@ -213,7 +224,7 @@ func (c *ConfigService) RenameItem(ifMatch string, res *configResource, name, ne
 	if !validEntityName(newName) {
 		return WriteResult{}, errInvalid("new_name", entityNameError)
 	}
-	opts := mutateOpts{IfMatch: ifMatch}
+	opts := mutateOpts{IfMatch: ifMatch, Item: c.itemOf(res, newName)}
 	var apply func(*config.Config) error
 	switch res.Key {
 	case "templates":
@@ -259,7 +270,7 @@ func (c *ConfigService) DuplicateItem(ifMatch string, res *configResource, name,
 	if !validEntityName(newName) {
 		return WriteResult{}, errInvalid("new_name", entityNameError)
 	}
-	return c.Mutate(mutateOpts{IfMatch: ifMatch}, func(cfg *config.Config) error {
+	return c.Mutate(mutateOpts{IfMatch: ifMatch, Item: c.itemOf(res, newName)}, func(cfg *config.Config) error {
 		src, ok := cfg.Templates[name]
 		if !ok {
 			return errNotFound("Template %q not found", name)

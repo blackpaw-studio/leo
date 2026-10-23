@@ -2,10 +2,12 @@ package web
 
 import (
 	"errors"
+	"fmt"
 	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -348,5 +350,101 @@ func TestWebUIPagesTheAppsLinkTo(t *testing.T) {
 	}
 	if w := requestAs(t, s, http.MethodGet, "/config", testAPIToken, ""); w.Code != http.StatusNotFound {
 		t.Errorf("GET /config = %d, want 404 (there is no config index page)", w.Code)
+	}
+}
+
+// A run log is read from its tail, never whole: a log over the cap returns
+// only the last bytes (cut to whole lines) and says so.
+func TestTaskLogReadsABoundedTail(t *testing.T) {
+	h := newAPIHarness(t)
+	cfg := h.loadConfig()
+	logs := filepath.Join(cfg.StatePath(), "logs")
+	if err := os.MkdirAll(logs, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	var b strings.Builder
+	for i := 0; i < 200; i++ {
+		fmt.Fprintf(&b, "line-%03d\n", i)
+	}
+	if err := os.WriteFile(filepath.Join(logs, "heartbeat-big.jsonl"), []byte(b.String()), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	h.svc.maxLogBytes = 64
+
+	res := h.do(http.MethodGet, "/tasks/heartbeat/log?file=heartbeat-big.jsonl", "", nil)
+	wantStatus(t, res, http.StatusOK)
+	d := res.data()
+	text, _ := d["text"].(string)
+	if d["truncated"] != true || len(text) > 64 || !strings.HasPrefix(text, "line-") || !strings.HasSuffix(b.String(), text) || !strings.HasSuffix(text, "line-199\n") {
+		t.Errorf("tail = %q (truncated=%v)", text, d["truncated"])
+	}
+
+	h.svc.maxLogBytes = 1 << 20
+	res = h.do(http.MethodGet, "/tasks/heartbeat/log?file=heartbeat-big.jsonl", "", nil)
+	if d := res.data(); d["text"] != b.String() || d["truncated"] != nil {
+		t.Errorf("a log under the cap must come back whole, truncated=%v len=%d", d["truncated"], len(d["text"].(string)))
+	}
+}
+
+// Service restart is single-flight: while `leo service restart` is still
+// running, another request is a 409, not a second restart.
+func TestServiceRestartIsSingleFlight(t *testing.T) {
+	h := newAPIHarness(t)
+	var started int
+	var proc *exec.Cmd
+	h.svc.execCommand = func(string, ...string) *exec.Cmd {
+		started++
+		proc = exec.Command("sleep", "30")
+		return proc
+	}
+	wantStatus(t, h.do(http.MethodPost, "/service/restart", "", nil), http.StatusAccepted)
+	t.Cleanup(func() { _ = proc.Process.Kill() })
+
+	res := h.do(http.MethodPost, "/service/restart", "", nil)
+	wantStatus(t, res, http.StatusConflict)
+	wantCode(t, res, CodeRestartInProgress)
+	if started != 1 {
+		t.Fatalf("a second restart was spawned (%d starts)", started)
+	}
+
+	// Once the restart process is gone (it failed, say), a retry is allowed.
+	_ = proc.Process.Kill()
+	deadline := time.Now().Add(5 * time.Second)
+	for h.do(http.MethodPost, "/service/restart", "", nil).Status == http.StatusConflict {
+		if time.Now().After(deadline) {
+			t.Fatal("restart stayed in flight after its process exited")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	if started != 2 {
+		t.Errorf("starts = %d, want 2", started)
+	}
+	_ = proc.Process.Kill()
+}
+
+// Every config API route is operator-only on the web: the agent token (which
+// reaches the rest of /api/*) and API-client tokens (which reach only message
+// and chat-post) are refused on every one, and an anonymous caller is 401.
+// The route list comes from the registration, so a new route is covered here
+// without an edit.
+func TestEveryWebConfigRouteRejectsAgentAndClientTokens(t *testing.T) {
+	s := newTokenSplitServer(t)
+	s.SetClients([]ClientPolicy{{Name: "pipe", Token: testPostToken, CanPost: []string{"pipe-*"}}})
+	patterns := append(ConfigRoutePatterns("/api/v1"), "GET /api/v1/version")
+	if len(patterns) < 30 {
+		t.Fatalf("only %d config routes listed; the registration walk is broken", len(patterns))
+	}
+	wildcard := regexp.MustCompile(`\{[^}]+\}`)
+	for _, pattern := range patterns {
+		method, path, _ := strings.Cut(pattern, " ")
+		path = wildcard.ReplaceAllString(path, "x")
+		for name, token := range map[string]string{"agent": testAgentToken, "client": testPostToken} {
+			if w := requestAs(t, s, method, path, token, ""); w.Code != http.StatusForbidden {
+				t.Errorf("%s with the %s token = %d, want 403", pattern, name, w.Code)
+			}
+		}
+		if w := requestAs(t, s, method, path, "", ""); w.Code != http.StatusUnauthorized {
+			t.Errorf("%s without a token = %d, want 401", pattern, w.Code)
+		}
 	}
 }

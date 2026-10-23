@@ -1,8 +1,10 @@
 package web
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"net/http"
 	"os"
@@ -22,8 +24,8 @@ import (
 const (
 	defaultHistoryLimit = 20
 	maxHistoryLimit     = 200
-	// maxTaskLogBytes bounds one run-log response; a longer log is cut to its
-	// tail and reported truncated.
+	// maxTaskLogBytes bounds one run-log response; a longer log is read from
+	// its tail only and reported truncated.
 	maxTaskLogBytes = 4 << 20
 
 	codeUnavailable = "unavailable"
@@ -46,11 +48,20 @@ func (c *ConfigService) launchTask(name string) error {
 // and nobody is asked a question: --graceful skips the busy prompt, --force
 // the timeout one.
 func (c *ConfigService) launchServiceRestart() error {
+	// Single-flight: a restart drains agents for up to minutes, so a second
+	// request while one is running is refused, not queued behind it.
+	if !c.restartInFlight.CompareAndSwap(false, true) {
+		return errRestartInProgress()
+	}
 	cmd := c.execCommand(c.leoPath, "service", "restart", "--graceful", "--force", "--config", c.configPath)
 	if err := cmd.Start(); err != nil {
+		c.restartInFlight.Store(false)
 		return err
 	}
-	go cmd.Wait() //nolint:errcheck // the daemon is about to be replaced
+	go func() {
+		_ = cmd.Wait() // on success this daemon is replaced before it returns
+		c.restartInFlight.Store(false)
+	}()
 	c.serviceRestartNeeded.Store(false)
 	return nil
 }
@@ -152,7 +163,7 @@ func (c *ConfigService) handleTaskLogAPI(w http.ResponseWriter, r *http.Request)
 		writeConfigError(w, errBadRequest("log file does not match task"))
 		return
 	}
-	data, err := os.ReadFile(filepath.Join(cfg.StatePath(), "logs", file))
+	text, truncated, err := readLogFileTail(filepath.Join(cfg.StatePath(), "logs", file), c.logLimit())
 	if errors.Is(err, fs.ErrNotExist) {
 		writeConfigError(w, errNotFound("log file %q not found", file))
 		return
@@ -161,12 +172,48 @@ func (c *ConfigService) handleTaskLogAPI(w http.ResponseWriter, r *http.Request)
 		writeJSON(w, http.StatusInternalServerError, apiResponse{Error: fmt.Sprintf("reading log file: %v", err), Code: codeInternal})
 		return
 	}
-	doc := taskLogDoc{File: file}
-	if len(data) > maxTaskLogBytes {
-		data, doc.Truncated = data[len(data)-maxTaskLogBytes:], true
+	writeConfigData(w, http.StatusOK, taskLogDoc{File: file, Text: text, Truncated: truncated})
+}
+
+func (c *ConfigService) logLimit() int64 {
+	if c.maxLogBytes > 0 {
+		return c.maxLogBytes
 	}
-	doc.Text = string(data)
-	writeConfigData(w, http.StatusOK, doc)
+	return maxTaskLogBytes
+}
+
+// readLogFileTail reads at most limit bytes from the end of path, never the
+// whole file. When it had to cut, the partial first line is dropped so the text
+// starts on a line boundary.
+func readLogFileTail(path string, limit int64) (text string, truncated bool, err error) {
+	f, err := os.Open(path) //nolint:gosec // basename of a task-prefixed file under the state logs dir
+	if err != nil {
+		return "", false, err
+	}
+	defer f.Close() //nolint:errcheck
+	info, err := f.Stat()
+	if err != nil {
+		return "", false, err
+	}
+	start := int64(0)
+	if info.Size() > limit {
+		// One byte more than the limit, to tell whether the cut fell on a line start.
+		start, truncated = info.Size()-limit-1, true
+	}
+	buf := make([]byte, info.Size()-start)
+	if _, err := io.ReadFull(io.NewSectionReader(f, start, int64(len(buf))), buf); err != nil {
+		return "", false, err
+	}
+	if truncated {
+		if buf[0] == '\n' {
+			buf = buf[1:]
+		} else if i := bytes.IndexByte(buf, '\n'); i >= 0 {
+			buf = buf[i+1:]
+		} else {
+			buf = nil
+		}
+	}
+	return string(buf), truncated, nil
 }
 
 type promptDoc struct {
@@ -285,6 +332,11 @@ func (c *ConfigService) handleCronPreviewAPI(w http.ResponseWriter, r *http.Requ
 
 func (c *ConfigService) handleServiceRestartAPI(w http.ResponseWriter, _ *http.Request) {
 	if err := c.launchServiceRestart(); err != nil {
+		var ce *ConfigError
+		if errors.As(err, &ce) {
+			writeConfigError(w, ce)
+			return
+		}
 		writeJSON(w, http.StatusInternalServerError, apiResponse{Error: fmt.Sprintf("restarting service: %v", err), Code: codeInternal})
 		return
 	}
