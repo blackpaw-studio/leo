@@ -503,6 +503,7 @@ func New(configPath string, processes ProcessStateProvider, scheduler SchedulerP
 		return agent.SessionName(caller), true
 	}
 	s.setupConsultRuntime(opts, resolveCallerSession)
+	s.SetRecentConsults(s.consults.Records)
 
 	s.injectPrompt = func(ctx context.Context, session, body string) error {
 		return tmux.InjectPrompt(ctx, s.tmuxPath(), session, body)
@@ -676,6 +677,12 @@ func New(configPath string, processes ProcessStateProvider, scheduler SchedulerP
 	apiMux.HandleFunc("GET /api/v1/templates", s.handleAPITemplatesV1)
 	apiMux.HandleFunc("POST /api/v1/agents/spawn", s.requireOperatorToken(s.handleAPIAgentSpawn))
 	apiMux.HandleFunc("POST /api/v1/agents/{name}/environments", s.requireOperatorToken(s.handleAPIAgentSetEnvironments))
+	// JSON config API (docs/configuration/config-api.md): the same service the
+	// daemon serves on its socket, operator token only. The agent token passes
+	// the bearer check above, so each route refuses it itself.
+	s.RegisterConfigRoutes(apiMux, "/api/v1", s.requireOperatorToken)
+	s.RegisterReloadRoute(apiMux, "/api/v1", s.requireOperatorToken)
+	apiMux.HandleFunc("GET /api/v1/version", s.requireOperatorToken(s.handleAPIVersion))
 	// iOS app (docs: leo-ios spec §2). The push routes check the caller's
 	// identity themselves: the device owning {id}, or the operator token.
 	apiMux.HandleFunc("PUT /api/v1/devices/{id}/push", s.handleAPIDevicePush)

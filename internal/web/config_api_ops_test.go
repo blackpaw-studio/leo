@@ -304,3 +304,33 @@ func TestConfigReloadAPI(t *testing.T) {
 	res = h.do(http.MethodPost, "/config/reload", "", nil)
 	wantStatus(t, res, http.StatusInternalServerError)
 }
+
+// The config API is operator-only on the web: an agent's token reaches the
+// rest of /api/* but must not read or edit leo.yaml.
+func TestWebConfigAPIIsOperatorOnly(t *testing.T) {
+	s := newTokenSplitServer(t)
+	for _, tc := range []struct{ method, path, body string }{
+		{http.MethodGet, "/api/v1/config/schema", ""},
+		{http.MethodGet, "/api/v1/config/delegation", ""},
+		{http.MethodPut, "/api/v1/config/defaults", `{"values":{}}`},
+		{http.MethodPost, "/api/v1/tasks/x/run", ""},
+		{http.MethodPost, "/api/v1/service/restart", ""},
+		{http.MethodPost, "/api/v1/config/reload", ""},
+		{http.MethodGet, "/api/v1/version", ""},
+	} {
+		if w := requestAs(t, s, tc.method, tc.path, testAgentToken, tc.body); w.Code != http.StatusForbidden {
+			t.Errorf("%s %s with the agent token = %d, want 403", tc.method, tc.path, w.Code)
+		}
+		if w := requestAs(t, s, tc.method, tc.path, "", tc.body); w.Code != http.StatusUnauthorized {
+			t.Errorf("%s %s without a token = %d, want 401", tc.method, tc.path, w.Code)
+		}
+	}
+	if w := requestAs(t, s, http.MethodGet, "/api/v1/version", testAPIToken, ""); w.Code != http.StatusOK ||
+		!strings.Contains(w.Body.String(), `"config_api"`) {
+		t.Errorf("GET /api/v1/version as operator = %d %s", w.Code, w.Body.String())
+	}
+	w := requestAs(t, s, http.MethodGet, "/api/v1/config/schema", testAPIToken, "")
+	if w.Code != http.StatusOK {
+		t.Errorf("GET /api/v1/config/schema as operator = %d %s", w.Code, w.Body.String())
+	}
+}

@@ -100,7 +100,10 @@ type Server struct {
 	attachPlacements *consult.AttachPlacements
 	router           *sessionRouter
 	claudeLookup     func() (string, error) // set via SetClaudeLookup; nil omits claude from /health
-	logPath          string                 // service log path, set via SetLogPath; threaded into web.Options.LogPath by StartWeb
+	// configSvc is the leo.yaml write path shared with the web server: both
+	// serve the JSON config API from it and agree on the restart flags.
+	configSvc *web.ConfigService
+	logPath   string // service log path, set via SetLogPath; threaded into web.Options.LogPath by StartWeb
 	// resolveHandle backs web.Options.ResolveHandle: resolves a config-defined
 	// process name to its harness name and SessionHandle. Set via
 	// SetResolveHandle by service boot; nil means every process is claude.
@@ -257,6 +260,8 @@ func New(sockPath, configPath string, processes ProcessStateProvider, opts ...Op
 		return tmux.AbortPrompt(context.Background(), s.tmuxPath(), tmuxSession)
 	})
 
+	s.configSvc = s.newConfigService()
+
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /health", s.handleHealth)
 	mux.HandleFunc("GET /version", s.handleVersion)
@@ -273,7 +278,11 @@ func New(sockPath, configPath string, processes ProcessStateProvider, opts ...Op
 	mux.HandleFunc("POST /task/enable", s.handleTaskEnable)
 	mux.HandleFunc("POST /task/disable", s.handleTaskDisable)
 	mux.HandleFunc("GET /task/list", s.handleTaskList)
-	mux.HandleFunc("POST /config/reload", s.handleConfigReload)
+	// The JSON config API (docs/configuration/config-api.md): the 0600 socket
+	// is the operator's, so no wrapper. /config/reload is the shared service's
+	// too, so socket and web answer with the same body.
+	s.configSvc.RegisterConfigRoutes(mux, "", func(h http.HandlerFunc) http.HandlerFunc { return h })
+	s.configSvc.RegisterReloadRoute(mux, "", func(h http.HandlerFunc) http.HandlerFunc { return h })
 	mux.HandleFunc("GET /drain/busy", s.handleDrainBusy)
 	mux.HandleFunc("POST /drain", s.handleDrainBegin)
 	mux.HandleFunc("GET /drain", s.handleDrainStatus)
@@ -336,6 +345,29 @@ func New(sockPath, configPath string, processes ProcessStateProvider, opts ...Op
 	}
 
 	return s
+}
+
+// newConfigService builds the config service the socket and the web server
+// share. Its collaborators are late-bound closures: the agent manager, log
+// path and version are attached after New returns.
+func (s *Server) newConfigService() *web.ConfigService {
+	return web.NewConfigService(web.ConfigServiceOptions{
+		ConfigPath: s.configPath,
+		Writer:     s.configWriter,
+		Reloader:   s,
+		LeoPath:    s.leoMCP.Executable(),
+		LogPath:    func() string { return s.logPath },
+		Agents: func() web.AgentRestarter {
+			if s.agentMgr == nil {
+				return nil
+			}
+			return s.agentMgr
+		},
+		Processes: func() web.ProcessStateProvider { return &processAdapter{inner: s.processes} },
+		Version:   func() string { return s.leoVersion },
+		StartedAt: time.Now(),
+		PID:       s.pid,
+	})
 }
 
 // SetParentContext supplies the service lifetime to web-dispatched runs.
@@ -482,6 +514,7 @@ func (s *Server) StartWeb(cfg *config.Config, agentSvc web.AgentService) error {
 	// invocations, whatever the harness (see sessionRouter.ObserveTurn).
 	observeOpts = append(observeOpts, web.WithTurnObserver(s.observeAgentTurn))
 	s.webServer = web.New(s.configPath, &processAdapter{inner: s.processes}, s.scheduler, s, agentSvc, web.Options{
+		Config:         s.configSvc,
 		ConfigWriter:   s.configWriter,
 		Port:           port,
 		APIToken:       apiToken,

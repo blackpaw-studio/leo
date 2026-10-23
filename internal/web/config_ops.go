@@ -16,6 +16,7 @@ import (
 
 	"github.com/blackpaw-studio/leo/internal/config"
 	"github.com/blackpaw-studio/leo/internal/history"
+	"github.com/blackpaw-studio/leo/internal/observe"
 )
 
 const (
@@ -384,16 +385,27 @@ type reloadDoc struct {
 
 // handleConfigReloadAPI re-reads leo.yaml into the running daemon.
 func (c *ConfigService) handleConfigReloadAPI(w http.ResponseWriter, _ *http.Request) {
-	_, rev, err := c.loadLocked()
-	if err != nil {
-		writeConfigError(w, err)
-		return
-	}
 	if c.reloader != nil {
 		if err := c.reloader.ReloadConfig(); err != nil {
 			writeJSON(w, http.StatusInternalServerError, apiResponse{Error: fmt.Sprintf("reload failed: %v", err), Code: codeInternal})
 			return
 		}
 	}
+	_, rev, err := c.loadLocked()
+	if err != nil {
+		writeConfigError(w, err)
+		return
+	}
 	writeConfigData(w, http.StatusOK, reloadDoc{Revision: rev})
+}
+
+type versionDoc struct {
+	Version      string   `json:"version"`
+	Capabilities []string `json:"capabilities"`
+}
+
+// handleAPIVersion is GET /api/v1/version: the build version and the optional
+// API features this daemon offers, the web twin of the socket's GET /version.
+func (s *Server) handleAPIVersion(w http.ResponseWriter, _ *http.Request) {
+	writeConfigData(w, http.StatusOK, versionDoc{Version: s.version, Capabilities: observe.Features()})
 }
