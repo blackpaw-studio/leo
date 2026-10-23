@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"math"
 	"os"
 	"os/exec"
@@ -31,6 +32,7 @@ import (
 	"github.com/blackpaw-studio/leo/internal/machine"
 	"github.com/blackpaw-studio/leo/internal/managed"
 	"github.com/blackpaw-studio/leo/internal/observe"
+	"github.com/blackpaw-studio/leo/internal/startup"
 	"github.com/blackpaw-studio/leo/internal/tmux"
 )
 
@@ -935,6 +937,13 @@ func scrubDispatchIdentity() error {
 
 func defaultSupervisedExec(opts RunSupervisedOptions) error {
 	claudePath, homePath, configPath, webToken := opts.ClaudePath, opts.HomePath, opts.ConfigPath, opts.WebToken
+	// Timestamped lines: the startup log is how a stall is located after the fact.
+	logger := log.New(os.Stderr, "", log.LstdFlags)
+	timer := startup.New(time.Now, logger.Printf)
+	// Registered first so it runs last: a stalled shutdown step can still be
+	// dumped. stopDump is replaced once the handler is installed.
+	stopDump := func() {}
+	defer func() { stopDump() }()
 	// Process-local, so harmless for a daemon that then loses the lock. Runs
 	// before the locale fix-up and any tmux or agent launch, which inherit it.
 	if err := managed.ApplyEnv(opts.Env, setenvFn); err != nil {
@@ -942,11 +951,16 @@ func defaultSupervisedExec(opts RunSupervisedOptions) error {
 	}
 	// First thing, before the log rotator, tmux or the socket: a daemon that
 	// loses the lock must not unlink the winner's leo.sock or touch its logs.
+	stepDone := timer.Step("lock")
 	releaseLock, err := AcquireDaemonLock(filepath.Join(homePath, "state"))
+	stepDone()
 	if err != nil {
 		return err
 	}
 	defer func() { _ = releaseLock() }()
+	// Installed before tmux, the socket and web.New, so a stall in any of them
+	// can be dumped with `leo service dump`.
+	stopDump = installGoroutineDump(filepath.Join(homePath, "state"), time.Now, logger.Printf)
 	localeEnv := os.Environ()
 	if warning := env.UTF8LocaleWarning(localeEnv); warning != "" {
 		fmt.Fprintf(os.Stderr, "warning: %s\n", warning)
@@ -978,6 +992,7 @@ func defaultSupervisedExec(opts RunSupervisedOptions) error {
 	}
 
 	// Find tmux early so we can cache it
+	stepDone = timer.Step("tmux server")
 	tmuxPath, err := resolveDaemonTmux(opts.TmuxPath, os.Stderr)
 	if err != nil {
 		return err
@@ -995,6 +1010,7 @@ func defaultSupervisedExec(opts RunSupervisedOptions) error {
 	} else {
 		go tmux.SuperviseForegroundServer(ctx, tmuxPath, menuBindings...)
 	}
+	stepDone()
 
 	supervisor := NewSupervisor(ctx)
 	supervisor.tmuxPath = tmuxPath
@@ -1004,16 +1020,21 @@ func defaultSupervisedExec(opts RunSupervisedOptions) error {
 	supervisor.configPath = configPath
 	supervisor.reportCmd = reportCmdFor(executable)
 
+	stepDone = timer.Step("observability")
 	obs := wireObservability(ctx, supervisor, tmuxPath)
+	stepDone()
 	// Leo Chat's store; nil (chat off, logged) when it cannot open. Closed
 	// after srv.Shutdown, whose defer is registered later.
+	stepDone = timer.Step("chat open")
 	obs.Chat, obs.ChatAttachments = openChat(homePath)
+	stepDone()
 	if obs.Chat != nil {
 		defer func() { _ = obs.Chat.Close() }()
 	}
 
 	// Start daemon IPC server with process state provider
 	sockPath := filepath.Join(homePath, "state", "leo.sock")
+	stepDone = timer.Step("daemon wiring")
 	// The claude mod bridge: the hub is served on the socket's
 	// /api/bridge/* routes and reachable through srv.Bridge() by the call
 	// sites that deliver through it; the launcher plans bridged claude
@@ -1029,7 +1050,11 @@ func defaultSupervisedExec(opts RunSupervisedOptions) error {
 		daemon.WithBridgeLaunches(bridgeLauncher, supervisor.BridgeRouter()),
 		// One sampler for both machine routes, so they share the 1s cache
 		// and the CPU baseline. Disk is reported for the state dir.
-		daemon.WithMachineStats(machine.NewSampler(machine.NewProbe(filepath.Dir(sockPath)))))
+		daemon.WithMachineStats(machine.NewSampler(machine.NewProbe(filepath.Dir(sockPath)))),
+		daemon.WithStartupTimer(timer),
+		// The SIGUSR1 handler is installed above, so /health may say it is safe
+		// for `leo service dump` to signal this daemon.
+		daemon.WithGoroutineDump())
 	srv.SetParentContext(ctx)
 	// Threaded into web.New's extra Options by StartWeb — see
 	// daemon.Server.SetObservability's doc comment.
@@ -1060,13 +1085,18 @@ func defaultSupervisedExec(opts RunSupervisedOptions) error {
 	// Graceful restart: the CLI drains busy agents through the socket's
 	// /drain routes before it restarts the daemon.
 	srv.SetDrain(newDrainManager(srv, supervisor, tmuxPath, homePath))
-	if err := srv.Start(); err != nil {
+	stepDone()
+	stepDone = timer.Step("IPC listen")
+	err = srv.Start()
+	stepDone()
+	if err != nil {
 		fmt.Fprintf(os.Stderr, "warning: daemon server failed to start: %v\n", err)
 	} else {
 		defer func() { _ = srv.Shutdown() }()
 		fmt.Fprintf(os.Stdout, "daemon IPC server listening on %s\n", sockPath)
 
 		// Build the agent.Manager shared by web, daemon, and CLI handlers.
+		stepDone = timer.Step("agent manager")
 		cfgLoader := func() (*config.Config, error) { return config.Load(configPath) }
 		agentMgr := agent.New(cfgLoader, supervisor, tmuxPath, webToken)
 		agentMgr.SetLeoMCP(leoMCP)
@@ -1087,8 +1117,10 @@ func defaultSupervisedExec(opts RunSupervisedOptions) error {
 		// message can auto-resume them (see Manager.Stop). Runs for the
 		// daemon's lifetime; ctx cancellation stops it.
 		go runIdleSweep(ctx, supervisor, agentMgr, tmuxPath, homePath)
+		stepDone()
 
 		// Start web UI if enabled
+		stepDone = timer.Step("web")
 		if cfg, err := config.Load(configPath); err == nil {
 			if err := srv.StartWeb(cfg, agentMgr); err != nil {
 				fmt.Fprintf(os.Stderr, "warning: web UI failed to start: %v\n", err)
@@ -1097,9 +1129,11 @@ func defaultSupervisedExec(opts RunSupervisedOptions) error {
 				agentMgr.SetGoneHook(srv.CloseChatAsksOf)
 			}
 		}
+		stepDone()
 	}
 
 	// Restore ephemeral agents from previous run
+	stepDone = timer.Step("RestoreAgents")
 	var restoreOpts []RestoreOption
 	if cfg, err := config.Load(configPath); err != nil {
 		fmt.Fprintf(os.Stderr, "warning: restoring agents without checking their named environments: %v\n", err)
@@ -1107,6 +1141,7 @@ func defaultSupervisedExec(opts RunSupervisedOptions) error {
 		restoreOpts = append(restoreOpts, WithRestoreConfig(cfg))
 	}
 	restored := RestoreAgents(homePath, tmuxPath, webToken, supervisor, leoMCP, restoreOpts...)
+	stepDone()
 	if restored > 0 {
 		fmt.Fprintf(os.Stdout, "restored %d ephemeral agent(s)\n", restored)
 	}
@@ -1115,6 +1150,7 @@ func defaultSupervisedExec(opts RunSupervisedOptions) error {
 	// `leo update` and `leo service restart` wait on this before asking the
 	// daemon about agents (daemon.WaitReady).
 	srv.MarkReady()
+	timer.Total()
 	// After restore, so every drained agent is back (or knowably gone)
 	// before it is told to resume; the daemon owns this step, so it runs
 	// even if the CLI that restarted it died.
