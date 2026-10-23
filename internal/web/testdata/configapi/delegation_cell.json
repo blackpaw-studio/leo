@@ -1,0 +1,75 @@
+{
+  "body": {
+    "data": {
+      "item": {
+        "active_profile": "fast",
+        "configured": true,
+        "enabled": true,
+        "hide_native_agents": [
+          "implementer",
+          "implementer-hard",
+          "code-reviewer",
+          "Explore",
+          "Plan",
+          "general-purpose"
+        ],
+        "hide_native_agents_is_default": true,
+        "profiles": [
+          {
+            "active": false,
+            "description": "",
+            "name": "deep",
+            "roles": {
+              "coder": {
+                "effort": "",
+                "inherited_model": "opus",
+                "model": "",
+                "template": "coder"
+              }
+            }
+          },
+          {
+            "active": true,
+            "description": "",
+            "name": "fast",
+            "roles": {
+              "coder": {
+                "effort": "high",
+                "inherited_model": "opus",
+                "model": "",
+                "template": "coder"
+              }
+            }
+          }
+        ],
+        "recent_consults": [],
+        "revision": "sha256:50143125f025707d10b22b47378dc35ea94745934a1e3f63b43f40c0861353a0",
+        "roles": [
+          {
+            "declared": true,
+            "name": "coder",
+            "use_for": "writing code"
+          }
+        ],
+        "templates": [
+          {
+            "model": "opus",
+            "name": "coder"
+          },
+          {
+            "model": "haiku",
+            "name": "reviewer"
+          }
+        ],
+        "warnings": []
+      },
+      "restart_required": {
+        "agents": true,
+        "service": true
+      },
+      "revision": "sha256:50143125f025707d10b22b47378dc35ea94745934a1e3f63b43f40c0861353a0"
+    },
+    "ok": true
+  },
+  "status": 200
+}

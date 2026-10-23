@@ -1,0 +1,71 @@
+{
+  "body": {
+    "data": {
+      "items": [
+        {
+          "effective_harness": "claude",
+          "inherited": {
+            "model": "sonnet"
+          },
+          "name": "heartbeat",
+          "values": {
+            "channels": [],
+            "dev_channels": [],
+            "enabled": true,
+            "env": {},
+            "environments": [],
+            "harness": "",
+            "harness_options": {},
+            "max_turns": null,
+            "model": "",
+            "notify_on_fail": false,
+            "owner": "",
+            "prompt_file": "heartbeat.md",
+            "queue_max": null,
+            "retries": null,
+            "runtime": "",
+            "schedule": "0 * * * *",
+            "silent": false,
+            "template": "",
+            "timeout": "",
+            "timezone": "",
+            "workspace": ""
+          }
+        },
+        {
+          "effective_harness": "claude",
+          "inherited": {
+            "model": "sonnet"
+          },
+          "name": "nightly",
+          "values": {
+            "channels": [],
+            "dev_channels": [],
+            "enabled": false,
+            "env": {},
+            "environments": [],
+            "harness": "",
+            "harness_options": {},
+            "max_turns": null,
+            "model": "",
+            "notify_on_fail": false,
+            "owner": "",
+            "prompt_file": "prompts/nightly.md",
+            "queue_max": null,
+            "retries": null,
+            "runtime": "",
+            "schedule": "0 3 * * *",
+            "silent": false,
+            "template": "",
+            "timeout": "",
+            "timezone": "",
+            "workspace": ""
+          }
+        }
+      ],
+      "revision": "sha256:d1e5ba28f778048557b354bff517f7ba525088d0ef619dbdaa4f1b36f87f9f08"
+    },
+    "ok": true
+  },
+  "status": 200
+}
