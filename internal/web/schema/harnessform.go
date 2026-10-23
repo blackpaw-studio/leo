@@ -104,7 +104,7 @@ func ApplyHarnessOptions(h harness.Harness, form url.Values) (map[string]any, er
 		case harness.OptionBool:
 			b, err := strconv.ParseBool(raw)
 			if err != nil {
-				return nil, fmt.Errorf("harness option %s: %q is not true/false", f.Key, raw)
+				return nil, &FieldError{Key: HarnessOptionPrefix + f.Key, Err: fmt.Errorf("harness option %s: %q is not true/false", f.Key, raw)}
 			}
 			set(f.Key, b)
 		case harness.OptionStringList:
@@ -117,7 +117,7 @@ func ApplyHarnessOptions(h harness.Harness, form url.Values) (map[string]any, er
 		case harness.OptionYAMLMap:
 			var m map[string]any
 			if err := yaml.Unmarshal([]byte(raw), &m); err != nil {
-				return nil, fmt.Errorf("harness option %s: %v", f.Key, err)
+				return nil, &FieldError{Key: HarnessOptionPrefix + f.Key, Err: fmt.Errorf("harness option %s: %v", f.Key, err)}
 			}
 			if len(m) > 0 {
 				set(f.Key, m)

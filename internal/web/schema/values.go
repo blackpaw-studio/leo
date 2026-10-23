@@ -9,6 +9,17 @@ import (
 	"strings"
 )
 
+// FieldError is a parse failure pinned to the field that caused it. Error()
+// is the bare cause, so the web flashes read exactly as before; the JSON
+// config API reads Key to put the message on its field.
+type FieldError struct {
+	Key string
+	Err error
+}
+
+func (e *FieldError) Error() string { return e.Err.Error() }
+func (e *FieldError) Unwrap() error { return e.Err }
+
 // FieldValue is a Field resolved against a concrete struct value, ready for
 // template rendering.
 type FieldValue struct {
@@ -86,14 +97,14 @@ func Apply(target any, section Section, form url.Values) error {
 			}
 		case KindNumber:
 			if err := applyNumber(val, sf, f.Key, raw); err != nil {
-				return err
+				return &FieldError{Key: f.Key, Err: err}
 			}
 		case KindCSV:
 			val.Set(reflect.ValueOf(parseCSV(raw)))
 		case KindEnvMap:
 			m, err := parseEnvLines(raw)
 			if err != nil {
-				return fmt.Errorf("%s: %w", f.Key, err)
+				return &FieldError{Key: f.Key, Err: fmt.Errorf("%s: %w", f.Key, err)}
 			}
 			val.Set(reflect.ValueOf(m))
 		default:
