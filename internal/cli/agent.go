@@ -616,6 +616,10 @@ func attachLocal(ctx context.Context, cmd *cobra.Command, homePath, query string
 	if err != nil {
 		return fmt.Errorf("looking up session: %w", err)
 	}
+	session, err = awaitRestoredSession(ctx, homePath, query, session)
+	if err != nil {
+		return err
+	}
 
 	// Dormant agents have no tmux session to attach to yet — prompt to start
 	// (or fail fast off a TTY) before doing anything else, and BEFORE the
