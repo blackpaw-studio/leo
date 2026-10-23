@@ -11,7 +11,7 @@ bodies:
 | Where | Path prefix | Auth |
 |-------|-------------|------|
 | Daemon unix socket (mode 0600) | none (`/config/schema`) | the socket |
-| Web listener | `/api/v1` (`/api/v1/config/schema`) | operator bearer token; the agent token and device tokens get 403 |
+| Web listener | `/api/v1` (`/api/v1/config/schema`) | the operator bearer token, or a paired device token (a paired app is operator-equivalent by design); the agent token and API-client tokens get 403 |
 
 The daemon advertises it: `GET /version` (socket) and `GET /api/v1/version`
 return `{"version", "capabilities": [...]}`, and `config_api` is in the list.
@@ -21,6 +21,11 @@ Every response uses the standard envelope `{"ok", "data", "error", "code",
 "errors"}`. `errors` appears only on a 422.
 
 ## Revisions and concurrency
+
+Writes **rewrite `leo.yaml` from the parsed config**: comments, key order and
+keys leo does not know are not preserved (the web UI's saves do the same).
+Anyone who hand-annotates the file should edit it in an editor, not through
+the API.
 
 `leo.yaml` is the single source of truth and edits can come from the
 browser, the CLI or an editor. Every read returns the file's **revision**,
@@ -85,8 +90,10 @@ write-only: they read as `{"set": true|false}`.
 | `POST /config/{resource}/{name}/duplicate` | `{"new_name"}` | 201 |
 | `DELETE /config/{resource}/{name}` | none | 200 |
 
-`PUT` is a patch: a key you send replaces the value, `null` clears it, a key
-you omit is left alone. Sending a field the schema does not define is 400;
+`PUT` is a patch applied key by key: a key you send replaces the value, `null`
+clears it, a key you omit is left exactly as it is (it is not re-parsed or
+re-trimmed, so a list item that contains a comma survives a write of another
+field). Sending a field the schema does not define is 400;
 a bad value is 422. Nested
 objects (`permissions`, `push`, `harness_options`) merge the same way: a key
 inside them replaces, `null` clears just that key, an omitted key is kept, and
@@ -99,6 +106,28 @@ A write answers `{revision, restart_required: {agents, service}, warning?,
 item?}`. `restart_required` reports the **accumulated** flags, not just this
 write: it stays set until the service or the agents are restarted. `warning`
 means the file was saved but the live reload failed.
+
+### Secrets
+
+Credential entries of an `env` map never leave the daemon. An entry is a
+credential when its key (case-insensitive) contains `TOKEN`, `SECRET`,
+`PASSWORD`, `PASSWD` or `CREDENTIAL`; contains `API_KEY`, `PRIVATE_KEY` or
+`ACCESS_KEY` (the underscore or dash is optional); or has `AUTH` as a whole
+segment (`ANTHROPIC_AUTH_TOKEN`, `SERVICE_AUTH`, not `AUTHOR`). This applies to
+every `env` field (defaults, templates, tasks, environments). Reads and write
+responses show such an entry as `{"set": true|false}` and every other entry as
+its string:
+
+```json
+"env": {"ANTHROPIC_AUTH_TOKEN": {"set": true}, "ANTHROPIC_BASE_URL": "http://localhost:3325"}
+```
+
+An `env` patch is applied entry by entry: `"value"` sets or replaces the entry,
+`{"set": true}` (what a read returned) keeps its current value (422 on `env` if
+there is none), `null` deletes it, and an entry left out is kept. `"env": null`
+clears the whole map. A client can therefore echo back what it read and change
+only what the user edited. (The web UI still shows env values in full; the
+redaction is the API's.)
 
 ### Validation errors (422)
 
@@ -156,11 +185,11 @@ A cell's validation errors land on `template`, `model` or `effort`.
 |---------|--------|
 | `POST /tasks/{name}/run` | 202 `{name, status: "started"}`; runs `leo run` detached |
 | `GET /tasks/{name}/history?limit=20` | run history, newest first (`limit` at most 200) |
-| `GET /tasks/{name}/log?file=` | `{file, text}`; `file` must be one of the task's logs |
+| `GET /tasks/{name}/log?file=` | `{file, text, truncated?}`; `file` must be one of the task's logs. Only the last 4 MiB is read; a longer log comes back cut to whole lines with `truncated: true` |
 | `GET /config/tasks/{name}/prompt[?file=]` | `{revision, file, files, content}` |
 | `PUT /config/tasks/{name}/prompt` | `{content}`; writes the task's current `prompt_file` |
 | `GET /cron/preview?expr=` | `{valid, description, error?}` |
-| `POST /service/restart` | 202; graceful `leo service restart`, clears the service banner |
+| `POST /service/restart` | 202; graceful `leo service restart`, clears the service banner. Single-flight: while a restart is running another request is 409 `restart_in_progress` (the restart is not queued or repeated) |
 | `POST /service/restart-agents` | `{restarted, skipped, failed: {name: message}}`; clears the agents banner only on zero failures |
 | `GET /service/log?lines=200` | `{text}`, at most 1000 lines |
 | `GET /service/status` | `{version, pid, started_at, config_path, log_path, restart_required, processes}` |
