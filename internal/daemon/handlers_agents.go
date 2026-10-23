@@ -395,6 +395,9 @@ func (s *Server) handleAgentSession(w http.ResponseWriter, r *http.Request) {
 		Session: s.agentMgr.SessionName(rec.Name),
 		Name:    rec.Name,
 		Stopped: rec.Status == "stopped",
+		// "restoring" is deliberately not Stopped: the agent is not dormant,
+		// so clients must not offer to start it.
+		Restoring: rec.Status == "restoring",
 	})
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, fmt.Sprintf("marshaling session: %v", err))
@@ -634,6 +637,8 @@ func writeAgentError(w http.ResponseWriter, err error) {
 		writeJSON(w, http.StatusConflict, Response{OK: false, Error: err.Error(), Code: ErrorCodeAgentNotStopped})
 	case errors.Is(err, agent.ErrAgentAlreadyRunning):
 		writeJSON(w, http.StatusConflict, Response{OK: false, Error: err.Error(), Code: ErrorCodeAgentAlreadyRunning})
+	case errors.Is(err, agent.ErrDaemonRestoring):
+		writeJSON(w, http.StatusServiceUnavailable, Response{OK: false, Error: err.Error(), Code: ErrorCodeDaemonRestoring})
 	case errors.Is(err, agent.ErrAgentNotRunning):
 		writeJSON(w, http.StatusConflict, Response{OK: false, Error: err.Error(), Code: ErrorCodeAgentNotRunning})
 	default:
