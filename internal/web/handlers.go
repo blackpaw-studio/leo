@@ -344,15 +344,10 @@ func (s *Server) handleTaskRun(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Spawn leo run as a detached subprocess
-	cmd := s.execCommand(s.leoPath, "run", name, "--config", s.configPath)
-	if err := cmd.Start(); err != nil {
+	if err := s.launchTask(name); err != nil {
 		s.renderFlash(w, "error", fmt.Sprintf("Failed to start task: %v", err))
 		return
 	}
-
-	// Don't wait for the process — it runs independently
-	go cmd.Wait() //nolint:errcheck
 
 	s.renderFlash(w, "success", fmt.Sprintf("Task %q triggered", name))
 }
@@ -495,16 +490,10 @@ func findTmuxPath() string {
 }
 
 func (s *Server) handleServiceRestart(w http.ResponseWriter, r *http.Request) {
-	// Always drain busy agents first, and never wait on a question nobody
-	// can answer: --graceful skips the busy prompt, --force the timeout one.
-	cmd := s.execCommand(s.leoPath, "service", "restart", "--graceful", "--force", "--config", s.configPath)
-	if err := cmd.Start(); err != nil {
+	if err := s.launchServiceRestart(); err != nil {
 		s.renderFlash(w, "error", fmt.Sprintf("Failed to restart: %v", err))
 		return
 	}
-	go cmd.Wait() //nolint:errcheck
-
-	s.serviceRestartNeeded.Store(false)
 	s.renderFlash(w, "success", "Service restarting. Busy agents get up to 10 minutes to pause first.")
 }
 

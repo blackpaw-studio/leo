@@ -1,0 +1,399 @@
+package web
+
+import (
+	"errors"
+	"fmt"
+	"io/fs"
+	"net/http"
+	"os"
+	"path/filepath"
+	"sort"
+	"strconv"
+	"strings"
+	"time"
+
+	robfigcron "github.com/robfig/cron/v3"
+
+	"github.com/blackpaw-studio/leo/internal/config"
+	"github.com/blackpaw-studio/leo/internal/history"
+)
+
+const (
+	defaultHistoryLimit = 20
+	maxHistoryLimit     = 200
+	// maxTaskLogBytes bounds one run-log response; a longer log is cut to its
+	// tail and reported truncated.
+	maxTaskLogBytes = 4 << 20
+
+	codeUnavailable = "unavailable"
+	codeInternal    = "internal"
+)
+
+// launchTask starts `leo run <name>` detached; the run reports through task
+// history, not through this call.
+func (c *ConfigService) launchTask(name string) error {
+	cmd := c.execCommand(c.leoPath, "run", name, "--config", c.configPath)
+	if err := cmd.Start(); err != nil {
+		return err
+	}
+	go cmd.Wait() //nolint:errcheck // runs independently
+	return nil
+}
+
+// launchServiceRestart starts a graceful, unprompted `leo service restart`
+// and drops the service-restart banner. Busy agents are always drained first
+// and nobody is asked a question: --graceful skips the busy prompt, --force
+// the timeout one.
+func (c *ConfigService) launchServiceRestart() error {
+	cmd := c.execCommand(c.leoPath, "service", "restart", "--graceful", "--force", "--config", c.configPath)
+	if err := cmd.Start(); err != nil {
+		return err
+	}
+	go cmd.Wait() //nolint:errcheck // the daemon is about to be replaced
+	c.serviceRestartNeeded.Store(false)
+	return nil
+}
+
+// loadForRead loads the config for a read-only route.
+func (c *ConfigService) loadForRead() (*config.Config, error) {
+	cfg, err := c.loadConfig()
+	if err != nil {
+		return nil, configUnavailable(err)
+	}
+	return cfg, nil
+}
+
+// taskOf loads the config and resolves the {name} task, or the 404/503.
+func (c *ConfigService) taskOf(r *http.Request) (*config.Config, string, config.TaskConfig, error) {
+	cfg, err := c.loadForRead()
+	if err != nil {
+		return nil, "", config.TaskConfig{}, err
+	}
+	name := r.PathValue("name")
+	task, ok := cfg.Tasks[name]
+	if !ok {
+		return nil, "", config.TaskConfig{}, errNotFound("task %q not found", name)
+	}
+	return cfg, name, task, nil
+}
+
+func (c *ConfigService) registerOpsRoutes(route func(string, http.HandlerFunc)) {
+	route("POST /tasks/{name}/run", c.handleTaskRunAPI)
+	route("GET /tasks/{name}/history", c.handleTaskHistoryAPI)
+	route("GET /tasks/{name}/log", c.handleTaskLogAPI)
+	route("GET /config/tasks/{name}/prompt", c.handlePromptGetAPI)
+	route("PUT /config/tasks/{name}/prompt", c.handlePromptPutAPI)
+	route("GET /cron/preview", c.handleCronPreviewAPI)
+	route("POST /service/restart", c.handleServiceRestartAPI)
+	route("POST /service/restart-agents", c.handleRestartAgentsAPI)
+	route("GET /service/log", c.handleServiceLogAPI)
+	route("GET /service/status", c.handleServiceStatusAPI)
+}
+
+func (c *ConfigService) handleTaskRunAPI(w http.ResponseWriter, r *http.Request) {
+	_, name, _, err := c.taskOf(r)
+	if err != nil {
+		writeConfigError(w, err)
+		return
+	}
+	if err := c.launchTask(name); err != nil {
+		writeJSON(w, http.StatusInternalServerError, apiResponse{Error: fmt.Sprintf("starting task: %v", err), Code: codeInternal})
+		return
+	}
+	writeConfigData(w, http.StatusAccepted, map[string]string{"name": name, "status": "started"})
+}
+
+func (c *ConfigService) handleTaskHistoryAPI(w http.ResponseWriter, r *http.Request) {
+	cfg, name, _, err := c.taskOf(r)
+	if err != nil {
+		writeConfigError(w, err)
+		return
+	}
+	limit := defaultHistoryLimit
+	if raw := r.URL.Query().Get("limit"); raw != "" {
+		n, perr := strconv.Atoi(raw)
+		if perr != nil || n < 1 {
+			writeConfigError(w, errBadRequest("limit must be a positive integer"))
+			return
+		}
+		limit = min(n, maxHistoryLimit)
+	}
+	entries := c.loadHistory(cfg).GetAll(name) // already newest first
+	if len(entries) > limit {
+		entries = entries[:limit]
+	}
+	if entries == nil {
+		entries = []history.Entry{}
+	}
+	writeConfigData(w, http.StatusOK, entries)
+}
+
+type taskLogDoc struct {
+	File      string `json:"file"`
+	Text      string `json:"text"`
+	Truncated bool   `json:"truncated,omitempty"`
+}
+
+func (c *ConfigService) handleTaskLogAPI(w http.ResponseWriter, r *http.Request) {
+	cfg, name, _, err := c.taskOf(r)
+	if err != nil {
+		writeConfigError(w, err)
+		return
+	}
+	file := r.URL.Query().Get("file")
+	if file == "" {
+		writeConfigError(w, errBadRequest("missing file parameter"))
+		return
+	}
+	// Only the basename is honored, so a path cannot leave the logs dir.
+	file = filepath.Base(file)
+	if !strings.HasPrefix(file, name+"-") {
+		writeConfigError(w, errBadRequest("log file does not match task"))
+		return
+	}
+	data, err := os.ReadFile(filepath.Join(cfg.StatePath(), "logs", file))
+	if errors.Is(err, fs.ErrNotExist) {
+		writeConfigError(w, errNotFound("log file %q not found", file))
+		return
+	}
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, apiResponse{Error: fmt.Sprintf("reading log file: %v", err), Code: codeInternal})
+		return
+	}
+	doc := taskLogDoc{File: file}
+	if len(data) > maxTaskLogBytes {
+		data, doc.Truncated = data[len(data)-maxTaskLogBytes:], true
+	}
+	doc.Text = string(data)
+	writeConfigData(w, http.StatusOK, doc)
+}
+
+type promptDoc struct {
+	Revision string   `json:"revision"`
+	File     string   `json:"file"`
+	Files    []string `json:"files"`
+	Content  string   `json:"content"`
+}
+
+// readPromptBytes reads a prompt file's raw bytes; a missing file is empty
+// (the create-on-first-write case).
+func readPromptBytes(workspace, file string) ([]byte, error) {
+	abs, err := config.ResolvePromptPath(workspace, file)
+	if err != nil {
+		return nil, errInvalid("file", err.Error())
+	}
+	data, err := os.ReadFile(abs)
+	if err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return nil, fmt.Errorf("reading prompt file: %w", err)
+	}
+	return data, nil
+}
+
+func (c *ConfigService) handlePromptGetAPI(w http.ResponseWriter, r *http.Request) {
+	cfg, _, task, err := c.taskOf(r)
+	if err != nil {
+		writeConfigError(w, err)
+		return
+	}
+	file := task.PromptFile
+	if q := r.URL.Query().Get("file"); q != "" {
+		file = q
+	}
+	workspace := cfg.TaskWorkspace(task)
+	files, _ := config.ListPromptFiles(workspace)
+	if files == nil {
+		files = []string{}
+	}
+	doc := promptDoc{File: file, Files: files, Revision: config.RevisionOf(nil)}
+	if file != "" {
+		data, err := readPromptBytes(workspace, file)
+		if err != nil {
+			writeConfigError(w, asConfigError(err))
+			return
+		}
+		doc.Content, doc.Revision = string(data), config.RevisionOf(data)
+	}
+	w.Header().Set("ETag", `"`+doc.Revision+`"`)
+	writeConfigData(w, http.StatusOK, doc)
+}
+
+func (c *ConfigService) handlePromptPutAPI(w http.ResponseWriter, r *http.Request) {
+	ifMatch, err := ifMatchOf(r)
+	if err != nil {
+		writeConfigError(w, err)
+		return
+	}
+	body, ok := delegationBody[struct {
+		Content *string `json:"content"`
+	}](w, r)
+	if !ok {
+		return
+	}
+	if body.Content == nil {
+		writeConfigError(w, errBadRequest(`body must be {"content": "..."}`))
+		return
+	}
+	defer c.lockConfigWrite()()
+	cfg, _, task, err := c.taskOf(r)
+	if err != nil {
+		writeConfigError(w, err)
+		return
+	}
+	if task.PromptFile == "" {
+		writeConfigError(w, errInvalid("", "task has no prompt_file"))
+		return
+	}
+	workspace := cfg.TaskWorkspace(task)
+	current, err := readPromptBytes(workspace, task.PromptFile)
+	if err != nil {
+		writeConfigError(w, asConfigError(err))
+		return
+	}
+	if rev := config.RevisionOf(current); rev != ifMatch {
+		writeConfigError(w, errConflict(rev))
+		return
+	}
+	if err := config.WritePromptFile(workspace, task.PromptFile, *body.Content); err != nil {
+		writeConfigError(w, errInvalid("", fmt.Sprintf("Failed to save prompt: %v", err)))
+		return
+	}
+	rev := config.RevisionOf([]byte(*body.Content))
+	w.Header().Set("ETag", `"`+rev+`"`)
+	writeConfigData(w, http.StatusOK, map[string]string{"revision": rev, "file": task.PromptFile})
+}
+
+type cronPreviewDoc struct {
+	Valid       bool   `json:"valid"`
+	Description string `json:"description"`
+	Error       string `json:"error,omitempty"`
+}
+
+func (c *ConfigService) handleCronPreviewAPI(w http.ResponseWriter, r *http.Request) {
+	expr := r.URL.Query().Get("expr")
+	if expr == "" {
+		writeConfigError(w, errBadRequest("missing expr parameter"))
+		return
+	}
+	parser := robfigcron.NewParser(robfigcron.Minute | robfigcron.Hour | robfigcron.Dom | robfigcron.Month | robfigcron.Dow)
+	if _, err := parser.Parse(expr); err != nil {
+		writeConfigData(w, http.StatusOK, cronPreviewDoc{Error: err.Error()})
+		return
+	}
+	writeConfigData(w, http.StatusOK, cronPreviewDoc{Valid: true, Description: describeCron(expr)})
+}
+
+func (c *ConfigService) handleServiceRestartAPI(w http.ResponseWriter, _ *http.Request) {
+	if err := c.launchServiceRestart(); err != nil {
+		writeJSON(w, http.StatusInternalServerError, apiResponse{Error: fmt.Sprintf("restarting service: %v", err), Code: codeInternal})
+		return
+	}
+	writeConfigData(w, http.StatusAccepted, map[string]string{"status": "restarting"})
+}
+
+type restartAgentsDoc struct {
+	Restarted []string          `json:"restarted"`
+	Skipped   []string          `json:"skipped"`
+	Failed    map[string]string `json:"failed"`
+}
+
+func (c *ConfigService) handleRestartAgentsAPI(w http.ResponseWriter, _ *http.Request) {
+	var restarter AgentRestarter
+	if c.agents != nil {
+		restarter = c.agents()
+	}
+	if restarter == nil {
+		writeJSON(w, http.StatusServiceUnavailable, apiResponse{Error: "agent service not available", Code: codeUnavailable})
+		return
+	}
+	result := restarter.RestartAll()
+	doc := restartAgentsDoc{Restarted: orEmpty(result.Restarted), Skipped: orEmpty(result.Skipped), Failed: map[string]string{}}
+	for name, err := range result.Failed {
+		doc.Failed[name] = err.Error()
+	}
+	if len(doc.Failed) == 0 {
+		c.ClearAgentsRestartNeeded()
+	}
+	writeConfigData(w, http.StatusOK, doc)
+}
+
+func orEmpty(s []string) []string {
+	if s == nil {
+		return []string{}
+	}
+	return s
+}
+
+func (c *ConfigService) handleServiceLogAPI(w http.ResponseWriter, r *http.Request) {
+	n := serviceLogTailDefaultLines
+	if raw := r.URL.Query().Get("lines"); raw != "" {
+		parsed, err := strconv.Atoi(raw)
+		if err != nil || parsed < 1 {
+			writeConfigError(w, errBadRequest("lines must be a positive integer"))
+			return
+		}
+		n = min(parsed, serviceLogTailMaxLines)
+	}
+	path := c.logFilePath()
+	if path == "" {
+		writeConfigError(w, errNotFound("log path not configured"))
+		return
+	}
+	text, err := readLogTail(path, n)
+	if errors.Is(err, fs.ErrNotExist) {
+		text, err = "", nil
+	}
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, apiResponse{Error: fmt.Sprintf("reading service log: %v", err), Code: codeInternal})
+		return
+	}
+	writeConfigData(w, http.StatusOK, map[string]string{"text": text})
+}
+
+type serviceStatusDoc struct {
+	Version         string             `json:"version"`
+	PID             int                `json:"pid"`
+	StartedAt       time.Time          `json:"started_at"`
+	ConfigPath      string             `json:"config_path"`
+	LogPath         string             `json:"log_path"`
+	RestartRequired RestartRequired    `json:"restart_required"`
+	Processes       []ProcessStateInfo `json:"processes"`
+}
+
+func (c *ConfigService) handleServiceStatusAPI(w http.ResponseWriter, _ *http.Request) {
+	doc := serviceStatusDoc{
+		PID: c.pid, StartedAt: c.startedAt, ConfigPath: c.configPath, LogPath: c.logFilePath(),
+		RestartRequired: c.RestartFlags(), Processes: []ProcessStateInfo{},
+	}
+	if c.version != nil {
+		doc.Version = c.version()
+	}
+	if c.processes != nil {
+		if p := c.processes(); p != nil {
+			for _, st := range p.States() {
+				doc.Processes = append(doc.Processes, st)
+			}
+			sort.Slice(doc.Processes, func(i, j int) bool { return doc.Processes[i].Name < doc.Processes[j].Name })
+		}
+	}
+	writeConfigData(w, http.StatusOK, doc)
+}
+
+type reloadDoc struct {
+	Revision string `json:"revision"`
+}
+
+// handleConfigReloadAPI re-reads leo.yaml into the running daemon.
+func (c *ConfigService) handleConfigReloadAPI(w http.ResponseWriter, _ *http.Request) {
+	_, rev, err := c.loadLocked()
+	if err != nil {
+		writeConfigError(w, err)
+		return
+	}
+	if c.reloader != nil {
+		if err := c.reloader.ReloadConfig(); err != nil {
+			writeJSON(w, http.StatusInternalServerError, apiResponse{Error: fmt.Sprintf("reload failed: %v", err), Code: codeInternal})
+			return
+		}
+	}
+	writeConfigData(w, http.StatusOK, reloadDoc{Revision: rev})
+}

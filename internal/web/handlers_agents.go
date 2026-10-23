@@ -523,12 +523,10 @@ func (s *Server) handleAPITaskRun(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	cmd := s.execCommand(s.leoPath, "run", name, "--config", s.configPath)
-	if err := cmd.Start(); err != nil {
+	if err := s.launchTask(name); err != nil {
 		writeJSON(w, http.StatusInternalServerError, apiResponse{Error: fmt.Sprintf("starting task: %v", err)})
 		return
 	}
-	go cmd.Wait() //nolint:errcheck
 
 	writeJSON(w, http.StatusOK, apiResponse{OK: true, Data: map[string]string{"name": name, "status": "started"}})
 }
