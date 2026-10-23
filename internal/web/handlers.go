@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"html/template"
-	"log"
 	"net/http"
 	"net/url"
 	"os"
@@ -17,7 +16,6 @@ import (
 
 	robfigcron "github.com/robfig/cron/v3"
 
-	"github.com/blackpaw-studio/leo/internal/agentstore"
 	"github.com/blackpaw-studio/leo/internal/config"
 	"github.com/blackpaw-studio/leo/internal/history"
 	"github.com/blackpaw-studio/leo/internal/tmux"
@@ -300,33 +298,25 @@ func parseResultEvent(raw map[string]json.RawMessage) (logEvent, bool) {
 }
 
 func (s *Server) handleTaskToggle(w http.ResponseWriter, r *http.Request) {
-	defer s.lockConfigWrite()()
 	name := r.PathValue("name")
-
-	cfg, err := s.loadConfig()
-	if err != nil {
-		s.renderFlash(w, "error", fmt.Sprintf("Failed to load config: %v", err))
-		return
-	}
-
-	task, ok := cfg.Tasks[name]
-	if !ok {
-		s.renderFlash(w, "error", fmt.Sprintf("Task %q not found", name))
-		return
-	}
-
-	task.Enabled = !task.Enabled
-	cfg.Tasks[name] = task
-
-	if errMsg := s.validateAndSave(cfg); errMsg != "" {
+	var enabled bool
+	warn, errMsg := s.mutateConfig(func(cfg *config.Config) error {
+		task, ok := cfg.Tasks[name]
+		if !ok {
+			return errNotFound("Task %q not found", name)
+		}
+		task.Enabled = !task.Enabled
+		enabled = task.Enabled
+		cfg.Tasks[name] = task
+		return nil
+	})
+	if errMsg != "" {
 		s.renderFlash(w, "error", errMsg)
 		return
 	}
 
-	warn := s.reloadConfigOrWarn()
-
 	action := "enabled"
-	if !task.Enabled {
+	if !enabled {
 		action = "disabled"
 	}
 
@@ -646,49 +636,15 @@ func (s *Server) handleCronPreview(w http.ResponseWriter, r *http.Request) {
 // The add form is a plain (non-htmx-boosted) POST, so a 303 here is a normal
 // browser redirect rather than an htmx swap.
 func (s *Server) handleTaskAdd(w http.ResponseWriter, r *http.Request) {
-	defer s.lockConfigWrite()()
 	if err := r.ParseForm(); err != nil {
 		s.renderFlash(w, "error", fmt.Sprintf("Invalid form: %v", err))
 		return
 	}
-
 	name := r.FormValue("name")
-	if !validEntityName(name) {
-		s.renderFlash(w, "error", entityNameError)
+	if _, err := s.AddItem("", resourceByKey("tasks"), name, map[string]string{"schedule": r.FormValue("schedule")}); err != nil {
+		s.renderFlash(w, "error", err.Error())
 		return
 	}
-	schedule := r.FormValue("schedule")
-	if schedule == "" {
-		s.renderFlash(w, "error", "Schedule is required")
-		return
-	}
-
-	cfg, err := s.loadConfig()
-	if err != nil {
-		s.renderFlash(w, "error", fmt.Sprintf("Failed to load config: %v", err))
-		return
-	}
-
-	if cfg.Tasks == nil {
-		cfg.Tasks = make(map[string]config.TaskConfig)
-	}
-	if _, exists := cfg.Tasks[name]; exists {
-		s.renderFlash(w, "error", fmt.Sprintf("Task %q already exists", name))
-		return
-	}
-
-	cfg.Tasks[name] = config.TaskConfig{
-		Schedule:   schedule,
-		PromptFile: "prompts/" + name + ".md",
-		Enabled:    false,
-	}
-
-	if errMsg := s.validateAndSave(cfg); errMsg != "" {
-		s.renderFlash(w, "error", errMsg)
-		return
-	}
-	s.reloadConfigOrWarn() // reload failures are logged server-side; nothing to attach a flash to across a redirect
-
 	http.Redirect(w, r, "/tasks/"+url.PathEscape(name), http.StatusSeeOther)
 }
 
@@ -696,28 +652,10 @@ func (s *Server) handleTaskAdd(w http.ResponseWriter, r *http.Request) {
 // task list — the edit page the delete button lives on no longer has
 // anything to show once the task is gone.
 func (s *Server) handleTaskDelete(w http.ResponseWriter, r *http.Request) {
-	defer s.lockConfigWrite()()
-	name := r.PathValue("name")
-
-	cfg, err := s.loadConfig()
-	if err != nil {
-		s.renderFlash(w, "error", fmt.Sprintf("Failed to load config: %v", err))
+	if _, err := s.DeleteItem("", resourceByKey("tasks"), r.PathValue("name")); err != nil {
+		s.renderFlash(w, "error", err.Error())
 		return
 	}
-
-	if _, ok := cfg.Tasks[name]; !ok {
-		s.renderFlash(w, "error", fmt.Sprintf("Task %q not found", name))
-		return
-	}
-
-	delete(cfg.Tasks, name)
-
-	if errMsg := s.validateAndSave(cfg); errMsg != "" {
-		s.renderFlash(w, "error", errMsg)
-		return
-	}
-	s.reloadConfigOrWarn()
-
 	w.Header().Set("HX-Redirect", "/tasks")
 	w.WriteHeader(http.StatusOK)
 }
@@ -727,43 +665,17 @@ func (s *Server) handleTaskDelete(w http.ResponseWriter, r *http.Request) {
 // handleTemplateAdd creates a bare-minimum template (name only) and redirects
 // straight to its edit page, where every other TemplateConfig field can be
 // set through the schema-driven form. Workspace is left empty ("") to
-// inherit the default workspace, matching the empty-means-inherit convention
-// used elsewhere in this file (e.g. handleHostAdd below).
+// inherit the default workspace, matching the empty-means-inherit convention.
 func (s *Server) handleTemplateAdd(w http.ResponseWriter, r *http.Request) {
-	defer s.lockConfigWrite()()
 	if err := r.ParseForm(); err != nil {
 		s.renderFlash(w, "error", fmt.Sprintf("Invalid form: %v", err))
 		return
 	}
-
 	name := r.FormValue("name")
-	if !validEntityName(name) {
-		s.renderFlash(w, "error", entityNameError)
+	if _, err := s.AddItem("", resourceByKey("templates"), name, nil); err != nil {
+		s.renderFlash(w, "error", err.Error())
 		return
 	}
-
-	cfg, err := s.loadConfig()
-	if err != nil {
-		s.renderFlash(w, "error", fmt.Sprintf("Failed to load config: %v", err))
-		return
-	}
-
-	if cfg.Templates == nil {
-		cfg.Templates = make(map[string]config.TemplateConfig)
-	}
-	if _, exists := cfg.Templates[name]; exists {
-		s.renderFlash(w, "error", fmt.Sprintf("Template %q already exists", name))
-		return
-	}
-
-	cfg.Templates[name] = config.TemplateConfig{}
-
-	if errMsg := s.validateAndSave(cfg); errMsg != "" {
-		s.renderFlash(w, "error", errMsg)
-		return
-	}
-	s.reloadConfigOrWarn() // reload failures are logged server-side; nothing to attach a flash to across a redirect
-
 	http.Redirect(w, r, "/config/templates/"+url.PathEscape(name), http.StatusSeeOther)
 }
 
@@ -771,28 +683,10 @@ func (s *Server) handleTemplateAdd(w http.ResponseWriter, r *http.Request) {
 // to the template list — the edit page the delete button lives on no longer
 // has anything to show once the template is gone.
 func (s *Server) handleTemplateDelete(w http.ResponseWriter, r *http.Request) {
-	defer s.lockConfigWrite()()
-	name := r.PathValue("name")
-
-	cfg, err := s.loadConfig()
-	if err != nil {
-		s.renderFlash(w, "error", fmt.Sprintf("Failed to load config: %v", err))
+	if _, err := s.DeleteItem("", resourceByKey("templates"), r.PathValue("name")); err != nil {
+		s.renderFlash(w, "error", err.Error())
 		return
 	}
-
-	if _, ok := cfg.Templates[name]; !ok {
-		s.renderFlash(w, "error", fmt.Sprintf("Template %q not found", name))
-		return
-	}
-
-	delete(cfg.Templates, name)
-
-	if errMsg := s.validateAndSave(cfg); errMsg != "" {
-		s.renderFlash(w, "error", errMsg)
-		return
-	}
-	s.reloadConfigOrWarn()
-
 	w.Header().Set("HX-Redirect", "/config/templates")
 	w.WriteHeader(http.StatusOK)
 }
@@ -807,68 +701,11 @@ func (s *Server) handleTemplateDelete(w http.ResponseWriter, r *http.Request) {
 // rename form targets a non-#flash-container element, so failures are retargeted
 // to the shared flash container via renderFlashToContainer.
 func (s *Server) handleTemplateRename(w http.ResponseWriter, r *http.Request) {
-	defer s.lockConfigWrite()()
-	name := r.PathValue("name")
-
-	newName := r.FormValue("new_name")
-	if newName == "" {
-		s.renderFlashToContainer(w, "error", "New name is required")
-		return
-	}
-	if !validEntityName(newName) {
-		s.renderFlashToContainer(w, "error", entityNameError)
-		return
-	}
-
-	cfg, err := s.loadConfig()
-	if err != nil {
-		s.renderFlashToContainer(w, "error", fmt.Sprintf("Failed to load config: %v", err))
-		return
-	}
-
-	if _, ok := cfg.Templates[name]; !ok {
-		s.renderFlashToContainer(w, "error", fmt.Sprintf("Template %q not found", name))
-		return
-	}
-	if newName == name {
-		// No-op rename: bounce back to the same edit page. Guarded by the
-		// existence check above so a stale path can't redirect to a page that
-		// isn't there.
-		w.Header().Set("HX-Redirect", "/config/templates/"+url.PathEscape(name))
-		w.WriteHeader(http.StatusOK)
-		return
-	}
-
-	if err := config.RenameTemplate(cfg, name, newName); err != nil {
+	name, newName := r.PathValue("name"), r.FormValue("new_name")
+	if _, err := s.RenameItem("", resourceByKey("templates"), name, newName); err != nil {
 		s.renderFlashToContainer(w, "error", err.Error())
 		return
 	}
-
-	if errMsg := s.validateAndSave(cfg); errMsg != "" {
-		s.renderFlashToContainer(w, "error", errMsg)
-		return
-	}
-
-	// Best-effort: move the template pointer on every persisted agent record
-	// spawned from the old name. A failure here must not fail a rename that
-	// already updated config + tasks, so we log and continue.
-	if records, err := agentstore.Load(agentstore.FilePath(cfg.HomePath)); err == nil {
-		for recName, rec := range records {
-			if rec.Template != name {
-				continue
-			}
-			if err := agentstore.Update(cfg.HomePath, recName, func(r agentstore.Record) agentstore.Record {
-				r.Template = newName
-				return r
-			}); err != nil {
-				// #nosec G706 -- name/newName/recName are validated identifiers (validEntityName / existing config + agentstore keys); no control chars can reach the log
-				log.Printf("template rename %q→%q: agentstore.Update(%q) failed: %v", name, newName, recName, err)
-			}
-		}
-	}
-
-	s.reloadConfigOrWarn()
-
 	w.Header().Set("HX-Redirect", "/config/templates/"+url.PathEscape(newName))
 	w.WriteHeader(http.StatusOK)
 }
@@ -876,83 +713,37 @@ func (s *Server) handleTemplateRename(w http.ResponseWriter, r *http.Request) {
 // --- Remote host config management ---
 //
 // Hosts live on the Settings page (config_settings.html) as a card list
-// plus name-only add form (mirrors the retired providers page's shape).
+// plus name-only add form.
 
 // handleHostAdd creates a new remote-host entry and reports back on the
 // settings page itself (HX-Refresh, not a redirect to a separate edit page).
-// HostConfig has no fields Config.Validate() requires to be non-empty (no
-// ssh-non-empty check exists), so a genuinely empty HostConfig{} round-trips
-// through validateAndSave as-is, same as handleTemplateAdd.
-// The flash message still tells the operator to fill in ssh via the card's
-// inline form before the host is usable.
+// The flash message tells the operator to fill in ssh via the card's inline
+// form before the host is usable.
 func (s *Server) handleHostAdd(w http.ResponseWriter, r *http.Request) {
-	defer s.lockConfigWrite()()
 	if err := r.ParseForm(); err != nil {
 		s.renderFlash(w, "error", fmt.Sprintf("Invalid form: %v", err))
 		return
 	}
-
 	name := r.FormValue("name")
-	if !validEntityName(name) {
-		s.renderFlash(w, "error", entityNameError)
+	if _, err := s.AddItem("", resourceByKey("hosts"), name, nil); err != nil {
+		s.renderFlash(w, "error", err.Error())
 		return
 	}
-
-	cfg, err := s.loadConfig()
-	if err != nil {
-		s.renderFlash(w, "error", fmt.Sprintf("Failed to load config: %v", err))
-		return
-	}
-
-	if cfg.Client.Hosts == nil {
-		cfg.Client.Hosts = make(map[string]config.HostConfig)
-	}
-	if _, exists := cfg.Client.Hosts[name]; exists {
-		s.renderFlash(w, "error", fmt.Sprintf("Host %q already exists", name))
-		return
-	}
-
-	cfg.Client.Hosts[name] = config.HostConfig{}
-
-	if errMsg := s.validateAndSave(cfg); errMsg != "" {
-		s.renderFlash(w, "error", errMsg)
-		return
-	}
-	s.reloadConfigOrWarn()
-
 	w.Header().Set("HX-Refresh", "true")
 	s.renderFlash(w, "success", fmt.Sprintf("Host %q created — set its ssh target below", name))
 }
 
 // handleHostDelete removes a remote host and reports back on the settings
-// page (HX-Refresh, not a redirect to a separate edit page). No
-// reference-check scan runs here: nothing in the config schema references a
-// host by name — client.default_host is a free-text hint for `leo agent`
-// CLI dispatch, not a validated foreign key — so an optimistic delete is
-// safe.
+// page (HX-Refresh, not a redirect to a separate edit page). Nothing in the
+// config schema references a host by name — client.default_host is a free-text
+// hint for `leo agent` CLI dispatch, not a validated foreign key — so an
+// optimistic delete is safe.
 func (s *Server) handleHostDelete(w http.ResponseWriter, r *http.Request) {
-	defer s.lockConfigWrite()()
 	name := r.PathValue("name")
-
-	cfg, err := s.loadConfig()
-	if err != nil {
-		s.renderFlash(w, "error", fmt.Sprintf("Failed to load config: %v", err))
+	if _, err := s.DeleteItem("", resourceByKey("hosts"), name); err != nil {
+		s.renderFlash(w, "error", err.Error())
 		return
 	}
-
-	if _, ok := cfg.Client.Hosts[name]; !ok {
-		s.renderFlash(w, "error", fmt.Sprintf("Host %q not found", name))
-		return
-	}
-
-	delete(cfg.Client.Hosts, name)
-
-	if errMsg := s.validateAndSave(cfg); errMsg != "" {
-		s.renderFlash(w, "error", errMsg)
-		return
-	}
-	s.reloadConfigOrWarn()
-
 	w.Header().Set("HX-Refresh", "true")
 	s.renderFlash(w, "success", fmt.Sprintf("Host %q deleted", name))
 }

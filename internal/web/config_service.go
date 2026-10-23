@@ -194,24 +194,6 @@ func (c *ConfigService) reloadConfigOrWarn() string {
 	return ""
 }
 
-// mutateConfig loads config, applies apply, validates, saves, and reloads,
-// all under the config write lock so saves and reloads stay ordered. A
-// non-empty errMsg means nothing was written; warn reports a failed reload.
-func (c *ConfigService) mutateConfig(apply func(*config.Config) error) (warn, errMsg string) {
-	defer c.lockConfigWrite()()
-	cfg, err := c.loadConfig()
-	if err != nil {
-		return "", err.Error()
-	}
-	if err := apply(cfg); err != nil {
-		return "", err.Error()
-	}
-	if msg := c.validateAndSave(cfg); msg != "" {
-		return "", msg
-	}
-	return c.reloadConfigOrWarn(), ""
-}
-
 // agentList returns the claude sub-agent names, refreshing at most once per
 // minute. fetchAgentList shells out to `claude agents`, which can take up to
 // 10s, so the shell-out itself must never run while agentMu is held.

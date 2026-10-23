@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
-	"sync/atomic"
 
 	"github.com/blackpaw-studio/leo/internal/config"
 	"github.com/blackpaw-studio/leo/internal/harness"
@@ -159,61 +158,21 @@ func harnessView(target any, cfg *config.Config) (own map[string]any, name strin
 	return nil, config.DefaultHarnessName, nil
 }
 
-// applySection is the single save path for every schema-driven config form.
-// locate returns a pointer to the section's struct living inside cfg (or a
-// copy to be written back via put); put writes the (mutated) value back into
-// cfg. applyOptions parses the section's harness_options.* inputs into
-// target (invoked after schema.Apply, so a harness change submitted in the
-// same POST is already reflected in target when the effective harness is
-// resolved) — pass nil for sections with no harness sub-form (web/client/
-// host). restartFlag, when non-nil, is set on a successful save to surface
-// the matching restart banner — s.serviceRestartNeeded for sections that
-// need the daemon's TCP listener rebuilt (Web), s.agentsRestartNeeded for
-// sections a *running* agent won't pick up until it's individually restarted
-// (Defaults, Template). nil means neither remedy applies (config reload
-// alone is enough — Task/Client/Host).
-func (s *Server) applySection(w http.ResponseWriter, r *http.Request,
-	section schema.Section,
-	locate func(cfg *config.Config) (any, bool),
-	put func(cfg *config.Config, v any),
-	applyOptions func(cfg *config.Config, target any, form url.Values) error,
-	okMsg string, restartFlag *atomic.Bool,
-) {
-	defer s.lockConfigWrite()()
+// applyResource is the HTML adapter over ConfigService.ApplyValues: it parses
+// the posted form, saves it into the named item of res and flashes the
+// outcome. Validation, persistence and the restart banner live in the core, so
+// the JSON API saves identically.
+func (s *Server) applyResource(w http.ResponseWriter, r *http.Request, res *configResource, name string) {
 	if err := r.ParseForm(); err != nil {
 		s.renderFlash(w, "error", "Invalid form: "+err.Error())
 		return
 	}
-	cfg, err := s.loadConfig()
+	result, err := s.ApplyValues("", res, name, r.Form, nil)
 	if err != nil {
-		s.renderFlash(w, "error", "Failed to load config: "+err.Error())
-		return
-	}
-	target, ok := locate(cfg)
-	if !ok {
-		s.renderFlash(w, "error", "Not found")
-		return
-	}
-	if err := schema.Apply(target, section, r.Form); err != nil {
 		s.renderFlash(w, "error", err.Error())
 		return
 	}
-	if applyOptions != nil {
-		if err := applyOptions(cfg, target, r.Form); err != nil {
-			s.renderFlash(w, "error", err.Error())
-			return
-		}
-	}
-	put(cfg, target)
-	if errMsg := s.validateAndSave(cfg); errMsg != "" {
-		s.renderFlash(w, "error", errMsg)
-		return
-	}
-	warn := s.reloadConfigOrWarn()
-	if restartFlag != nil {
-		restartFlag.Store(true)
-	}
-	typ, msg := appendReloadWarning("success", okMsg, warn)
+	typ, msg := appendReloadWarning("success", res.saved(name), result.Warning)
 	s.renderFlash(w, typ, msg)
 }
 
@@ -230,128 +189,36 @@ func applyScopeHarnessOptions(form url.Values, harnessName string) (map[string]a
 	return schema.ApplyHarnessOptions(h, form)
 }
 
-// handleConfigDefaultsSave is the schema-driven replacement for the old
-// hand-rolled handleConfigDefaults. Defaults changes affect every process,
-// task, template, and session that inherits from them: new spawns and task
-// runs pick them up immediately via config reload, but a *running* agent
-// keeps whatever args it was spawned with until it's individually restarted,
-// so the agents-restart banner is always flagged.
+// The save handlers below are one line each: which resource, which item. What
+// a save does (and which restart banner it raises) is the resource's, see
+// configResources. Defaults changes affect every process, task, template and
+// session that inherits from them, so a running agent keeps its spawn-time
+// args until restarted; Web port/bind/allowed_hosts only apply when the
+// daemon's TCP listener is rebuilt; Tasks, the Remote client and hosts need
+// only the reload.
+
 func (s *Server) handleConfigDefaultsSave(w http.ResponseWriter, r *http.Request) {
-	s.applySection(w, r, schema.SectionDefaults,
-		func(cfg *config.Config) (any, bool) { return &cfg.Defaults, true },
-		func(cfg *config.Config, v any) {}, // &cfg.Defaults is already the live field — nothing to write back
-		func(cfg *config.Config, target any, form url.Values) error {
-			d := target.(*config.DefaultsConfig)
-			opts, err := applyScopeHarnessOptions(form, cfg.DefaultsHarness())
-			if err != nil {
-				return err
-			}
-			d.HarnessOptions = opts
-			return schema.Apply(&d.Push, schema.SectionPushDefaults, form)
-		},
-		"Defaults saved", &s.agentsRestartNeeded)
+	s.applyResource(w, r, resourceByKey("defaults"), "")
 }
 
-// handleConfigTaskSave is the schema-driven replacement for the old
-// hand-rolled handleConfigTask. Tasks don't affect running processes, so no
-// restart flag is set.
 func (s *Server) handleConfigTaskSave(w http.ResponseWriter, r *http.Request) {
-	name := r.PathValue("name")
-	s.applySection(w, r, schema.SectionTask,
-		func(cfg *config.Config) (any, bool) {
-			t, ok := cfg.Tasks[name]
-			return &t, ok
-		},
-		func(cfg *config.Config, v any) { cfg.Tasks[name] = *(v.(*config.TaskConfig)) },
-		func(cfg *config.Config, target any, form url.Values) error {
-			t := target.(*config.TaskConfig)
-			opts, err := applyScopeHarnessOptions(form, cfg.TaskHarness(*t))
-			if err != nil {
-				return err
-			}
-			t.HarnessOptions = opts
-			return nil
-		},
-		fmt.Sprintf("Task %q saved", name), nil)
+	s.applyResource(w, r, resourceByKey("tasks"), r.PathValue("name"))
 }
 
-// handleConfigTemplateSave is the schema-driven replacement for the old
-// hand-rolled handleConfigTemplate. It also fixes that handler's silent
-// omission of provider and idle_suspend_after (added to TemplateConfig since
-// the old handler was written, but never wired into its field-by-field
-// parsing). Templates only affect future agent spawns immediately (via
-// config reload) — but agent.Manager.Restart can now re-apply a template
-// change to an already-running agent spawned from it, so a template save
-// flags the agents-restart banner too.
 func (s *Server) handleConfigTemplateSave(w http.ResponseWriter, r *http.Request) {
-	name := r.PathValue("name")
-	s.applySection(w, r, schema.SectionTemplate,
-		func(cfg *config.Config) (any, bool) {
-			t, ok := cfg.Templates[name]
-			return &t, ok
-		},
-		func(cfg *config.Config, v any) { cfg.Templates[name] = *(v.(*config.TemplateConfig)) },
-		func(cfg *config.Config, target any, form url.Values) error {
-			t := target.(*config.TemplateConfig)
-			opts, err := applyScopeHarnessOptions(form, cfg.TemplateHarness(*t))
-			if err != nil {
-				return err
-			}
-			t.HarnessOptions = opts
-			// The permissions sub-struct parses from the same submitted form
-			// under its own section; its keys never collide with a template
-			// field, so ordering between the two Apply passes is irrelevant.
-			if err := schema.Apply(&t.Permissions, schema.SectionPermissions, form); err != nil {
-				return err
-			}
-			return schema.Apply(&t.Push, schema.SectionPushTemplate, form)
-		},
-		fmt.Sprintf("Template %q saved", name), &s.agentsRestartNeeded)
+	s.applyResource(w, r, resourceByKey("templates"), r.PathValue("name"))
 }
 
-// handleConfigWebSave is the schema-driven save path for the Web UI card on
-// /config/settings. cfg.Web is directly addressable (like cfg.Defaults), so
-// this follows handleConfigDefaultsSave's no-op-put pattern rather than the
-// map-entry copy-then-write-back pattern hosts use. Port/bind/allowed_hosts
-// changes can only take effect when the daemon's TCP listener is rebuilt at
-// boot, so the service-restart banner is always flagged (matches the
-// schema.SectionWeb Warning strings on those fields).
 func (s *Server) handleConfigWebSave(w http.ResponseWriter, r *http.Request) {
-	s.applySection(w, r, schema.SectionWeb,
-		func(cfg *config.Config) (any, bool) { return &cfg.Web, true },
-		func(cfg *config.Config, v any) {}, // &cfg.Web is already the live field — nothing to write back
-		nil,                                // no harness sub-form for this section
-		"Web UI settings saved", &s.serviceRestartNeeded)
+	s.applyResource(w, r, resourceByKey("web"), "")
 }
 
-// handleConfigClientSave is the schema-driven save path for the Remote
-// client card (default_host only — SectionClient's registry excludes
-// "hosts", which gets its own map-CRUD UI below). default_host only affects
-// future `leo agent` client dispatch, not the running service, so no
-// restart is flagged.
 func (s *Server) handleConfigClientSave(w http.ResponseWriter, r *http.Request) {
-	s.applySection(w, r, schema.SectionClient,
-		func(cfg *config.Config) (any, bool) { return &cfg.Client, true },
-		func(cfg *config.Config, v any) {}, // &cfg.Client is already the live field — nothing to write back
-		nil,                                // no harness sub-form for this section
-		"Remote client settings saved", nil)
+	s.applyResource(w, r, resourceByKey("client"), "")
 }
 
-// handleConfigHostSave is the schema-driven save path for a single remote
-// host's inline card form. Uses the same map-entry copy-then-write-back
-// shape as handleConfigTemplateSave. Host connection details (ssh, ssh_args,
-// leo_path, tmux_path) only affect future `leo agent` dispatch to that host,
-// not the running service, so no restart is flagged.
 func (s *Server) handleConfigHostSave(w http.ResponseWriter, r *http.Request) {
-	name := r.PathValue("name")
-	s.applySection(w, r, schema.SectionClientHost,
-		func(cfg *config.Config) (any, bool) {
-			h, ok := cfg.Client.Hosts[name]
-			return &h, ok
-		},
-		func(cfg *config.Config, v any) { cfg.Client.Hosts[name] = *(v.(*config.HostConfig)) },
-		nil, // no harness sub-form for this section
-		fmt.Sprintf("Host %q saved", name), nil)
+	s.applyResource(w, r, resourceByKey("hosts"), r.PathValue("name"))
 }
 
 // kindName maps a resolved schema.Kind to the string components/form.html
