@@ -23,8 +23,10 @@ The user is offered an action that cannot succeed. During the v0.58.0 update thi
    `daemon starting, agents not restored yet — waiting…`, polls until it clears, then attaches
    normally. It never calls start in that state. Timeout: 2 min (a package var, for tests). On timeout
    it exits non-zero with `daemon is still restoring agents; try again shortly`.
-5. **List output.** `leo agent list` shows `restoring` verbatim. The web UI and `/api/v1` pass the
-   status string through unchanged.
+5. **List output.** `leo agent list` shows `restoring` verbatim. The web UI shows `restoring`.
+   `/api/v1` keeps its four wire values: `observe.MapStatus` folds `restoring` into `stopped` (adding a
+   wire value is an API contract change; follow-up pending Evan's sign-off). A Start from an API
+   consumer during restore gets 503 `daemon_restoring`.
 6. **Remote.** `runRemoteAttach` executes `leo attach` on the host, so it inherits this behavior. No
    separate change.
 
