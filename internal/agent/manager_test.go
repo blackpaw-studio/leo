@@ -842,9 +842,42 @@ func TestStartNotStoppedErrors(t *testing.T) {
 	_ = agentstore.Save(home, agentstore.Record{Name: "leo-x", Workspace: "/w", SessionID: "sid"})
 
 	m := New(func() (*config.Config, error) { return cfg, nil }, sup, "", "tok")
+	m.SetReadiness(func() bool { return true })
 	err := m.Start("leo-x")
 	if !errors.Is(err, ErrAgentNotStopped) {
 		t.Fatalf("expected ErrAgentNotStopped, got %v", err)
+	}
+}
+
+// TestStartBeforeReadyReportsRestoring: before the daemon has restored its
+// agents, a non-live record that is not dormant is merely awaiting restore, so
+// Start says so instead of the misleading "not stopped".
+func TestStartBeforeReadyReportsRestoring(t *testing.T) {
+	home := t.TempDir()
+	cfg := &config.Config{HomePath: home}
+	sup := &capturingSupervisor{}
+	_ = agentstore.Save(home, agentstore.Record{Name: "leo-x", Workspace: "/w", SessionID: "sid"})
+
+	m := New(func() (*config.Config, error) { return cfg, nil }, sup, "", "tok")
+	m.SetReadiness(func() bool { return false })
+	err := m.Start("leo-x")
+	if !errors.Is(err, ErrDaemonRestoring) {
+		t.Fatalf("expected ErrDaemonRestoring, got %v", err)
+	}
+}
+
+// TestStartBeforeReadyStillStartsStoppedRecord: an explicitly stopped record
+// is never touched by restore, so starting it during the restore window works.
+func TestStartBeforeReadyStillStartsStoppedRecord(t *testing.T) {
+	home := t.TempDir()
+	cfg := &config.Config{HomePath: home}
+	sup := &capturingSupervisor{}
+	_ = agentstore.Save(home, agentstore.Record{Name: "leo-x", Workspace: t.TempDir(), SessionID: "sid", Stopped: true})
+
+	m := New(func() (*config.Config, error) { return cfg, nil }, sup, "", "tok")
+	m.SetReadiness(func() bool { return false })
+	if err := m.Start("leo-x"); errors.Is(err, ErrDaemonRestoring) {
+		t.Fatalf("a Stopped record must start during restore, got %v", err)
 	}
 }
 
@@ -1845,6 +1878,44 @@ func TestListSurfacesStoppedAgents(t *testing.T) {
 	}
 	if statuses["leo-wt"] != "stopped" {
 		t.Fatalf("stopped worktree agent missing/wrong: %v", statuses)
+	}
+}
+
+// TestListBeforeReadyReportsRestoring: until the daemon is ready, a stored
+// record that is neither live nor Stopped is awaiting restore, not stopped.
+// Stopped records keep their status; once ready, a non-live record is stopped
+// as before.
+func TestListBeforeReadyReportsRestoring(t *testing.T) {
+	home := t.TempDir()
+	cfg := &config.Config{HomePath: home}
+	sup := &capturingSupervisor{}
+	_ = agentstore.Save(home, agentstore.Record{Name: "leo-pending", Workspace: "/w"})
+	_ = agentstore.Save(home, agentstore.Record{Name: "leo-dormant", Workspace: "/w2", Stopped: true})
+
+	ready := false
+	m := New(func() (*config.Config, error) { return cfg, nil }, sup, "", "tok")
+	m.SetReadiness(func() bool { return ready })
+
+	statuses := func() map[string]string {
+		out := map[string]string{}
+		for _, r := range m.List() {
+			out[r.Name] = r.Status
+		}
+		return out
+	}
+	got := statuses()
+	if got["leo-pending"] != "restoring" || got["leo-dormant"] != "stopped" {
+		t.Fatalf("before ready: %v", got)
+	}
+	resolved, err := m.Resolve("leo-pending")
+	if err != nil || resolved.Status != "restoring" {
+		t.Fatalf("Resolve before ready: %+v, %v", resolved, err)
+	}
+
+	ready = true
+	got = statuses()
+	if got["leo-pending"] != "stopped" || got["leo-dormant"] != "stopped" {
+		t.Fatalf("after ready: %v", got)
 	}
 }
 

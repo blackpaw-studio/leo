@@ -65,6 +65,12 @@ var (
 	// than a bare 500.
 	ErrAgentNotStopped = errors.New("agent is not stopped")
 
+	// ErrDaemonRestoring is returned by Manager.Start when the daemon has not
+	// finished restoring its agents and the target record is neither live nor
+	// dormant: it is waiting for restore, so there is nothing to start yet.
+	// Callers map it to a 503 telling the operator to retry shortly.
+	ErrDaemonRestoring = errors.New("daemon is still restoring agents")
+
 	// ErrAgentAlreadyRunning is returned by Manager.Start when the target
 	// agent is currently live. Callers map it to a 4xx (409) telling the
 	// operator the agent is already up rather than a bare 500.

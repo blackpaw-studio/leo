@@ -139,6 +139,9 @@ type Manager struct {
 	// bridgeStatus reads a live agent's Record.Bridge and BridgePending;
 	// nil leaves them empty.
 	bridgeStatus func(name string) BridgeStatus
+	// isReady reports whether the daemon has finished restoring agents; nil
+	// means ready. See SetReadiness.
+	isReady func() bool
 	// goneMu guards gone: it is set after the daemon is already serving.
 	goneMu sync.Mutex
 	// gone is told when an agent is stopped by an operator or deleted, so
@@ -170,6 +173,29 @@ func (m *Manager) notifyGone(name string) {
 // the argv limit (see resolveOpeningPrompt).
 func (m *Manager) SetBridgeCapable(capable func() bool) {
 	m.bridgeCapable = capable
+}
+
+// SetReadiness tells the Manager how to learn whether the daemon has finished
+// restoring agents. Until it does, a stored record that is neither live nor
+// Stopped is awaiting restore (status "restoring"), not stopped. nil means
+// always ready — the CLI-local and test default.
+func (m *Manager) SetReadiness(isReady func() bool) {
+	m.isReady = isReady
+}
+
+// restoring reports whether the daemon is still restoring its agents.
+func (m *Manager) restoring() bool {
+	return m.isReady != nil && !m.isReady()
+}
+
+// notLiveStatus is the status of a stored record with no live process:
+// "stopped", except that before the daemon is ready a record not marked
+// Stopped is simply awaiting restore, so it reports "restoring".
+func (m *Manager) notLiveStatus(rec agentstore.Record) string {
+	if !rec.Stopped && m.restoring() {
+		return "restoring"
+	}
+	return "stopped"
 }
 
 // SetBridgeStatus tells the Manager how to read a live agent's bridge
@@ -1087,7 +1113,7 @@ func (m *Manager) List() []Record {
 			Branch:        rec.Branch,
 			CanonicalPath: rec.CanonicalPath,
 			Environments:  rec.Environments,
-			Status:        "stopped",
+			Status:        m.notLiveStatus(rec),
 			StartedAt:     rec.SpawnedAt,
 			StoppedReason: rec.StoppedReason,
 			WakeOnMessage: rec.WakeOnMessage,
@@ -1233,6 +1259,9 @@ func (m *Manager) Start(name string) error {
 		return &ErrNotFound{Query: name}
 	}
 	if !rec.Stopped {
+		if m.restoring() {
+			return fmt.Errorf("%w: %q", ErrDaemonRestoring, name)
+		}
 		return fmt.Errorf("%w: %q", ErrAgentNotStopped, name)
 	}
 

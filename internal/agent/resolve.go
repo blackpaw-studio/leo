@@ -185,7 +185,8 @@ func ValidateRepo(repo string) error {
 // hydrate builds a Record for a resolved row. A live row carries the
 // supervisor's process state (Status/StartedAt/Restarts); a dormant row has
 // no live process, so it mirrors List's dormant-row treatment: Status
-// "stopped", StartedAt from the stored SpawnedAt, and StoppedReason surfaced
+// "stopped" (or "restoring" before the daemon is ready, see notLiveStatus),
+// StartedAt from the stored SpawnedAt, and StoppedReason surfaced
 // so callers can tell a failed-restore record from a manual stop.
 func (m *Manager) hydrate(name string, state ProcessState, live bool, stored map[string]agentstore.Record) Record {
 	r := Record{Name: name}
@@ -196,6 +197,7 @@ func (m *Manager) hydrate(name string, state ProcessState, live bool, stored map
 	} else {
 		r.Status = "stopped"
 		if rec, ok := stored[name]; ok {
+			r.Status = m.notLiveStatus(rec)
 			r.StartedAt = rec.SpawnedAt
 			r.StoppedReason = rec.StoppedReason
 		}
