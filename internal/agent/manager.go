@@ -1728,7 +1728,9 @@ type RestartResult struct {
 func (m *Manager) RestartAll() RestartResult {
 	result := RestartResult{Failed: map[string]error{}}
 	for _, rec := range m.List() {
-		if rec.Status == "stopped" && rec.StoppedReason == "" {
+		// A "restoring" record is awaiting the daemon's own restore and has
+		// no process to bounce yet; skip it like an unrestored stopped one.
+		if rec.Status == "restoring" || (rec.Status == "stopped" && rec.StoppedReason == "") {
 			result.Skipped = append(result.Skipped, rec.Name)
 			continue
 		}

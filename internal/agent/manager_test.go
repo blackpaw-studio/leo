@@ -1323,6 +1323,31 @@ func TestRestartAllSkipsStoppedAndIsolatesFailures(t *testing.T) {
 	}
 }
 
+// TestRestartAllSkipsRestoringRecords: before the daemon is ready, a record
+// awaiting restore is not restartable, and RestartAll must neither attempt it
+// nor report it as a failure. Once ready, it is treated as before.
+func TestRestartAllSkipsRestoringRecords(t *testing.T) {
+	home := t.TempDir()
+	cfg := &config.Config{HomePath: home}
+	sup := &capturingSupervisor{}
+	_ = agentstore.Save(home, agentstore.Record{Name: "leo-pending", Workspace: "/w"})
+
+	m := New(func() (*config.Config, error) { return cfg, nil }, sup, "", "tok")
+	m.SetReadiness(func() bool { return false })
+
+	result := m.RestartAll()
+
+	if len(result.Failed) != 0 {
+		t.Fatalf("Failed = %v, want none for a restoring record", result.Failed)
+	}
+	if len(result.Restarted) != 0 {
+		t.Fatalf("Restarted = %v, want none", result.Restarted)
+	}
+	if len(result.Skipped) != 1 || result.Skipped[0] != "leo-pending" {
+		t.Fatalf("Skipped = %v, want [leo-pending]", result.Skipped)
+	}
+}
+
 // TestRestartAllBouncesLiveNonRunningStatuses verifies that live agents whose
 // supervisor status is not the literal "running" — e.g. "starting" or
 // "restarting" (crash-loop backoff) — are still bounced by RestartAll, not
