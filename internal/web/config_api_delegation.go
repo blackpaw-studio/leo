@@ -71,7 +71,7 @@ func (c *ConfigService) buildDelegationDocument(cfg *config.Config, revision str
 	}
 	doc.HideNativeAgentsIsDefault = d.HideNativeAgents == nil
 	for _, t := range delegationTemplates(cfg) {
-		doc.Templates = append(doc.Templates, delegationTemplateDoc{Name: t.Name, Model: t.Model})
+		doc.Templates = append(doc.Templates, delegationTemplateDoc(t))
 	}
 	for _, r := range delegationRoles(d) {
 		doc.Roles = append(doc.Roles, delegationRoleDoc{Name: r.Name, UseFor: r.UseFor, Declared: r.Declared})

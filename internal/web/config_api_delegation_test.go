@@ -60,7 +60,7 @@ func TestDelegationDocument(t *testing.T) {
 
 func TestDelegationDocumentWithoutABlock(t *testing.T) {
 	h := newAPIHarness(t)
-	noDelegation := configAPIFixtureYAML[:strings.Index(configAPIFixtureYAML, "delegation:")]
+	noDelegation, _, _ := strings.Cut(configAPIFixtureYAML, "delegation:")
 	if err := os.WriteFile(h.path, []byte(noDelegation), 0o600); err != nil {
 		t.Fatal(err)
 	}

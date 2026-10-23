@@ -1,6 +1,7 @@
 package web
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"os/exec"
@@ -9,7 +10,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"context"
 	"github.com/blackpaw-studio/leo/internal/agent"
 	"github.com/blackpaw-studio/leo/internal/config"
 	"github.com/blackpaw-studio/leo/internal/consult"

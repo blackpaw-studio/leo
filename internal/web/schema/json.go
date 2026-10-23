@@ -177,7 +177,7 @@ func fillSelect(doc *FieldDoc, f Field, src OptionSources) {
 		return
 	}
 	for _, o := range src.For(f.Options) {
-		doc.Options = append(doc.Options, OptionDoc{Value: o.Value, Label: o.Label})
+		doc.Options = append(doc.Options, OptionDoc(o))
 	}
 }
 
@@ -219,11 +219,11 @@ func HarnessDocs(h harness.Harness, src OptionSources) []FieldDoc {
 			for _, v := range f.EnumValues {
 				doc.Options = append(doc.Options, OptionDoc{Value: v, Label: v})
 			}
-		case f.Source != "" && !(f.Source == "templates" && src.Cfg == nil):
+		case f.Source != "" && (f.Source != "templates" || src.Cfg != nil):
 			if opts := src.TryFor(f.Source); len(opts) > 1 {
 				doc.Type = "enum"
 				for _, o := range opts[1:] {
-					doc.Options = append(doc.Options, OptionDoc{Value: o.Value, Label: o.Label})
+					doc.Options = append(doc.Options, OptionDoc(o))
 				}
 			}
 		}
