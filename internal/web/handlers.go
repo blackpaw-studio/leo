@@ -575,23 +575,6 @@ type flashData struct {
 	Message string
 }
 
-// reloadConfigOrWarn invokes the in-process scheduler reloader. It returns
-// an empty string on success or when no reloader is configured. On failure
-// it logs the error and returns a human-readable warning that callers
-// should surface via their flash message so operators notice that the
-// saved config didn't actually take effect in the scheduler.
-func (s *Server) reloadConfigOrWarn() string {
-	if s.reloader == nil {
-		return ""
-	}
-	if err := s.reloader.ReloadConfig(); err != nil {
-		msg := fmt.Sprintf("scheduler reload failed: %v", err)
-		log.Printf("web: %s", msg)
-		return msg
-	}
-	return ""
-}
-
 // appendReloadWarning elevates a success flash to a warning when a reload
 // produced a warning, appending the warning to the original message.
 // Pass-through when warn is empty, or when typ is already an error.
@@ -626,17 +609,6 @@ func validEntityName(name string) bool {
 // submitted name, shared by every add handler so the guidance stays
 // consistent.
 const entityNameError = "Name may contain only letters, digits, dot, underscore, dash"
-
-// validateAndSave validates the config and saves it. Returns an error message for the user, or empty on success.
-func (s *Server) validateAndSave(cfg *config.Config) string {
-	if err := cfg.Validate(); err != nil {
-		return err.Error()
-	}
-	if err := config.Save(s.configPath, cfg); err != nil {
-		return fmt.Sprintf("Failed to save: %v", err)
-	}
-	return ""
-}
 
 func (s *Server) handleCronPreview(w http.ResponseWriter, r *http.Request) {
 	expr := r.URL.Query().Get("expr")

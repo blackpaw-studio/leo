@@ -54,12 +54,12 @@ func (s *Server) handleServiceLogTail(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 
-	if s.serviceLogPath == "" {
+	if s.logFilePath() == "" {
 		logTailDimTemplate.Execute(w, "log path not configured") //nolint:errcheck
 		return
 	}
 
-	tail, err := readLogTail(s.serviceLogPath, n)
+	tail, err := readLogTail(s.logFilePath(), n)
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
 			logTailDimTemplate.Execute(w, "no log file yet") //nolint:errcheck
