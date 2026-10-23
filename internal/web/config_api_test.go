@@ -23,6 +23,7 @@ import (
 // daemon socket and /api/v1 mount them.
 type apiHarness struct {
 	t    *testing.T
+	home string
 	svc  *ConfigService
 	path string
 	mux  *http.ServeMux

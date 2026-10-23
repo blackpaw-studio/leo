@@ -186,7 +186,7 @@ A cell's validation errors land on `template`, `model` or `effort`.
 | `POST /tasks/{name}/run` | 202 `{name, status: "started"}`; runs `leo run` detached |
 | `GET /tasks/{name}/history?limit=20` | run history, newest first (`limit` at most 200) |
 | `GET /tasks/{name}/log?file=` | `{file, text, truncated?}`; `file` must be one of the task's logs. Only the last 4 MiB is read; a longer log comes back cut to whole lines with `truncated: true` |
-| `GET /config/tasks/{name}/prompt[?file=]` | `{revision, file, files, content}` |
+| `GET /config/tasks/{name}/prompt` | `{revision, file, files, content}`; always the task's configured `prompt_file` (a `?file=` query is ignored) |
 | `PUT /config/tasks/{name}/prompt` | `{content}`; writes the task's current `prompt_file` |
 | `GET /cron/preview?expr=` | `{valid, description, error?}` |
 | `POST /service/restart` | 202; graceful `leo service restart`, clears the service banner. Single-flight: while a restart is running another request is 409 `restart_in_progress` (the restart is not queued or repeated) |
@@ -198,7 +198,7 @@ A cell's validation errors land on `template`, `model` or `effort`.
 The prompt file has its own revision: the sha256 of its bytes (the hash of
 nothing when the file does not exist yet). `PUT` needs it in `If-Match`
 (428 / 409 as above) and creates the file when it is missing. The prompt path
-is confined to the task's workspace.
+is confined to the task's workspace, and a `prompt_file` that is `leo.yaml`, resolves (through symlinks or hard links) to it, or lies under leo's state directory is refused with 422 on `prompt_file`, for both `GET` and `PUT`. `files` omits those paths. To edit a different prompt, change the task's `prompt_file` field.
 
 ## Contract tests
 

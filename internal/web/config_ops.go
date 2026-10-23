@@ -53,14 +53,22 @@ func (c *ConfigService) launchServiceRestart() error {
 	if !c.restartInFlight.CompareAndSwap(false, true) {
 		return errRestartInProgress()
 	}
+	// Released by defer so a panic anywhere below cannot leave restart stuck
+	// at 409; once the process is running its watcher goroutine owns the flag.
+	handedOff := false
+	defer func() {
+		if !handedOff {
+			c.restartInFlight.Store(false)
+		}
+	}()
 	cmd := c.execCommand(c.leoPath, "service", "restart", "--graceful", "--force", "--config", c.configPath)
 	if err := cmd.Start(); err != nil {
-		c.restartInFlight.Store(false)
 		return err
 	}
+	handedOff = true
 	go func() {
+		defer c.restartInFlight.Store(false)
 		_ = cmd.Wait() // on success this daemon is replaced before it returns
-		c.restartInFlight.Store(false)
 	}()
 	c.serviceRestartNeeded.Store(false)
 	return nil
@@ -225,10 +233,10 @@ type promptDoc struct {
 
 // readPromptBytes reads a prompt file's raw bytes; a missing file is empty
 // (the create-on-first-write case).
-func readPromptBytes(workspace, file string) ([]byte, error) {
-	abs, err := config.ResolvePromptPath(workspace, file)
+func (c *ConfigService) readPromptBytes(cfg *config.Config, workspace, file string) ([]byte, error) {
+	abs, err := c.resolveGuardedPrompt(cfg, workspace, file)
 	if err != nil {
-		return nil, errInvalid("file", err.Error())
+		return nil, err
 	}
 	data, err := os.ReadFile(abs)
 	if err != nil && !errors.Is(err, fs.ErrNotExist) {
@@ -243,18 +251,14 @@ func (c *ConfigService) handlePromptGetAPI(w http.ResponseWriter, r *http.Reques
 		writeConfigError(w, err)
 		return
 	}
+	// Only the task's configured prompt_file is served; a ?file= query is
+	// ignored (the app switches files by editing the prompt_file field).
 	file := task.PromptFile
-	if q := r.URL.Query().Get("file"); q != "" {
-		file = q
-	}
 	workspace := cfg.TaskWorkspace(task)
-	files, _ := config.ListPromptFiles(workspace)
-	if files == nil {
-		files = []string{}
-	}
+	files := c.listPromptFiles(cfg, workspace)
 	doc := promptDoc{File: file, Files: files, Revision: config.RevisionOf(nil)}
 	if file != "" {
-		data, err := readPromptBytes(workspace, file)
+		data, err := c.readPromptBytes(cfg, workspace, file)
 		if err != nil {
 			writeConfigError(w, asConfigError(err))
 			return
@@ -263,6 +267,19 @@ func (c *ConfigService) handlePromptGetAPI(w http.ResponseWriter, r *http.Reques
 	}
 	w.Header().Set("ETag", `"`+doc.Revision+`"`)
 	writeConfigData(w, http.StatusOK, doc)
+}
+
+// listPromptFiles lists the workspace's markdown files, leaving out leo's own
+// state files.
+func (c *ConfigService) listPromptFiles(cfg *config.Config, workspace string) []string {
+	all, _ := config.ListPromptFiles(workspace)
+	files := make([]string, 0, len(all))
+	for _, f := range all {
+		if abs, err := config.ResolvePromptPath(workspace, f); err == nil && !c.protectedPrompt(cfg, abs) {
+			files = append(files, f)
+		}
+	}
+	return files
 }
 
 func (c *ConfigService) handlePromptPutAPI(w http.ResponseWriter, r *http.Request) {
@@ -292,7 +309,7 @@ func (c *ConfigService) handlePromptPutAPI(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	workspace := cfg.TaskWorkspace(task)
-	current, err := readPromptBytes(workspace, task.PromptFile)
+	current, err := c.readPromptBytes(cfg, workspace, task.PromptFile)
 	if err != nil {
 		writeConfigError(w, asConfigError(err))
 		return

@@ -160,13 +160,104 @@ func TestTaskPromptCreatesMissingFile(t *testing.T) {
 	}
 }
 
-func TestTaskPromptFileParamCannotEscapeWorkspace(t *testing.T) {
-	h := newAPIHarness(t)
-	res := h.do(http.MethodGet, "/config/tasks/heartbeat/prompt?file=../../etc/passwd", "", nil)
-	wantStatus(t, res, http.StatusUnprocessableEntity)
-	if f := res.errorFields(); len(f) == 0 || f[0]["field"] != "file" {
-		t.Errorf("errors = %v", f)
+// The prompt routes serve the task's configured prompt_file and nothing else:
+// a ?file= query is ignored, so a workspace that contains leo.yaml cannot be
+// used to read it.
+func TestTaskPromptIgnoresFileQuery(t *testing.T) {
+	h := newHomeWorkspaceHarness(t)
+	res := h.do(http.MethodGet, "/config/tasks/heartbeat/prompt?file=leo.yaml", "", nil)
+	wantStatus(t, res, http.StatusOK)
+	d := res.data()
+	if d["file"] != "heartbeat.md" || strings.Contains(string(res.Raw), "schedule") {
+		t.Fatalf("?file= was honored: %s", res.Raw)
 	}
+	if res := h.do(http.MethodGet, "/config/tasks/heartbeat/prompt?file=../../etc/passwd", "", nil); res.Status != http.StatusOK || res.data()["file"] != "heartbeat.md" {
+		t.Errorf("traversal query = %d %s", res.Status, res.Raw)
+	}
+}
+
+// A prompt_file that is leo.yaml, resolves to it through a symlink, or sits
+// under the state dir is refused on both routes, and nothing is written.
+func TestTaskPromptRefusesConfigAndStateFiles(t *testing.T) {
+	h := newHomeWorkspaceHarness(t)
+	before := h.fileBytes()
+	for _, task := range []string{"leaky", "linked", "statey", "stateylink"} {
+		t.Run(task, func(t *testing.T) {
+			res := h.do(http.MethodGet, "/config/tasks/"+task+"/prompt", "", nil)
+			wantStatus(t, res, http.StatusUnprocessableEntity)
+			if strings.Contains(string(res.Raw), "sk-secret") {
+				t.Fatalf("secret leaked: %s", res.Raw)
+			}
+			res = h.do(http.MethodPut, "/config/tasks/"+task+"/prompt", config.RevisionOf(nil), map[string]any{"content": "pwned"})
+			wantStatus(t, res, http.StatusUnprocessableEntity)
+		})
+	}
+	if h.fileBytes() != before {
+		t.Fatal("a refused prompt write changed leo.yaml")
+	}
+	if b, _ := os.ReadFile(filepath.Join(h.home, "state", "notes.md")); string(b) != "state notes" {
+		t.Errorf("state file changed: %q", b)
+	}
+}
+
+func TestTaskPromptListingOmitsStateFiles(t *testing.T) {
+	h := newHomeWorkspaceHarness(t)
+	res := h.do(http.MethodGet, "/config/tasks/heartbeat/prompt", "", nil)
+	wantStatus(t, res, http.StatusOK)
+	for _, f := range res.data()["files"].([]any) {
+		if strings.HasPrefix(f.(string), "state/") {
+			t.Errorf("listing includes state file %v", f)
+		}
+	}
+}
+
+// newHomeWorkspaceHarness is the dangerous setup: every task's workspace is
+// the leo home, so leo.yaml and state/ sit inside it. leo.yaml carries a
+// credential the prompt routes must never return.
+func newHomeWorkspaceHarness(t *testing.T) *apiHarness {
+	t.Helper()
+	h := newAPIHarness(t)
+	home := filepath.Dir(h.path)
+	h.home = home
+	raw, err := os.ReadFile(h.path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	extra := fmt.Sprintf(`  leaky:
+    schedule: "0 4 * * *"
+    prompt_file: leo.yaml
+    workspace: %[1]s
+  linked:
+    schedule: "0 4 * * *"
+    prompt_file: link.md
+    workspace: %[1]s
+  statey:
+    schedule: "0 4 * * *"
+    prompt_file: state/notes.md
+    workspace: %[1]s
+  stateylink:
+    schedule: "0 4 * * *"
+    prompt_file: statelink.md
+    workspace: %[1]s
+  nightly:
+`, home)
+	out := strings.Replace(string(raw), "  nightly:\n", extra, 1)
+	out = strings.Replace(out, "    prompt_file: heartbeat.md\n", "    prompt_file: heartbeat.md\n    workspace: "+home+"\n", 1)
+	out = strings.Replace(out, "defaults:\n", "defaults:\n  env:\n    ANTHROPIC_AUTH_TOKEN: sk-secret\n", 1)
+	if err := os.WriteFile(h.path, []byte(out), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	must := func(err error) {
+		t.Helper()
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	must(os.WriteFile(filepath.Join(home, "heartbeat.md"), []byte("beat"), 0o600))
+	must(os.WriteFile(filepath.Join(home, "state", "notes.md"), []byte("state notes"), 0o600))
+	must(os.Symlink(h.path, filepath.Join(home, "link.md")))
+	must(os.Symlink(filepath.Join(home, "state", "notes.md"), filepath.Join(home, "statelink.md")))
+	return h
 }
 
 func TestCronPreviewAPI(t *testing.T) {
@@ -447,4 +538,21 @@ func TestEveryWebConfigRouteRejectsAgentAndClientTokens(t *testing.T) {
 			t.Errorf("%s without a token = %d, want 401", pattern, w.Code)
 		}
 	}
+}
+
+// A restart whose launch panics must not leave the single-flight flag set, or
+// every later restart would be a 409 until the daemon is replaced.
+func TestServiceRestartReleasesFlagOnPanic(t *testing.T) {
+	h := newAPIHarness(t)
+	h.svc.execCommand = func(string, ...string) *exec.Cmd { panic("boom") }
+	func() {
+		defer func() {
+			if recover() == nil {
+				t.Error("expected the panic to propagate")
+			}
+		}()
+		h.do(http.MethodPost, "/service/restart", "", nil)
+	}()
+	h.svc.execCommand = func(string, ...string) *exec.Cmd { return exec.Command("true") }
+	wantStatus(t, h.do(http.MethodPost, "/service/restart", "", nil), http.StatusAccepted)
 }
