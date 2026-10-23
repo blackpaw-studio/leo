@@ -10,6 +10,7 @@ import (
 	"github.com/blackpaw-studio/leo/internal/config"
 	"github.com/blackpaw-studio/leo/internal/consult"
 	"github.com/blackpaw-studio/leo/internal/observe"
+	"github.com/blackpaw-studio/leo/internal/startup"
 	"github.com/blackpaw-studio/leo/internal/tmux"
 )
 
@@ -56,12 +57,19 @@ func (i consultLoopIntervals) withDefaults() consultLoopIntervals {
 // setupConsultRuntime keeps dispatch viewer command execution on the server's
 // injectable context-aware seam; this is the path used by roster sweeps too.
 func (s *Server) setupConsultRuntime(opts Options, resolveCallerSession func(string) (string, bool)) {
+	// One counter spans every seam the restart path shells out through, so
+	// the startup log can say how many tmux and git calls MarkInterrupted made.
+	var calls startup.ExecCounter
+	s.execCommand = calls.Wrap(s.execCommand)
+	s.execCommandContext = calls.WrapContext(s.execCommandContext)
 	viewer := consult.NewViewer(s.configPath, resolveCallerSession)
 	viewer.TmuxPath = s.tmuxPath()
 	viewer.ExecCommand = s.execCommand
 	viewer.ExecCommandContext = s.execCommandContext
 	s.consults = consult.NewDispatcherWithOnStart(opts.ConsultRecorder, opts.ParentContext, viewer.OnStart, viewer.Close)
 	s.consults.LeoMCP = opts.LeoMCP
+	s.consults.GitCommand = calls.Wrap(s.consults.GitCommand)
+	s.consults.SetStartupLog(opts.Startup.Logf)
 	if cfg, err := s.loadConfig(); err == nil {
 		s.consults.ApplyConfig(cfg)
 	}
@@ -120,10 +128,20 @@ func (s *Server) setupConsultRuntime(opts Options, resolveCallerSession func(str
 	// Adopting surviving dispatches re-opens their bridge keys, so it must
 	// run before the agents' restore settles adoption (Hub.AwaitAdoption):
 	// after that, a key nobody opened refuses its mod for good.
-	s.consults.MarkInterrupted()
+	stop := opts.Startup.Step("web.New: MarkInterrupted")
+	before := calls.Snapshot()
+	restart := s.consults.MarkInterrupted()
+	used := calls.Snapshot().Sub(before)
+	stop()
+	opts.Startup.Logf("startup: MarkInterrupted: %d records, %d tmux calls, %d git calls", restart.Records, used.Tmux, used.Git)
 	// Best-effort: drop settings spill files (which can hold credentials)
 	// of runs the previous daemon never finalized.
-	s.consults.SweepRunFiles()
+	stop = opts.Startup.Step("web.New: SweepRunFiles")
+	before = calls.Snapshot()
+	sweep := s.consults.SweepRunFiles()
+	used = calls.Snapshot().Sub(before)
+	stop()
+	opts.Startup.Logf("startup: SweepRunFiles: kept %d, removed %d run files, %d tmux / %d git calls", sweep.Kept, sweep.Removed, used.Tmux, used.Git)
 	if opts.ParentContext == nil {
 		return
 	}
