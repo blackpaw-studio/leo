@@ -100,7 +100,12 @@ func DaemonPID(ctx context.Context, workDir string) (int, bool) {
 // when the daemon is unreachable (missing or stale socket) or answers with
 // anything other than a well-formed 200.
 func probeHealth(ctx context.Context, sockPath string) (healthData, bool) {
-	ctx, cancel := context.WithTimeout(ctx, probeTimeout)
+	return probeHealthWithin(ctx, sockPath, probeTimeout)
+}
+
+// probeHealthWithin is probeHealth with its own round-trip bound.
+func probeHealthWithin(ctx context.Context, sockPath string, timeout time.Duration) (healthData, bool) {
+	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://daemon/health", nil)
@@ -125,6 +130,32 @@ func probeHealth(ctx context.Context, sockPath string) (healthData, bool) {
 		return healthData{}, false
 	}
 	return health, true
+}
+
+// dumpProbeTimeout bounds the /health probe `leo service dump` makes. It is
+// looser than probeTimeout because the command is run on a daemon that is
+// already struggling.
+const dumpProbeTimeout = 5 * time.Second
+
+// DumpInfo identifies the daemon a goroutine dump request would signal.
+type DumpInfo struct {
+	PID     int
+	Version string
+	// Capable is whether the daemon installed the SIGUSR1 dump handler; an
+	// older daemon would be terminated by the signal.
+	Capable bool
+}
+
+// DumpTarget asks the daemon at workDir, over its socket, who it is and
+// whether it can take a goroutine dump signal. ok is false when no daemon
+// answers. The PID comes from /health, never from the lock file, so a stale
+// lock can never point the signal at a recycled process.
+func DumpTarget(ctx context.Context, workDir string) (info DumpInfo, ok bool) {
+	health, ok := probeHealthWithin(ctx, SockPath(workDir), dumpProbeTimeout)
+	if !ok || health.PID == 0 {
+		return DumpInfo{}, false
+	}
+	return DumpInfo{PID: health.PID, Version: health.Version, Capable: health.GoroutineDump}, true
 }
 
 // WebStatus is whether the running daemon is serving its web listener, and on

@@ -25,6 +25,7 @@ import (
 	"github.com/blackpaw-studio/leo/internal/leomcp"
 	"github.com/blackpaw-studio/leo/internal/observe"
 	"github.com/blackpaw-studio/leo/internal/observe/httpapi"
+	"github.com/blackpaw-studio/leo/internal/startup"
 	"github.com/blackpaw-studio/leo/internal/tmux"
 	"github.com/blackpaw-studio/leo/internal/web"
 )
@@ -171,10 +172,27 @@ type Server struct {
 	// webListening is the web listener's bound address once it is serving,
 	// reported on /health.
 	webListening atomic.Pointer[healthWeb]
+	// startup times StartWeb's steps; nil records nothing.
+	startup *startup.Timer
+	// goroutineDump is whether the process handles SIGUSR1 with a goroutine
+	// dump, advertised on /health.
+	goroutineDump bool
 }
 
 // Option configures a Server at construction.
 type Option func(*Server)
+
+// WithStartupTimer times StartWeb's steps through t.
+func WithStartupTimer(t *startup.Timer) Option {
+	return func(s *Server) { s.startup = t }
+}
+
+// WithGoroutineDump declares that the process handles SIGUSR1 with a
+// goroutine dump, so /health tells `leo service dump` it is safe to signal.
+// Set it only after the handler is installed.
+func WithGoroutineDump() Option {
+	return func(s *Server) { s.goroutineDump = true }
+}
 
 // WithBridge serves hub on the bridge routes instead of a private one.
 func WithBridge(hub *bridge.Hub) Option {
@@ -481,6 +499,7 @@ func (s *Server) StartWeb(cfg *config.Config, agentSvc web.AgentService) error {
 	// Supervised agents' turn hooks complete their in-flight persistent-task
 	// invocations, whatever the harness (see sessionRouter.ObserveTurn).
 	observeOpts = append(observeOpts, web.WithTurnObserver(s.observeAgentTurn))
+	stop := s.startup.Step("web.New")
 	s.webServer = web.New(s.configPath, &processAdapter{inner: s.processes}, s.scheduler, s, agentSvc, web.Options{
 		ConfigWriter:   s.configWriter,
 		Port:           port,
@@ -502,19 +521,26 @@ func (s *Server) StartWeb(cfg *config.Config, agentSvc web.AgentService) error {
 		Devices:    devices.NewStore(cfg.StatePath(), nil),
 		PublicURLs: cfg.Web.PublicURLs,
 		Chat:       web.ChatOptions{Store: s.chatStore, AttachmentsDir: s.chatAttachmentsDir, Publisher: s.chatPublisher, TaskRun: s.TaskRun},
+		Startup:    s.startup,
 	}, observeOpts...)
+	stop()
 	s.setControl(s.webServer.ControlHandler())
 	s.setClientSink(s.webServer)
 	s.setDrainNotifier(s.webServer.DrainNotifier())
 	s.setRunningDispatches(s.webServer.RunningDispatches)
 	if s.chatStore != nil {
+		stop = s.startup.Step("StartChat/Recover")
 		s.webServer.StartChat(s.parentContext)
+		stop()
 		s.setChat(s.webServer.ChatHandler())
 	}
 	s.setWebSources(s.webServer.ObserveSources())
 	bind := cfg.WebBind()
 	addr := fmt.Sprintf("%s:%d", bind, port)
-	if err := s.webServer.ListenAndServe(addr); err != nil {
+	stop = s.startup.Step("listener bind")
+	err = s.webServer.ListenAndServe(addr)
+	stop()
+	if err != nil {
 		return fmt.Errorf("starting web UI: %w", err)
 	}
 	s.setWebListening(bind, port)
@@ -685,7 +711,7 @@ func (s *Server) MarkReady() {
 }
 
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
-	writeData(w, http.StatusOK, healthData{Version: s.leoVersion, Ready: s.ready.Load(), PID: s.pid, Web: s.webListening.Load(), Claude: s.claudeHealth()})
+	writeData(w, http.StatusOK, healthData{Version: s.leoVersion, Ready: s.ready.Load(), PID: s.pid, Web: s.webListening.Load(), Claude: s.claudeHealth(), GoroutineDump: s.goroutineDump})
 }
 
 // SetClaudeLookup wires the claude resolution /health reports. It is called
