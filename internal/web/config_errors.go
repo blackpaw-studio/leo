@@ -79,6 +79,10 @@ func configUnavailable(err error) *ConfigError {
 type validationScope struct {
 	Resource string // "defaults", "templates", "tasks", "environments", "web", "client", "hosts"
 	Name     string // the item, for collections
+	// Profile and Role narrow "delegation" to one profile × role cell, whose
+	// fields are template, model and effort.
+	Profile string
+	Role    string
 }
 
 // optionKeyPattern pulls the offending key out of a harness DecodeOptions
@@ -118,6 +122,11 @@ func scopePrefix(scope validationScope) (prefix string, single string) {
 		return "client.hosts." + scope.Name + ".", ""
 	case "client":
 		return "client.", ""
+	case "delegation":
+		if scope.Profile != "" && scope.Role != "" {
+			return "delegation.profiles." + scope.Profile + ".roles." + scope.Role + ".", ""
+		}
+		return "delegation.", ""
 	}
 	return "", ""
 }

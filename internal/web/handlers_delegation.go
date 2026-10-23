@@ -263,29 +263,41 @@ func (s *Server) handleDelegationPreview(w http.ResponseWriter, r *http.Request)
 		http.Error(w, err.Error(), 500)
 		return
 	}
+	data, err := previewDelegation(cfg, r.URL.Query().Get("profile"))
+	if err != nil {
+		status := http.StatusNotFound
+		if ce := asConfigError(err); ce.Code == CodeDelegationMissing {
+			status = http.StatusBadRequest
+		}
+		http.Error(w, err.Error(), status)
+		return
+	}
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	if err := s.templates.ExecuteTemplate(w, "delegation_preview", data); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+	}
+}
+
+// previewDelegation is what activating target would change relative to the
+// active profile, and which declared roles target leaves unrouted.
+func previewDelegation(cfg *config.Config, target string) (delegationPreviewData, error) {
 	d, err := requireDelegation(cfg)
 	if err != nil {
-		http.Error(w, err.Error(), 400)
-		return
+		return delegationPreviewData{}, err
 	}
-	target := r.URL.Query().Get("profile")
 	p, ok := d.Profiles[target]
 	if !ok {
-		http.Error(w, "profile not found", 404)
-		return
+		return delegationPreviewData{}, profileNotFound(target)
 	}
 	current := d.Profiles[d.ActiveProfile]
-	diff := config.DiffProfiles(current, p)
-	data := delegationPreviewData{Profile: target}
-	missing := []string{}
+	data := delegationPreviewData{Profile: target, Missing: []string{}}
 	for role := range d.Roles {
 		if _, ok := p.Roles[role]; !ok {
-			missing = append(missing, role)
+			data.Missing = append(data.Missing, role)
 		}
 	}
-	sort.Strings(missing)
-	data.Missing = missing
-	for _, role := range diff {
+	sort.Strings(data.Missing)
+	for _, role := range config.DiffProfiles(current, p) {
 		before, hadBefore := current.Roles[role]
 		after, hadAfter := p.Roles[role]
 		switch {
@@ -297,8 +309,5 @@ func (s *Server) handleDelegationPreview(w http.ResponseWriter, r *http.Request)
 			data.Changes = append(data.Changes, delegationProfileChange{Role: role, Kind: "changed", Before: before, After: after})
 		}
 	}
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	if err := s.templates.ExecuteTemplate(w, "delegation_preview", data); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-	}
+	return data, nil
 }

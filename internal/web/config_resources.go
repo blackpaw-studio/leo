@@ -264,6 +264,10 @@ func resourceByKey(key string) *configResource {
 // resource: its registry keys plus "<sub>.<key>" for each subsection.
 func fieldKeys(resource string) map[string]bool {
 	keys := map[string]bool{}
+	if resource == "delegation" {
+		keys["template"], keys["model"], keys["effort"] = true, true, true
+		return keys
+	}
 	r := resourceByKey(resource)
 	if r == nil {
 		return keys
