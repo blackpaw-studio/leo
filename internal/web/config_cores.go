@@ -120,7 +120,7 @@ func (c *ConfigService) mutateConfig(apply func(*config.Config) error) (warn, er
 // POST, or the JSON overlay's rendering); check, when non-nil, runs after the
 // flat fields are applied and may reject the write with field problems.
 func (c *ConfigService) ApplyValues(ifMatch string, res *configResource, name string, form url.Values,
-	check func(cfg *config.Config, target any) []schema.Problem) (WriteResult, error) {
+	check func(cfg *config.Config, target any, form url.Values) []schema.Problem) (WriteResult, error) {
 	opts := mutateOpts{IfMatch: ifMatch, Scope: validationScope{Resource: res.Key, Name: name}, Flag: res.flag(c)}
 	return c.Mutate(opts, func(cfg *config.Config) error {
 		target, ok := res.locate(cfg, name)
@@ -139,12 +139,12 @@ func (c *ConfigService) ApplyValues(ifMatch string, res *configResource, name st
 // change in the same form is already reflected) harness_options, then the
 // nested subsections.
 func applyForm(cfg *config.Config, res *configResource, target any, form url.Values,
-	check func(*config.Config, any) []schema.Problem) error {
+	check func(*config.Config, any, url.Values) []schema.Problem) error {
 	if err := schema.Apply(target, res.Section, form); err != nil {
 		return fieldError(err, "")
 	}
 	if check != nil {
-		if problems := check(cfg, target); len(problems) > 0 {
+		if problems := check(cfg, target, form); len(problems) > 0 {
 			return errInvalidFields(problems)
 		}
 	}

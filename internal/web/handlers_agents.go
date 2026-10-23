@@ -12,6 +12,7 @@ import (
 	"github.com/blackpaw-studio/leo/internal/agent"
 	"github.com/blackpaw-studio/leo/internal/config"
 	"github.com/blackpaw-studio/leo/internal/redact"
+	"github.com/blackpaw-studio/leo/internal/web/schema"
 )
 
 // resolveAgentQuery resolves a shorthand query to the canonical agent name
@@ -44,6 +45,9 @@ type apiResponse struct {
 	// Code is a stable machine-readable error class, set only where an
 	// endpoint documents one (see ClassifyEnvironmentError).
 	Code string `json:"code,omitempty"`
+	// Errors lists per-field problems of a 422 from the config API; field ""
+	// is form-level.
+	Errors []schema.Problem `json:"errors,omitempty"`
 }
 
 func writeJSON(w http.ResponseWriter, status int, resp apiResponse) {
