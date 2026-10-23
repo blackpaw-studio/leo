@@ -20,7 +20,7 @@ const dispatchSpillPrefix = "dispatch-"
 // launch again; SweepRunFiles removes every run file whose id is not in keep.
 type runFileCleaner interface {
 	ReleaseRunFiles(id string)
-	SweepRunFiles(keep map[string]bool)
+	SweepRunFiles(keep map[string]bool) (removed int)
 }
 
 // releaseRunFilesLocked drops a finalized run's files. Callers hold d.mu.
@@ -30,10 +30,15 @@ func (d *Dispatcher) releaseRunFilesLocked(id string) {
 	}
 }
 
+// SweepSummary reports what SweepRunFiles kept and removed.
+type SweepSummary struct {
+	Kept, Removed int
+}
+
 // SweepRunFiles removes run files for every run that is not a live
 // interactive dispatch. Best-effort; meant for daemon startup, after
 // MarkInterrupted has settled the previous daemon's runs.
-func (d *Dispatcher) SweepRunFiles() {
+func (d *Dispatcher) SweepRunFiles() SweepSummary {
 	d.mu.Lock()
 	c, ok := d.interactiveRuntime.(runFileCleaner)
 	keep := make(map[string]bool)
@@ -43,9 +48,11 @@ func (d *Dispatcher) SweepRunFiles() {
 		}
 	}
 	d.mu.Unlock()
+	summary := SweepSummary{Kept: len(keep)}
 	if ok {
-		c.SweepRunFiles(keep)
+		summary.Removed = c.SweepRunFiles(keep)
 	}
+	return summary
 }
 
 // dispatchSpillPath is the settings spill file of run id ("" if unusable).
@@ -83,20 +90,23 @@ func removeIfExists(path, what, id string) {
 // SweepRunFiles removes every dispatch settings spill and opening-brief file
 // whose run id is not in keep. Agent spill files (<agent>.json) are left
 // alone.
-func (r *TmuxInteractiveRuntime) SweepRunFiles(keep map[string]bool) {
+func (r *TmuxInteractiveRuntime) SweepRunFiles(keep map[string]bool) int {
 	home := r.spillHome()
 	if home == "" {
-		return
+		return 0
 	}
-	sweepGlob(filepath.Join(home, "state", "settings", dispatchSpillPrefix+"*.json"), dispatchSpillPrefix, ".json", "settings spill", keep)
-	sweepGlob(filepath.Join(home, "state", claudeharness.DispatchBriefSpillDir, "*.txt"), "", ".txt", "opening brief", keep)
+	return sweepGlob(filepath.Join(home, "state", "settings", dispatchSpillPrefix+"*.json"), dispatchSpillPrefix, ".json", "settings spill", keep) +
+		sweepGlob(filepath.Join(home, "state", claudeharness.DispatchBriefSpillDir, "*.txt"), "", ".txt", "opening brief", keep)
 }
 
-func sweepGlob(pattern, prefix, suffix, what string, keep map[string]bool) {
+// sweepGlob removes the files matching pattern whose run id is not in keep
+// and returns how many it removed.
+func sweepGlob(pattern, prefix, suffix, what string, keep map[string]bool) int {
 	matches, err := filepath.Glob(pattern)
 	if err != nil {
-		return
+		return 0
 	}
+	removed := 0
 	for _, path := range matches {
 		id := strings.TrimSuffix(strings.TrimPrefix(filepath.Base(path), prefix), suffix)
 		if keep[id] {
@@ -104,6 +114,9 @@ func sweepGlob(pattern, prefix, suffix, what string, keep map[string]bool) {
 		}
 		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
 			fmt.Fprintf(os.Stderr, "dispatch %s: sweeping %s: %v\n", id, what, err)
+			continue
 		}
+		removed++
 	}
+	return removed
 }
