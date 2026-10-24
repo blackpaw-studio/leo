@@ -1,0 +1,50 @@
+{
+  "body": {
+    "data": {
+      "item": {
+        "effective_harness": "claude",
+        "inherited": {},
+        "name": "coder3",
+        "revision": "sha256:71098ce3fe7bfad5b7417e19629b89302932ee177eae3b393c20d36fd8ea0587",
+        "values": {
+          "add_dirs": [],
+          "channels": [],
+          "dev_channels": [],
+          "env": {},
+          "environments": [],
+          "harness": "",
+          "harness_options": {
+            "permission_mode": "plan"
+          },
+          "idle_suspend_after": "",
+          "isolation": "",
+          "max_turns": null,
+          "mcp_config": "",
+          "model": "opus",
+          "permissions": {
+            "can_consult": [],
+            "can_message": [],
+            "can_spawn": [
+              "reviewer"
+            ],
+            "deny_tools": []
+          },
+          "push": {
+            "chat": null,
+            "errored": null,
+            "finished": null,
+            "needs_input": null
+          },
+          "workspace": "/tmp/coder"
+        }
+      },
+      "restart_required": {
+        "agents": true,
+        "service": true
+      },
+      "revision": "sha256:71098ce3fe7bfad5b7417e19629b89302932ee177eae3b393c20d36fd8ea0587"
+    },
+    "ok": true
+  },
+  "status": 200
+}

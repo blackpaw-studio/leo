@@ -1,0 +1,11 @@
+{
+  "body": {
+    "code": "revision_mismatch",
+    "data": {
+      "revision": "sha256:d1e5ba28f778048557b354bff517f7ba525088d0ef619dbdaa4f1b36f87f9f08"
+    },
+    "error": "leo.yaml changed since it was read",
+    "ok": false
+  },
+  "status": 409
+}

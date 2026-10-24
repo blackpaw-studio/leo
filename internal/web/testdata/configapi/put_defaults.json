@@ -1,0 +1,33 @@
+{
+  "body": {
+    "data": {
+      "item": {
+        "effective_harness": "claude",
+        "revision": "sha256:b32756745ab108c8e9bf254031b97032c6ed122a2c7bf8c08d16985453c76795",
+        "values": {
+          "environments": [
+            "base"
+          ],
+          "harness": "",
+          "harness_options": {},
+          "idle_suspend_after": "",
+          "max_turns": 10,
+          "model": "opus",
+          "push": {
+            "chat": true,
+            "errored": true,
+            "finished": true,
+            "needs_input": true
+          }
+        }
+      },
+      "restart_required": {
+        "agents": true,
+        "service": false
+      },
+      "revision": "sha256:b32756745ab108c8e9bf254031b97032c6ed122a2c7bf8c08d16985453c76795"
+    },
+    "ok": true
+  },
+  "status": 200
+}

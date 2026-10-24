@@ -19,11 +19,13 @@ import (
 func TestSetupConsultRuntimeUsesContextExecSeamForViewer(t *testing.T) {
 	var contextCalls atomic.Int32
 	s := &Server{
-		configPath: "test.yaml",
-		leoPath:    "leo",
-		execCommand: func(string, ...string) *exec.Cmd {
-			t.Fatal("viewer used legacy command seam while context seam was configured")
-			return nil
+		ConfigService: &ConfigService{
+			configPath: "test.yaml",
+			leoPath:    "leo",
+			execCommand: func(string, ...string) *exec.Cmd {
+				t.Fatal("viewer used legacy command seam while context seam was configured")
+				return nil
+			},
 		},
 		execCommandContext: func(_ context.Context, _ string, args ...string) *exec.Cmd {
 			contextCalls.Add(1)
@@ -51,9 +53,7 @@ func TestSetupConsultRuntimeUsesContextExecSeamForViewer(t *testing.T) {
 func TestShutdownStopsConsultRuntimeLoop(t *testing.T) {
 	var rosterCalls atomic.Int32
 	s := &Server{
-		configPath:         "test.yaml",
-		leoPath:            "leo",
-		execCommand:        func(string, ...string) *exec.Cmd { return exec.Command("true") },
+		ConfigService:      &ConfigService{configPath: "test.yaml", leoPath: "leo", execCommand: func(string, ...string) *exec.Cmd { return exec.Command("true") }},
 		execCommandContext: func(ctx context.Context, _ string, _ ...string) *exec.Cmd { return exec.CommandContext(ctx, "true") },
 		consultIntervals: consultLoopIntervals{
 			sweep:      time.Millisecond,
@@ -87,9 +87,7 @@ func TestConsultRuntimeLoopPollsLivePlacementOnEachTickUntilShutdown(t *testing.
 	ticks := make(chan time.Time)
 	polled := make(chan struct{})
 	s := &Server{
-		configPath:         "test.yaml",
-		leoPath:            "leo",
-		execCommand:        func(string, ...string) *exec.Cmd { return exec.Command("true") },
+		ConfigService:      &ConfigService{configPath: "test.yaml", leoPath: "leo", execCommand: func(string, ...string) *exec.Cmd { return exec.Command("true") }},
 		execCommandContext: func(ctx context.Context, _ string, _ ...string) *exec.Cmd { return exec.CommandContext(ctx, "true") },
 		updateRoster:       func([]consult.Record, time.Time) {},
 		placementTicks:     ticks,
@@ -134,9 +132,7 @@ func TestSetupConsultRuntimeReopensAnAdoptedDispatchsBridge(t *testing.T) {
 	_ = h.Close(consult.StatusRunning, nil)
 	startCommand := "exec 'env' 'LEO_DISPATCH_ID=" + id + "' 'claude'"
 	s := &Server{
-		configPath:  "test.yaml",
-		leoPath:     "leo",
-		execCommand: func(string, ...string) *exec.Cmd { return exec.Command("true") },
+		ConfigService: &ConfigService{configPath: "test.yaml", leoPath: "leo", execCommand: func(string, ...string) *exec.Cmd { return exec.Command("true") }},
 		execCommandContext: func(_ context.Context, _ string, args ...string) *exec.Cmd {
 			if slices.Contains(args, "list-panes") && slices.Contains(args, "%9") {
 				return exec.Command("printf", "%s\n", "%9\t0\t"+launch+"\t"+startCommand)

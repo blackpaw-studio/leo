@@ -1,0 +1,8 @@
+{
+  "body": {
+    "code": "revision_required",
+    "error": "If-Match with the current revision is required",
+    "ok": false
+  },
+  "status": 428
+}

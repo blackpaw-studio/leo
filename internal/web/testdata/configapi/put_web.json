@@ -1,0 +1,24 @@
+{
+  "body": {
+    "data": {
+      "item": {
+        "revision": "sha256:6dbd62d0f01d8fae8e00f7b62bae11913d8a16de50b3b1020e51c20f7066809d",
+        "values": {
+          "allowed_hosts": [],
+          "bind": "",
+          "enabled": true,
+          "port": 9000,
+          "public_urls": [],
+          "trusted_proxies": []
+        }
+      },
+      "restart_required": {
+        "agents": true,
+        "service": true
+      },
+      "revision": "sha256:6dbd62d0f01d8fae8e00f7b62bae11913d8a16de50b3b1020e51c20f7066809d"
+    },
+    "ok": true
+  },
+  "status": 200
+}

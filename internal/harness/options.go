@@ -12,6 +12,10 @@ const (
 	OptionEnum                         // fixed value list → string
 	OptionStringList                   // comma-separated input → []any of string
 	OptionYAMLMap                      // YAML textarea → map[string]any
+
+	// OptionTypeCount is one past the last option type, so tests can walk
+	// every type (the JSON config schema must be able to describe each).
+	OptionTypeCount
 )
 
 // OptionField describes one harness_options key for web-form rendering. It

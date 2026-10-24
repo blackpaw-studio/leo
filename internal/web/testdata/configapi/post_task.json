@@ -1,0 +1,44 @@
+{
+  "body": {
+    "data": {
+      "item": {
+        "effective_harness": "claude",
+        "inherited": {
+          "model": "opus"
+        },
+        "name": "weekly",
+        "revision": "sha256:3276bf9e832bcb4366a69706a48c9ec8512e5e728187a57d85b462b0887d5733",
+        "values": {
+          "channels": [],
+          "dev_channels": [],
+          "enabled": false,
+          "env": {},
+          "environments": [],
+          "harness": "",
+          "harness_options": {},
+          "max_turns": null,
+          "model": "",
+          "notify_on_fail": false,
+          "owner": "",
+          "prompt_file": "prompts/weekly.md",
+          "queue_max": null,
+          "retries": null,
+          "runtime": "",
+          "schedule": "0 9 * * 1",
+          "silent": false,
+          "template": "",
+          "timeout": "",
+          "timezone": "",
+          "workspace": ""
+        }
+      },
+      "restart_required": {
+        "agents": true,
+        "service": true
+      },
+      "revision": "sha256:3276bf9e832bcb4366a69706a48c9ec8512e5e728187a57d85b462b0887d5733"
+    },
+    "ok": true
+  },
+  "status": 201
+}

@@ -312,6 +312,12 @@ func (s *Server) handleAgentRestartAll(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	result := s.agentMgr.RestartAll()
+	// A clean batch applies every pending config change, so the web banner and
+	// the config API's restart_required drop the agents flag, as they do when
+	// the restart is started from the web UI.
+	if len(result.Failed) == 0 && s.configSvc != nil {
+		s.configSvc.ClearAgentsRestartNeeded()
+	}
 
 	failed := make(map[string]string, len(result.Failed))
 	for name, err := range result.Failed {

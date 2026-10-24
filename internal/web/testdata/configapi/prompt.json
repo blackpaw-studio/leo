@@ -1,0 +1,14 @@
+{
+  "body": {
+    "data": {
+      "content": "Check the thing.\n",
+      "file": "heartbeat.md",
+      "files": [
+        "heartbeat.md"
+      ],
+      "revision": "sha256:6fc3dd364461e340440bc63bde172e4074ca2f8a3f9a871fbdce00ad659667e8"
+    },
+    "ok": true
+  },
+  "status": 200
+}
