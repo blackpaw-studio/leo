@@ -123,6 +123,10 @@ type Dispatcher struct {
 	AgentToken string
 	// liveUsage reads running interactive claude dispatches' transcripts.
 	liveUsage liveUsageConfig
+	// startupLog receives startup diagnostics (see SetStartupLog);
+	// slowRestartRecord overrides defaultSlowRestartRecord when non-zero.
+	startupLog        func(format string, args ...any)
+	slowRestartRecord time.Duration
 }
 
 func (d *Dispatcher) SetCloseFinishedViewer(fn func(Record, func(string) error) (Record, error)) {
@@ -1200,84 +1204,114 @@ func (d *Dispatcher) waitDone(id string) {
 	<-state.done
 }
 
+// RestartSummary reports what MarkInterrupted processed.
+type RestartSummary struct {
+	Records int
+}
+
 // MarkInterrupted marks persisted in-flight dispatches as failed after a
 // daemon restart. In-memory runs belong to this process and are untouched.
-func (d *Dispatcher) MarkInterrupted() {
+func (d *Dispatcher) MarkInterrupted() RestartSummary {
 	recorder, ok := d.recorder.(*FileRecorder)
 	if !ok {
-		return
+		return RestartSummary{}
 	}
 	markedAt := d.now()
-	for _, rec := range func() []Record { records, _ := Load(filepath.Dir(recorder.dir)); return records }() {
-		rec = d.reconcileRestartViewer(rec)
-		if rec.WorktreeState == WorktreeCreating {
-			rec = d.reconcileCreating(rec)
+	records, _ := Load(filepath.Dir(recorder.dir))
+	for _, rec := range records {
+		tm := d.newRecordTimings()
+		d.markInterruptedRecord(recorder, rec, markedAt, tm)
+		d.warnSlowRecord(rec.ID, tm)
+	}
+	return RestartSummary{Records: len(records)}
+}
+
+// markInterruptedRecord settles one persisted record left by the previous daemon.
+func (d *Dispatcher) markInterruptedRecord(recorder *FileRecorder, rec Record, markedAt time.Time, tm *recordTimings) {
+	stop := tm.start("viewer pane lookup")
+	rec = d.reconcileRestartViewer(rec)
+	stop()
+	if rec.WorktreeState == WorktreeCreating {
+		stop = tm.start("worktree reconcile")
+		rec = d.reconcileCreating(rec)
+		stop()
+	}
+	if rec.Status.Terminal() {
+		writerUncertain := false
+		if rec.Isolation == "worktree" && rec.WorktreeState != WorktreeRemoved && rec.Mode != ModeInteractive {
+			writerUncertain = true
 		}
-		if rec.Status.Terminal() {
-			writerUncertain := false
-			if rec.Isolation == "worktree" && rec.WorktreeState != WorktreeRemoved && rec.Mode != ModeInteractive {
+		// A released run's pane was killed (release fails otherwise); any
+		// other interactive run without a recorded pane may still have an
+		// unrecorded one.
+		if rec.Isolation == "worktree" && rec.WorktreeState != WorktreeRemoved && rec.Mode == ModeInteractive && rec.PaneID == "" && rec.Status != StatusReleased {
+			writerUncertain = true
+		}
+		if rec.Mode == ModeInteractive && rec.PaneID != "" && d.interactiveRuntime != nil {
+			stop = tm.start("pane presence")
+			alive, certain := panePresent(d.interactiveRuntime, rec.PaneID)
+			stop()
+			if !certain && rec.Isolation == "worktree" && rec.WorktreeState != WorktreeRemoved {
 				writerUncertain = true
-			}
-			// A released run's pane was killed (release fails otherwise); any
-			// other interactive run without a recorded pane may still have an
-			// unrecorded one.
-			if rec.Isolation == "worktree" && rec.WorktreeState != WorktreeRemoved && rec.Mode == ModeInteractive && rec.PaneID == "" && rec.Status != StatusReleased {
-				writerUncertain = true
-			}
-			if rec.Mode == ModeInteractive && rec.PaneID != "" && d.interactiveRuntime != nil {
-				alive, certain := panePresent(d.interactiveRuntime, rec.PaneID)
-				if !certain && rec.Isolation == "worktree" && rec.WorktreeState != WorktreeRemoved {
-					writerUncertain = true
-				} else if alive {
-					cleaned, killErr := d.closeRestartPane(rec)
-					if killErr != nil {
-						if rec.Isolation == "worktree" && rec.WorktreeState != WorktreeRemoved {
-							rec.WorktreeState = WorktreeDeferred
-							writerUncertain = true
-						}
-						d.trackRestartKill(rec)
-					} else {
-						rec = cleaned
-						_ = writeRecord(recorder.dir, rec)
+			} else if alive {
+				stop = tm.start("pane close")
+				cleaned, killErr := d.closeRestartPane(rec)
+				stop()
+				if killErr != nil {
+					if rec.Isolation == "worktree" && rec.WorktreeState != WorktreeRemoved {
+						rec.WorktreeState = WorktreeDeferred
+						writerUncertain = true
 					}
+					d.trackRestartKill(rec)
+				} else {
+					rec = cleaned
+					_ = writeRecord(recorder.dir, rec)
 				}
 			}
-			if writerUncertain {
-				rec = d.setWorktreeState(rec, nil, WorktreeDeferred)
-			} else {
-				rec = d.cleanupWorktree(rec.ID)
-			}
-			d.restorePendingNotifications(rec)
-			continue
 		}
-		if rec.Mode == ModeInteractive {
-			d.restoreInteractive(rec)
-			continue
+		stop = tm.start("worktree cleanup")
+		if writerUncertain {
+			rec = d.setWorktreeState(rec, nil, WorktreeDeferred)
+		} else {
+			rec = d.cleanupWorktree(rec.ID)
 		}
-		rec.Error, rec.EndedAt = "daemon restarted", markedAt
-		if rec.Mode == "" {
-			rec.Mode = ModeHeadless
-		}
-		rec.Status = StatusFailed
-		if len(rec.Turns) == 0 {
-			synthesizeOpeningTurn(&rec)
-		}
-		for i := range rec.Turns {
-			if rec.Turns[i].Outcome == "" {
-				rec.Turns[i].Outcome, rec.Turns[i].Status = TurnInterrupted, StatusFailed
-				rec.Turns[i].Error, rec.Turns[i].EndedAt = "daemon restarted", markedAt
-				rec.Turns[i].SlotHeld, rec.Turns[i].Queued = false, false
-			}
-		}
-		if rec.Isolation == "worktree" && rec.WorktreeState != WorktreeRemoved {
-			rec.WorktreeState = WorktreeDeferred
-		}
-		rec.foldActive(markedAt)
-		d.mu.Lock()
-		d.addRestartCandidates(&rec)
-		d.mu.Unlock()
-		d.persistRestartSettle(recorder, rec)
+		stop()
+		stop = tm.start("notification restore")
+		d.restorePendingNotifications(rec)
+		stop()
+		return
 	}
+	if rec.Mode == ModeInteractive {
+		stop = tm.start("interactive restore")
+		d.restoreInteractive(rec)
+		stop()
+		return
+	}
+	rec.Error, rec.EndedAt = "daemon restarted", markedAt
+	if rec.Mode == "" {
+		rec.Mode = ModeHeadless
+	}
+	rec.Status = StatusFailed
+	if len(rec.Turns) == 0 {
+		synthesizeOpeningTurn(&rec)
+	}
+	for i := range rec.Turns {
+		if rec.Turns[i].Outcome == "" {
+			rec.Turns[i].Outcome, rec.Turns[i].Status = TurnInterrupted, StatusFailed
+			rec.Turns[i].Error, rec.Turns[i].EndedAt = "daemon restarted", markedAt
+			rec.Turns[i].SlotHeld, rec.Turns[i].Queued = false, false
+		}
+	}
+	if rec.Isolation == "worktree" && rec.WorktreeState != WorktreeRemoved {
+		rec.WorktreeState = WorktreeDeferred
+	}
+	rec.foldActive(markedAt)
+	stop = tm.start("settle")
+	d.mu.Lock()
+	d.addRestartCandidates(&rec)
+	d.mu.Unlock()
+	d.persistRestartSettle(recorder, rec)
+	stop()
 }
 
 func (d *Dispatcher) closeRestartPane(rec Record) (Record, error) {

@@ -20,14 +20,17 @@ func (r spillRuntime) ReleaseRunFiles(id string) {
 	_ = os.Remove(filepath.Join(r.dir, "dispatch-"+id+".json"))
 }
 
-func (r spillRuntime) SweepRunFiles(keep map[string]bool) {
+func (r spillRuntime) SweepRunFiles(keep map[string]bool) int {
+	removed := 0
 	matches, _ := filepath.Glob(filepath.Join(r.dir, "dispatch-*.json"))
 	for _, m := range matches {
 		id := filepath.Base(m)[len("dispatch-") : len(filepath.Base(m))-len(".json")]
 		if !keep[id] {
 			_ = os.Remove(m)
+			removed++
 		}
 	}
+	return removed
 }
 
 func writeSpill(t *testing.T, dir, id string) string {
@@ -85,8 +88,11 @@ func TestSweepRunFilesKeepsOnlyLiveRuns(t *testing.T) {
 	donePath := writeSpill(t, dir, "d-done")
 	orphan := writeSpill(t, dir, "d-forgotten")
 
-	d.SweepRunFiles()
+	summary := d.SweepRunFiles()
 
+	if want := (SweepSummary{Kept: 1, Removed: 2}); summary != want {
+		t.Fatalf("summary = %+v, want %+v", summary, want)
+	}
 	if _, err := os.Stat(livePath); err != nil {
 		t.Fatalf("live run's spill file removed: %v", err)
 	}

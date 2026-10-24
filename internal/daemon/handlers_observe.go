@@ -45,6 +45,10 @@ type healthData struct {
 	// request. The daemon runs without it, so this is how a client (the app's
 	// onboarding) learns it must be installed. Absent when no lookup is wired.
 	Claude *healthClaude `json:"claude,omitempty"`
+	// GoroutineDump is true when the daemon dumps its goroutines on SIGUSR1
+	// (see WithGoroutineDump). `leo service dump` signals only a daemon that
+	// says so, because SIGUSR1's default action is to terminate the process.
+	GoroutineDump bool `json:"goroutine_dump,omitempty"`
 }
 
 // healthClaude is the claude CLI's resolution: Path is set only when Found.

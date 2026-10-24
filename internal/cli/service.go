@@ -48,6 +48,7 @@ demand. Subcommands (start/stop/restart/logs) manage the background daemon.`,
 		newServiceReloadCmd(),
 		newServiceReparentCmd(),
 		newServiceHandoverCmd(),
+		newServiceDumpCmd(),
 	)
 
 	return cmd

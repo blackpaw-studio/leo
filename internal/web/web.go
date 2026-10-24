@@ -26,6 +26,7 @@ import (
 	"github.com/blackpaw-studio/leo/internal/leomcp"
 	"github.com/blackpaw-studio/leo/internal/observe"
 	"github.com/blackpaw-studio/leo/internal/peerinbox"
+	"github.com/blackpaw-studio/leo/internal/startup"
 	"github.com/blackpaw-studio/leo/internal/tmux"
 )
 
@@ -421,6 +422,9 @@ type Options struct {
 	// ParentContext is the daemon lifetime. Accepted dispatches are canceled
 	// when it ends instead of surviving a daemon shutdown.
 	ParentContext context.Context
+	// Startup times New's steps for the startup log. Optional; nil records
+	// nothing.
+	Startup *startup.Timer
 	// Bridge wires the claude mod bridge into agent messaging and dispatch
 	// launches. Optional; the zero value keeps everything on tmux.
 	Bridge BridgeOptions
@@ -484,7 +488,9 @@ func New(configPath string, processes ProcessStateProvider, scheduler SchedulerP
 	for _, opt := range extra {
 		opt(s)
 	}
+	stop := opts.Startup.Step("web.New: client policies")
 	s.SetClients(opts.Clients)
+	stop()
 	s.startAttach = func(session string, cols, rows uint16) (attachProc, error) {
 		return startTmuxAttach(s.tmuxPath(), session, cols, rows)
 	}
@@ -502,13 +508,17 @@ func New(configPath string, processes ProcessStateProvider, scheduler SchedulerP
 		}
 		return agent.SessionName(caller), true
 	}
+	stop = opts.Startup.Step("web.New: consult runtime")
 	s.setupConsultRuntime(opts, resolveCallerSession)
+	stop()
 	s.SetRecentConsults(s.consults.Records)
 
 	s.injectPrompt = func(ctx context.Context, session, body string) error {
 		return tmux.InjectPrompt(ctx, s.tmuxPath(), session, body)
 	}
+	stop = opts.Startup.Step("web.New: setupChat")
 	s.setupChat(opts.Chat)
+	stop()
 
 	s.sessions = newSessionStore(sessionTTL)
 	s.parseTemplates()
