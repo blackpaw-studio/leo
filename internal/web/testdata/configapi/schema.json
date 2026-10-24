@@ -1,0 +1,1246 @@
+{
+  "body": {
+    "data": {
+      "harnesses": {
+        "claude": {
+          "fields": [
+            {
+              "advanced": false,
+              "constraints": {},
+              "default": null,
+              "group": "Harness options",
+              "help": "--permission-mode for the spawned claude",
+              "key": "permission_mode",
+              "label": "Permission mode",
+              "nullable": true,
+              "options": [
+                {
+                  "label": "acceptEdits",
+                  "value": "acceptEdits"
+                },
+                {
+                  "label": "auto",
+                  "value": "auto"
+                },
+                {
+                  "label": "bypassPermissions",
+                  "value": "bypassPermissions"
+                },
+                {
+                  "label": "default",
+                  "value": "default"
+                },
+                {
+                  "label": "dontAsk",
+                  "value": "dontAsk"
+                },
+                {
+                  "label": "plan",
+                  "value": "plan"
+                }
+              ],
+              "restart": "none",
+              "type": "enum",
+              "warning": ""
+            },
+            {
+              "advanced": false,
+              "constraints": {},
+              "default": null,
+              "group": "Harness options",
+              "help": "--dangerously-skip-permissions",
+              "key": "bypass_permissions",
+              "label": "Bypass permissions",
+              "nullable": true,
+              "restart": "none",
+              "type": "bool",
+              "warning": ""
+            },
+            {
+              "advanced": false,
+              "constraints": {},
+              "default": null,
+              "group": "Harness options",
+              "help": "--remote-control (claude.ai remote control)",
+              "key": "remote_control",
+              "label": "Remote control",
+              "nullable": true,
+              "restart": "none",
+              "type": "bool",
+              "warning": ""
+            },
+            {
+              "advanced": false,
+              "constraints": {},
+              "default": null,
+              "group": "Harness options",
+              "help": "--agent: named claude sub-agent",
+              "key": "agent",
+              "label": "Agent",
+              "nullable": true,
+              "restart": "none",
+              "type": "string",
+              "warning": ""
+            },
+            {
+              "advanced": false,
+              "constraints": {},
+              "default": null,
+              "group": "Harness options",
+              "help": "--allowed-tools, comma-separated",
+              "key": "allowed_tools",
+              "label": "Allowed tools",
+              "nullable": true,
+              "restart": "none",
+              "type": "list",
+              "warning": ""
+            },
+            {
+              "advanced": false,
+              "constraints": {},
+              "default": null,
+              "group": "Harness options",
+              "help": "--disallowed-tools, comma-separated",
+              "key": "disallowed_tools",
+              "label": "Disallowed tools",
+              "nullable": true,
+              "restart": "none",
+              "type": "list",
+              "warning": ""
+            },
+            {
+              "advanced": false,
+              "constraints": {},
+              "default": null,
+              "group": "Harness options",
+              "help": "--append-system-prompt",
+              "key": "append_system_prompt",
+              "label": "Append system prompt",
+              "multiline": true,
+              "nullable": true,
+              "restart": "none",
+              "type": "string",
+              "warning": ""
+            },
+            {
+              "advanced": false,
+              "constraints": {},
+              "default": null,
+              "group": "Harness options",
+              "help": "inherit global MCP servers or use Leo-only",
+              "key": "mcp",
+              "label": "MCP profile",
+              "nullable": true,
+              "options": [
+                {
+                  "label": "inherit",
+                  "value": "inherit"
+                },
+                {
+                  "label": "none",
+                  "value": "none"
+                }
+              ],
+              "restart": "none",
+              "type": "enum",
+              "warning": ""
+            },
+            {
+              "advanced": false,
+              "constraints": {},
+              "default": null,
+              "group": "Harness options",
+              "help": "inherit installed plugins or disable them",
+              "key": "plugins",
+              "label": "Plugin profile",
+              "nullable": true,
+              "options": [
+                {
+                  "label": "inherit",
+                  "value": "inherit"
+                },
+                {
+                  "label": "none",
+                  "value": "none"
+                }
+              ],
+              "restart": "none",
+              "type": "enum",
+              "warning": ""
+            }
+          ]
+        },
+        "codex": {
+          "fields": [
+            {
+              "advanced": false,
+              "constraints": {},
+              "default": null,
+              "group": "Harness options",
+              "help": "codex permission preset (default read-only). approve-for-me runs workspace-write and routes escalations through codex's automatic approval reviewer instead of blocking on a human",
+              "key": "permission_mode",
+              "label": "Permission mode",
+              "nullable": true,
+              "options": [
+                {
+                  "label": "read-only",
+                  "value": "read-only"
+                },
+                {
+                  "label": "workspace-write",
+                  "value": "workspace-write"
+                },
+                {
+                  "label": "danger-full-access",
+                  "value": "danger-full-access"
+                },
+                {
+                  "label": "approve-for-me",
+                  "value": "approve-for-me"
+                }
+              ],
+              "restart": "none",
+              "type": "enum",
+              "warning": ""
+            }
+          ]
+        },
+        "opencode": {
+          "fields": [
+            {
+              "advanced": false,
+              "constraints": {},
+              "default": null,
+              "group": "Harness options",
+              "help": "YAML map: tool → allow/ask/deny, or tool → {pattern: verdict}",
+              "key": "permission",
+              "label": "Permission",
+              "nullable": true,
+              "restart": "none",
+              "type": "yaml",
+              "warning": ""
+            }
+          ]
+        }
+      },
+      "name_pattern": "^[A-Za-z0-9._-]+$",
+      "resources": [
+        {
+          "actions": [],
+          "fields": [
+            {
+              "advanced": false,
+              "constraints": {},
+              "default": null,
+              "group": "Harness",
+              "help": "Coding agent CLI driving this scope; options below are harness-specific",
+              "key": "harness",
+              "label": "Harness",
+              "options": [
+                {
+                  "label": "inherit",
+                  "value": ""
+                },
+                {
+                  "label": "claude",
+                  "value": "claude"
+                },
+                {
+                  "label": "codex",
+                  "value": "codex"
+                },
+                {
+                  "label": "opencode",
+                  "value": "opencode"
+                }
+              ],
+              "restart": "agents",
+              "type": "enum",
+              "warning": ""
+            },
+            {
+              "advanced": false,
+              "constraints": {},
+              "default": null,
+              "group": "Model",
+              "help": "",
+              "hints_by_harness": {
+                "claude": {
+                  "suggestions": [
+                    "fable",
+                    "haiku",
+                    "opus",
+                    "opus[1m]",
+                    "sonnet",
+                    "sonnet[1m]"
+                  ]
+                },
+                "codex": {
+                  "placeholder": "e.g. gpt-5.3-codex"
+                },
+                "opencode": {
+                  "placeholder": "provider/model, e.g. anthropic/claude-sonnet-5"
+                }
+              },
+              "key": "model",
+              "label": "Model",
+              "restart": "agents",
+              "type": "string",
+              "warning": ""
+            },
+            {
+              "advanced": false,
+              "constraints": {
+                "min": 0
+              },
+              "default": null,
+              "group": "Limits",
+              "help": "",
+              "key": "max_turns",
+              "label": "Max turns",
+              "restart": "agents",
+              "type": "int",
+              "warning": ""
+            },
+            {
+              "advanced": true,
+              "constraints": {},
+              "default": null,
+              "group": "Behavior",
+              "help": "Auto-suspend idle ephemeral agents, e.g. \"2h\"; empty disables",
+              "key": "idle_suspend_after",
+              "label": "Idle suspend after",
+              "restart": "agents",
+              "type": "duration",
+              "warning": ""
+            },
+            {
+              "advanced": false,
+              "constraints": {},
+              "default": null,
+              "group": "Behavior",
+              "help": "Named environments (see the Environments page), comma-separated; merged left to right, later wins",
+              "key": "environments",
+              "label": "Environments",
+              "restart": "agents",
+              "type": "list",
+              "warning": ""
+            }
+          ],
+          "harness_options": true,
+          "key": "defaults",
+          "kind": "singleton",
+          "label": "Defaults",
+          "restart": "agents",
+          "section": "defaults",
+          "subsections": [
+            {
+              "fields": [
+                {
+                  "advanced": false,
+                  "constraints": {},
+                  "default": true,
+                  "group": "Push notifications",
+                  "help": "Push to paired phones when an agent needs permission, has a question, or awaits your input",
+                  "key": "needs_input",
+                  "label": "Needs input",
+                  "restart": "agents",
+                  "type": "bool",
+                  "warning": ""
+                },
+                {
+                  "advanced": false,
+                  "constraints": {},
+                  "default": true,
+                  "group": "Push notifications",
+                  "help": "Push when an agent finishes its turn",
+                  "key": "finished",
+                  "label": "Finished",
+                  "restart": "agents",
+                  "type": "bool",
+                  "warning": ""
+                },
+                {
+                  "advanced": false,
+                  "constraints": {},
+                  "default": true,
+                  "group": "Push notifications",
+                  "help": "Push when an agent hits an error",
+                  "key": "errored",
+                  "label": "Errored",
+                  "restart": "agents",
+                  "type": "bool",
+                  "warning": ""
+                },
+                {
+                  "advanced": false,
+                  "constraints": {},
+                  "default": true,
+                  "group": "Push notifications",
+                  "help": "Push an agent's Leo Chat messages and questions",
+                  "key": "chat",
+                  "label": "Chat messages",
+                  "restart": "agents",
+                  "type": "bool",
+                  "warning": ""
+                }
+              ],
+              "key": "push",
+              "section": "push_defaults"
+            }
+          ]
+        },
+        {
+          "actions": [
+            "add",
+            "rename",
+            "duplicate",
+            "delete"
+          ],
+          "fields": [
+            {
+              "advanced": false,
+              "constraints": {},
+              "default": null,
+              "group": "General",
+              "help": "",
+              "key": "workspace",
+              "label": "Workspace",
+              "restart": "agents",
+              "type": "string",
+              "warning": ""
+            },
+            {
+              "advanced": false,
+              "constraints": {},
+              "default": null,
+              "group": "Harness",
+              "help": "Coding agent CLI driving this scope; options below are harness-specific",
+              "key": "harness",
+              "label": "Harness",
+              "options": [
+                {
+                  "label": "inherit",
+                  "value": ""
+                },
+                {
+                  "label": "claude",
+                  "value": "claude"
+                },
+                {
+                  "label": "codex",
+                  "value": "codex"
+                },
+                {
+                  "label": "opencode",
+                  "value": "opencode"
+                }
+              ],
+              "restart": "agents",
+              "type": "enum",
+              "warning": ""
+            },
+            {
+              "advanced": false,
+              "constraints": {},
+              "default": null,
+              "group": "Model",
+              "help": "",
+              "hints_by_harness": {
+                "claude": {
+                  "suggestions": [
+                    "fable",
+                    "haiku",
+                    "opus",
+                    "opus[1m]",
+                    "sonnet",
+                    "sonnet[1m]"
+                  ]
+                },
+                "codex": {
+                  "placeholder": "e.g. gpt-5.3-codex"
+                },
+                "opencode": {
+                  "placeholder": "provider/model, e.g. anthropic/claude-sonnet-5"
+                }
+              },
+              "key": "model",
+              "label": "Model",
+              "restart": "agents",
+              "type": "string",
+              "warning": ""
+            },
+            {
+              "advanced": false,
+              "constraints": {
+                "min": 0
+              },
+              "default": null,
+              "group": "Model",
+              "help": "",
+              "key": "max_turns",
+              "label": "Max turns",
+              "restart": "agents",
+              "type": "int",
+              "warning": ""
+            },
+            {
+              "advanced": false,
+              "constraints": {},
+              "default": null,
+              "group": "Channels",
+              "help": "",
+              "key": "channels",
+              "label": "Channels",
+              "restart": "agents",
+              "type": "list",
+              "warning": ""
+            },
+            {
+              "advanced": false,
+              "constraints": {},
+              "default": null,
+              "group": "Channels",
+              "help": "Overrides channels when LEO_ENV=dev",
+              "key": "dev_channels",
+              "label": "Dev channels",
+              "restart": "agents",
+              "type": "list",
+              "warning": ""
+            },
+            {
+              "advanced": true,
+              "constraints": {},
+              "default": null,
+              "group": "Advanced",
+              "help": "Path to an MCP server config file",
+              "key": "mcp_config",
+              "label": "MCP config",
+              "restart": "agents",
+              "type": "string",
+              "warning": ""
+            },
+            {
+              "advanced": true,
+              "constraints": {},
+              "default": null,
+              "group": "Advanced",
+              "help": "Comma-separated paths added to the workspace",
+              "key": "add_dirs",
+              "label": "Additional directories",
+              "restart": "agents",
+              "type": "list",
+              "warning": ""
+            },
+            {
+              "advanced": true,
+              "constraints": {},
+              "default": null,
+              "group": "Advanced",
+              "help": "Named environments (see the Environments page), comma-separated; merged left to right, later wins",
+              "key": "environments",
+              "label": "Environments",
+              "restart": "agents",
+              "type": "list",
+              "warning": ""
+            },
+            {
+              "advanced": true,
+              "constraints": {},
+              "default": null,
+              "group": "Advanced",
+              "help": "KEY=VALUE, one per line",
+              "key": "env",
+              "label": "Environment",
+              "restart": "agents",
+              "type": "map",
+              "warning": ""
+            },
+            {
+              "advanced": true,
+              "constraints": {},
+              "default": null,
+              "group": "Advanced",
+              "help": "Auto-suspend idle ephemeral agents, e.g. \"2h\"; empty disables",
+              "key": "idle_suspend_after",
+              "label": "Idle suspend after",
+              "restart": "agents",
+              "type": "duration",
+              "warning": ""
+            },
+            {
+              "advanced": true,
+              "constraints": {},
+              "default": null,
+              "group": "Advanced",
+              "help": "worktree runs dispatches of this template from a throwaway Git worktree at committed HEAD",
+              "key": "isolation",
+              "label": "Isolation",
+              "options": [
+                {
+                  "label": "none",
+                  "value": ""
+                },
+                {
+                  "label": "worktree",
+                  "value": "worktree"
+                }
+              ],
+              "restart": "agents",
+              "type": "enum",
+              "warning": ""
+            }
+          ],
+          "harness_options": true,
+          "key": "templates",
+          "kind": "collection",
+          "label": "Templates",
+          "restart": "agents",
+          "section": "template",
+          "subsections": [
+            {
+              "fields": [
+                {
+                  "advanced": true,
+                  "constraints": {},
+                  "default": null,
+                  "group": "Advanced",
+                  "help": "Leo MCP tools this template's agents cannot use, e.g. leo_spawn_agent",
+                  "key": "deny_tools",
+                  "label": "Deny tools",
+                  "restart": "agents",
+                  "type": "list",
+                  "warning": ""
+                },
+                {
+                  "advanced": true,
+                  "constraints": {},
+                  "default": null,
+                  "group": "Advanced",
+                  "help": "Agents this template may message; supports globs (scout-*). Empty means any",
+                  "key": "can_message",
+                  "label": "Can message",
+                  "restart": "agents",
+                  "type": "list",
+                  "warning": ""
+                },
+                {
+                  "advanced": true,
+                  "constraints": {},
+                  "default": null,
+                  "group": "Advanced",
+                  "help": "Templates this template may spawn. Empty means any",
+                  "key": "can_spawn",
+                  "label": "Can spawn",
+                  "restart": "agents",
+                  "type": "list",
+                  "warning": ""
+                },
+                {
+                  "advanced": true,
+                  "constraints": {},
+                  "default": null,
+                  "group": "Advanced",
+                  "help": "Templates this template may consult. Empty means any",
+                  "key": "can_consult",
+                  "label": "Can consult",
+                  "restart": "agents",
+                  "type": "list",
+                  "warning": ""
+                }
+              ],
+              "key": "permissions",
+              "section": "permissions"
+            },
+            {
+              "fields": [
+                {
+                  "advanced": false,
+                  "constraints": {},
+                  "default": null,
+                  "group": "Push notifications",
+                  "help": "Push to paired phones when an agent needs permission, has a question, or awaits your input",
+                  "key": "needs_input",
+                  "label": "Needs input",
+                  "nullable": true,
+                  "restart": "agents",
+                  "type": "bool",
+                  "warning": ""
+                },
+                {
+                  "advanced": false,
+                  "constraints": {},
+                  "default": null,
+                  "group": "Push notifications",
+                  "help": "Push when an agent finishes its turn",
+                  "key": "finished",
+                  "label": "Finished",
+                  "nullable": true,
+                  "restart": "agents",
+                  "type": "bool",
+                  "warning": ""
+                },
+                {
+                  "advanced": false,
+                  "constraints": {},
+                  "default": null,
+                  "group": "Push notifications",
+                  "help": "Push when an agent hits an error",
+                  "key": "errored",
+                  "label": "Errored",
+                  "nullable": true,
+                  "restart": "agents",
+                  "type": "bool",
+                  "warning": ""
+                },
+                {
+                  "advanced": false,
+                  "constraints": {},
+                  "default": null,
+                  "group": "Push notifications",
+                  "help": "Push an agent's Leo Chat messages and questions",
+                  "key": "chat",
+                  "label": "Chat messages",
+                  "nullable": true,
+                  "restart": "agents",
+                  "type": "bool",
+                  "warning": ""
+                }
+              ],
+              "key": "push",
+              "section": "push_template"
+            }
+          ]
+        },
+        {
+          "actions": [
+            "add",
+            "delete"
+          ],
+          "fields": [
+            {
+              "advanced": false,
+              "constraints": {
+                "required": true
+              },
+              "default": null,
+              "format": "cron",
+              "group": "Schedule",
+              "help": "",
+              "key": "schedule",
+              "label": "Schedule",
+              "restart": "none",
+              "type": "string",
+              "warning": ""
+            },
+            {
+              "advanced": false,
+              "constraints": {},
+              "default": null,
+              "group": "Schedule",
+              "help": "",
+              "key": "timezone",
+              "label": "Timezone",
+              "restart": "none",
+              "type": "string",
+              "warning": ""
+            },
+            {
+              "advanced": false,
+              "constraints": {},
+              "default": null,
+              "group": "Schedule",
+              "help": "",
+              "key": "enabled",
+              "label": "Enabled",
+              "restart": "none",
+              "type": "bool",
+              "warning": ""
+            },
+            {
+              "advanced": false,
+              "constraints": {
+                "required": true
+              },
+              "default": null,
+              "group": "Prompt",
+              "help": "",
+              "key": "prompt_file",
+              "label": "Prompt file",
+              "restart": "none",
+              "type": "string",
+              "warning": ""
+            },
+            {
+              "advanced": false,
+              "constraints": {},
+              "default": null,
+              "group": "Harness",
+              "help": "Coding agent CLI driving this scope; options below are harness-specific",
+              "key": "harness",
+              "label": "Harness",
+              "options": [
+                {
+                  "label": "inherit",
+                  "value": ""
+                },
+                {
+                  "label": "claude",
+                  "value": "claude"
+                },
+                {
+                  "label": "codex",
+                  "value": "codex"
+                },
+                {
+                  "label": "opencode",
+                  "value": "opencode"
+                }
+              ],
+              "restart": "none",
+              "type": "enum",
+              "warning": ""
+            },
+            {
+              "advanced": false,
+              "constraints": {},
+              "default": null,
+              "group": "Model",
+              "help": "",
+              "hints_by_harness": {
+                "claude": {
+                  "suggestions": [
+                    "fable",
+                    "haiku",
+                    "opus",
+                    "opus[1m]",
+                    "sonnet",
+                    "sonnet[1m]"
+                  ]
+                },
+                "codex": {
+                  "placeholder": "e.g. gpt-5.3-codex"
+                },
+                "opencode": {
+                  "placeholder": "provider/model, e.g. anthropic/claude-sonnet-5"
+                }
+              },
+              "key": "model",
+              "label": "Model",
+              "restart": "none",
+              "type": "string",
+              "warning": ""
+            },
+            {
+              "advanced": false,
+              "constraints": {
+                "min": 0
+              },
+              "default": null,
+              "group": "Model",
+              "help": "",
+              "key": "max_turns",
+              "label": "Max turns",
+              "restart": "none",
+              "type": "int",
+              "warning": ""
+            },
+            {
+              "advanced": false,
+              "constraints": {},
+              "default": null,
+              "group": "Execution",
+              "help": "",
+              "key": "timeout",
+              "label": "Timeout",
+              "restart": "none",
+              "type": "duration",
+              "warning": ""
+            },
+            {
+              "advanced": false,
+              "constraints": {
+                "min": 0
+              },
+              "default": null,
+              "group": "Execution",
+              "help": "",
+              "key": "retries",
+              "label": "Retries",
+              "restart": "none",
+              "type": "int",
+              "warning": ""
+            },
+            {
+              "advanced": false,
+              "constraints": {},
+              "default": null,
+              "group": "Execution",
+              "help": "",
+              "key": "silent",
+              "label": "Silent",
+              "restart": "none",
+              "type": "bool",
+              "warning": ""
+            },
+            {
+              "advanced": false,
+              "constraints": {},
+              "default": "oneshot",
+              "group": "Execution",
+              "help": "persistent delivers into a supervised agent instead of spawning claude -p",
+              "key": "runtime",
+              "label": "Runtime",
+              "options": [
+                {
+                  "label": "oneshot",
+                  "value": "oneshot"
+                },
+                {
+                  "label": "persistent",
+                  "value": "persistent"
+                }
+              ],
+              "restart": "none",
+              "type": "enum",
+              "warning": ""
+            },
+            {
+              "advanced": false,
+              "constraints": {},
+              "default": null,
+              "empty_label": "none",
+              "group": "Execution",
+              "help": "named template from the templates: block; empty derives an implicit agent from this task",
+              "key": "template",
+              "label": "Template",
+              "references": "templates",
+              "restart": "none",
+              "type": "reference",
+              "warning": ""
+            },
+            {
+              "advanced": false,
+              "constraints": {},
+              "default": 5,
+              "group": "Execution",
+              "help": "max queued firings; 0 = default (5)",
+              "key": "queue_max",
+              "label": "Queue max",
+              "restart": "none",
+              "type": "int",
+              "warning": ""
+            },
+            {
+              "advanced": false,
+              "constraints": {},
+              "default": null,
+              "group": "Notifications",
+              "help": "",
+              "key": "channels",
+              "label": "Channels",
+              "restart": "none",
+              "type": "list",
+              "warning": ""
+            },
+            {
+              "advanced": false,
+              "constraints": {},
+              "default": null,
+              "group": "Notifications",
+              "help": "Overrides channels when LEO_ENV=dev",
+              "key": "dev_channels",
+              "label": "Dev channels",
+              "restart": "none",
+              "type": "list",
+              "warning": ""
+            },
+            {
+              "advanced": false,
+              "constraints": {},
+              "default": null,
+              "group": "Notifications",
+              "help": "",
+              "key": "notify_on_fail",
+              "label": "Notify on fail",
+              "restart": "none",
+              "type": "bool",
+              "warning": ""
+            },
+            {
+              "advanced": false,
+              "constraints": {},
+              "default": null,
+              "group": "Notifications",
+              "help": "Agent whose Leo Chat thread gets this task's cards; empty picks the persistent target, the workspace's agent, or assistant",
+              "key": "owner",
+              "label": "Chat owner",
+              "restart": "none",
+              "type": "string",
+              "warning": ""
+            },
+            {
+              "advanced": true,
+              "constraints": {},
+              "default": null,
+              "group": "Advanced",
+              "help": "",
+              "key": "workspace",
+              "label": "Workspace",
+              "restart": "none",
+              "type": "string",
+              "warning": ""
+            },
+            {
+              "advanced": true,
+              "constraints": {},
+              "default": null,
+              "group": "Advanced",
+              "help": "Named environments (see the Environments page), comma-separated; merged left to right, later wins",
+              "key": "environments",
+              "label": "Environments",
+              "restart": "none",
+              "type": "list",
+              "warning": ""
+            },
+            {
+              "advanced": true,
+              "constraints": {},
+              "default": null,
+              "group": "Advanced",
+              "help": "KEY=VALUE, one per line",
+              "key": "env",
+              "label": "Environment",
+              "restart": "none",
+              "type": "map",
+              "warning": ""
+            }
+          ],
+          "harness_options": true,
+          "key": "tasks",
+          "kind": "collection",
+          "label": "Tasks",
+          "restart": "none",
+          "section": "task",
+          "subsections": []
+        },
+        {
+          "actions": [
+            "add",
+            "rename",
+            "delete"
+          ],
+          "fields": [
+            {
+              "advanced": false,
+              "constraints": {},
+              "default": null,
+              "group": "General",
+              "help": "KEY=VALUE, one per line. Absolute paths only — a literal ~ is not expanded",
+              "key": "env",
+              "label": "Variables",
+              "restart": "agents",
+              "type": "map",
+              "warning": ""
+            }
+          ],
+          "harness_options": false,
+          "key": "environments",
+          "kind": "collection",
+          "label": "Environments",
+          "restart": "agents",
+          "section": "environment",
+          "subsections": []
+        },
+        {
+          "actions": [],
+          "fields": [
+            {
+              "advanced": false,
+              "constraints": {},
+              "default": null,
+              "group": "General",
+              "help": "",
+              "key": "enabled",
+              "label": "Enabled",
+              "restart": "service",
+              "type": "bool",
+              "warning": ""
+            },
+            {
+              "advanced": false,
+              "constraints": {
+                "max": 65535,
+                "min": 1
+              },
+              "default": 8370,
+              "group": "General",
+              "help": "",
+              "key": "port",
+              "label": "Port",
+              "restart": "service",
+              "type": "int",
+              "warning": "Changing port or bind can lock you out of this UI; requires service restart"
+            },
+            {
+              "advanced": false,
+              "constraints": {},
+              "default": "127.0.0.1",
+              "group": "General",
+              "help": "empty = 127.0.0.1 (loopback only)",
+              "key": "bind",
+              "label": "Bind",
+              "restart": "service",
+              "type": "string",
+              "warning": "Changing port or bind can lock you out of this UI; requires service restart"
+            },
+            {
+              "advanced": false,
+              "constraints": {},
+              "default": null,
+              "group": "General",
+              "help": "",
+              "key": "allowed_hosts",
+              "label": "Allowed hosts",
+              "restart": "service",
+              "type": "list",
+              "warning": "Removing your own address here will block your browser"
+            },
+            {
+              "advanced": false,
+              "constraints": {},
+              "default": null,
+              "group": "General",
+              "help": "IPs or CIDRs permitted to authenticate with the Remote-User header",
+              "key": "trusted_proxies",
+              "label": "Trusted proxies",
+              "restart": "service",
+              "type": "list",
+              "warning": ""
+            },
+            {
+              "advanced": false,
+              "constraints": {},
+              "default": null,
+              "group": "General",
+              "help": "origins `leo pair` advertises to phones, e.g. https://leo.example.com; empty = LAN addresses",
+              "key": "public_urls",
+              "label": "Public URLs",
+              "restart": "service",
+              "type": "list",
+              "warning": ""
+            }
+          ],
+          "harness_options": false,
+          "key": "web",
+          "kind": "singleton",
+          "label": "Web UI",
+          "restart": "service",
+          "section": "web",
+          "subsections": []
+        },
+        {
+          "actions": [],
+          "fields": [
+            {
+              "advanced": false,
+              "constraints": {},
+              "default": null,
+              "group": "General",
+              "help": "default remote host for leo agent commands",
+              "key": "default_host",
+              "label": "Default host",
+              "restart": "none",
+              "type": "string",
+              "warning": ""
+            }
+          ],
+          "harness_options": false,
+          "key": "client",
+          "kind": "singleton",
+          "label": "Remote client",
+          "restart": "none",
+          "section": "client",
+          "subsections": []
+        },
+        {
+          "actions": [
+            "add",
+            "delete"
+          ],
+          "fields": [
+            {
+              "advanced": false,
+              "constraints": {},
+              "default": null,
+              "group": "General",
+              "help": "user@host",
+              "key": "ssh",
+              "label": "SSH",
+              "restart": "none",
+              "type": "string",
+              "warning": ""
+            },
+            {
+              "advanced": false,
+              "constraints": {},
+              "default": null,
+              "group": "General",
+              "help": "",
+              "key": "ssh_args",
+              "label": "SSH args",
+              "restart": "none",
+              "type": "list",
+              "warning": ""
+            },
+            {
+              "advanced": false,
+              "constraints": {},
+              "default": null,
+              "group": "General",
+              "help": "",
+              "key": "leo_path",
+              "label": "Leo path",
+              "restart": "none",
+              "type": "string",
+              "warning": ""
+            },
+            {
+              "advanced": false,
+              "constraints": {},
+              "default": null,
+              "group": "General",
+              "help": "",
+              "key": "tmux_path",
+              "label": "Tmux path",
+              "restart": "none",
+              "type": "string",
+              "warning": ""
+            }
+          ],
+          "harness_options": false,
+          "key": "hosts",
+          "kind": "collection",
+          "label": "Remote hosts",
+          "restart": "none",
+          "section": "client_host",
+          "subsections": []
+        },
+        {
+          "actions": [],
+          "fields": [],
+          "harness_options": false,
+          "key": "delegation",
+          "kind": "bespoke",
+          "label": "Delegation",
+          "restart": "none",
+          "section": "",
+          "subsections": []
+        }
+      ],
+      "schema_version": 1
+    },
+    "ok": true
+  },
+  "status": 200
+}

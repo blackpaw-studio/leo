@@ -1,0 +1,79 @@
+{
+  "body": {
+    "data": {
+      "items": [
+        {
+          "effective_harness": "claude",
+          "inherited": {},
+          "name": "coder",
+          "values": {
+            "add_dirs": [],
+            "channels": [],
+            "dev_channels": [],
+            "env": {},
+            "environments": [],
+            "harness": "",
+            "harness_options": {
+              "permission_mode": "plan"
+            },
+            "idle_suspend_after": "",
+            "isolation": "",
+            "max_turns": null,
+            "mcp_config": "",
+            "model": "opus",
+            "permissions": {
+              "can_consult": [],
+              "can_message": [],
+              "can_spawn": [
+                "reviewer"
+              ],
+              "deny_tools": []
+            },
+            "push": {
+              "chat": null,
+              "errored": null,
+              "finished": null,
+              "needs_input": null
+            },
+            "workspace": "/tmp/coder"
+          }
+        },
+        {
+          "effective_harness": "claude",
+          "inherited": {},
+          "name": "reviewer",
+          "values": {
+            "add_dirs": [],
+            "channels": [],
+            "dev_channels": [],
+            "env": {},
+            "environments": [],
+            "harness": "",
+            "harness_options": {},
+            "idle_suspend_after": "",
+            "isolation": "",
+            "max_turns": null,
+            "mcp_config": "",
+            "model": "haiku",
+            "permissions": {
+              "can_consult": [],
+              "can_message": [],
+              "can_spawn": [],
+              "deny_tools": []
+            },
+            "push": {
+              "chat": null,
+              "errored": null,
+              "finished": null,
+              "needs_input": null
+            },
+            "workspace": ""
+          }
+        }
+      ],
+      "revision": "sha256:d1e5ba28f778048557b354bff517f7ba525088d0ef619dbdaa4f1b36f87f9f08"
+    },
+    "ok": true
+  },
+  "status": 200
+}

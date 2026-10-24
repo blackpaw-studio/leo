@@ -1,0 +1,26 @@
+{
+  "body": {
+    "data": {
+      "effective_harness": "claude",
+      "revision": "sha256:d1e5ba28f778048557b354bff517f7ba525088d0ef619dbdaa4f1b36f87f9f08",
+      "values": {
+        "environments": [
+          "base"
+        ],
+        "harness": "",
+        "harness_options": {},
+        "idle_suspend_after": "",
+        "max_turns": 10,
+        "model": "sonnet",
+        "push": {
+          "chat": true,
+          "errored": true,
+          "finished": true,
+          "needs_input": true
+        }
+      }
+    },
+    "ok": true
+  },
+  "status": 200
+}

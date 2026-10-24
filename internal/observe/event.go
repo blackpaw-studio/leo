@@ -76,11 +76,15 @@ const (
 	// FeatureMachineStats: `GET /machine` (socket) and `GET /api/v1/machine`
 	// report whole-machine CPU, memory and disk usage.
 	FeatureMachineStats = "machine_stats"
+	// FeatureConfigAPI: the JSON config API (docs/configuration/config-api.md)
+	// — schema, revision-gated resource writes, delegation, ops — on the
+	// socket and under /api/v1.
+	FeatureConfigAPI = "config_api"
 )
 
 // Features returns the hello's features list, a fresh copy each call.
 func Features() []string {
-	return []string{FeatureBridgeTurns, FeatureAttentionReason, FeatureDispatchTree, FeatureAgentUsage, FeatureAgentControl, FeatureDispatchAttach, FeatureDispatchRemoved, FeatureStateSeq, FeatureAttachDispatchPlacement, FeatureDispatchPlacementLive, FeatureAgentEnvironments, FeatureChatQuestions, FeatureMachineStats}
+	return []string{FeatureBridgeTurns, FeatureAttentionReason, FeatureDispatchTree, FeatureAgentUsage, FeatureAgentControl, FeatureDispatchAttach, FeatureDispatchRemoved, FeatureStateSeq, FeatureAttachDispatchPlacement, FeatureDispatchPlacementLive, FeatureAgentEnvironments, FeatureChatQuestions, FeatureMachineStats, FeatureConfigAPI}
 }
 
 // ActivityMinInterval is the most often agent_activity is published per

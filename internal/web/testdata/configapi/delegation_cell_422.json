@@ -1,0 +1,14 @@
+{
+  "body": {
+    "code": "invalid",
+    "error": "config validation failed:\n  - delegation.profiles.fast.roles.coder.effort \"ludicrous\" is not valid (use low, medium, high, xhigh, or max)",
+    "errors": [
+      {
+        "field": "effort",
+        "message": "delegation.profiles.fast.roles.coder.effort \"ludicrous\" is not valid (use low, medium, high, xhigh, or max)"
+      }
+    ],
+    "ok": false
+  },
+  "status": 422
+}

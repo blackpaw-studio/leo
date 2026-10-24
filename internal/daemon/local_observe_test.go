@@ -102,7 +102,8 @@ func TestLocalMetadataRoutesUseExactEnvelopeShapes(t *testing.T) {
 
 	w := httptest.NewRecorder()
 	s.Handler().ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/version", nil))
-	if got, want := w.Body.String(), "{\"ok\":true,\"data\":{\"version\":\"v-test\"}}\n"; got != want {
+	wantVersion := `{"ok":true,"data":{"version":"v-test","capabilities":["` + strings.Join(observe.Features(), `","`) + `"]}}` + "\n"
+	if got, want := w.Body.String(), wantVersion; got != want {
 		t.Fatalf("/version = %s, want %s", got, want)
 	}
 	w = httptest.NewRecorder()

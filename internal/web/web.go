@@ -12,7 +12,6 @@ import (
 	"net/netip"
 	"os/exec"
 	"strings"
-	"sync"
 	"sync/atomic"
 	"time"
 
@@ -24,8 +23,6 @@ import (
 	"github.com/blackpaw-studio/leo/internal/cron"
 	"github.com/blackpaw-studio/leo/internal/devices"
 	"github.com/blackpaw-studio/leo/internal/harness"
-	claudeharness "github.com/blackpaw-studio/leo/internal/harness/claude"
-	"github.com/blackpaw-studio/leo/internal/history"
 	"github.com/blackpaw-studio/leo/internal/leomcp"
 	"github.com/blackpaw-studio/leo/internal/observe"
 	"github.com/blackpaw-studio/leo/internal/peerinbox"
@@ -97,12 +94,14 @@ type AgentService interface {
 
 // Server serves the Leo web UI over HTTP.
 type Server struct {
-	configPath string
-	processes  ProcessStateProvider
-	scheduler  SchedulerProvider
-	reloader   ConfigReloader
-	agentSvc   AgentService
-	leoPath    string
+	// ConfigService is the shared leo.yaml write path (config path, write
+	// lock, reloader, restart flags, exec seam). Embedded so the HTML handlers
+	// use it as s.loadConfig(), s.mutateConfig(...) and so on; the daemon
+	// builds it once and hands the same one to its socket routes.
+	*ConfigService
+	processes ProcessStateProvider
+	scheduler SchedulerProvider
+	agentSvc  AgentService
 	// tmuxBin is the daemon-resolved tmux binary; see tmuxPath.
 	tmuxBin    string
 	templates  *template.Template
@@ -111,52 +110,18 @@ type Server struct {
 	// event streams and long polls return as soon as Shutdown begins instead
 	// of holding httpServer.Shutdown for its grace. Nil on a Server not built
 	// by New (tests).
-	endStreams context.CancelFunc
-	listener   net.Listener
-	// serviceRestartNeeded is set when a Web UI config save (port/bind/
-	// enabled) changes settings that only take effect when the daemon's TCP
-	// listener is rebuilt at boot. Cleared by handleServiceRestart.
-	serviceRestartNeeded atomic.Bool
-	// agentsRestartNeeded is set when a Defaults or Template config save
-	// changes settings a *running* agent won't see until it's individually
-	// restarted (config reload already makes new spawns/task runs pick it up
-	// immediately — see applySection). Cleared by handleAgentsRestart on a
-	// restart batch with no failures.
-	agentsRestartNeeded atomic.Bool
-	port                int                            // port the listener is expected to bind on; used for Host/Origin checks
-	apiToken            string                         // operator bearer token: /api/*, browser routes, and /login
-	agentToken          string                         // token exported to agents; /api/* and agent-messaging routes only
-	clients             atomic.Pointer[[]ClientPolicy] // external API clients, scoped per route; swapped whole by SetClients, never mutated
-	allowedHosts        []string                       // extra hosts permitted beyond loopback (e.g. LAN IPs)
-	trustedProxies      []netip.Prefix                 // peers whose Remote-User header is trusted
-	sessions            *sessionStore                  // in-memory browser sessions for cookie-based auth
+	endStreams     context.CancelFunc
+	listener       net.Listener
+	port           int                            // port the listener is expected to bind on; used for Host/Origin checks
+	apiToken       string                         // operator bearer token: /api/*, browser routes, and /login
+	agentToken     string                         // token exported to agents; /api/* and agent-messaging routes only
+	clients        atomic.Pointer[[]ClientPolicy] // external API clients, scoped per route; swapped whole by SetClients, never mutated
+	allowedHosts   []string                       // extra hosts permitted beyond loopback (e.g. LAN IPs)
+	trustedProxies []netip.Prefix                 // peers whose Remote-User header is trusted
+	sessions       *sessionStore                  // in-memory browser sessions for cookie-based auth
 
-	// serviceLogPath is the absolute path to the service log tailed by the
-	// Service page's log viewer. Computed by service.LogPathFor(homePath) —
-	// the only place that formula lives — and threaded in via Options.LogPath
-	// since internal/web cannot import internal/service (import cycle:
-	// service -> daemon -> web). Empty when not wired by the caller (e.g. in
-	// tests that don't need it), in which case the log tail handler renders
-	// a "not configured" message instead of guessing a path.
-	serviceLogPath string
-
-	// configWriter serializes leo.yaml mutations with every other in-process
-	// writer (the daemon's IPC handlers share it); see config.Writer.
-	configWriter *config.Writer
-
-	// agentMu guards the on-demand, 60s-TTL cache of claude sub-agent names
-	// used to populate dropdowns without shelling out on every render.
-	agentMu       sync.Mutex
-	agentCache    []string
-	agentsFetched time.Time
-
-	// fetchAgentListFn is invoked outside agentMu to refresh agentCache.
-	// Defaults to s.fetchAgentList; tests replace it to control timing
-	// without shelling out to a real `claude` binary.
-	fetchAgentListFn func() []string
-
-	// Testability seam for exec.Command
-	execCommand        func(name string, args ...string) *exec.Cmd
+	// Testability seam for exec.CommandContext (exec.Command lives on
+	// ConfigService).
 	execCommandContext func(context.Context, string, ...string) *exec.Cmd
 
 	// resolvePeerSocket and deliverPeer route live Claude messages through
@@ -414,8 +379,14 @@ func (s *Server) Handler() http.Handler { return s.httpServer.Handler }
 //   - APIToken must be non-empty for /api/* routes to work. If empty, /api/*
 //     responds 500 to avoid accidentally serving the API unauthenticated.
 type Options struct {
+	// Config is the shared config service the daemon also serves its socket
+	// config routes from, so the web banners and the socket agree on the
+	// restart flags. Optional; nil builds a private one from the arguments to
+	// New plus ConfigWriter and LogPath (tests, embedders).
+	Config *ConfigService
 	// ConfigWriter is the process-wide leo.yaml write lock, shared with the
-	// daemon's IPC handlers. Optional; nil gets a private one (tests).
+	// daemon's IPC handlers. Optional; nil gets a private one (tests). Ignored
+	// when Config is set.
 	ConfigWriter *config.Writer
 	Port         int
 	APIToken     string
@@ -485,26 +456,21 @@ func New(configPath string, processes ProcessStateProvider, scheduler SchedulerP
 		log.Printf("web: ignoring web.trusted_proxies: %v", err)
 		trustedProxies = nil
 	}
-	configWriter := opts.ConfigWriter
-	if configWriter == nil {
-		configWriter = config.NewWriter()
+	cfgSvc := opts.Config
+	if cfgSvc == nil {
+		cfgSvc = newPrivateConfigService(configPath, processes, reloader, agentSvc, opts)
 	}
 	s := &Server{
-		configWriter:       configWriter,
-		configPath:         configPath,
+		ConfigService:      cfgSvc,
 		processes:          processes,
 		scheduler:          scheduler,
-		reloader:           reloader,
 		agentSvc:           agentSvc,
-		leoPath:            opts.LeoMCP.Executable(),
 		tmuxBin:            opts.TmuxPath,
 		port:               opts.Port,
 		apiToken:           opts.APIToken,
 		agentToken:         opts.AgentToken,
 		allowedHosts:       opts.AllowedHosts,
 		trustedProxies:     trustedProxies,
-		serviceLogPath:     opts.LogPath,
-		execCommand:        exec.Command,
 		execCommandContext: exec.CommandContext,
 		resolveHandle:      opts.ResolveHandle,
 		sseHeartbeat:       defaultSSEHeartbeat,
@@ -526,7 +492,6 @@ func New(configPath string, processes ProcessStateProvider, scheduler SchedulerP
 		return peerinbox.ResolveSocket(ctx, peerinbox.DefaultExec, s.tmuxPath(), session)
 	}
 	s.deliverPeer = peerinbox.Deliver
-	s.fetchAgentListFn = s.fetchAgentList
 	resolveCallerSession := func(caller string) (string, bool) {
 		if s.processes == nil {
 			return "", false
@@ -538,6 +503,7 @@ func New(configPath string, processes ProcessStateProvider, scheduler SchedulerP
 		return agent.SessionName(caller), true
 	}
 	s.setupConsultRuntime(opts, resolveCallerSession)
+	s.SetRecentConsults(s.consults.Records)
 
 	s.injectPrompt = func(ctx context.Context, session, body string) error {
 		return tmux.InjectPrompt(ctx, s.tmuxPath(), session, body)
@@ -711,6 +677,12 @@ func New(configPath string, processes ProcessStateProvider, scheduler SchedulerP
 	apiMux.HandleFunc("GET /api/v1/templates", s.handleAPITemplatesV1)
 	apiMux.HandleFunc("POST /api/v1/agents/spawn", s.requireOperatorToken(s.handleAPIAgentSpawn))
 	apiMux.HandleFunc("POST /api/v1/agents/{name}/environments", s.requireOperatorToken(s.handleAPIAgentSetEnvironments))
+	// JSON config API (docs/configuration/config-api.md): the same service the
+	// daemon serves on its socket, operator token only. The agent token passes
+	// the bearer check above, so each route refuses it itself.
+	s.RegisterConfigRoutes(apiMux, "/api/v1", s.requireOperatorToken)
+	s.RegisterReloadRoute(apiMux, "/api/v1", s.requireOperatorToken)
+	apiMux.HandleFunc("GET /api/v1/version", s.requireOperatorToken(s.handleAPIVersion))
 	// iOS app (docs: leo-ios spec §2). The push routes check the caller's
 	// identity themselves: the device owning {id}, or the operator token.
 	apiMux.HandleFunc("PUT /api/v1/devices/{id}/push", s.handleAPIDevicePush)
@@ -837,16 +809,6 @@ func (s *Server) Addr() string {
 	return s.listener.Addr().String()
 }
 
-// loadConfig loads the current config from disk.
-func (s *Server) loadConfig() (*config.Config, error) {
-	return config.Load(s.configPath)
-}
-
-// loadHistory loads the task history store.
-func (s *Server) loadHistory(cfg *config.Config) *history.Store {
-	return history.NewStore(cfg.HomePath)
-}
-
 func (s *Server) parseTemplates() {
 	funcMap := template.FuncMap{
 		"statusColor": statusColor,
@@ -904,69 +866,6 @@ func (s *Server) parseTemplates() {
 	}
 
 	s.templates = template.Must(template.New("").Funcs(funcMap).ParseFS(content, "templates/*.html", "templates/**/*.html"))
-}
-
-// agentList returns the claude sub-agent names, refreshing at most once per
-// minute. fetchAgentList shells out to `claude agents`, which can take up to
-// 10s, so the shell-out itself must never run while agentMu is held.
-//
-// The caller that finds the cache stale claims the refresh by stamping
-// agentsFetched immediately and releasing the lock before shelling out.
-// Any concurrent caller that arrives during that window sees a fresh
-// timestamp, so it returns the previous (stale) cache right away instead of
-// blocking on the in-flight fetch or starting a second one.
-func (s *Server) agentList() []string {
-	s.agentMu.Lock()
-	if time.Since(s.agentsFetched) <= time.Minute {
-		cache := s.agentCache
-		s.agentMu.Unlock()
-		return cache
-	}
-	s.agentsFetched = time.Now()
-	s.agentMu.Unlock()
-
-	fresh := s.fetchAgentListFn()
-
-	s.agentMu.Lock()
-	if len(fresh) > 0 {
-		s.agentCache = fresh
-	}
-	// agentsFetched was already stamped before the shell-out (above), so a
-	// nil/empty result from a transient failure still resets the TTL clock
-	// — it just keeps the previous (still-valid) cache instead of clobbering
-	// it with nothing, and won't hammer the failing command every call.
-	cache := s.agentCache
-	s.agentMu.Unlock()
-
-	return cache
-}
-
-// fetchAgentList runs `claude agents` and parses the agent names.
-func (s *Server) fetchAgentList() []string {
-	claudePath, err := exec.LookPath(claudeharness.Claude{}.Binary())
-	if err != nil {
-		return nil
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-
-	out, err := exec.CommandContext(ctx, claudePath, "agents").Output()
-	if err != nil {
-		return nil
-	}
-
-	var agents []string
-	for _, line := range strings.Split(string(out), "\n") {
-		line = strings.TrimSpace(line)
-		if strings.Contains(line, " · ") {
-			name := strings.TrimSpace(strings.SplitN(line, " · ", 2)[0])
-			if name != "" {
-				agents = append(agents, name)
-			}
-		}
-	}
-	return agents
 }
 
 func statusColor(status string) string {

@@ -1,6 +1,8 @@
 package config
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -785,18 +787,52 @@ func (c *Config) Validate() error {
 	errs = append(errs, c.validateEnvironments()...)
 
 	if len(errs) > 0 {
-		return fmt.Errorf("config validation failed:\n  - %s", strings.Join(errs, "\n  - "))
+		return &ValidationErrors{Messages: errs}
 	}
 	return nil
 }
 
+// ValidationErrors is Validate's failure: every problem found, one message
+// per entry, each starting with the dotted path of the field it concerns
+// (e.g. "templates.coder.model ..."). Error() renders them as one block.
+type ValidationErrors struct {
+	Messages []string
+}
+
+func (e *ValidationErrors) Error() string {
+	return fmt.Sprintf("config validation failed:\n  - %s", strings.Join(e.Messages, "\n  - "))
+}
+
 // Load reads and parses a leo.yaml config file.
 func Load(path string) (*Config, error) {
+	cfg, _, err := LoadWithRevision(path)
+	return cfg, err
+}
+
+// RevisionOf is the revision of leo.yaml content: "sha256:" plus the hex
+// digest of its bytes. The JSON config API hands it out as the ETag and
+// requires it back as If-Match on every write.
+func RevisionOf(data []byte) string {
+	sum := sha256.Sum256(data)
+	return "sha256:" + hex.EncodeToString(sum[:])
+}
+
+// LoadWithRevision is Load plus the revision of the exact bytes it parsed, so
+// a caller that compares revisions under the config write lock cannot race a
+// separate read of the file.
+func LoadWithRevision(path string) (*Config, string, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return nil, fmt.Errorf("reading config: %w", err)
+		return nil, "", fmt.Errorf("reading config: %w", err)
 	}
+	cfg, err := parse(path, data)
+	if err != nil {
+		return nil, "", err
+	}
+	return cfg, RevisionOf(data), nil
+}
 
+func parse(path string, data []byte) (*Config, error) {
 	var cfg Config
 	if err := yaml.Unmarshal(data, &cfg); err != nil {
 		return nil, fmt.Errorf("parsing config: %w", err)
