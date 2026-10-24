@@ -38,6 +38,44 @@ var (
 	agentStartTimeout = 10 * time.Second
 )
 
+// attachRestorePollInterval/attachRestoreTimeout bound the wait for a
+// starting daemon to finish restoring agents. Vars so tests need no real wait.
+var (
+	attachRestorePollInterval = 2 * time.Second
+	attachRestoreTimeout      = 2 * time.Minute
+)
+
+// awaitRestoredSession returns session once the daemon has finished restoring
+// agents. A session whose Restoring flag is set belongs to an agent that is
+// neither attachable nor startable yet, so this polls the daemon (never
+// calling start) until the flag clears, bounded by attachRestoreTimeout.
+// Sessions that are not restoring are returned untouched, with no output.
+func awaitRestoredSession(ctx context.Context, homePath, query string, session daemon.AgentSessionResponse) (daemon.AgentSessionResponse, error) {
+	if !session.Restoring {
+		return session, nil
+	}
+	if _, err := fmt.Fprintln(agentStderr, "daemon starting, agents not restored yet — waiting…"); err != nil {
+		return session, fmt.Errorf("writing notice: %w", err)
+	}
+	ctx, cancel := context.WithTimeout(ctx, attachRestoreTimeout)
+	defer cancel()
+	for session.Restoring {
+		select {
+		case <-ctx.Done():
+			return session, errors.New("daemon is still restoring agents; try again shortly")
+		case <-time.After(attachRestorePollInterval):
+		}
+		var err error
+		if session, err = lookupAgentSession(ctx, homePath, query); err != nil {
+			if ctx.Err() != nil {
+				return session, errors.New("daemon is still restoring agents; try again shortly")
+			}
+			return session, err
+		}
+	}
+	return session, nil
+}
+
 // defaultAgentSessionReady reports whether name's tmux session currently
 // exists. Errors locating tmux are treated as "not ready" — the caller's
 // bounded poll surfaces a clear timeout rather than this function returning

@@ -31,6 +31,7 @@ const (
 	ErrorCodeAgentNotStopped     = "agent_not_stopped"
 	ErrorCodeAgentAlreadyRunning = "agent_already_running"
 	ErrorCodeAgentNotRunning     = "agent_not_running"
+	ErrorCodeDaemonRestoring     = "daemon_restoring"
 	ErrorCodeDrainUnavailable    = "drain_unavailable"
 	ErrorCodeDrainInProgress     = "drain_in_progress"
 	ErrorCodeDrainNotDrained     = "drain_not_drained"
@@ -133,6 +134,10 @@ type AgentSessionResponse struct {
 	Session string `json:"session"`
 	Name    string `json:"name"`
 	Stopped bool   `json:"stopped,omitempty"`
+	// Restoring is set while the daemon is still restoring agents and this
+	// record is awaiting it (Status == "restoring"). The agent is neither
+	// attachable nor startable yet, so clients wait instead of offering start.
+	Restoring bool `json:"restoring,omitempty"`
 }
 
 // AttachPlacementRequest is the body of POST /attach/placement: the attaching

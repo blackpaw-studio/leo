@@ -1105,6 +1105,9 @@ func defaultSupervisedExec(opts RunSupervisedOptions) error {
 		// spawn need not hold it to the argv limit.
 		agentMgr.SetBridgeCapable(supervisor.BridgeCapable)
 		agentMgr.SetBridgeStatus(supervisor.BridgeStatus)
+		// Until restore finishes (MarkReady below), an unrestored agent
+		// reports "restoring" rather than "stopped".
+		agentMgr.SetReadiness(srv.Ready)
 		srv.SetAgentManager(agentMgr)
 		// The ensure-exists task-delivery path (config.ResolveTaskTarget +
 		// runPersistent) needs the same agent.Manager to spawn/resume targets

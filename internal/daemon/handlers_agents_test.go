@@ -536,6 +536,27 @@ func TestAgentSessionHandlerReportsNotStoppedForLiveRecord(t *testing.T) {
 	}
 }
 
+// TestAgentSessionHandlerReportsRestoring: a "restoring" record is not
+// dormant, so Stopped stays false (an attach must not offer to start it) and
+// Restoring tells the client to wait for the daemon instead.
+func TestAgentSessionHandlerReportsRestoring(t *testing.T) {
+	mgr := &fakeAgentManager{records: []agent.Record{{Name: "foo", Status: "restoring"}}}
+	_, client := startTestServerWithAgent(t, mgr)
+
+	resp, err := client.Get("http://localhost/agents/foo/session")
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	defer resp.Body.Close()
+	var env Response
+	json.NewDecoder(resp.Body).Decode(&env) //nolint:errcheck
+	var out AgentSessionResponse
+	json.Unmarshal(env.Data, &out) //nolint:errcheck
+	if !out.Restoring || out.Stopped {
+		t.Errorf("Restoring=%v Stopped=%v, want true/false", out.Restoring, out.Stopped)
+	}
+}
+
 func TestAgentSessionNotFound(t *testing.T) {
 	mgr := &fakeAgentManager{records: []agent.Record{}}
 	_, client := startTestServerWithAgent(t, mgr)
@@ -1080,10 +1101,12 @@ func TestAgentStartHandlerError(t *testing.T) {
 		name     string
 		err      error
 		wantCode int
+		wantBody string
 	}{
-		{"not stopped", fmt.Errorf("%w: %q", agent.ErrAgentNotStopped, "foo"), http.StatusConflict},
-		{"already running", fmt.Errorf("%w: %q", agent.ErrAgentAlreadyRunning, "foo"), http.StatusConflict},
-		{"unknown agent", &agent.ErrNotFound{Query: "foo"}, http.StatusNotFound},
+		{"not stopped", fmt.Errorf("%w: %q", agent.ErrAgentNotStopped, "foo"), http.StatusConflict, ErrorCodeAgentNotStopped},
+		{"already running", fmt.Errorf("%w: %q", agent.ErrAgentAlreadyRunning, "foo"), http.StatusConflict, ErrorCodeAgentAlreadyRunning},
+		{"restoring", fmt.Errorf("%w: %q", agent.ErrDaemonRestoring, "foo"), http.StatusServiceUnavailable, ErrorCodeDaemonRestoring},
+		{"unknown agent", &agent.ErrNotFound{Query: "foo"}, http.StatusNotFound, ErrorCodeNotFound},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -1098,6 +1121,13 @@ func TestAgentStartHandlerError(t *testing.T) {
 			defer resp.Body.Close()
 			if resp.StatusCode != tt.wantCode {
 				t.Fatalf("want %d, got %d", tt.wantCode, resp.StatusCode)
+			}
+			var env Response
+			if err := json.NewDecoder(resp.Body).Decode(&env); err != nil {
+				t.Fatalf("decode: %v", err)
+			}
+			if env.Code != tt.wantBody {
+				t.Errorf("code = %q, want %q", env.Code, tt.wantBody)
 			}
 		})
 	}

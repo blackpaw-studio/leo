@@ -115,6 +115,13 @@ while this client stays attached; see 'leo agent attach --help'.`,
 				return fmt.Errorf("no agent named %q", name)
 			}
 
+			// A daemon still restoring agents can neither attach nor start
+			// this one: wait for it before deciding anything.
+			session, err = awaitRestoredSession(cmd.Context(), cfg.HomePath, name, session)
+			if err != nil {
+				return err
+			}
+
 			// Dormant agents have no tmux session to attach to yet — prompt to
 			// start (or fail fast off a TTY) before doing anything else.
 			ok, err := ensureAgentRunningPrompt(cmd.Context(), cmd, cfg.HomePath, session.Name, session.Stopped, !opts.cc)

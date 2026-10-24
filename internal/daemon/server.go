@@ -743,6 +743,12 @@ func (s *Server) MarkReady() {
 	s.ready.Store(true)
 }
 
+// Ready reports whether MarkReady has been called. The agent Manager reads it
+// to tell an agent awaiting restore from a stopped one.
+func (s *Server) Ready() bool {
+	return s.ready.Load()
+}
+
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	writeData(w, http.StatusOK, healthData{Version: s.leoVersion, Ready: s.ready.Load(), PID: s.pid, Web: s.webListening.Load(), Claude: s.claudeHealth(), GoroutineDump: s.goroutineDump})
 }

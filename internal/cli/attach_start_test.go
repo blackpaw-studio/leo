@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/blackpaw-studio/leo/internal/daemon"
 	"github.com/spf13/cobra"
 )
 
@@ -225,5 +226,88 @@ func TestEnsureAgentRunningNoPromptRefusesStoppedAgentWithoutPrompting(t *testin
 	}
 	if *started || stderr.Len() != 0 {
 		t.Fatalf("started=%v stderr=%q, want no prompt and no start", *started, stderr.String())
+	}
+}
+
+// stubRestoreWait shrinks the restore wait so tests need no real sleeps.
+func stubRestoreWait(t *testing.T, interval, timeout time.Duration) {
+	t.Helper()
+	oldInterval, oldTimeout := attachRestorePollInterval, attachRestoreTimeout
+	attachRestorePollInterval, attachRestoreTimeout = interval, timeout
+	t.Cleanup(func() { attachRestorePollInterval, attachRestoreTimeout = oldInterval, oldTimeout })
+}
+
+// TestAttachWaitsForRestoreThenAttaches: while the daemon reports the agent as
+// restoring, `leo attach` waits (never offering or calling start) and attaches
+// normally once the flag clears.
+func TestAttachWaitsForRestoreThenAttaches(t *testing.T) {
+	path := newAttachAliasTestConfig(t)
+	_, stderr := withStubStdio(t)
+	stubRestoreWait(t, time.Nanosecond, time.Minute)
+	lookups := 0
+	stubAgentSessionFull(t, func(workDir, name string) (daemon.AgentSessionResponse, error) {
+		lookups++
+		return daemon.AgentSessionResponse{Session: "leo-scratch", Name: "scratch", Restoring: lookups <= 3}, nil
+	})
+	stubAgentAttachSpecFn(t, func(workDir, name string) (daemon.AgentAttachSpecResponse, error) {
+		return daemon.AgentAttachSpecResponse{Name: name}, nil // claude
+	})
+	oldTTY := agentIsTTY
+	agentIsTTY = func() bool { t.Fatal("must not prompt while restoring"); return true }
+	t.Cleanup(func() { agentIsTTY = oldTTY })
+	started := stubAgentStart(t, nil)
+	stubTmuxLookPath(t, "/usr/bin/tmux", nil)
+	stubOutsideTmux(t)
+	var execedArgv []string
+	oldExec := agentSyscallExec
+	agentSyscallExec = func(argv0 string, argv []string, envv []string) error {
+		execedArgv = argv
+		return nil
+	}
+	t.Cleanup(func() { agentSyscallExec = oldExec })
+
+	root := newRootCmd()
+	root.SetArgs([]string{"--config", path, "attach", "scratch", "--host", "localhost"})
+	if err := root.Execute(); err != nil {
+		t.Fatalf("execute: %v", err)
+	}
+	if *started {
+		t.Fatal("AgentStart must never fire while the daemon is restoring")
+	}
+	if !strings.Contains(stderr.String(), "daemon starting, agents not restored yet — waiting…") {
+		t.Errorf("missing waiting notice, stderr = %q", stderr.String())
+	}
+	if !strings.Contains(strings.Join(execedArgv, " "), "leo-scratch") {
+		t.Fatalf("expected attach once restored, argv = %v", execedArgv)
+	}
+}
+
+// TestAttachRestoreTimeout: a daemon that never finishes restoring fails the
+// attach with a retry hint instead of hanging or offering to start.
+func TestAttachRestoreTimeout(t *testing.T) {
+	path := newAttachAliasTestConfig(t)
+	withStubStdio(t)
+	stubRestoreWait(t, time.Nanosecond, 20*time.Millisecond)
+	stubAgentSessionFull(t, func(workDir, name string) (daemon.AgentSessionResponse, error) {
+		return daemon.AgentSessionResponse{Session: "leo-scratch", Name: "scratch", Restoring: true}, nil
+	})
+	started := stubAgentStart(t, nil)
+	stubAgentAttachSpecFn(t, func(workDir, name string) (daemon.AgentAttachSpecResponse, error) {
+		return daemon.AgentAttachSpecResponse{Name: name}, nil // claude
+	})
+	stubTmuxLookPath(t, "/usr/bin/tmux", nil)
+	stubOutsideTmux(t)
+	oldExec := agentSyscallExec
+	agentSyscallExec = func(string, []string, []string) error { return nil }
+	t.Cleanup(func() { agentSyscallExec = oldExec })
+
+	root := newRootCmd()
+	root.SetArgs([]string{"--config", path, "attach", "scratch", "--host", "localhost"})
+	err := root.Execute()
+	if err == nil || !strings.Contains(err.Error(), "daemon is still restoring agents; try again shortly") {
+		t.Fatalf("err = %v, want restore-timeout message", err)
+	}
+	if *started {
+		t.Fatal("AgentStart must not fire while the daemon is restoring")
 	}
 }
