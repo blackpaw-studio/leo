@@ -1,0 +1,68 @@
+{
+  "body": {
+    "data": {
+      "active_profile": "fast",
+      "configured": true,
+      "enabled": true,
+      "hide_native_agents": [
+        "implementer",
+        "implementer-hard",
+        "code-reviewer",
+        "Explore",
+        "Plan",
+        "general-purpose"
+      ],
+      "hide_native_agents_is_default": true,
+      "profiles": [
+        {
+          "active": false,
+          "description": "",
+          "name": "deep",
+          "roles": {
+            "coder": {
+              "effort": "",
+              "inherited_model": "opus",
+              "model": "",
+              "template": "coder"
+            }
+          }
+        },
+        {
+          "active": true,
+          "description": "",
+          "name": "fast",
+          "roles": {
+            "coder": {
+              "effort": "",
+              "inherited_model": "haiku",
+              "model": "",
+              "template": "reviewer"
+            }
+          }
+        }
+      ],
+      "recent_consults": [],
+      "revision": "sha256:d1e5ba28f778048557b354bff517f7ba525088d0ef619dbdaa4f1b36f87f9f08",
+      "roles": [
+        {
+          "declared": true,
+          "name": "coder",
+          "use_for": "writing code"
+        }
+      ],
+      "templates": [
+        {
+          "model": "opus",
+          "name": "coder"
+        },
+        {
+          "model": "haiku",
+          "name": "reviewer"
+        }
+      ],
+      "warnings": []
+    },
+    "ok": true
+  },
+  "status": 200
+}

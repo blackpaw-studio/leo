@@ -1,0 +1,12 @@
+{
+  "body": {
+    "data": {
+      "revision": "sha256:d1e5ba28f778048557b354bff517f7ba525088d0ef619dbdaa4f1b36f87f9f08",
+      "values": {
+        "default_host": "remote"
+      }
+    },
+    "ok": true
+  },
+  "status": 200
+}

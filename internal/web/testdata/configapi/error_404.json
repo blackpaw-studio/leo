@@ -1,0 +1,8 @@
+{
+  "body": {
+    "code": "not_found",
+    "error": "Template \"ghost\" not found",
+    "ok": false
+  },
+  "status": 404
+}

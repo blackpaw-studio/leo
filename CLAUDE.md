@@ -37,7 +37,7 @@ internal/config/          → Config types + YAML loading/saving (leo.yaml)
 internal/daemon/          → Daemon IPC server (Unix socket HTTP) + client for CLI passthrough
 internal/harness/         → Coding-agent adapter registry + claude, codex, opencode adapters. All three run every leo primitive (scheduled tasks, ephemeral agents, persistent tasks) — see docs/configuration/harnesses.md
 internal/agent/           → Ephemeral agent lifecycle (Manager): template resolution, workspace setup, supervisor + agentstore persistence. Shared by CLI, web, and HTTP callers.
-internal/web/             → Web UI (htmx + Go html/template, embedded via embed.FS)
+internal/web/             → Web UI (htmx + Go html/template, embedded via embed.FS) + the JSON config API (`ConfigService`, shared with the daemon socket; docs/configuration/config-api.md)
 internal/service/         → Daemon lifecycle + agent supervisor (tmux management, launchd/systemd)
 internal/run/             → Task runner: prompt assembly + claude invocation
 internal/cron/            → In-process cron scheduler (robfig/cron wrapper)

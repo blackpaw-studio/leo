@@ -9,7 +9,6 @@ import (
 	"sort"
 
 	"github.com/blackpaw-studio/leo/internal/agentstore"
-	"github.com/blackpaw-studio/leo/internal/config"
 	"github.com/blackpaw-studio/leo/internal/web/schema"
 )
 
@@ -56,48 +55,20 @@ func (s *Server) buildEnvironmentsData(r *http.Request) (any, error) {
 // keep their launch env until restarted (the same as any config change), so it
 // raises the agents-restart-needed banner.
 func (s *Server) handleConfigEnvironmentSave(w http.ResponseWriter, r *http.Request) {
-	name := r.PathValue("name")
-	s.applySection(w, r, schema.SectionEnvironment,
-		func(cfg *config.Config) (any, bool) {
-			env, ok := cfg.Environments[name]
-			return &schema.EnvironmentEntry{Env: env}, ok
-		},
-		func(cfg *config.Config, v any) { cfg.Environments[name] = v.(*schema.EnvironmentEntry).Env },
-		nil,
-		fmt.Sprintf("Environment %q saved", name), &s.agentsRestartNeeded)
+	s.applyResource(w, r, resourceByKey("environments"), r.PathValue("name"))
 }
 
 // handleEnvironmentAdd creates an empty named environment.
 func (s *Server) handleEnvironmentAdd(w http.ResponseWriter, r *http.Request) {
-	defer s.lockConfigWrite()()
 	if err := r.ParseForm(); err != nil {
 		s.renderFlash(w, "error", fmt.Sprintf("Invalid form: %v", err))
 		return
 	}
 	name := r.FormValue("name")
-	if !validEntityName(name) {
-		s.renderFlash(w, "error", entityNameError)
+	if _, err := s.AddItem("", resourceByKey("environments"), name, nil); err != nil {
+		s.renderFlash(w, "error", err.Error())
 		return
 	}
-	cfg, err := s.loadConfig()
-	if err != nil {
-		s.renderFlash(w, "error", fmt.Sprintf("Failed to load config: %v", err))
-		return
-	}
-	if _, exists := cfg.Environments[name]; exists {
-		s.renderFlash(w, "error", fmt.Sprintf("Environment %q already exists", name))
-		return
-	}
-	if cfg.Environments == nil {
-		cfg.Environments = make(map[string]map[string]string)
-	}
-	cfg.Environments[name] = map[string]string{}
-	if errMsg := s.validateAndSave(cfg); errMsg != "" {
-		s.renderFlash(w, "error", errMsg)
-		return
-	}
-	s.reloadConfigOrWarn()
-
 	w.Header().Set("HX-Refresh", "true")
 	s.renderFlash(w, "success", fmt.Sprintf("Environment %q created — add its variables below", name))
 }
@@ -106,24 +77,11 @@ func (s *Server) handleEnvironmentAdd(w http.ResponseWriter, r *http.Request) {
 // while defaults, a template or a task still names it, so the flash lists the
 // reference instead of leaving a dangling name behind.
 func (s *Server) handleEnvironmentDelete(w http.ResponseWriter, r *http.Request) {
-	defer s.lockConfigWrite()()
 	name := r.PathValue("name")
-	cfg, err := s.loadConfig()
-	if err != nil {
-		s.renderFlash(w, "error", fmt.Sprintf("Failed to load config: %v", err))
+	if _, err := s.DeleteItem("", resourceByKey("environments"), name); err != nil {
+		s.renderFlash(w, "error", err.Error())
 		return
 	}
-	if _, ok := cfg.Environments[name]; !ok {
-		s.renderFlash(w, "error", fmt.Sprintf("Environment %q not found", name))
-		return
-	}
-	delete(cfg.Environments, name)
-	if errMsg := s.validateAndSave(cfg); errMsg != "" {
-		s.renderFlash(w, "error", errMsg)
-		return
-	}
-	s.reloadConfigOrWarn()
-
 	w.Header().Set("HX-Refresh", "true")
 	s.renderFlash(w, "success", fmt.Sprintf("Environment %q deleted", name))
 }
@@ -139,41 +97,11 @@ func (s *Server) handleEnvironmentDelete(w http.ResponseWriter, r *http.Request)
 // so every outcome is a flash; success also refreshes the page to show the
 // renamed card.
 func (s *Server) handleEnvironmentRename(w http.ResponseWriter, r *http.Request) {
-	defer s.lockConfigWrite()()
-	name := r.PathValue("name")
-
-	newName := r.FormValue("new_name")
-	if newName == "" {
-		s.renderFlashToContainer(w, "error", "New name is required")
-		return
-	}
-	if !validEntityName(newName) {
-		s.renderFlashToContainer(w, "error", entityNameError)
-		return
-	}
-
-	cfg, err := s.loadConfig()
-	if err != nil {
-		s.renderFlashToContainer(w, "error", fmt.Sprintf("Failed to load config: %v", err))
-		return
-	}
-	if _, ok := cfg.Environments[name]; !ok {
-		s.renderFlashToContainer(w, "error", fmt.Sprintf("Environment %q not found", name))
-		return
-	}
-	renamed, err := config.RenameEnvironment(cfg, name, newName)
-	if err != nil {
+	name, newName := r.PathValue("name"), r.FormValue("new_name")
+	if _, err := s.RenameItem("", resourceByKey("environments"), name, newName); err != nil {
 		s.renderFlashToContainer(w, "error", err.Error())
 		return
 	}
-	if errMsg := s.validateAndSave(renamed); errMsg != "" {
-		s.renderFlashToContainer(w, "error", errMsg)
-		return
-	}
-
-	renameInAgentRecords(renamed.HomePath, name, newName)
-	s.reloadConfigOrWarn()
-
 	w.Header().Set("HX-Refresh", "true")
 	s.renderFlashToContainer(w, "success", fmt.Sprintf("Environment %q renamed to %q", name, newName))
 }

@@ -25,6 +25,7 @@ import (
 	"github.com/blackpaw-studio/leo/internal/leomcp"
 	"github.com/blackpaw-studio/leo/internal/observe"
 	"github.com/blackpaw-studio/leo/internal/observe/httpapi"
+	"github.com/blackpaw-studio/leo/internal/startup"
 	"github.com/blackpaw-studio/leo/internal/tmux"
 	"github.com/blackpaw-studio/leo/internal/web"
 )
@@ -100,7 +101,10 @@ type Server struct {
 	attachPlacements *consult.AttachPlacements
 	router           *sessionRouter
 	claudeLookup     func() (string, error) // set via SetClaudeLookup; nil omits claude from /health
-	logPath          string                 // service log path, set via SetLogPath; threaded into web.Options.LogPath by StartWeb
+	// configSvc is the leo.yaml write path shared with the web server: both
+	// serve the JSON config API from it and agree on the restart flags.
+	configSvc *web.ConfigService
+	logPath   string // service log path, set via SetLogPath; threaded into web.Options.LogPath by StartWeb
 	// resolveHandle backs web.Options.ResolveHandle: resolves a config-defined
 	// process name to its harness name and SessionHandle. Set via
 	// SetResolveHandle by service boot; nil means every process is claude.
@@ -171,10 +175,27 @@ type Server struct {
 	// webListening is the web listener's bound address once it is serving,
 	// reported on /health.
 	webListening atomic.Pointer[healthWeb]
+	// startup times StartWeb's steps; nil records nothing.
+	startup *startup.Timer
+	// goroutineDump is whether the process handles SIGUSR1 with a goroutine
+	// dump, advertised on /health.
+	goroutineDump bool
 }
 
 // Option configures a Server at construction.
 type Option func(*Server)
+
+// WithStartupTimer times StartWeb's steps through t.
+func WithStartupTimer(t *startup.Timer) Option {
+	return func(s *Server) { s.startup = t }
+}
+
+// WithGoroutineDump declares that the process handles SIGUSR1 with a
+// goroutine dump, so /health tells `leo service dump` it is safe to signal.
+// Set it only after the handler is installed.
+func WithGoroutineDump() Option {
+	return func(s *Server) { s.goroutineDump = true }
+}
 
 // WithBridge serves hub on the bridge routes instead of a private one.
 func WithBridge(hub *bridge.Hub) Option {
@@ -257,6 +278,8 @@ func New(sockPath, configPath string, processes ProcessStateProvider, opts ...Op
 		return tmux.AbortPrompt(context.Background(), s.tmuxPath(), tmuxSession)
 	})
 
+	s.configSvc = s.newConfigService()
+
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /health", s.handleHealth)
 	mux.HandleFunc("GET /version", s.handleVersion)
@@ -273,7 +296,11 @@ func New(sockPath, configPath string, processes ProcessStateProvider, opts ...Op
 	mux.HandleFunc("POST /task/enable", s.handleTaskEnable)
 	mux.HandleFunc("POST /task/disable", s.handleTaskDisable)
 	mux.HandleFunc("GET /task/list", s.handleTaskList)
-	mux.HandleFunc("POST /config/reload", s.handleConfigReload)
+	// The JSON config API (docs/configuration/config-api.md): the 0600 socket
+	// is the operator's, so no wrapper. /config/reload is the shared service's
+	// too, so socket and web answer with the same body.
+	s.configSvc.RegisterConfigRoutes(mux, "", func(h http.HandlerFunc) http.HandlerFunc { return h })
+	s.configSvc.RegisterReloadRoute(mux, "", func(h http.HandlerFunc) http.HandlerFunc { return h })
 	mux.HandleFunc("GET /drain/busy", s.handleDrainBusy)
 	mux.HandleFunc("POST /drain", s.handleDrainBegin)
 	mux.HandleFunc("GET /drain", s.handleDrainStatus)
@@ -336,6 +363,29 @@ func New(sockPath, configPath string, processes ProcessStateProvider, opts ...Op
 	}
 
 	return s
+}
+
+// newConfigService builds the config service the socket and the web server
+// share. Its collaborators are late-bound closures: the agent manager, log
+// path and version are attached after New returns.
+func (s *Server) newConfigService() *web.ConfigService {
+	return web.NewConfigService(web.ConfigServiceOptions{
+		ConfigPath: s.configPath,
+		Writer:     s.configWriter,
+		Reloader:   s,
+		LeoPath:    s.leoMCP.Executable(),
+		LogPath:    func() string { return s.logPath },
+		Agents: func() web.AgentRestarter {
+			if s.agentMgr == nil {
+				return nil
+			}
+			return s.agentMgr
+		},
+		Processes: func() web.ProcessStateProvider { return &processAdapter{inner: s.processes} },
+		Version:   func() string { return s.leoVersion },
+		StartedAt: time.Now(),
+		PID:       s.pid,
+	})
 }
 
 // SetParentContext supplies the service lifetime to web-dispatched runs.
@@ -481,7 +531,9 @@ func (s *Server) StartWeb(cfg *config.Config, agentSvc web.AgentService) error {
 	// Supervised agents' turn hooks complete their in-flight persistent-task
 	// invocations, whatever the harness (see sessionRouter.ObserveTurn).
 	observeOpts = append(observeOpts, web.WithTurnObserver(s.observeAgentTurn))
+	stop := s.startup.Step("web.New")
 	s.webServer = web.New(s.configPath, &processAdapter{inner: s.processes}, s.scheduler, s, agentSvc, web.Options{
+		Config:         s.configSvc,
 		ConfigWriter:   s.configWriter,
 		Port:           port,
 		APIToken:       apiToken,
@@ -502,19 +554,26 @@ func (s *Server) StartWeb(cfg *config.Config, agentSvc web.AgentService) error {
 		Devices:    devices.NewStore(cfg.StatePath(), nil),
 		PublicURLs: cfg.Web.PublicURLs,
 		Chat:       web.ChatOptions{Store: s.chatStore, AttachmentsDir: s.chatAttachmentsDir, Publisher: s.chatPublisher, TaskRun: s.TaskRun},
+		Startup:    s.startup,
 	}, observeOpts...)
+	stop()
 	s.setControl(s.webServer.ControlHandler())
 	s.setClientSink(s.webServer)
 	s.setDrainNotifier(s.webServer.DrainNotifier())
 	s.setRunningDispatches(s.webServer.RunningDispatches)
 	if s.chatStore != nil {
+		stop = s.startup.Step("StartChat/Recover")
 		s.webServer.StartChat(s.parentContext)
+		stop()
 		s.setChat(s.webServer.ChatHandler())
 	}
 	s.setWebSources(s.webServer.ObserveSources())
 	bind := cfg.WebBind()
 	addr := fmt.Sprintf("%s:%d", bind, port)
-	if err := s.webServer.ListenAndServe(addr); err != nil {
+	stop = s.startup.Step("listener bind")
+	err = s.webServer.ListenAndServe(addr)
+	stop()
+	if err != nil {
 		return fmt.Errorf("starting web UI: %w", err)
 	}
 	s.setWebListening(bind, port)
@@ -691,7 +750,7 @@ func (s *Server) Ready() bool {
 }
 
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
-	writeData(w, http.StatusOK, healthData{Version: s.leoVersion, Ready: s.ready.Load(), PID: s.pid, Web: s.webListening.Load(), Claude: s.claudeHealth()})
+	writeData(w, http.StatusOK, healthData{Version: s.leoVersion, Ready: s.ready.Load(), PID: s.pid, Web: s.webListening.Load(), Claude: s.claudeHealth(), GoroutineDump: s.goroutineDump})
 }
 
 // SetClaudeLookup wires the claude resolution /health reports. It is called

@@ -1,0 +1,16 @@
+{
+  "body": {
+    "data": [
+      {
+        "duration_ms": 1500,
+        "exit_code": 0,
+        "log_file": "heartbeat-1.jsonl",
+        "run_at": "2026-10-23T08:00:01Z",
+        "started_at": "2026-10-23T08:00:00Z",
+        "task": "heartbeat"
+      }
+    ],
+    "ok": true
+  },
+  "status": 200
+}

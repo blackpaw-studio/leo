@@ -28,6 +28,10 @@ const (
 	KindDuration             // string like "30m", "2h"
 	KindTextarea             // long string
 	KindDatalist             // free-text input with a <datalist> of suggestions
+
+	// KindCount is one past the last kind, so tests can walk every kind (the
+	// JSON schema must be able to describe each).
+	KindCount
 )
 
 // Section identifies which config struct a field list applies to.
@@ -109,7 +113,30 @@ type Field struct {
 	Group    string // form section heading, e.g. "Schedule", "Runtime"
 	Advanced bool   // rendered inside the collapsed advanced <details>
 	Warning  string // rendered as an inline warning (e.g. lockout risk)
+
+	// The attributes below feed the JSON config schema only. All are optional
+	// and set only where config itself defines the rule: the daemon stays
+	// authoritative and Validate remains the only enforcement.
+
+	// Default is the effective value when unset (e.g. web.port 8370).
+	Default any
+	// Constraints are rules Validate or the add handlers already enforce.
+	Constraints Constraints
+	// Secret marks a write-only field: JSON reads report {"set": bool} and
+	// never the value.
+	Secret bool
 }
+
+// Constraints are the validation rules a client may pre-check. A nil bound or
+// a zero Required/Pattern means "none".
+type Constraints struct {
+	Required bool   `json:"required,omitempty"`
+	Min      *int   `json:"min,omitempty"`
+	Max      *int   `json:"max,omitempty"`
+	Pattern  string `json:"pattern,omitempty"`
+}
+
+func intp(n int) *int { return &n }
 
 // DeriveKind maps a Go type to its default form control.
 func DeriveKind(t reflect.Type) Kind {

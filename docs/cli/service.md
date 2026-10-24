@@ -14,6 +14,7 @@ leo service stop
 leo service status
 leo service restart
 leo service logs
+leo service dump
 
 # OS-level daemon (launchd/systemd)
 leo service start --daemon
@@ -202,6 +203,12 @@ Tail the daemon log file.
 | `-n`, `--tail` | `50` | Number of lines to display. |
 | `-f`, `--follow` | `false` | Follow the log output (like `tail -f`). |
 
+### `leo service dump`
+
+Asks the running daemon to write every goroutine's stack to `<home>/state/goroutines-<unix>.txt` (mode 0600) and prints that path. The daemon keeps serving; nothing about its state changes. Use it on a daemon that is slow to start or looks stuck, to see where it is. A second dump in the same second gets a `-2`, `-3`, … suffix. Dump files are not pruned; remove them by hand.
+
+Under the hood this sends `SIGUSR1`, whose default action is to terminate a process. So the command takes the daemon's PID from its `/health` answer on the socket (never from the lock file, which can be stale), and signals only a daemon whose `/health` carries `"goroutine_dump": true`. A daemon that does not answer exits non-zero with `daemon is not running`; one that predates the feature is refused with a message naming its PID and version. If no file appears within 10 seconds the command exits non-zero and points at `leo service logs`.
+
 ## Claude Arguments
 
 For each supervised agent, Leo builds `claude` arguments based on its config:
@@ -219,6 +226,10 @@ claude --channels <channels>               \
 ## Logs
 
 All modes write logs to `~/.leo/state/service.log`. The daemon rotates this file automatically on size: when it reaches 10 MB, [lumberjack](https://pkg.go.dev/gopkg.in/natefinch/lumberjack.v2) renames it to a timestamped backup (`service-<timestamp>.log.gz`) and opens a fresh file in place. Up to 3 backups are retained for 30 days, gzipped. No external logrotate setup is required. `leo service logs -f` reopens cleanly across rotations.
+
+### Startup timing
+
+While starting, the daemon logs one timestamped line per step, `startup: <step> took <duration>`, covering the lock, tmux server, observability, chat open, daemon wiring, IPC listen, agent manager, web (with its `web.New`, `MarkInterrupted`, `SweepRunFiles`, `setupChat`, `StartChat/Recover` and `listener bind` sub-steps), `RestoreAgents`, and a final `startup: total took …` once the daemon reports ready. `MarkInterrupted` and `SweepRunFiles` also log how many records or run files they handled and how many tmux and git calls they made, and `MarkInterrupted` warns about any single record that takes more than 2 s. A step that never finishes never logs its line, so the last `took` line marks where startup is stuck; `leo service dump` shows the exact location.
 
 ## Service Labels
 

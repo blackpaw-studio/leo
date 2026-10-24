@@ -9,6 +9,17 @@ import (
 	"strings"
 )
 
+// FieldError is a parse failure pinned to the field that caused it. Error()
+// is the bare cause, so the web flashes read exactly as before; the JSON
+// config API reads Key to put the message on its field.
+type FieldError struct {
+	Key string
+	Err error
+}
+
+func (e *FieldError) Error() string { return e.Err.Error() }
+func (e *FieldError) Unwrap() error { return e.Err }
+
 // FieldValue is a Field resolved against a concrete struct value, ready for
 // template rendering.
 type FieldValue struct {
@@ -63,8 +74,26 @@ func Values(target any, section Section, defaults any) []FieldValue {
 // happens for KindBool (unchecked checkbox), which the hidden-false input
 // covers. Returns the first parse error encountered.
 func Apply(target any, section Section, form url.Values) error {
+	return apply(target, section, form, nil)
+}
+
+// ApplyKeys is Apply restricted to the named fields: every other field of
+// target is left exactly as it is (no re-parse, no trimming), which is what a
+// partial JSON patch needs.
+func ApplyKeys(target any, section Section, form url.Values, keys []string) error {
+	only := make(map[string]bool, len(keys))
+	for _, k := range keys {
+		only[k] = true
+	}
+	return apply(target, section, form, only)
+}
+
+func apply(target any, section Section, form url.Values, only map[string]bool) error {
 	v := reflect.ValueOf(target).Elem()
 	for _, f := range FieldsFor(section) {
+		if only != nil && !only[f.Key] {
+			continue
+		}
 		sf := mustFieldByYAMLKey(v.Type(), section, f.Key)
 		val := v.FieldByIndex(sf.Index)
 		raw := form.Get(f.Key)
@@ -86,14 +115,14 @@ func Apply(target any, section Section, form url.Values) error {
 			}
 		case KindNumber:
 			if err := applyNumber(val, sf, f.Key, raw); err != nil {
-				return err
+				return &FieldError{Key: f.Key, Err: err}
 			}
 		case KindCSV:
 			val.Set(reflect.ValueOf(parseCSV(raw)))
 		case KindEnvMap:
 			m, err := parseEnvLines(raw)
 			if err != nil {
-				return fmt.Errorf("%s: %w", f.Key, err)
+				return &FieldError{Key: f.Key, Err: fmt.Errorf("%s: %w", f.Key, err)}
 			}
 			val.Set(reflect.ValueOf(m))
 		default:

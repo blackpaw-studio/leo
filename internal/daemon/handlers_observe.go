@@ -19,7 +19,14 @@ import (
 
 type versionData struct {
 	Version string `json:"version"`
+	// Capabilities are the optional API features this daemon offers (the
+	// same list the event stream's hello carries), so a client can gate UI on
+	// a plain GET.
+	Capabilities []string `json:"capabilities"`
 }
+
+// Capabilities returns the optional API features this daemon offers.
+func Capabilities() []string { return observe.Features() }
 
 // healthData is the /health payload. Ready flips true only once the daemon
 // has finished restoring agents (see Server.MarkReady); /health itself
@@ -38,6 +45,10 @@ type healthData struct {
 	// request. The daemon runs without it, so this is how a client (the app's
 	// onboarding) learns it must be installed. Absent when no lookup is wired.
 	Claude *healthClaude `json:"claude,omitempty"`
+	// GoroutineDump is true when the daemon dumps its goroutines on SIGUSR1
+	// (see WithGoroutineDump). `leo service dump` signals only a daemon that
+	// says so, because SIGUSR1's default action is to terminate the process.
+	GoroutineDump bool `json:"goroutine_dump,omitempty"`
 }
 
 // healthClaude is the claude CLI's resolution: Path is set only when Found.
@@ -72,7 +83,7 @@ type templateListEntry struct {
 }
 
 func (s *Server) handleVersion(w http.ResponseWriter, _ *http.Request) {
-	writeData(w, http.StatusOK, versionData{Version: s.leoVersion})
+	writeData(w, http.StatusOK, versionData{Version: s.leoVersion, Capabilities: Capabilities()})
 }
 
 func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {

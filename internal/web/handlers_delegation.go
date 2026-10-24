@@ -215,47 +215,14 @@ func (s *Server) renderDelegationFragment(w http.ResponseWriter, name string, da
 func (s *Server) handleDelegationCell(w http.ResponseWriter, r *http.Request) {
 	profile, role := r.FormValue("profile"), r.FormValue("role")
 	submitted := config.RoleTarget{Template: r.FormValue("template"), Model: r.FormValue("model"), Effort: r.FormValue("effort")}
-	warn, errMsg := s.mutateConfig(func(cfg *config.Config) error {
-		d, err := requireDelegation(cfg)
-		if err != nil {
-			return err
-		}
-		p, ok := d.Profiles[profile]
-		if !ok {
-			return fmt.Errorf("profile %q not found", profile)
-		}
-		roles := make(map[string]config.RoleTarget, len(p.Roles)+1)
-		for name, target := range p.Roles {
-			roles[name] = target
-		}
-		if submitted.Template == "" {
-			delete(roles, role)
-		} else {
-			roles[role] = submitted
-		}
-		p.Roles = roles
-		d.Profiles[profile] = p
-		return nil
-	})
+	warn, errMsg := s.mutateConfig(setCell(profile, role, submitted))
 	s.renderDelegationStatus(w, cellStatusID(profile, role), warn, errMsg)
 }
 
 // handleDelegationUseFor autosaves a declared role's use_for text.
 func (s *Server) handleDelegationUseFor(w http.ResponseWriter, r *http.Request) {
 	role := r.FormValue("role")
-	warn, errMsg := s.mutateConfig(func(cfg *config.Config) error {
-		d, err := requireDelegation(cfg)
-		if err != nil {
-			return err
-		}
-		spec, ok := d.Roles[role]
-		if !ok {
-			return fmt.Errorf("role %q not found", role)
-		}
-		spec.UseFor = r.FormValue("use_for")
-		d.Roles[role] = spec
-		return nil
-	})
+	warn, errMsg := s.mutateConfig(setUseFor(role, r.FormValue("use_for")))
 	s.renderDelegationStatus(w, useForStatusID(role), warn, errMsg)
 }
 
@@ -269,50 +236,25 @@ func (s *Server) handleDelegationHideAgents(w http.ResponseWriter, r *http.Reque
 	names := strings.FieldsFunc(r.FormValue("hide_native_agents"), func(c rune) bool {
 		return c == ',' || unicode.IsSpace(c)
 	})
-	warn, errMsg := s.mutateConfig(func(cfg *config.Config) error {
-		d, err := requireDelegation(cfg)
-		if err != nil {
-			return err
-		}
-		d.SetHiddenNativeAgents(names)
-		return nil
-	})
+	warn, errMsg := s.mutateConfig(setHiddenAgents(names))
 	s.renderDelegationStatus(w, hideAgentsStatusID, warn, errMsg)
 }
 
 // handleDelegationEnabled flips the global delegation switch. Profiles and
 // roles are kept either way; the page refreshes to show the new state.
 func (s *Server) handleDelegationEnabled(w http.ResponseWriter, r *http.Request) {
-	s.delegationMutation(w, r, func(cfg *config.Config) error {
-		d, err := requireDelegation(cfg)
-		if err != nil {
-			return err
-		}
-		switch r.FormValue("enabled") {
-		case "true":
-			d.SetEnabled(true)
-		case "false":
-			d.SetEnabled(false)
-		default:
-			return fmt.Errorf("enabled must be true or false")
-		}
-		return nil
-	})
+	switch r.FormValue("enabled") {
+	case "true":
+		s.delegationMutation(w, r, setEnabled(true))
+	case "false":
+		s.delegationMutation(w, r, setEnabled(false))
+	default:
+		s.delegationMutation(w, r, func(*config.Config) error { return fmt.Errorf("enabled must be true or false") })
+	}
 }
 
 func (s *Server) handleDelegationActive(w http.ResponseWriter, r *http.Request) {
-	s.delegationMutation(w, r, func(cfg *config.Config) error {
-		d, err := requireDelegation(cfg)
-		if err != nil {
-			return err
-		}
-		name := r.FormValue("profile")
-		if _, ok := d.Profiles[name]; !ok {
-			return fmt.Errorf("profile %q not found", name)
-		}
-		d.ActiveProfile = name
-		return nil
-	})
+	s.delegationMutation(w, r, setActiveProfile(r.FormValue("profile")))
 }
 
 func (s *Server) handleDelegationPreview(w http.ResponseWriter, r *http.Request) {
@@ -321,29 +263,41 @@ func (s *Server) handleDelegationPreview(w http.ResponseWriter, r *http.Request)
 		http.Error(w, err.Error(), 500)
 		return
 	}
+	data, err := previewDelegation(cfg, r.URL.Query().Get("profile"))
+	if err != nil {
+		status := http.StatusNotFound
+		if ce := asConfigError(err); ce.Code == CodeDelegationMissing {
+			status = http.StatusBadRequest
+		}
+		http.Error(w, err.Error(), status)
+		return
+	}
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	if err := s.templates.ExecuteTemplate(w, "delegation_preview", data); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+	}
+}
+
+// previewDelegation is what activating target would change relative to the
+// active profile, and which declared roles target leaves unrouted.
+func previewDelegation(cfg *config.Config, target string) (delegationPreviewData, error) {
 	d, err := requireDelegation(cfg)
 	if err != nil {
-		http.Error(w, err.Error(), 400)
-		return
+		return delegationPreviewData{}, err
 	}
-	target := r.URL.Query().Get("profile")
 	p, ok := d.Profiles[target]
 	if !ok {
-		http.Error(w, "profile not found", 404)
-		return
+		return delegationPreviewData{}, profileNotFound(target)
 	}
 	current := d.Profiles[d.ActiveProfile]
-	diff := config.DiffProfiles(current, p)
-	data := delegationPreviewData{Profile: target}
-	missing := []string{}
+	data := delegationPreviewData{Profile: target, Missing: []string{}}
 	for role := range d.Roles {
 		if _, ok := p.Roles[role]; !ok {
-			missing = append(missing, role)
+			data.Missing = append(data.Missing, role)
 		}
 	}
-	sort.Strings(missing)
-	data.Missing = missing
-	for _, role := range diff {
+	sort.Strings(data.Missing)
+	for _, role := range config.DiffProfiles(current, p) {
 		before, hadBefore := current.Roles[role]
 		after, hadAfter := p.Roles[role]
 		switch {
@@ -355,8 +309,5 @@ func (s *Server) handleDelegationPreview(w http.ResponseWriter, r *http.Request)
 			data.Changes = append(data.Changes, delegationProfileChange{Role: role, Kind: "changed", Before: before, After: after})
 		}
 	}
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	if err := s.templates.ExecuteTemplate(w, "delegation_preview", data); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-	}
+	return data, nil
 }

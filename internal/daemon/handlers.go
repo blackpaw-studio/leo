@@ -227,14 +227,6 @@ func (s *Server) handleCronList(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, Response{OK: true, Data: data})
 }
 
-func (s *Server) handleConfigReload(w http.ResponseWriter, r *http.Request) {
-	if err := s.ReloadConfig(); err != nil {
-		writeError(w, http.StatusInternalServerError, fmt.Sprintf("reloading config: %v", err))
-		return
-	}
-	writeJSON(w, http.StatusOK, Response{OK: true})
-}
-
 // syncScheduler re-syncs the in-process scheduler with the current config.
 // Errors are logged but not returned because the on-disk config write already succeeded.
 func (s *Server) syncScheduler(cfg *config.Config) {

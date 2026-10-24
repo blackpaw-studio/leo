@@ -1,0 +1,18 @@
+{
+  "body": {
+    "code": "invalid",
+    "error": "config validation failed:\n  - tasks.heartbeat.schedule: expected 5 fields, got 3\n  - tasks.heartbeat.retries must not be negative",
+    "errors": [
+      {
+        "field": "schedule",
+        "message": "tasks.heartbeat.schedule: expected 5 fields, got 3"
+      },
+      {
+        "field": "retries",
+        "message": "tasks.heartbeat.retries must not be negative"
+      }
+    ],
+    "ok": false
+  },
+  "status": 422
+}
