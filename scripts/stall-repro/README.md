@@ -7,8 +7,9 @@ processes and tmux server. `DUMP_AFTER=<s>` runs `leo service dump` that many se
 Needs `bin/leo` (`make build`). Never touches `~/.leo`, launchd, or the production tmux socket.
 
 `WAIT_FOR_LOG=<regex>` keeps the daemon up after ready until a matching line reaches
-`state/service.log` (under `MAX_WAIT`), e.g. `WAIT_FOR_LOG='restart reconcile:'` for the background
-restart reconcile's summary. The runner also reports when the web UI first answered (polled every 0.2 s).
+`state/service.log` (under `MAX_WAIT`), e.g. `WAIT_FOR_LOG='restart reconcile: [0-9]+ records'` for the
+background restart reconcile's summary (a bare `restart reconcile:` also matches its slow-record and git
+timeout warnings, which arrive before the pass is done). The runner also reports when the web UI first answered (polled every 0.2 s).
 
 `snapshot.sh <T>` prints the end state a run left in `<T>` as sorted JSON (per record: status, worktree
 state, whether a branch tip was recorded, pane/viewer ids, error, notification dispositions; plus the
