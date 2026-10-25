@@ -157,3 +157,50 @@ func TestListPromptFiles_ExcludesEscapingSymlinks(t *testing.T) {
 		t.Errorf("listing lost legitimate files: %v", files)
 	}
 }
+
+// On a case-insensitive filesystem an absolute symlink may name the workspace
+// with different capitalization than the configured path; it is still inside.
+func TestPromptFile_CaseAliasedInWorkspaceSymlinkStillWorks(t *testing.T) {
+	base := t.TempDir()
+	ws := filepath.Join(base, "wsdir")
+	if err := os.MkdirAll(filepath.Join(ws, "shared"), 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(base, "WSDIR")); err != nil {
+		t.Skip("filesystem is case-sensitive")
+	}
+	real := filepath.Join(ws, "shared", "real.md")
+	if err := os.WriteFile(real, []byte("hello"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	alias := filepath.Join(base, "WSDIR", "shared", "real.md")
+	mustSymlink(t, alias, filepath.Join(ws, "prompts", "task.md"))
+
+	got, err := ReadPromptFile(ws, "prompts/task.md")
+	if err != nil || got != "hello" {
+		t.Fatalf("read = %q, %v", got, err)
+	}
+	if err := WritePromptFile(ws, "prompts/task.md", "updated"); err != nil {
+		t.Fatal(err)
+	}
+	if b, _ := os.ReadFile(real); string(b) != "updated" {
+		t.Errorf("target = %q", b)
+	}
+}
+
+func TestListPromptFiles_SymlinkedWorkspaceRoot(t *testing.T) {
+	ws, _ := symlinkFixture(t)
+	if err := os.WriteFile(filepath.Join(ws, "ok.md"), []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(filepath.Dir(ws), "ws-link")
+	mustSymlink(t, ws, link)
+
+	files, err := ListPromptFiles(link)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(files) != 1 || files[0] != "ok.md" {
+		t.Errorf("files = %v, want [ok.md]", files)
+	}
+}

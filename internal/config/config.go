@@ -1038,19 +1038,16 @@ func ListPromptFiles(workspace string) ([]string, error) {
 	}
 	defer func() { _ = root.Close() }()
 	var files []string
-	err = filepath.Walk(absWorkspace, func(path string, info os.FileInfo, err error) error {
+	err = fs.WalkDir(root.FS(), ".", func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return nil // skip unreadable entries
 		}
-		if info.IsDir() || !strings.HasSuffix(strings.ToLower(info.Name()), ".md") {
+		if d.IsDir() || !strings.HasSuffix(strings.ToLower(d.Name()), ".md") {
 			return nil
 		}
-		rel, err := filepath.Rel(absWorkspace, path)
-		if err != nil {
-			return nil
-		}
+		rel := filepath.FromSlash(path)
 		// Skip symlinks that leave the workspace (or point at a directory).
-		_, resolvedRel, err := resolveInWorkspace(absWorkspace, path)
+		_, resolvedRel, err := resolveInWorkspace(absWorkspace, filepath.Join(absWorkspace, rel))
 		if err != nil {
 			return nil
 		}
@@ -1112,11 +1109,35 @@ func resolveInWorkspace(absWorkspace, absPath string) (realWorkspace, rel string
 	for i := len(rest) - 1; i >= 0; i-- {
 		resolved = filepath.Join(resolved, rest[i])
 	}
-	rel, err = filepath.Rel(realWorkspace, resolved)
-	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+	rel, ok := relativeByIdentity(realWorkspace, resolved)
+	if !ok {
 		return "", "", fmt.Errorf("prompt file %q escapes workspace via symlink", absPath)
 	}
 	return realWorkspace, rel, nil
+}
+
+// relativeByIdentity returns path relative to the workspace by finding the
+// ancestor of path that is the same directory as workspace (os.SameFile), so
+// a path spelled with different capitalization on a case-insensitive
+// filesystem still counts as inside. ok is false when no ancestor matches.
+func relativeByIdentity(workspace, path string) (rel string, ok bool) {
+	wsInfo, err := os.Stat(workspace)
+	if err != nil {
+		return "", false
+	}
+	tail := ""
+	for cur := path; ; cur = filepath.Dir(cur) {
+		if info, err := os.Stat(cur); err == nil && os.SameFile(wsInfo, info) {
+			if tail == "" {
+				return ".", true
+			}
+			return tail, true
+		}
+		if filepath.Dir(cur) == cur {
+			return "", false
+		}
+		tail = filepath.Join(filepath.Base(cur), tail)
+	}
 }
 
 // openPromptRoot resolves promptFile lexically and through symlinks, then
@@ -1171,7 +1192,8 @@ func ReadPromptFile(workspace, promptFile string) (string, error) {
 
 // WritePromptFile writes content to a task's prompt file, creating
 // parent directories as needed. The write is confined to the workspace the
-// same way ReadPromptBytes is.
+// same way ReadPromptBytes is. Creating a file through a dangling absolute
+// symlink is refused even when its target would be inside the workspace.
 func WritePromptFile(workspace, promptFile, content string) error {
 	if _, err := ResolvePromptPath(workspace, promptFile); err != nil {
 		return err
