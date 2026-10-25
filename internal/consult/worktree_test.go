@@ -185,7 +185,7 @@ func TestMarkInterruptedPreservesRemovedWorktrees(t *testing.T) {
 		}
 	}
 	d := NewDispatcher(recorder)
-	d.MarkInterrupted()
+	markInterruptedAndReconcile(t, d)
 	for _, id := range []string{"d-removed", "d-creating"} {
 		rec, err := d.Get(id)
 		if err != nil {

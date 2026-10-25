@@ -158,15 +158,23 @@ func (d *Dispatcher) cleanupWorktree(id string) Record {
 // cleanupWorktreeWith is cleanupWorktree with the git that assesses the
 // worktree and the git that removes it supplied by the caller.
 func (d *Dispatcher) cleanupWorktreeWith(id string, assess, mutate gitFunc) Record {
-	rec, state, err := d.lookup(id)
-	if err != nil {
-		return rec
-	}
-	rec, needsAssessment := d.cleanupPrecheck(rec, state)
-	if !needsAssessment {
+	rec, state, due := d.cleanupDue(id)
+	if !due {
 		return rec
 	}
 	return d.applyWorktreeAssessment(assess, mutate, rec, state)
+}
+
+// cleanupDue looks id up and applies cleanupPrecheck to it: it returns the
+// record (deferred, when that was the decision), its live run if any, and
+// whether its worktree is due an assessment.
+func (d *Dispatcher) cleanupDue(id string) (Record, *runState, bool) {
+	rec, state, err := d.lookup(id)
+	if err != nil {
+		return rec, nil, false
+	}
+	rec, due := d.cleanupPrecheck(rec, state)
+	return rec, state, due
 }
 
 // cleanupPrecheck applies cleanupWorktree's checks that need no git: it

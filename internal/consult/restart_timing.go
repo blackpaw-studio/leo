@@ -34,9 +34,10 @@ func (t *recordTimings) start(op string) (stop func()) {
 	}
 }
 
-// warnSlowRecord logs a record whose reconciliation exceeded the threshold,
-// as soon as that record finishes, so a long stall still shows progress.
-func (d *Dispatcher) warnSlowRecord(id string, t *recordTimings) {
+// warnSlowRecord logs a record whose reconciliation in pass (MarkInterrupted
+// or the background restart reconcile) exceeded the threshold, as soon as
+// that record finishes, so a long stall still shows progress.
+func (d *Dispatcher) warnSlowRecord(pass, id string, t *recordTimings) {
 	threshold := d.slowRestartRecord
 	if threshold == 0 {
 		threshold = defaultSlowRestartRecord
@@ -45,5 +46,5 @@ func (d *Dispatcher) warnSlowRecord(id string, t *recordTimings) {
 	if d.startupLog == nil || took <= threshold {
 		return
 	}
-	d.startupLog("startup: MarkInterrupted: slow record %s took %s (slowest: %s %s)", id, took, t.slowest, t.longest)
+	d.startupLog("startup: %s: slow record %s took %s (slowest: %s %s)", pass, id, took, t.slowest, t.longest)
 }

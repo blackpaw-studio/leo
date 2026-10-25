@@ -319,7 +319,7 @@ func TestRestartClosesTheRecordedPaneThenCleansItsWorktree(t *testing.T) {
 	d := NewDispatcher(NewFileRecorder(stateDir))
 	d.SetInteractiveRuntime(rt)
 
-	d.MarkInterrupted()
+	markInterruptedAndReconcile(t, d)
 
 	got, _ := d.Get(rec.ID)
 	if !slices.Equal(rt.killedPanes(), []string{"%7"}) {
@@ -336,7 +336,7 @@ func TestRestartRetriesADeferredCleanupWhenThePaneIsAbsent(t *testing.T) {
 	d := NewDispatcher(NewFileRecorder(stateDir))
 	d.SetInteractiveRuntime(newPaneRuntime(false))
 
-	d.MarkInterrupted()
+	markInterruptedAndReconcile(t, d)
 
 	got, _ := d.Get(rec.ID)
 	if got.WorktreeState != WorktreeRemoved || dirExists(rec.Worktree) {
@@ -352,7 +352,7 @@ func TestRestartKeepsADeferredCleanupWhenTheKillFails(t *testing.T) {
 	d := NewDispatcher(NewFileRecorder(stateDir))
 	d.SetInteractiveRuntime(rt)
 
-	d.MarkInterrupted()
+	markInterruptedAndReconcile(t, d)
 
 	got, _ := d.Get(rec.ID)
 	if got.WorktreeState != WorktreeDeferred || !dirExists(rec.Worktree) {

@@ -458,7 +458,7 @@ func TestMarkInterruptedRestoresTerminalIsolatedNotificationAsReaped(t *testing.
 		t.Fatal(err)
 	}
 
-	d.MarkInterrupted()
+	markInterruptedAndReconcile(t, d)
 	d.mu.Lock()
 	s := d.runs[rec.ID]
 	d.mu.Unlock()

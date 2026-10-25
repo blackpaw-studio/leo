@@ -1,6 +1,7 @@
 package consult
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -213,6 +214,7 @@ func TestRestartReconcileEndState(t *testing.T) {
 	d, rt, repo, stateDir := endStateFixture(t)
 
 	d.MarkInterrupted()
+	d.ReconcileRestart(context.Background(), 1)
 	d.SweepRunFiles()
 
 	got := restartEndState(t, d, rt, repo, stateDir)
