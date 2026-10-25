@@ -70,12 +70,17 @@ envelope.
 }
 ```
 
-- `status` — lifecycle, from the agent record: `starting` | `running` | `stopped`. These
-  three values are exhaustive on the wire — an internal-only crash-loop-backoff state
-  (`restarting`) folds into `starting`, the closest lifecycle equivalent a consumer can
-  act on, so a consumer never has to recognize a fourth value. Leo has only one dormant
-  state; a suspended-then-resumable agent and a deliberately-stopped one both report
-  `stopped` — see `wake_on_message` to tell them apart.
+- `status` — lifecycle, from the agent record: `starting` | `running` | `stopped` |
+  `restoring`. `restoring` is reported only while the daemon is still restoring agents at
+  boot (before `/health` is ready) for a stored agent that is neither live nor deliberately
+  stopped; it is never `wake_on_message`, and after the daemon is ready it never appears.
+  Daemons that advertise the `agent_status_restoring` capability (`/events` hello,
+  `/api/v1/version`) emit it; older daemons report such an agent as `stopped`, so a client
+  must treat any status it does not recognize as `stopped`. An internal-only
+  crash-loop-backoff state (`restarting`) folds into `starting`, the closest lifecycle
+  equivalent a consumer can act on. Leo has only one dormant state; a
+  suspended-then-resumable agent and a deliberately-stopped one both report `stopped` — see
+  `wake_on_message` to tell them apart.
 - `wake_on_message` — always present, meaningful only when `status` is `stopped`: `true`
   means the agent was parked by the idle sweep and an inbound message auto-starts it
   again; `false` means it is either not dormant at all, or was stopped deliberately (by an

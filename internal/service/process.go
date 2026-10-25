@@ -1143,6 +1143,7 @@ func defaultSupervisedExec(opts RunSupervisedOptions) error {
 	} else {
 		restoreOpts = append(restoreOpts, WithRestoreConfig(cfg))
 	}
+	restoring := pendingRestores(homePath)
 	restored := RestoreAgents(homePath, tmuxPath, webToken, supervisor, leoMCP, restoreOpts...)
 	stepDone()
 	if restored > 0 {
@@ -1153,6 +1154,11 @@ func defaultSupervisedExec(opts RunSupervisedOptions) error {
 	// `leo update` and `leo service restart` wait on this before asking the
 	// daemon about agents (daemon.WaitReady).
 	srv.MarkReady()
+	// Failed and dropped restores publish nothing themselves; tell event
+	// followers how every agent they saw as "restoring" turned out. After
+	// MarkReady, so a snapshot taken once these events arrive already reports
+	// the post-ready status; nothing between RestoreAgents and here returns.
+	publishRestoreOutcomes(homePath, restoring, supervisor.EphemeralAgents(), obs.Publisher)
 	timer.Total()
 	// After restore, so every drained agent is back (or knowably gone)
 	// before it is told to resume; the daemon owns this step, so it runs

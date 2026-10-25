@@ -80,11 +80,16 @@ const (
 	// — schema, revision-gated resource writes, delegation, ops — on the
 	// socket and under /api/v1.
 	FeatureConfigAPI = "config_api"
+	// FeatureAgentStatusRestoring: an agent's status may be "restoring" while
+	// the daemon is still restoring agents at boot. A client without this
+	// capability never sees the value; one that doesn't know it must treat an
+	// unknown status as "stopped".
+	FeatureAgentStatusRestoring = "agent_status_restoring"
 )
 
 // Features returns the hello's features list, a fresh copy each call.
 func Features() []string {
-	return []string{FeatureBridgeTurns, FeatureAttentionReason, FeatureDispatchTree, FeatureAgentUsage, FeatureAgentControl, FeatureDispatchAttach, FeatureDispatchRemoved, FeatureStateSeq, FeatureAttachDispatchPlacement, FeatureDispatchPlacementLive, FeatureAgentEnvironments, FeatureChatQuestions, FeatureMachineStats, FeatureConfigAPI}
+	return []string{FeatureBridgeTurns, FeatureAttentionReason, FeatureDispatchTree, FeatureAgentUsage, FeatureAgentControl, FeatureDispatchAttach, FeatureDispatchRemoved, FeatureStateSeq, FeatureAttachDispatchPlacement, FeatureDispatchPlacementLive, FeatureAgentEnvironments, FeatureChatQuestions, FeatureMachineStats, FeatureConfigAPI, FeatureAgentStatusRestoring}
 }
 
 // ActivityMinInterval is the most often agent_activity is published per

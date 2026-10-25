@@ -6,6 +6,13 @@ All notable user-visible changes to Leo are documented here.
 
 ### Added
 
+- **`restoring` agent status on `/api/v1` (`agent_status_restoring`).** While the
+  daemon is still restoring agents at boot, a stored agent that is neither live nor
+  stopped now reports `status: "restoring"` (state snapshot, agent detail, and
+  `agent_state_changed`/`agent_spawned` events) instead of `stopped`; it never carries
+  `wake_on_message` and never appears once the daemon is ready. The capability is listed
+  in the `/events` hello and `/api/v1/version`. Clients must treat an unknown status as
+  `stopped`.
 - **Client chat post (`can_post`).** An API client can now drop text into an
   agent's Leo Chat thread with no turn: `leo client add <name> --can-post <glob>`
   (repeatable; a client needs `--can-message` or `--can-post`, and the scopes are
