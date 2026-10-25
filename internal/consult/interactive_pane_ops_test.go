@@ -2,6 +2,7 @@ package consult
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -273,4 +274,66 @@ func TestInteractiveTurnEndingDuringShowEndsHidden(t *testing.T) {
 	go func() { _, _ = d.Send(context.Background(), id, "next") }()
 	waitForEvents(t, rt, "show", 1)
 	waitForSettledHidden(t, d, rt, id)
+}
+
+// A cancel that lands while the opening injection is still on its way kills
+// the pane; the opening's own stale-pane reconcile must then find nothing
+// left to kill instead of killing the same pane a second time.
+func TestCancelBeforeOpeningReconcileKillsThePaneOnce(t *testing.T) {
+	d := NewDispatcher(newFakeRecorder())
+	openingStarted, releaseOpening, openingDone := make(chan struct{}), make(chan struct{}), make(chan struct{})
+	d.beforeOpeningInject = func() { close(openingStarted); <-releaseOpening }
+	d.afterOpeningInject = func() { close(openingDone) }
+	rt := &fakeInteractiveRuntime{arm: true, empty: true}
+	d.SetInteractiveRuntime(rt)
+	s, err := d.Start(context.Background(), testConfig(), Request{Template: "claude", Prompt: "x", Cwd: t.TempDir(), Mode: ModeInteractive})
+	if err != nil {
+		t.Fatal(err)
+	}
+	<-openingStarted
+	if _, err := d.Cancel(s.ID); err != nil {
+		t.Fatal(err)
+	}
+	close(releaseOpening)
+	<-openingDone
+	if got := rt.killCount(); got != 1 {
+		t.Fatalf("kills = %d, want the canceled pane killed once", got)
+	}
+}
+
+// Alive is false for a pane whose probe failed or that tmux still lists as
+// dead, but such an orphan must still be killed: nothing else targets it once
+// the record has moved on to another pane.
+func TestCloseStalePaneKillsAnOrphanUnlessTmuxConfirmsItGone(t *testing.T) {
+	tests := []struct {
+		name      string
+		presence  PanePresence
+		probeErr  error
+		wantKills int
+	}{
+		{"probe error", PaneAbsent, errors.New("tmux timed out"), 1},
+		{"present but dead", PanePresentDead, nil, 1},
+		{"confirmed gone", PaneAbsent, nil, 0},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			d := NewDispatcher(newFakeRecorder())
+			fake := &fakeInteractiveRuntime{arm: true, empty: true}
+			rt := presenceInteractiveRuntime{fakeInteractiveRuntime: fake, presence: tt.presence, probeErr: tt.probeErr}
+			d.SetInteractiveRuntime(rt)
+			s, err := d.Start(context.Background(), testConfig(), Request{Template: "claude", Prompt: "x", Cwd: t.TempDir(), Mode: ModeInteractive})
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, state, err := d.lookup(s.ID)
+			if err != nil || state == nil {
+				t.Fatalf("lookup %s: %v", s.ID, err)
+			}
+			fake.setAlive(false)
+			d.closeStalePane(state, rt, "%orphan")
+			if got := fake.killCount(); got != tt.wantKills {
+				t.Fatalf("kills = %d, want %d", got, tt.wantKills)
+			}
+		})
+	}
 }
