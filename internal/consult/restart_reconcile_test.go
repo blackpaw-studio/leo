@@ -119,6 +119,46 @@ func TestReconcileCreatingTimeoutDefers(t *testing.T) {
 	}
 }
 
+func TestMarkInterruptedResolvesEachListedWorktreeOnce(t *testing.T) {
+	repo, stateDir := t.TempDir(), t.TempDir()
+	var listing strings.Builder
+	listed := map[string]bool{}
+	for i := range 20 {
+		path := filepath.Join(stateDir, worktreesDirName, fmt.Sprintf("d-other-%d", i))
+		listed[path] = true
+		fmt.Fprintf(&listing, "worktree %s\nHEAD %s\nbranch refs/heads/leo/d-other-%d\n\n", path, strings.Repeat("a", 40), i)
+	}
+	// Runs that died while their worktrees were being created, none of which
+	// the listing holds: each one's search covers every listed entry.
+	for i := range 3 {
+		id := fmt.Sprintf("d-make-%d", i)
+		restartRecord(t, stateDir, Record{
+			ID: id, Kind: "dispatch", Template: "claude", Mode: ModeHeadless, Status: StatusRunning, StartedAt: adoptNow,
+			Isolation: "worktree", WorktreeState: WorktreeCreating, RepositoryRoot: repo, SourceCwd: repo,
+			Worktree: filepath.Join(stateDir, worktreesDirName, id), Branch: "leo/" + id,
+		})
+	}
+	resolved := map[string]int{}
+	original := evalSymlinks
+	evalSymlinks = func(path string) (string, error) { resolved[path]++; return original(path) }
+	t.Cleanup(func() { evalSymlinks = original })
+	d := NewDispatcher(NewFileRecorder(stateDir))
+	d.GitCommand = func(string, ...string) *exec.Cmd { return exec.Command("printf", "%s", listing.String()) }
+
+	d.MarkInterrupted()
+
+	for path := range listed {
+		if resolved[path] > 1 {
+			t.Fatalf("listed worktree %s resolved %d times in one fast pass, want at most once", path, resolved[path])
+		}
+	}
+	for i := range 3 {
+		if got, _ := LoadOne(stateDir, fmt.Sprintf("d-make-%d", i)); got.WorktreeState != WorktreeRemoved {
+			t.Fatalf("d-make-%d worktree_state = %q, want removed", i, got.WorktreeState)
+		}
+	}
+}
+
 // countingRuntime counts every call the dispatcher makes into its runtime
 // beyond the base interface's no-ops: each one stands for a tmux call.
 type countingRuntime struct {

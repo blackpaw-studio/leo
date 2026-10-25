@@ -126,23 +126,23 @@ func (d *Dispatcher) finishRestartJob(id string) {
 	d.restartPending[id]--
 }
 
-// memoRestartLister lists each repository's worktrees at most once for the
-// fast pass: nothing changes worktrees before the daemon binds, so one
-// listing answers every record in the repository.
+// memoRestartLister lists and resolves each repository's worktrees at most
+// once for the fast pass: nothing changes worktrees before the daemon binds,
+// so one listing answers every record in the repository.
 func (d *Dispatcher) memoRestartLister(ctx context.Context) func(id string) worktreeLister {
 	type listing struct {
-		out []byte
-		err error
+		paths map[string]bool
+		err   error
 	}
 	lists := map[string]listing{}
 	return func(id string) worktreeLister {
-		return func(root string) ([]byte, error) {
+		return func(root string) (map[string]bool, error) {
 			if l, ok := lists[root]; ok {
-				return l.out, l.err
+				return l.paths, l.err
 			}
-			out, err := d.restartLister(ctx, id)(root)
-			lists[root] = listing{out, err}
-			return out, err
+			paths, err := d.restartLister(ctx, id)(root)
+			lists[root] = listing{paths, err}
+			return paths, err
 		}
 	}
 }
@@ -151,7 +151,13 @@ func (d *Dispatcher) memoRestartLister(ctx context.Context) func(id string) work
 // reconciliation, with the restart git timeout.
 func (d *Dispatcher) restartLister(ctx context.Context, id string) worktreeLister {
 	git := d.restartGit(ctx, id)
-	return func(root string) ([]byte, error) { return git("-C", root, "worktree", "list", "--porcelain") }
+	return func(root string) (map[string]bool, error) {
+		out, err := git("-C", root, "worktree", "list", "--porcelain")
+		if err != nil {
+			return nil, err
+		}
+		return resolveListedWorktrees(out), nil
+	}
 }
 
 // cleanupRestartWorktree is cleanupWorktree for the restart path: every git

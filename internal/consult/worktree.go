@@ -317,32 +317,44 @@ func (d *Dispatcher) setWorktreeStateTip(rec Record, state *runState, dispositio
 	return rec
 }
 
-// worktreeLister returns `git worktree list --porcelain` for a repository root.
-type worktreeLister func(root string) ([]byte, error)
+// worktreeLister returns the worktree paths registered with a repository
+// root, each resolved through symlinks.
+type worktreeLister func(root string) (map[string]bool, error)
+
+// evalSymlinks resolves a worktree path; tests count its calls.
+var evalSymlinks = filepath.EvalSymlinks
+
+// resolveListedWorktrees reads the paths out of `git worktree list
+// --porcelain` output, each resolved through symlinks.
+func resolveListedWorktrees(out []byte) map[string]bool {
+	paths := map[string]bool{}
+	for _, line := range strings.Split(string(out), "\n") {
+		listed, ok := strings.CutPrefix(line, "worktree ")
+		if !ok {
+			continue
+		}
+		if canonical, err := evalSymlinks(listed); err == nil {
+			listed = canonical
+		}
+		paths[listed] = true
+	}
+	return paths
+}
 
 func (d *Dispatcher) reconcileCreating(rec Record, list worktreeLister) Record {
 	if rec.WorktreeState != WorktreeCreating {
 		return rec
 	}
-	out, err := list(rec.RepositoryRoot)
+	registered, err := list(rec.RepositoryRoot)
 	if err != nil {
 		return d.setWorktreeState(rec, nil, WorktreeDeferred)
 	}
 	wantPath := rec.Worktree
-	if canonical, err := filepath.EvalSymlinks(rec.Worktree); err == nil {
+	if canonical, err := evalSymlinks(rec.Worktree); err == nil {
 		wantPath = canonical
 	}
-	for _, line := range strings.Split(string(out), "\n") {
-		if !strings.HasPrefix(line, "worktree ") {
-			continue
-		}
-		listed := strings.TrimPrefix(line, "worktree ")
-		if canonical, err := filepath.EvalSymlinks(listed); err == nil {
-			listed = canonical
-		}
-		if listed == wantPath {
-			return d.setWorktreeState(rec, nil, WorktreePresent)
-		}
+	if registered[wantPath] {
+		return d.setWorktreeState(rec, nil, WorktreePresent)
 	}
 	if _, err := os.Lstat(rec.Worktree); err == nil || !os.IsNotExist(err) {
 		return d.setWorktreeState(rec, nil, WorktreeDeferred)
