@@ -14,12 +14,19 @@ const maxSymlinkDepth = 16
 // writeTemp is a testability seam for the temp-file write in writeFileAtomic.
 var writeTemp = writeSynced
 
-// Ownership seams: statOwner reads a file's uid/gid, processOwner is the
-// caller's, chownTemp hands the temp file to the previous owner.
+// Ownership seams: statOwner reads the existing target's uid/gid, tempOwner
+// the temp file's actual owner (it may already inherit the directory's gid),
+// chownTemp hands the temp file to the previous owner.
 var (
-	statOwner    = fileOwner
-	processOwner = func() (uid, gid int) { return os.Getuid(), os.Getgid() }
-	chownTemp    = func(f *os.File, uid, gid int) error { return f.Chown(uid, gid) }
+	statOwner = fileOwner
+	tempOwner = func(f *os.File) (uid, gid int, ok bool) {
+		fi, err := f.Stat()
+		if err != nil {
+			return 0, 0, false
+		}
+		return fileOwner(fi)
+	}
+	chownTemp = func(f *os.File, uid, gid int) error { return f.Chown(uid, gid) }
 )
 
 // fileOwner returns the uid/gid of fi, or ok=false if the platform doesn't
@@ -74,8 +81,10 @@ func writeFileAtomic(path string, data []byte) (err error) {
 // preserveOwner gives tmp the owner of the existing target, because rename
 // installs a new inode owned by the caller (`sudo leo config ...` would
 // otherwise leave a user's leo.yaml root-owned and unreadable by the daemon).
-// Only a privileged caller can chown; if that fails the save fails rather
-// than silently changing the owner. A missing target has no owner to keep.
+// A differing uid needs a privileged chown, and its failure fails the save
+// rather than silently changing the owner. A differing gid alone is
+// best-effort: an unprivileged user may not be in the old group (EPERM), and
+// the save must still succeed. A missing target has no owner to keep.
 func preserveOwner(tmp *os.File, target string) error {
 	fi, err := os.Stat(target)
 	if errors.Is(err, os.ErrNotExist) {
@@ -88,13 +97,15 @@ func preserveOwner(tmp *os.File, target string) error {
 	if !ok {
 		return nil
 	}
-	if procUID, procGID := processOwner(); uid == procUID && gid == procGID {
+	tmpUID, tmpGID, ok := tempOwner(tmp)
+	if !ok || (uid == tmpUID && gid == tmpGID) {
 		return nil
 	}
-	if err := chownTemp(tmp, uid, gid); err != nil {
-		return fmt.Errorf("preserving config owner %d:%d: %w", uid, gid, err)
+	err = chownTemp(tmp, uid, gid)
+	if err == nil || (uid == tmpUID && errors.Is(err, syscall.EPERM)) {
+		return nil
 	}
-	return nil
+	return fmt.Errorf("preserving config owner %d:%d: %w", uid, gid, err)
 }
 
 // resolveWriteTarget returns the file a write to path must replace. A

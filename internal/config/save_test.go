@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"syscall"
 	"testing"
 )
 
@@ -153,15 +154,15 @@ func TestSaveThroughDanglingSymlinkCreatesTarget(t *testing.T) {
 	}
 }
 
-// stubOwnership fakes the stat'd owner of the existing file, the process
-// identity and the chown, so ownership is tested without real root.
-func stubOwnership(t *testing.T, fileUID, fileGID, procUID, procGID int, chown func(*os.File, int, int) error) {
+// stubOwnership fakes the existing file's owner, the temp file's actual owner
+// and the chown, so ownership is tested without real root.
+func stubOwnership(t *testing.T, fileUID, fileGID, tmpUID, tmpGID int, chown func(*os.File, int, int) error) {
 	t.Helper()
-	prevStat, prevProc, prevChown := statOwner, processOwner, chownTemp
+	prevStat, prevTemp, prevChown := statOwner, tempOwner, chownTemp
 	statOwner = func(os.FileInfo) (int, int, bool) { return fileUID, fileGID, true }
-	processOwner = func() (int, int) { return procUID, procGID }
+	tempOwner = func(*os.File) (int, int, bool) { return tmpUID, tmpGID, true }
 	chownTemp = chown
-	t.Cleanup(func() { statOwner, processOwner, chownTemp = prevStat, prevProc, prevChown })
+	t.Cleanup(func() { statOwner, tempOwner, chownTemp = prevStat, prevTemp, prevChown })
 }
 
 func TestSavePreservesOwnerOfExistingFile(t *testing.T) {
@@ -183,11 +184,11 @@ func TestSavePreservesOwnerOfExistingFile(t *testing.T) {
 	}
 }
 
-func TestSaveSkipsChownWhenOwnerMatchesProcess(t *testing.T) {
+func TestSaveSkipsChownWhenTempFileAlreadyOwnedByTargetOwner(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "leo.yaml")
 	writeSeed(t, path, "defaults:\n  model: opus\n", 0600)
 	stubOwnership(t, 501, 20, 501, 20, func(*os.File, int, int) error {
-		t.Error("chown called although owner matches the process")
+		t.Error("chown called although the temp file already has the target owner")
 		return nil
 	})
 
@@ -272,5 +273,19 @@ func TestSaveSymlinkLoopErrorsAndWritesNothing(t *testing.T) {
 	}
 	if names := dirNames(t, dir); len(names) != 2 {
 		t.Errorf("dir = %v, want only the two links", names)
+	}
+}
+
+func TestSaveGroupOnlyDifferenceToleratesChownEPERM(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "leo.yaml")
+	writeSeed(t, path, "defaults:\n  model: opus\n", 0600)
+	stubOwnership(t, 501, 80, 501, 20, func(*os.File, int, int) error { return syscall.EPERM })
+
+	if err := Save(path, &Config{Defaults: DefaultsConfig{Model: "sonnet"}}); err != nil {
+		t.Fatalf("Save failed on a group-only chown EPERM: %v", err)
+	}
+	loaded, err := Load(path)
+	if err != nil || loaded.Defaults.Model != "sonnet" {
+		t.Errorf("save not applied: %v, %v", loaded, err)
 	}
 }
