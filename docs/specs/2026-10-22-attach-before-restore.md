@@ -41,3 +41,16 @@ The user is offered an action that cannot succeed. During the v0.58.0 update thi
 - Handler: `ErrDaemonRestoring` → 503 with its code.
 - CLI attach: `Restoring` → waits and attaches once it clears, and never calls `agentStartFn`;
   times out with the message above.
+
+## Addendum (2026-10-24): `restoring` on `/api/v1`
+Evan approved exposing the restore state to API consumers.
+- `observe.MapStatus` maps `restoring` to a new wire value `restoring` instead of folding it into
+  `stopped`. Every `/api/v1` surface that carries agent status (agents list, agent detail, SSE/observe
+  events, roster) uses it. Before ready only; after `MarkReady` nothing changes.
+- **Compatibility:** this adds a value to an existing enum. `/version` advertises capability
+  `agent_status_restoring`, so clients can tell old daemons from new ones. Clients that don't
+  understand the value must treat an unknown status as `stopped`. leoterm confirms its decoder tolerates
+  unknown values before this ships.
+- Docs: `/api/v1` status table and changelog.
+- Tests: an observe mapping unit test (`restoring` → `restoring`), an API golden/handler test before ready,
+  and a capability present in `/version`.
