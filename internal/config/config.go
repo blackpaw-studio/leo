@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"net"
 	"net/netip"
 	"net/url"
@@ -1020,30 +1021,44 @@ func expandHome(path string) string {
 }
 
 // ListPromptFiles returns all .md files in the workspace, as paths relative
-// to the workspace root. Returns nil (not an error) if the workspace doesn't exist.
+// to the workspace root. Symlinks that resolve outside the workspace (or to a
+// directory) are left out. Returns nil (not an error) if the workspace doesn't
+// exist.
 func ListPromptFiles(workspace string) ([]string, error) {
 	absWorkspace, err := filepath.Abs(workspace)
 	if err != nil {
 		return nil, fmt.Errorf("resolving workspace path: %w", err)
 	}
-	if _, err := os.Stat(absWorkspace); os.IsNotExist(err) {
-		return nil, nil
+	realWorkspace, err := filepath.EvalSymlinks(absWorkspace)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("resolving workspace path: %w", err)
 	}
+	root, err := os.OpenRoot(realWorkspace)
+	if err != nil {
+		return nil, fmt.Errorf("opening workspace: %w", err)
+	}
+	defer func() { _ = root.Close() }()
 	var files []string
-	err = filepath.Walk(absWorkspace, func(path string, info os.FileInfo, err error) error {
+	err = fs.WalkDir(root.FS(), ".", func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return nil // skip unreadable entries
 		}
-		if info.IsDir() {
+		if d.IsDir() || !strings.HasSuffix(strings.ToLower(d.Name()), ".md") {
 			return nil
 		}
-		if strings.HasSuffix(strings.ToLower(info.Name()), ".md") {
-			rel, err := filepath.Rel(absWorkspace, path)
-			if err != nil {
-				return nil
-			}
-			files = append(files, rel)
+		rel := filepath.FromSlash(path)
+		// Skip symlinks that leave the workspace (or point at a directory).
+		_, resolvedRel, err := resolveInWorkspace(absWorkspace, filepath.Join(absWorkspace, rel))
+		if err != nil {
+			return nil
 		}
+		if target, err := root.Stat(resolvedRel); err != nil || target.IsDir() {
+			return nil
+		}
+		files = append(files, rel)
 		return nil
 	})
 	if err != nil {
@@ -1074,16 +1089,104 @@ func ResolvePromptPath(workspace, promptFile string) (string, error) {
 	return absPrompt, nil
 }
 
+// resolveInWorkspace maps an absolute path under workspace to its
+// symlink-free location relative to the workspace's real directory. A path
+// whose symlinks lead outside the workspace is refused; one that leads to
+// another file inside it is followed. The deepest existing ancestor is
+// resolved and the not-yet-created remainder re-appended.
+func resolveInWorkspace(absWorkspace, absPath string) (realWorkspace, rel string, err error) {
+	realWorkspace, err = filepath.EvalSymlinks(absWorkspace)
+	if err != nil {
+		return "", "", err
+	}
+	var rest []string
+	resolved := ""
+	for cur := absPath; ; cur = filepath.Dir(cur) {
+		if resolved, err = filepath.EvalSymlinks(cur); err == nil {
+			break
+		}
+		if filepath.Dir(cur) == cur {
+			return "", "", fmt.Errorf("resolving prompt path: %w", err)
+		}
+		rest = append(rest, filepath.Base(cur))
+	}
+	for i := len(rest) - 1; i >= 0; i-- {
+		resolved = filepath.Join(resolved, rest[i])
+	}
+	rel, ok := relativeByIdentity(realWorkspace, resolved)
+	if !ok {
+		return "", "", fmt.Errorf("prompt file %q escapes workspace via symlink", absPath)
+	}
+	return realWorkspace, rel, nil
+}
+
+// relativeByIdentity returns path relative to the workspace by finding the
+// ancestor of path that is the same directory as workspace (os.SameFile), so
+// a path spelled with different capitalization on a case-insensitive
+// filesystem still counts as inside. ok is false when no ancestor matches.
+func relativeByIdentity(workspace, path string) (rel string, ok bool) {
+	wsInfo, err := os.Stat(workspace)
+	if err != nil {
+		return "", false
+	}
+	tail := ""
+	for cur := path; ; cur = filepath.Dir(cur) {
+		if info, err := os.Stat(cur); err == nil && os.SameFile(wsInfo, info) {
+			if tail == "" {
+				return ".", true
+			}
+			return tail, true
+		}
+		if filepath.Dir(cur) == cur {
+			return "", false
+		}
+		tail = filepath.Join(filepath.Base(cur), tail)
+	}
+}
+
+// openPromptRoot resolves promptFile lexically and through symlinks, then
+// opens the workspace as an os.Root so the final open also refuses symlinks
+// and ".." that leave it (closing the window between resolve and open). The
+// returned rel is the prompt's symlink-free path relative to the workspace.
+func openPromptRoot(workspace, promptFile string) (root *os.Root, rel string, err error) {
+	absPath, err := ResolvePromptPath(workspace, promptFile)
+	if err != nil {
+		return nil, "", err
+	}
+	absWorkspace, err := filepath.Abs(workspace)
+	if err != nil {
+		return nil, "", fmt.Errorf("resolving workspace path: %w", err)
+	}
+	realWorkspace, rel, err := resolveInWorkspace(absWorkspace, absPath)
+	if err != nil {
+		return nil, "", err
+	}
+	root, err = os.OpenRoot(realWorkspace)
+	if err != nil {
+		return nil, "", err
+	}
+	return root, rel, nil
+}
+
+// ReadPromptBytes reads a prompt file's raw bytes, confined to the workspace:
+// a symlink (or symlinked directory) pointing outside it is refused, one
+// pointing elsewhere inside it is followed. A missing file or workspace
+// satisfies errors.Is(err, fs.ErrNotExist).
+func ReadPromptBytes(workspace, promptFile string) ([]byte, error) {
+	root, rel, err := openPromptRoot(workspace, promptFile)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = root.Close() }()
+	return root.ReadFile(rel)
+}
+
 // ReadPromptFile reads a task's prompt file content. Returns empty string
 // and nil error if the file does not exist (new file case).
 func ReadPromptFile(workspace, promptFile string) (string, error) {
-	absPath, err := ResolvePromptPath(workspace, promptFile)
+	data, err := ReadPromptBytes(workspace, promptFile)
 	if err != nil {
-		return "", err
-	}
-	data, err := os.ReadFile(absPath)
-	if err != nil {
-		if os.IsNotExist(err) {
+		if errors.Is(err, fs.ErrNotExist) {
 			return "", nil
 		}
 		return "", fmt.Errorf("reading prompt file: %w", err)
@@ -1092,16 +1195,33 @@ func ReadPromptFile(workspace, promptFile string) (string, error) {
 }
 
 // WritePromptFile writes content to a task's prompt file, creating
-// parent directories as needed.
+// parent directories as needed. The write is confined to the workspace the
+// same way ReadPromptBytes is. Creating a file through a dangling absolute
+// symlink is refused even when its target would be inside the workspace.
 func WritePromptFile(workspace, promptFile, content string) error {
-	absPath, err := ResolvePromptPath(workspace, promptFile)
+	if _, err := ResolvePromptPath(workspace, promptFile); err != nil {
+		return err
+	}
+	if err := os.MkdirAll(workspace, 0750); err != nil {
+		return fmt.Errorf("creating prompt file directory: %w", err)
+	}
+	root, rel, err := openPromptRoot(workspace, promptFile)
 	if err != nil {
 		return err
 	}
-	if err := os.MkdirAll(filepath.Dir(absPath), 0750); err != nil {
+	defer func() { _ = root.Close() }()
+	if err := root.MkdirAll(filepath.Dir(rel), 0750); err != nil {
 		return fmt.Errorf("creating prompt file directory: %w", err)
 	}
-	if err := os.WriteFile(absPath, []byte(content), 0600); err != nil {
+	f, err := root.OpenFile(rel, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0600)
+	if err != nil {
+		return fmt.Errorf("writing prompt file: %w", err)
+	}
+	if _, err := f.WriteString(content); err != nil {
+		f.Close()
+		return fmt.Errorf("writing prompt file: %w", err)
+	}
+	if err := f.Close(); err != nil {
 		return fmt.Errorf("writing prompt file: %w", err)
 	}
 	return nil
