@@ -119,6 +119,26 @@ func TestAssemblePromptPathTraversal(t *testing.T) {
 	}
 }
 
+func TestAssemblePromptRefusesSymlinkOutOfWorkspace(t *testing.T) {
+	base := t.TempDir()
+	ws := filepath.Join(base, "ws")
+	if err := os.MkdirAll(ws, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	outside := filepath.Join(base, "operator.md")
+	if err := os.WriteFile(outside, []byte("operator-secret"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, filepath.Join(ws, "task.md")); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := assemblePrompt(&config.Config{HomePath: base}, config.TaskConfig{Workspace: ws, PromptFile: "task.md"})
+	if err == nil || strings.Contains(got, "operator-secret") {
+		t.Fatalf("assemblePrompt followed an escaping symlink: %q, %v", got, err)
+	}
+}
+
 func TestAssemblePromptMissingFile(t *testing.T) {
 	dir := t.TempDir()
 

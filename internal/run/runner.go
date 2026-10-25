@@ -980,14 +980,9 @@ func channelPluginName(channel string) (string, bool) {
 func assemblePrompt(cfg *config.Config, task config.TaskConfig) (string, error) {
 	taskWorkspace := cfg.TaskWorkspace(task)
 
-	absPrompt, err := config.ResolvePromptPath(taskWorkspace, task.PromptFile)
+	promptData, err := config.ReadPromptBytes(taskWorkspace, task.PromptFile)
 	if err != nil {
-		return "", err
-	}
-
-	promptData, err := os.ReadFile(absPrompt)
-	if err != nil {
-		return "", fmt.Errorf("reading prompt file %s: %w", absPrompt, err)
+		return "", fmt.Errorf("reading prompt file %s: %w", filepath.Join(taskWorkspace, task.PromptFile), err)
 	}
 
 	var parts []string
