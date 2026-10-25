@@ -36,7 +36,11 @@ while kill -0 "$D" 2>/dev/null; do
   el_ms=$(( $(now_ms) - t0 )); el=$((el_ms / 1000))
   # Any HTTP answer at all: the web UI is listening.
   if [ -z "$web_ms" ] && curl -s -o /dev/null -m 1 "http://127.0.0.1:$PORT/" 2>/dev/null; then web_ms=$el_ms; fi
-  if curl -fsS -m 2 --unix-socket "$T/state/leo.sock" http://leo/health 2>/dev/null | grep -Eq '"ready": *true'; then break; fi
+  if curl -fsS -m 2 --unix-socket "$T/state/leo.sock" http://leo/health 2>/dev/null | grep -Eq '"ready": *true'; then
+    # Ready can land between probes: the web UI answering now still counts.
+    if [ -z "$web_ms" ] && curl -s -o /dev/null -m 1 "http://127.0.0.1:$PORT/" 2>/dev/null; then web_ms=$(( $(now_ms) - t0 )); fi
+    break
+  fi
   if [ -n "${DUMP_AFTER:-}" ] && [ "$dumped" = 0 ] && [ "$el" -ge "$DUMP_AFTER" ]; then
     dumped=1; (cd "$T/ws" && "$LEO" service dump -c "$T/leo.yaml") >"$T/dump.out" 2>&1; echo "dump at ${el}s: $(cat "$T/dump.out")"
   fi
