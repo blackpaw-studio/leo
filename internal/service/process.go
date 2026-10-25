@@ -1143,8 +1143,12 @@ func defaultSupervisedExec(opts RunSupervisedOptions) error {
 	} else {
 		restoreOpts = append(restoreOpts, WithRestoreConfig(cfg))
 	}
+	restoring := pendingRestores(homePath)
 	restored := RestoreAgents(homePath, tmuxPath, webToken, supervisor, leoMCP, restoreOpts...)
 	stepDone()
+	// Failed and dropped restores publish nothing themselves; tell event
+	// followers how every agent they saw as "restoring" turned out.
+	publishRestoreOutcomes(homePath, restoring, supervisor.EphemeralAgents(), obs.Publisher)
 	if restored > 0 {
 		fmt.Fprintf(os.Stdout, "restored %d ephemeral agent(s)\n", restored)
 	}
