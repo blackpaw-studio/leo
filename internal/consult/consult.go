@@ -17,6 +17,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -127,6 +128,12 @@ type Dispatcher struct {
 	// slowRestartRecord overrides defaultSlowRestartRecord when non-zero.
 	startupLog        func(format string, args ...any)
 	slowRestartRecord time.Duration
+	// restartGitTimeout overrides restartGitTimeout (the constant) when
+	// non-zero; restartGitCalls and restartGitTimeouts count the restart
+	// path's git calls for its summary.
+	restartGitTimeout  time.Duration
+	restartGitCalls    atomic.Int64
+	restartGitTimeouts atomic.Int64
 }
 
 func (d *Dispatcher) SetCloseFinishedViewer(fn func(Record, func(string) error) (Record, error)) {
@@ -1218,22 +1225,37 @@ func (d *Dispatcher) MarkInterrupted() RestartSummary {
 	}
 	markedAt := d.now()
 	records, _ := Load(filepath.Dir(recorder.dir))
+	ctx := context.Background()
 	for _, rec := range records {
 		tm := d.newRecordTimings()
-		d.markInterruptedRecord(recorder, rec, markedAt, tm)
+		d.markInterruptedRecord(ctx, recorder, rec, markedAt, tm)
 		d.warnSlowRecord(rec.ID, tm)
 	}
 	return RestartSummary{Records: len(records)}
 }
 
+// restartLister lists a repository's worktrees for record id's restart
+// reconciliation, with the restart git timeout.
+func (d *Dispatcher) restartLister(ctx context.Context, id string) worktreeLister {
+	git := d.restartGit(ctx, id)
+	return func(root string) ([]byte, error) { return git("-C", root, "worktree", "list", "--porcelain") }
+}
+
+// cleanupRestartWorktree is cleanupWorktree for the restart path: every git
+// call is bounded by the restart git timeout, and a removal, once begun, is
+// not cut short by ctx.
+func (d *Dispatcher) cleanupRestartWorktree(ctx context.Context, id string) Record {
+	return d.cleanupWorktreeWith(id, d.restartGit(ctx, id), d.restartGit(context.WithoutCancel(ctx), id))
+}
+
 // markInterruptedRecord settles one persisted record left by the previous daemon.
-func (d *Dispatcher) markInterruptedRecord(recorder *FileRecorder, rec Record, markedAt time.Time, tm *recordTimings) {
+func (d *Dispatcher) markInterruptedRecord(ctx context.Context, recorder *FileRecorder, rec Record, markedAt time.Time, tm *recordTimings) {
 	stop := tm.start("viewer pane lookup")
 	rec = d.reconcileRestartViewer(rec)
 	stop()
 	if rec.WorktreeState == WorktreeCreating {
 		stop = tm.start("worktree reconcile")
-		rec = d.reconcileCreating(rec)
+		rec = d.reconcileCreating(rec, d.restartLister(ctx, rec.ID))
 		stop()
 	}
 	if rec.Status.Terminal() {
@@ -1255,7 +1277,7 @@ func (d *Dispatcher) markInterruptedRecord(recorder *FileRecorder, rec Record, m
 				writerUncertain = true
 			} else if alive {
 				stop = tm.start("pane close")
-				cleaned, killErr := d.closeRestartPane(rec)
+				cleaned, killErr := d.closeRestartPane(ctx, rec)
 				stop()
 				if killErr != nil {
 					if rec.Isolation == "worktree" && rec.WorktreeState != WorktreeRemoved {
@@ -1273,7 +1295,7 @@ func (d *Dispatcher) markInterruptedRecord(recorder *FileRecorder, rec Record, m
 		if writerUncertain {
 			rec = d.setWorktreeState(rec, nil, WorktreeDeferred)
 		} else {
-			rec = d.cleanupWorktree(rec.ID)
+			rec = d.cleanupRestartWorktree(ctx, rec.ID)
 		}
 		stop()
 		stop = tm.start("notification restore")
@@ -1283,7 +1305,7 @@ func (d *Dispatcher) markInterruptedRecord(recorder *FileRecorder, rec Record, m
 	}
 	if rec.Mode == ModeInteractive {
 		stop = tm.start("interactive restore")
-		d.restoreInteractive(rec)
+		d.restoreInteractive(ctx, rec)
 		stop()
 		return
 	}
@@ -1310,13 +1332,15 @@ func (d *Dispatcher) markInterruptedRecord(recorder *FileRecorder, rec Record, m
 	d.mu.Lock()
 	d.addRestartCandidates(&rec)
 	d.mu.Unlock()
-	d.persistRestartSettle(recorder, rec)
+	d.persistRestartSettle(ctx, recorder, rec)
 	stop()
 }
 
-func (d *Dispatcher) closeRestartPane(rec Record) (Record, error) {
+func (d *Dispatcher) closeRestartPane(ctx context.Context, rec Record) (Record, error) {
 	rt := d.interactiveRuntime
-	return d.closeRecordedPane(rec, rec.PaneID, rt.Kill, runtimeLayout(rt))
+	return d.closeRecordedPaneThen(rec, rec.PaneID, rt.Kill, runtimeLayout(rt), func(id string) Record {
+		return d.cleanupRestartWorktree(ctx, id)
+	})
 }
 
 // trackRestartKill retains a terminal record solely to retry cleanup. Terminal

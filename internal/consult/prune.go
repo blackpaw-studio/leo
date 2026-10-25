@@ -270,13 +270,13 @@ func pruneApply(git gitFunc, ps psFunc, stateDir string, entries []*pruneEntry, 
 				e.item.Error = err.Error()
 				continue
 			}
-			tip, e.item.BranchDeleted = deleteMergedBranch(git, rec)
+			tip, e.item.BranchDeleted = deleteMergedBranch(git, git, rec)
 		case PruneStale:
 			if repositoryExists(rec.RepositoryRoot) {
 				// Git refuses to delete a branch still checked out in a
 				// registered worktree, even one whose directory is gone.
 				pruneRepo(rec.RepositoryRoot)
-				tip, e.item.BranchDeleted = deleteMergedBranch(git, rec)
+				tip, e.item.BranchDeleted = deleteMergedBranch(git, git, rec)
 			}
 		}
 		rec.WorktreeState = WorktreeRemoved

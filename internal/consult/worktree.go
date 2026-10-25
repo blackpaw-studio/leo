@@ -10,6 +10,7 @@ import (
 	"regexp"
 	"strings"
 	"syscall"
+	"time"
 )
 
 const worktreesDirName = "worktrees"
@@ -31,17 +32,50 @@ func worktreeSlug(s string) string {
 
 func (d *Dispatcher) git(args ...string) ([]byte, error) { return execGit(d.GitCommand, args...) }
 
+// gitWaitDelay is how long a killed git call's output pipes may stay open,
+// held by a child it left behind, before execGitContext stops waiting on them.
+const gitWaitDelay = time.Second
+
 // execGit runs git through newCmd, the injectable seam tests replace.
 func execGit(newCmd func(name string, args ...string) *exec.Cmd, args ...string) ([]byte, error) {
+	return execGitContext(context.Background(), newCmd, args...)
+}
+
+// execGitContext runs git through newCmd and kills it once ctx is done. The
+// seam builds commands without a context, so the kill is done here; the
+// error then wraps ctx's.
+func execGitContext(ctx context.Context, newCmd func(name string, args ...string) *exec.Cmd, args ...string) ([]byte, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, fmt.Errorf("git %s: %w", strings.Join(args, " "), err)
+	}
 	cmd := newCmd("git", args...)
 	// Callers parse the output, so it is stdout alone: a warning on stderr
 	// (a broken ref, say) must never read as data. Stderr only explains a failure.
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
-	if err := cmd.Run(); err != nil {
-		return nil, fmt.Errorf("git %s: %w: %s", strings.Join(args, " "), err, strings.TrimSpace(stderr.String()))
+	if ctx.Done() == nil {
+		if err := cmd.Run(); err != nil {
+			return nil, fmt.Errorf("git %s: %w: %s", strings.Join(args, " "), err, strings.TrimSpace(stderr.String()))
+		}
+		return bytes.TrimSpace(stdout.Bytes()), nil
 	}
-	return bytes.TrimSpace(stdout.Bytes()), nil
+	cmd.WaitDelay = gitWaitDelay
+	if err := cmd.Start(); err != nil {
+		return nil, fmt.Errorf("git %s: %w", strings.Join(args, " "), err)
+	}
+	waited := make(chan error, 1)
+	go func() { waited <- cmd.Wait() }()
+	select {
+	case err := <-waited:
+		if err != nil {
+			return nil, fmt.Errorf("git %s: %w: %s", strings.Join(args, " "), err, strings.TrimSpace(stderr.String()))
+		}
+		return bytes.TrimSpace(stdout.Bytes()), nil
+	case <-ctx.Done():
+		_ = cmd.Process.Kill()
+		<-waited
+		return nil, fmt.Errorf("git %s: %w", strings.Join(args, " "), ctx.Err())
+	}
 }
 
 func (d *Dispatcher) prepareWorktree(state *runState, req Request) error {
@@ -118,11 +152,32 @@ func (d *Dispatcher) persistIsolationLocked(state *runState) error {
 // closed, release, restart) and by `leo dispatch prune`, so a postponed
 // cleanup is never lost and a kept one is re-checked against the disk.
 func (d *Dispatcher) cleanupWorktree(id string) Record {
+	return d.cleanupWorktreeWith(id, d.git, d.git)
+}
+
+// cleanupWorktreeWith is cleanupWorktree with the git that assesses the
+// worktree and the git that removes it supplied by the caller.
+func (d *Dispatcher) cleanupWorktreeWith(id string, assess, mutate gitFunc) Record {
 	rec, state, err := d.lookup(id)
-	if err != nil || rec.Isolation != "worktree" || rec.WorktreeState == WorktreeRemoved {
+	if err != nil {
 		return rec
 	}
-	deferCleanup := func() Record { return d.setWorktreeState(rec, state, WorktreeDeferred) }
+	rec, needsAssessment := d.cleanupPrecheck(rec, state)
+	if !needsAssessment {
+		return rec
+	}
+	return d.applyWorktreeAssessment(assess, mutate, rec, state)
+}
+
+// cleanupPrecheck applies cleanupWorktree's checks that need no git: it
+// returns rec unchanged, or deferred (and recorded so), when the worktree
+// must not be assessed now, and reports whether the writers are known gone
+// so the worktree is due its assessment.
+func (d *Dispatcher) cleanupPrecheck(rec Record, state *runState) (Record, bool) {
+	if rec.Isolation != "worktree" || rec.WorktreeState == WorktreeRemoved {
+		return rec, false
+	}
+	deferCleanup := func() (Record, bool) { return d.setWorktreeState(rec, state, WorktreeDeferred), false }
 	if rec.Mode == ModeInteractive {
 		switch {
 		case rec.PaneID != "":
@@ -139,40 +194,41 @@ func (d *Dispatcher) cleanupWorktree(id string) Record {
 		case !rec.Status.Terminal():
 			return deferCleanup()
 		}
-	} else {
-		if !rec.Status.Terminal() {
-			return rec
-		}
-		if state != nil {
-			select {
-			case <-state.done:
-			default:
-				return rec
-			}
-		}
-		if state == nil || (state.headlessStarted && !d.headlessWritersGone(state)) {
-			return deferCleanup()
+		return rec, true
+	}
+	if !rec.Status.Terminal() {
+		return rec, false
+	}
+	if state != nil {
+		select {
+		case <-state.done:
+		default:
+			return rec, false
 		}
 	}
-	return d.applyWorktreeAssessment(rec, state)
+	if state == nil || (state.headlessStarted && !d.headlessWritersGone(state)) {
+		return deferCleanup()
+	}
+	return rec, true
 }
 
 // applyWorktreeAssessment acts on assessWorktree's verdict for a worktree
-// whose writers are known to be gone.
-func (d *Dispatcher) applyWorktreeAssessment(rec Record, state *runState) Record {
+// whose writers are known to be gone. assess runs the read-only checks and
+// mutate the removal.
+func (d *Dispatcher) applyWorktreeAssessment(assess, mutate gitFunc, rec Record, state *runState) Record {
 	keep := func() Record { return d.setWorktreeState(rec, state, WorktreeKept) }
-	switch assessWorktree(d.git, rec).Verdict {
+	switch assessWorktree(assess, rec).Verdict {
 	case verdictRemove:
-		if err := removeWorktreeCheckout(d.git, rec); err != nil {
+		if err := removeWorktreeCheckout(mutate, rec); err != nil {
 			return keep()
 		}
-		tip, _ := deleteMergedBranch(d.git, rec)
+		tip, _ := deleteMergedBranch(assess, mutate, rec)
 		return d.setWorktreeStateTip(rec, state, WorktreeRemoved, tip)
 	case verdictGone:
-		if err := pruneRepositoryWorktrees(d.git, rec.RepositoryRoot); err != nil {
+		if err := pruneRepositoryWorktrees(mutate, rec.RepositoryRoot); err != nil {
 			return keep()
 		}
-		tip, _ := deleteMergedBranch(d.git, rec)
+		tip, _ := deleteMergedBranch(assess, mutate, rec)
 		return d.setWorktreeStateTip(rec, state, WorktreeRemoved, tip)
 	default:
 		return keep()
@@ -253,11 +309,14 @@ func (d *Dispatcher) setWorktreeStateTip(rec Record, state *runState, dispositio
 	return rec
 }
 
-func (d *Dispatcher) reconcileCreating(rec Record) Record {
+// worktreeLister returns `git worktree list --porcelain` for a repository root.
+type worktreeLister func(root string) ([]byte, error)
+
+func (d *Dispatcher) reconcileCreating(rec Record, list worktreeLister) Record {
 	if rec.WorktreeState != WorktreeCreating {
 		return rec
 	}
-	out, err := d.git("-C", rec.RepositoryRoot, "worktree", "list", "--porcelain")
+	out, err := list(rec.RepositoryRoot)
 	if err != nil {
 		return d.setWorktreeState(rec, nil, WorktreeDeferred)
 	}

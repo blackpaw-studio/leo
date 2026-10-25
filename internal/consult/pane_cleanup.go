@@ -27,6 +27,12 @@ func (d *Dispatcher) PersistViewerRecord(rec Record) {
 // closeRecordedPane is the sole pane-kill path. tmux I/O stays outside mu;
 // record publication/cleanup and retry metadata are committed under mu.
 func (d *Dispatcher) closeRecordedPane(rec Record, pane string, kill func(string) error, layout func(string) error) (Record, error) {
+	return d.closeRecordedPaneThen(rec, pane, kill, layout, d.cleanupWorktree)
+}
+
+// closeRecordedPaneThen is closeRecordedPane with the worktree cleanup a
+// finished run gets once its pane is gone supplied by the caller.
+func (d *Dispatcher) closeRecordedPaneThen(rec Record, pane string, kill func(string) error, layout func(string) error, cleanup func(id string) Record) (Record, error) {
 	if pane == "" {
 		return rec, nil
 	}
@@ -84,7 +90,7 @@ func (d *Dispatcher) closeRecordedPane(rec Record, pane string, kill func(string
 	// A finished run whose pane was the last writer: decide its worktree now
 	// rather than leaving the cleanup that found the pane alive deferred.
 	if rec.Mode == ModeInteractive && rec.Isolation == "worktree" && rec.Status.Terminal() && rec.PaneID == "" && rec.WorktreeState != WorktreeRemoved {
-		rec = d.cleanupWorktree(rec.ID)
+		rec = cleanup(rec.ID)
 	}
 	return rec, nil
 }

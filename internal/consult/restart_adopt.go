@@ -1,6 +1,7 @@
 package consult
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"slices"
@@ -49,19 +50,19 @@ const adoptWaitLostText = "may have been waiting on background work when the dae
 // restoreInteractive adopts an interactive run the previous daemon left
 // live, when its pane survived the restart and nothing it was doing lived
 // only in that daemon; any other run is settled as "daemon restarted".
-func (d *Dispatcher) restoreInteractive(rec Record) {
+func (d *Dispatcher) restoreInteractive(ctx context.Context, rec Record) {
 	rt, ok := d.interactiveRuntime.(adoptionRuntime)
 	switch {
 	case !ok:
-		d.settleRestarted(rec, settleNoRuntime)
+		d.settleRestarted(ctx, rec, settleNoRuntime)
 		return
 	case rec.PaneID == "":
-		d.settleRestarted(rec, settleNoPane)
+		d.settleRestarted(ctx, rec, settleNoPane)
 		return
 	case rec.Status == StatusSettling:
 		// Its settle target, deadline and close reason lived only in the
 		// old daemon: finish it as a restart, as before adoption.
-		d.settleRestarted(rec, settleSettling)
+		d.settleRestarted(ctx, rec, settleSettling)
 		return
 	}
 	probe, err := rt.ProbeAdoption(rec.PaneID, rec.ID)
@@ -70,10 +71,10 @@ func (d *Dispatcher) restoreInteractive(rec Record) {
 			// Whatever runs there now is not this dispatch's to close.
 			rec.PaneID = ""
 		}
-		d.settleRestarted(rec, reason)
+		d.settleRestarted(ctx, rec, reason)
 		return
 	}
-	d.adoptRestarted(rec, probe, rt)
+	d.adoptRestarted(ctx, rec, probe, rt)
 }
 
 // adoptRefusal is why rec cannot be adopted given its pane's probe, or ""
@@ -103,7 +104,7 @@ func adoptRefusal(rec Record, probe AdoptProbe, probeErr error) string {
 // turns, its slot and pane re-registered and, when its pane was tagged with
 // a bridge launch, its bridge key re-opened for that launch. It stays
 // adopting until it shows activity (see Sweep).
-func (d *Dispatcher) adoptRestarted(rec Record, probe AdoptProbe, rt adoptionRuntime) {
+func (d *Dispatcher) adoptRestarted(ctx context.Context, rec Record, probe AdoptProbe, rt adoptionRuntime) {
 	recorder, ok := d.recorder.(*FileRecorder)
 	if !ok {
 		return
@@ -117,7 +118,7 @@ func (d *Dispatcher) adoptRestarted(rec Record, probe AdoptProbe, rt adoptionRun
 	handle, err := recorder.Resume(rec)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "dispatch %s: reopening recording to adopt: %v\n", rec.ID, err)
-		d.settleRestarted(rec, "recording unavailable")
+		d.settleRestarted(ctx, rec, "recording unavailable")
 		return
 	}
 	// The run's process is not this daemon's child: there is no context of
@@ -366,7 +367,7 @@ func adoptedPlacement(viewerKind string) string {
 // "daemon restarted": its open turns are lost, the caller is sent the close
 // notice, and a pane still standing is killed. reason is why it was not
 // adopted, for the log.
-func (d *Dispatcher) settleRestarted(rec Record, reason string) {
+func (d *Dispatcher) settleRestarted(ctx context.Context, rec Record, reason string) {
 	recorder, ok := d.recorder.(*FileRecorder)
 	if !ok {
 		return
@@ -403,7 +404,7 @@ func (d *Dispatcher) settleRestarted(rec Record, reason string) {
 				rec.WorktreeState = WorktreeDeferred
 			}
 		} else if alive {
-			cleaned, killErr := d.closeRestartPane(rec)
+			cleaned, killErr := d.closeRestartPane(ctx, rec)
 			if killErr != nil {
 				if rec.Isolation == "worktree" && rec.WorktreeState != WorktreeRemoved {
 					rec.WorktreeState = WorktreeDeferred
@@ -414,18 +415,18 @@ func (d *Dispatcher) settleRestarted(rec Record, reason string) {
 			}
 		}
 	}
-	d.persistRestartSettle(recorder, rec)
+	d.persistRestartSettle(ctx, recorder, rec)
 	fmt.Fprintf(os.Stderr, "dispatch %s: settled: %s\n", rec.ID, reason)
 }
 
 // persistRestartSettle writes a run settled at startup, removes its worktree
 // unless it must be kept, and requeues the notifications it still owes.
-func (d *Dispatcher) persistRestartSettle(recorder *FileRecorder, rec Record) {
+func (d *Dispatcher) persistRestartSettle(ctx context.Context, recorder *FileRecorder, rec Record) {
 	if err := writeRecord(recorder.dir, rec); err != nil {
 		fmt.Fprintf(os.Stderr, "dispatch %s: recording: %v\n", rec.ID, err)
 	}
 	if rec.Status.Terminal() {
-		rec = d.cleanupWorktree(rec.ID)
+		rec = d.cleanupRestartWorktree(ctx, rec.ID)
 	}
 	d.restorePendingNotifications(rec)
 }

@@ -170,18 +170,18 @@ func removeWorktreeCheckout(git gitFunc, rec Record) error {
 
 // deleteMergedBranch deletes rec.Branch only when its tip is reachable from
 // another ref, and returns that tip. An absent branch or any git failure
-// leaves it alone.
-func deleteMergedBranch(git gitFunc, rec Record) (tip string, deleted bool) {
-	out, err := git("-C", rec.RepositoryRoot, "rev-parse", "--verify", "--quiet", "refs/heads/"+rec.Branch+"^{commit}")
+// leaves it alone. assess runs the checks and mutate the deletion.
+func deleteMergedBranch(assess, mutate gitFunc, rec Record) (tip string, deleted bool) {
+	out, err := assess("-C", rec.RepositoryRoot, "rev-parse", "--verify", "--quiet", "refs/heads/"+rec.Branch+"^{commit}")
 	if err != nil {
 		return "", false
 	}
 	tip = string(out)
-	refs, err := refsReaching(git, rec.RepositoryRoot, tip, "refs/heads/"+rec.Branch)
+	refs, err := refsReaching(assess, rec.RepositoryRoot, tip, "refs/heads/"+rec.Branch)
 	if err != nil || len(refs) == 0 {
 		return "", false
 	}
-	if _, err := git("-C", rec.RepositoryRoot, "branch", "-D", rec.Branch); err != nil {
+	if _, err := mutate("-C", rec.RepositoryRoot, "branch", "-D", rec.Branch); err != nil {
 		return "", false
 	}
 	return tip, true
