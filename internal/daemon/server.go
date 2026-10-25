@@ -743,6 +743,16 @@ func (s *Server) MarkReady() {
 	s.ready.Store(true)
 }
 
+// StartRestartReconcile starts the web server's background restart
+// reconcile, which finishes reconciling the dispatches the previous daemon
+// left. The boot path calls it right after MarkReady, so that work never
+// delays readiness. A no-op without a web server.
+func (s *Server) StartRestartReconcile() {
+	if s.webServer != nil {
+		s.webServer.StartRestartReconcile()
+	}
+}
+
 // Ready reports whether MarkReady has been called. The agent Manager reads it
 // to tell an agent awaiting restore from a stopped one.
 func (s *Server) Ready() bool {

@@ -1154,6 +1154,10 @@ func defaultSupervisedExec(opts RunSupervisedOptions) error {
 	// `leo update` and `leo service restart` wait on this before asking the
 	// daemon about agents (daemon.WaitReady).
 	srv.MarkReady()
+	// Reconciling what the previous daemon's dispatches left (worktree
+	// cleanup, terminal records' panes, run files) runs in the background
+	// from here on, never before ready.
+	srv.StartRestartReconcile()
 	// Failed and dropped restores publish nothing themselves; tell event
 	// followers how every agent they saw as "restoring" turned out. After
 	// MarkReady, so a snapshot taken once these events arrive already reports

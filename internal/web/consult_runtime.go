@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"sync"
 	"time"
 
 	"github.com/blackpaw-studio/leo/internal/bridge"
@@ -13,6 +14,20 @@ import (
 	"github.com/blackpaw-studio/leo/internal/startup"
 	"github.com/blackpaw-studio/leo/internal/tmux"
 )
+
+// restartReconcileWorkers is how many records the background restart
+// reconcile works on at once.
+const restartReconcileWorkers = 4
+
+// StartRestartReconcile starts the background pass that finishes the
+// restart reconciliation MarkInterrupted queued (see
+// consult.Dispatcher.ReconcileRestart). The daemon calls it once it is
+// ready; later calls do nothing.
+func (s *Server) StartRestartReconcile() {
+	if s.startRestartReconcile != nil {
+		s.startRestartReconcile()
+	}
+}
 
 // consultLoopIntervals are the consult runtime loop's tick periods. rosterIdle
 // is how often the roster refreshes when no record is roster-eligible.
@@ -128,20 +143,16 @@ func (s *Server) setupConsultRuntime(opts Options, resolveCallerSession func(str
 	// Adopting surviving dispatches re-opens their bridge keys, so it must
 	// run before the agents' restore settles adoption (Hub.AwaitAdoption):
 	// after that, a key nobody opened refuses its mod for good.
+	// This is the fast pass: records already terminal, worktree cleanup and
+	// the settings-spill sweep are left to the background restart reconcile
+	// the daemon starts once it is ready (StartRestartReconcile).
 	stop := opts.Startup.Step("web.New: MarkInterrupted")
 	before := calls.Snapshot()
 	restart := s.consults.MarkInterrupted()
 	used := calls.Snapshot().Sub(before)
 	stop()
-	opts.Startup.Logf("startup: MarkInterrupted: %d records, %d tmux calls, %d git calls", restart.Records, used.Tmux, used.Git)
-	// Best-effort: drop settings spill files (which can hold credentials)
-	// of runs the previous daemon never finalized.
-	stop = opts.Startup.Step("web.New: SweepRunFiles")
-	before = calls.Snapshot()
-	sweep := s.consults.SweepRunFiles()
-	used = calls.Snapshot().Sub(before)
-	stop()
-	opts.Startup.Logf("startup: SweepRunFiles: kept %d, removed %d run files, %d tmux / %d git calls", sweep.Kept, sweep.Removed, used.Tmux, used.Git)
+	opts.Startup.Logf("startup: MarkInterrupted: %d records, %d tmux calls, %d git calls (%d timed out), %d queued for the restart reconcile",
+		restart.Records, used.Tmux, used.Git, restart.GitTimeouts, restart.Queued)
 	if opts.ParentContext == nil {
 		return
 	}
@@ -154,13 +165,33 @@ func (s *Server) setupConsultRuntime(opts Options, resolveCallerSession func(str
 	if pollPlacement == nil {
 		pollPlacement = s.consults.PollPlacement
 	}
+	prune := s.pruneConsults
+	if prune == nil {
+		prune = s.consults.Prune
+	}
 	loopCtx, cancel := context.WithCancel(opts.ParentContext)
 	done := make(chan struct{})
 	placementDone := make(chan struct{})
+	// reconciled closes once the restart reconcile has exited, or once
+	// shutdown has made sure it never starts.
+	reconciled := make(chan struct{})
+	var reconcileOnce sync.Once
+	s.startRestartReconcile = func() {
+		reconcileOnce.Do(func() {
+			go func() {
+				defer close(reconciled)
+				before := calls.Snapshot()
+				summary := s.consults.ReconcileRestart(loopCtx, restartReconcileWorkers)
+				opts.Startup.Logf("startup: %s", summary.LogLine(calls.Snapshot().Sub(before).Tmux))
+			}()
+		})
+	}
 	s.stopConsultLoop = func() {
 		cancel()
+		reconcileOnce.Do(func() { close(reconciled) })
 		<-done
 		<-placementDone
+		<-reconciled
 	}
 	// A placement poll waits on tmux moves, so it gets a loop of its own
 	// rather than stalling the sweep and the roster.
@@ -185,13 +216,17 @@ func (s *Server) setupConsultRuntime(opts Options, resolveCallerSession func(str
 		defer close(done)
 		dispatcherTicker := time.NewTicker(intervals.sweep)
 		rosterTicker := time.NewTicker(intervals.roster)
-		viewerTicker := time.NewTicker(intervals.viewer)
 		stateTicker := time.NewTicker(intervals.bridgeState)
 		lastRosterUpdate := time.Now()
 		defer dispatcherTicker.Stop()
 		defer rosterTicker.Stop()
-		defer viewerTicker.Stop()
 		defer stateTicker.Stop()
+		viewerTicks := s.viewerTicks
+		if viewerTicks == nil {
+			viewerTicker := time.NewTicker(intervals.viewer)
+			defer viewerTicker.Stop()
+			viewerTicks = viewerTicker.C
+		}
 		for {
 			select {
 			case <-loopCtx.Done():
@@ -204,9 +239,16 @@ func (s *Server) setupConsultRuntime(opts Options, resolveCallerSession func(str
 					updateRoster(records, now)
 					lastRosterUpdate = now
 				}
-			case now := <-viewerTicker.C:
-				viewer.Sweep(s.consults.Records(), now)
-				s.consults.Prune()
+			case now := <-viewerTicks:
+				// Records the restart reconcile has yet to reach are left to
+				// it: a viewer write or a prune meanwhile would be lost to,
+				// or undone by, its own write.
+				viewer.Sweep(withoutIDs(s.consults.Records(), s.consults.RestartPendingIDs()), now)
+				select {
+				case <-reconciled:
+					prune()
+				default:
+				}
 			case <-stateTicker.C:
 				if pusher != nil {
 					pusher.Tick()
@@ -216,6 +258,20 @@ func (s *Server) setupConsultRuntime(opts Options, resolveCallerSession func(str
 			}
 		}
 	}()
+}
+
+// withoutIDs returns records minus those whose id is in ids.
+func withoutIDs(records []consult.Record, ids map[string]bool) []consult.Record {
+	if len(ids) == 0 {
+		return records
+	}
+	kept := make([]consult.Record, 0, len(records))
+	for _, rec := range records {
+		if !ids[rec.ID] {
+			kept = append(kept, rec)
+		}
+	}
+	return kept
 }
 
 // newBridgeFeed builds the observability projection of the agents' bridge

@@ -102,6 +102,19 @@ func (d *Dispatcher) takeRestartJobs() []restartJob {
 	return jobs
 }
 
+// RestartPendingIDs returns the ids of the records the restart reconcile has
+// yet to finish: housekeeping that rewrites records leaves them alone until
+// it has.
+func (d *Dispatcher) RestartPendingIDs() map[string]bool {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	ids := make(map[string]bool, len(d.restartPending))
+	for id := range d.restartPending {
+		ids[id] = true
+	}
+	return ids
+}
+
 // finishRestartJob drops one job of id from the pending set.
 func (d *Dispatcher) finishRestartJob(id string) {
 	d.mu.Lock()
@@ -203,7 +216,9 @@ func (d *Dispatcher) ReconcileRestart(ctx context.Context, workers int) RestartR
 		}()
 	}
 	wg.Wait()
-	summary.Canceled = next < len(jobs)
+	// A cancel that cut a job's git short counts too, though no job was
+	// left untaken.
+	summary.Canceled = next < len(jobs) || ctx.Err() != nil
 	summary.GitCalls = d.restartGitCalls.Load() - gitCalls
 	summary.GitTimeouts = d.restartGitTimeouts.Load() - gitTimeouts
 	summary.Took = time.Since(began)
