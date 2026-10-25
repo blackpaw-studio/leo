@@ -306,10 +306,7 @@ func (d *Dispatcher) reconcileTerminalRecord(ctx context.Context, recorder *File
 		rec = d.reconcileCreating(rec, d.restartLister(ctx, rec.ID))
 		stop()
 	}
-	writerUncertain := false
-	if rec.Isolation == "worktree" && rec.WorktreeState != WorktreeRemoved && rec.Mode != ModeInteractive {
-		writerUncertain = true
-	}
+	writerUncertain := rec.Isolation == "worktree" && rec.WorktreeState != WorktreeRemoved && rec.Mode != ModeInteractive
 	// A released run's pane was killed (release fails otherwise); any
 	// other interactive run without a recorded pane may still have an
 	// unrecorded one.
