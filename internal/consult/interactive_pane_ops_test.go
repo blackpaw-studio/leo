@@ -274,3 +274,28 @@ func TestInteractiveTurnEndingDuringShowEndsHidden(t *testing.T) {
 	waitForEvents(t, rt, "show", 1)
 	waitForSettledHidden(t, d, rt, id)
 }
+
+// A cancel that lands while the opening injection is still on its way kills
+// the pane; the opening's own stale-pane reconcile must then find nothing
+// left to kill instead of killing the same pane a second time.
+func TestCancelBeforeOpeningReconcileKillsThePaneOnce(t *testing.T) {
+	d := NewDispatcher(newFakeRecorder())
+	openingStarted, releaseOpening, openingDone := make(chan struct{}), make(chan struct{}), make(chan struct{})
+	d.beforeOpeningInject = func() { close(openingStarted); <-releaseOpening }
+	d.afterOpeningInject = func() { close(openingDone) }
+	rt := &fakeInteractiveRuntime{arm: true, empty: true}
+	d.SetInteractiveRuntime(rt)
+	s, err := d.Start(context.Background(), testConfig(), Request{Template: "claude", Prompt: "x", Cwd: t.TempDir(), Mode: ModeInteractive})
+	if err != nil {
+		t.Fatal(err)
+	}
+	<-openingStarted
+	if _, err := d.Cancel(s.ID); err != nil {
+		t.Fatal(err)
+	}
+	close(releaseOpening)
+	<-openingDone
+	if got := rt.killCount(); got != 1 {
+		t.Fatalf("kills = %d, want the canceled pane killed once", got)
+	}
+}

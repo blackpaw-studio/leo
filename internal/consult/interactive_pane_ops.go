@@ -93,13 +93,14 @@ func (d *Dispatcher) killRunPane(s *runState) {
 }
 
 // closeStalePane kills pane if, now, the run has settled or moved on to a
-// different pane: an opening that outlived its run.
+// different pane: an opening that outlived its run. A pane that is already
+// gone (a cancel's kill got there first) is left alone, as killRunPane does.
 func (d *Dispatcher) closeStalePane(s *runState, rt InteractiveRuntime, pane string) {
 	d.mu.Lock()
 	stale := s.killRequested || s.record.Status.Terminal() || s.record.Status == StatusSettling || s.record.PaneID != pane
 	rec := cloneRecord(s.record)
 	d.mu.Unlock()
-	if stale {
+	if stale && rt.Alive(pane) {
 		_, _ = d.closeRecordedPane(rec, pane, rt.Kill, runtimeLayout(rt))
 	}
 }
