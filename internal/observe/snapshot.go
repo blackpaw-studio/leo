@@ -52,6 +52,10 @@ const (
 	StatusStarting Status = "starting"
 	StatusRunning  Status = "running"
 	StatusStopped  Status = "stopped"
+	// StatusRestoring: the daemon is still restoring agents at boot and this
+	// one is awaiting it; it is neither live nor deliberately stopped.
+	// Only reported before the daemon is ready (FeatureAgentStatusRestoring).
+	StatusRestoring Status = "restoring"
 )
 
 // Activity is an agent's live work state, derived from tmux session activity. It is

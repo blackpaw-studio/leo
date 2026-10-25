@@ -192,6 +192,35 @@ func TestBuildSnapshotStatusMappingRestartingBecomesStarting(t *testing.T) {
 	}
 }
 
+// TestAPIStateReportsRestoringBeforeReady drives GET /api/v1/state with a
+// record the manager reports as "restoring" (daemon not yet ready): the wire
+// status must be "restoring", not folded into "stopped", and never wake-on-message.
+func TestAPIStateReportsRestoringBeforeReady(t *testing.T) {
+	s, _ := newTestServer(t)
+	s.agentSvc = &mockAgentService{records: []agent.Record{
+		{Name: "agent-a", Status: "restoring", WakeOnMessage: true},
+	}}
+	w := httptest.NewRecorder()
+	s.httpServer.Handler.ServeHTTP(w, httptest.NewRequest("GET", "/api/v1/state", nil))
+	var resp struct {
+		Data struct {
+			Agents []map[string]any `json:"agents"`
+		} `json:"data"`
+	}
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decoding state: %v", err)
+	}
+	if len(resp.Data.Agents) != 1 {
+		t.Fatalf("agents = %v", resp.Data.Agents)
+	}
+	if got := resp.Data.Agents[0]["status"]; got != "restoring" {
+		t.Errorf("status = %v, want restoring", got)
+	}
+	if got := resp.Data.Agents[0]["wake_on_message"]; got != false {
+		t.Errorf("wake_on_message = %v, want false", got)
+	}
+}
+
 func TestBuildSnapshotPrefersLiveProcessStateOverRecord(t *testing.T) {
 	started := time.Now().Add(-time.Hour)
 	in := snapshotInput{

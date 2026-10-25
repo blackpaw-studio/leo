@@ -419,7 +419,8 @@ func TestWebConfigAPIIsOperatorOnly(t *testing.T) {
 		}
 	}
 	if w := requestAs(t, s, http.MethodGet, "/api/v1/version", testAPIToken, ""); w.Code != http.StatusOK ||
-		!strings.Contains(w.Body.String(), `"config_api"`) {
+		!strings.Contains(w.Body.String(), `"config_api"`) ||
+		!strings.Contains(w.Body.String(), `"agent_status_restoring"`) {
 		t.Errorf("GET /api/v1/version as operator = %d %s", w.Code, w.Body.String())
 	}
 	w := requestAs(t, s, http.MethodGet, "/api/v1/config/schema", testAPIToken, "")
