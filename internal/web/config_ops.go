@@ -234,11 +234,10 @@ type promptDoc struct {
 // readPromptBytes reads a prompt file's raw bytes; a missing file is empty
 // (the create-on-first-write case).
 func (c *ConfigService) readPromptBytes(cfg *config.Config, workspace, file string) ([]byte, error) {
-	abs, err := c.resolveGuardedPrompt(cfg, workspace, file)
-	if err != nil {
+	if _, err := c.resolveGuardedPrompt(cfg, workspace, file); err != nil {
 		return nil, err
 	}
-	data, err := os.ReadFile(abs)
+	data, err := config.ReadPromptBytes(workspace, file)
 	if err != nil && !errors.Is(err, fs.ErrNotExist) {
 		return nil, fmt.Errorf("reading prompt file: %w", err)
 	}

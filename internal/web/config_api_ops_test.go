@@ -419,7 +419,8 @@ func TestWebConfigAPIIsOperatorOnly(t *testing.T) {
 		}
 	}
 	if w := requestAs(t, s, http.MethodGet, "/api/v1/version", testAPIToken, ""); w.Code != http.StatusOK ||
-		!strings.Contains(w.Body.String(), `"config_api"`) {
+		!strings.Contains(w.Body.String(), `"config_api"`) ||
+		!strings.Contains(w.Body.String(), `"agent_status_restoring"`) {
 		t.Errorf("GET /api/v1/version as operator = %d %s", w.Code, w.Body.String())
 	}
 	w := requestAs(t, s, http.MethodGet, "/api/v1/config/schema", testAPIToken, "")
@@ -555,4 +556,42 @@ func TestServiceRestartReleasesFlagOnPanic(t *testing.T) {
 	}()
 	h.svc.execCommand = func(string, ...string) *exec.Cmd { return exec.Command("true") }
 	wantStatus(t, h.do(http.MethodPost, "/service/restart", "", nil), http.StatusAccepted)
+}
+
+// A prompt_file that is a symlink out of the workspace is refused on both
+// routes, the outside file is never read or changed, and the listing omits it.
+func TestTaskPromptRefusesSymlinkOutOfWorkspace(t *testing.T) {
+	h := newAPIHarness(t)
+	cfg := h.loadConfig()
+	ws := cfg.TaskWorkspace(cfg.Tasks["heartbeat"])
+	if err := os.MkdirAll(ws, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	outside := filepath.Join(t.TempDir(), "operator.md")
+	if err := os.WriteFile(outside, []byte("operator-secret"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, filepath.Join(ws, "heartbeat.md")); err != nil {
+		t.Fatal(err)
+	}
+
+	res := h.do(http.MethodGet, "/config/tasks/heartbeat/prompt", "", nil)
+	if res.Status == http.StatusOK || strings.Contains(string(res.Raw), "operator-secret") {
+		t.Fatalf("GET through escaping symlink = %d %s", res.Status, res.Raw)
+	}
+	res = h.do(http.MethodPut, "/config/tasks/heartbeat/prompt", config.RevisionOf([]byte("operator-secret")), map[string]any{"content": "pwned"})
+	if res.Status == http.StatusOK {
+		t.Fatalf("PUT through escaping symlink succeeded: %s", res.Raw)
+	}
+	if b, _ := os.ReadFile(outside); string(b) != "operator-secret" {
+		t.Errorf("outside file changed to %q", b)
+	}
+
+	res = h.do(http.MethodGet, "/config/tasks/nightly/prompt", "", nil)
+	wantStatus(t, res, http.StatusOK)
+	for _, f := range res.data()["files"].([]any) {
+		if f == "heartbeat.md" {
+			t.Errorf("listing includes escaping symlink: %v", res.data()["files"])
+		}
+	}
 }

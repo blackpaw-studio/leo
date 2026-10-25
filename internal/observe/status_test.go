@@ -10,6 +10,7 @@ func TestMapStatus(t *testing.T) {
 		{"running", StatusRunning},
 		{"starting", StatusStarting},
 		{"restarting", StatusStarting},
+		{"restoring", StatusRestoring},
 		{"stopped", StatusStopped},
 		{"zombie", StatusStopped},
 		{"", StatusStopped},
@@ -37,6 +38,7 @@ func TestAgentDormancy(t *testing.T) {
 	}{
 		{"running agent, wake flag stale/irrelevant", "running", true, StatusRunning, false},
 		{"starting agent, wake flag stale/irrelevant", "starting", true, StatusStarting, false},
+		{"restoring agent, wake flag dropped", "restoring", true, StatusRestoring, false},
 		{"idle-swept dormant agent wakes on message", "stopped", true, StatusStopped, true},
 		{"manually stopped agent stays dormant", "stopped", false, StatusStopped, false},
 		{"unrecognized raw status folds to stopped, wake forwarded", "zombie", true, StatusStopped, true},
