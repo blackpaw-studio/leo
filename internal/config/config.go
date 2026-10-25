@@ -867,7 +867,11 @@ func (c *Config) expandPaths() {
 	}
 }
 
-// Save writes the config to a YAML file.
+// Save writes the config to a YAML file atomically: readers see either the
+// old file or the new one, never a partial write, and the result is 0600
+// even when the file previously had broader permissions. If path is a
+// symlink, Save writes through it: the link survives and its target is
+// replaced (see resolveWriteTarget).
 func Save(path string, cfg *Config) error {
 	data, err := yaml.Marshal(cfg)
 	if err != nil {
@@ -878,7 +882,7 @@ func Save(path string, cfg *Config) error {
 		return fmt.Errorf("creating config directory: %w", err)
 	}
 
-	if err := os.WriteFile(path, data, 0600); err != nil {
+	if err := writeFileAtomic(path, data); err != nil {
 		return fmt.Errorf("writing config: %w", err)
 	}
 
