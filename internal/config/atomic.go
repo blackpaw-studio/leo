@@ -14,6 +14,24 @@ const maxSymlinkDepth = 16
 // writeTemp is a testability seam for the temp-file write in writeFileAtomic.
 var writeTemp = writeSynced
 
+// Ownership seams: statOwner reads a file's uid/gid, processOwner is the
+// caller's, chownTemp hands the temp file to the previous owner.
+var (
+	statOwner    = fileOwner
+	processOwner = func() (uid, gid int) { return os.Getuid(), os.Getgid() }
+	chownTemp    = func(f *os.File, uid, gid int) error { return f.Chown(uid, gid) }
+)
+
+// fileOwner returns the uid/gid of fi, or ok=false if the platform doesn't
+// expose them.
+func fileOwner(fi os.FileInfo) (uid, gid int, ok bool) {
+	st, isStat := fi.Sys().(*syscall.Stat_t)
+	if !isStat {
+		return 0, 0, false
+	}
+	return int(st.Uid), int(st.Gid), true
+}
+
 // writeFileAtomic replaces path with data (mode 0600) so a concurrent reader
 // or a crash never observes a truncated file: the content goes to a temp file
 // in the same directory, is fsynced, renamed over the target, and the
@@ -40,6 +58,10 @@ func writeFileAtomic(path string, data []byte) (err error) {
 		_ = tmp.Close()
 		return fmt.Errorf("setting temp config permissions: %w", err)
 	}
+	if err = preserveOwner(tmp, target); err != nil {
+		_ = tmp.Close()
+		return err
+	}
 	if err := writeTemp(tmp, data); err != nil {
 		return err
 	}
@@ -47,6 +69,32 @@ func writeFileAtomic(path string, data []byte) (err error) {
 		return fmt.Errorf("installing config: %w", err)
 	}
 	return syncDir(dir)
+}
+
+// preserveOwner gives tmp the owner of the existing target, because rename
+// installs a new inode owned by the caller (`sudo leo config ...` would
+// otherwise leave a user's leo.yaml root-owned and unreadable by the daemon).
+// Only a privileged caller can chown; if that fails the save fails rather
+// than silently changing the owner. A missing target has no owner to keep.
+func preserveOwner(tmp *os.File, target string) error {
+	fi, err := os.Stat(target)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("inspecting config file: %w", err)
+	}
+	uid, gid, ok := statOwner(fi)
+	if !ok {
+		return nil
+	}
+	if procUID, procGID := processOwner(); uid == procUID && gid == procGID {
+		return nil
+	}
+	if err := chownTemp(tmp, uid, gid); err != nil {
+		return fmt.Errorf("preserving config owner %d:%d: %w", uid, gid, err)
+	}
+	return nil
 }
 
 // resolveWriteTarget returns the file a write to path must replace. A
