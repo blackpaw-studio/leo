@@ -187,3 +187,214 @@ func TestMarkInterruptedNoExecForTerminalRecords(t *testing.T) {
 		}
 	}
 }
+
+// seedTerminalRecords persists n released interactive records whose worktree
+// metadata points at existing directories, so each one's background
+// assessment starts with a git call (and, with no real repository behind
+// it, ends kept).
+func seedTerminalRecords(t *testing.T, stateDir string, n int) []string {
+	t.Helper()
+	root := t.TempDir()
+	ids := make([]string, 0, n)
+	for i := range n {
+		id := fmt.Sprintf("d-t-%02d", i)
+		wt := filepath.Join(root, id)
+		if err := os.MkdirAll(wt, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		restartRecord(t, stateDir, Record{ID: id, Kind: "dispatch", Template: "worker", Mode: ModeInteractive,
+			Status: StatusReleased, StartedAt: adoptNow, Isolation: "worktree", WorktreeState: WorktreePresent,
+			RepositoryRoot: root, Worktree: wt, BaseCommit: "base", Branch: "leo/" + id})
+		ids = append(ids, id)
+	}
+	return ids
+}
+
+// gitGate is a git seam that holds every call until released, tracking how
+// many it holds at once.
+type gitGate struct {
+	mu            sync.Mutex
+	inFlight, max int
+	entered       chan struct{}
+	release       chan struct{}
+	once          sync.Once
+}
+
+func newGitGate(t *testing.T, d *Dispatcher) *gitGate {
+	g := &gitGate{entered: make(chan struct{}, 64), release: make(chan struct{})}
+	t.Cleanup(g.open)
+	d.GitCommand = func(string, ...string) *exec.Cmd {
+		g.mu.Lock()
+		g.inFlight++
+		g.max = max(g.max, g.inFlight)
+		g.mu.Unlock()
+		g.entered <- struct{}{}
+		<-g.release
+		g.mu.Lock()
+		g.inFlight--
+		g.mu.Unlock()
+		return exec.Command("false")
+	}
+	return g
+}
+
+// open releases every held call, and every later one.
+func (g *gitGate) open() { g.once.Do(func() { close(g.release) }) }
+
+func (g *gitGate) awaitEntered(t *testing.T, n int) {
+	t.Helper()
+	deadline := time.After(5 * time.Second)
+	for i := range n {
+		select {
+		case <-g.entered:
+		case <-deadline:
+			t.Fatalf("only %d of %d git calls ever ran at once", i, n)
+		}
+	}
+}
+
+func (g *gitGate) maxInFlight() int {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return g.max
+}
+
+func recordBytes(t *testing.T, stateDir string, ids []string) map[string][]byte {
+	t.Helper()
+	out := make(map[string][]byte, len(ids))
+	for _, id := range ids {
+		b, err := os.ReadFile(filepath.Join(Dir(stateDir), id+".json"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		out[id] = b
+	}
+	return out
+}
+
+func TestReconcileRestartBoundsConcurrency(t *testing.T) {
+	stateDir := t.TempDir()
+	seedTerminalRecords(t, stateDir, 12)
+	d := NewDispatcher(NewFileRecorder(stateDir))
+	g := newGitGate(t, d)
+	d.MarkInterrupted()
+
+	done := make(chan RestartReconcileSummary, 1)
+	go func() { done <- d.ReconcileRestart(context.Background(), 4) }()
+	g.awaitEntered(t, 4)
+	g.open()
+	summary := <-done
+
+	if got := g.maxInFlight(); got != 4 {
+		t.Fatalf("at most %d git calls ran at once, want 4", got)
+	}
+	if summary.Records != 12 || summary.Kept != 12 || summary.GitCalls != 12 || summary.Canceled {
+		t.Fatalf("summary = %+v, want 12 records kept over 12 git calls", summary)
+	}
+}
+
+func TestReconcileRestartStopsOnCancel(t *testing.T) {
+	stateDir := t.TempDir()
+	ids := seedTerminalRecords(t, stateDir, 12)
+	d := NewDispatcher(NewFileRecorder(stateDir))
+	g := newGitGate(t, d)
+	d.MarkInterrupted()
+	before := recordBytes(t, stateDir, ids)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan RestartReconcileSummary, 1)
+	go func() { done <- d.ReconcileRestart(ctx, 4) }()
+	g.awaitEntered(t, 4)
+	cancel()
+	g.open()
+	summary := <-done
+
+	if !summary.Canceled || summary.Records != 4 {
+		t.Fatalf("summary = %+v, want canceled after the 4 jobs in flight", summary)
+	}
+	after := recordBytes(t, stateDir, ids)
+	untouched := 0
+	for _, id := range ids {
+		if string(before[id]) == string(after[id]) {
+			untouched++
+		}
+	}
+	if untouched < len(ids)-4 {
+		t.Fatalf("%d of %d records untouched; every record the pass did not reach must stay as loaded", untouched, len(ids))
+	}
+}
+
+// sweepHookRuntime runs hook once its sweep has listed the run files and
+// before it decides on any of them.
+type sweepHookRuntime struct {
+	*fakeInteractiveRuntime
+	dir  string
+	hook func()
+}
+
+func (r sweepHookRuntime) ReleaseRunFiles(string) {}
+
+func (r sweepHookRuntime) SweepRunFiles(keep func(string) bool) int {
+	matches, _ := filepath.Glob(filepath.Join(r.dir, dispatchSpillPrefix+"*.json"))
+	r.hook()
+	removed := 0
+	for _, m := range matches {
+		if id := strings.TrimSuffix(strings.TrimPrefix(filepath.Base(m), dispatchSpillPrefix), ".json"); !keep(id) {
+			_ = os.Remove(m)
+			removed++
+		}
+	}
+	return removed
+}
+
+func TestReconcileRestartKeepsSpillOfRunStartedDuringPass(t *testing.T) {
+	stateDir, dir := t.TempDir(), t.TempDir()
+	d := NewDispatcher(NewFileRecorder(stateDir))
+	started := writeSpill(t, dir, "d-new")
+	dead := writeSpill(t, dir, "d-dead")
+	d.SetInteractiveRuntime(sweepHookRuntime{fakeInteractiveRuntime: &fakeInteractiveRuntime{}, dir: dir, hook: func() {
+		// A dispatch starts once the daemon is serving: its run is
+		// registered before its launch writes the spill.
+		d.mu.Lock()
+		d.runs["d-new"] = newRunState(Record{ID: "d-new", Kind: "dispatch", Mode: ModeInteractive, Status: StatusRunning}, nopHandle{}, make(chan struct{}), nil)
+		d.mu.Unlock()
+	}})
+	d.MarkInterrupted()
+
+	summary := d.ReconcileRestart(context.Background(), 4)
+
+	if _, err := os.Stat(started); err != nil {
+		t.Fatalf("spill of a run started during the pass was removed: %v", err)
+	}
+	assertGone(t, dead)
+	if want := (SweepSummary{Kept: 1, Removed: 1}); summary.Sweep != want {
+		t.Fatalf("sweep = %+v, want %+v", summary.Sweep, want)
+	}
+}
+
+func TestReconcileRestartSkipsRunOwnedAfterFastPass(t *testing.T) {
+	stateDir := t.TempDir()
+	ids := seedTerminalRecords(t, stateDir, 1)
+	d := NewDispatcher(NewFileRecorder(stateDir))
+	calls := recordGit(d)
+	d.MarkInterrupted()
+	// A follow-up reopened the record once the daemon was serving: its run
+	// owns the record now, and its own terminal transitions clean up.
+	rec, err := LoadOne(stateDir, ids[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	d.mu.Lock()
+	d.runs[rec.ID] = newRunState(rec, nopHandle{}, make(chan struct{}), nil)
+	d.mu.Unlock()
+	before := recordBytes(t, stateDir, ids)
+
+	summary := d.ReconcileRestart(context.Background(), 4)
+
+	if summary.Records != 1 || summary.Skipped != 1 || len(*calls) != 0 {
+		t.Fatalf("summary = %+v git calls = %q, want the job skipped untouched", summary, *calls)
+	}
+	if after := recordBytes(t, stateDir, ids); string(after[rec.ID]) != string(before[rec.ID]) {
+		t.Fatal("a skipped record was rewritten")
+	}
+}

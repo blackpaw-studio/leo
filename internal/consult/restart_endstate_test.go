@@ -75,7 +75,7 @@ func (r *endStateRuntime) ReleaseRunFiles(id string) {
 	_ = os.Remove(filepath.Join(r.spillDir, dispatchSpillPrefix+id+".json"))
 }
 
-func (r *endStateRuntime) SweepRunFiles(keep map[string]bool) int {
+func (r *endStateRuntime) SweepRunFiles(keep func(string) bool) int {
 	return sweepGlob(filepath.Join(r.spillDir, dispatchSpillPrefix+"*.json"), dispatchSpillPrefix, ".json", "settings spill", keep)
 }
 
@@ -211,11 +211,18 @@ func restartEndState(t *testing.T, d *Dispatcher, rt *endStateRuntime, repo, sta
 // before the startup-stall fix: moving work off the critical path must
 // reach exactly this end state.
 func TestRestartReconcileEndState(t *testing.T) {
+	for _, workers := range []int{1, 4} {
+		t.Run(fmt.Sprintf("%d workers", workers), func(t *testing.T) {
+			assertRestartEndState(t, workers)
+		})
+	}
+}
+
+func assertRestartEndState(t *testing.T, workers int) {
 	d, rt, repo, stateDir := endStateFixture(t)
 
 	d.MarkInterrupted()
-	d.ReconcileRestart(context.Background(), 1)
-	d.SweepRunFiles()
+	summary := d.ReconcileRestart(context.Background(), workers)
 
 	got := restartEndState(t, d, rt, repo, stateDir)
 	want := `d-c-absent status=failed wt=removed tip=false pane= viewer_pane= viewer_kind= error="daemon restarted" notes=d-c-absent#1:suppressed
@@ -240,5 +247,9 @@ layouts=@3
 `
 	if got != want {
 		t.Fatalf("restart end state:\n%s\nwant:\n%s", got, want)
+	}
+	if summary.Records != 9 || summary.Skipped != 0 || summary.Removed != 3 || summary.Kept != 2 || summary.Deferred != 2 ||
+		summary.Sweep != (SweepSummary{Kept: 1, Removed: 2}) || summary.Canceled {
+		t.Fatalf("summary = %+v, want 9 records: 3 removed, 2 kept, 2 deferred; run files kept 1 / removed 2", summary)
 	}
 }

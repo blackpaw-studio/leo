@@ -1219,8 +1219,10 @@ func (d *Dispatcher) waitDone(id string) {
 // RestartSummary reports what MarkInterrupted processed.
 type RestartSummary struct {
 	Records int
-	// Queued is how many of them were left to ReconcileRestart.
+	// Queued is how many jobs it left to ReconcileRestart.
 	Queued int
+	// GitTimeouts counts its git calls that ran past the restart timeout.
+	GitTimeouts int64
 }
 
 // MarkInterrupted settles the persisted in-flight dispatches the previous
@@ -1235,6 +1237,7 @@ func (d *Dispatcher) MarkInterrupted() RestartSummary {
 		return RestartSummary{}
 	}
 	markedAt := d.now()
+	timeouts := d.restartGitTimeouts.Load()
 	records, _ := Load(filepath.Dir(recorder.dir))
 	list := d.memoRestartLister(context.Background())
 	queued := 0
@@ -1248,7 +1251,7 @@ func (d *Dispatcher) MarkInterrupted() RestartSummary {
 		queued += d.markInterruptedRecord(recorder, rec, markedAt, tm, list)
 		d.warnSlowRecord("MarkInterrupted", rec.ID, tm)
 	}
-	return RestartSummary{Records: len(records), Queued: queued}
+	return RestartSummary{Records: len(records), Queued: queued, GitTimeouts: d.restartGitTimeouts.Load() - timeouts}
 }
 
 // markInterruptedRecord settles one record the previous daemon left in

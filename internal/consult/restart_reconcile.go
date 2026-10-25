@@ -7,6 +7,7 @@ import (
 	"os"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -147,40 +148,104 @@ func (d *Dispatcher) cleanupRestartWorktree(ctx context.Context, id string) Reco
 	return d.cleanupWorktreeWith(id, d.restartGit(ctx, id), d.restartGit(context.WithoutCancel(ctx), id))
 }
 
-// RestartReconcileSummary reports what ReconcileRestart did.
+// RestartReconcileSummary reports what ReconcileRestart did. Records counts
+// the jobs it reached, Skipped those it left to a run that took the record
+// over, and Removed, Kept and Deferred the worktree outcomes of the rest. Git
+// calls and timeouts count the pass's own restart-path git calls.
 type RestartReconcileSummary struct {
-	Records, Skipped int
-	Took             time.Duration
-	Canceled         bool
+	Records, Skipped        int
+	Removed, Kept, Deferred int
+	GitCalls, GitTimeouts   int64
+	Sweep                   SweepSummary
+	Took                    time.Duration
+	Canceled                bool
 }
 
 // ReconcileRestart runs the reconciliation MarkInterrupted queued, once the
-// daemon is serving: records that were terminal at shutdown get their
-// viewer, pane and worktree reconciled and their notifications requeued, and
-// runs MarkInterrupted settled get their worktrees assessed. It returns once
-// the queue is drained or ctx is done; records it did not reach stay
-// exactly as they were.
+// daemon is serving: first the sweep of run files no live run owns, then,
+// over workers workers, notifying records first, the records that were
+// terminal at shutdown (viewer, pane and worktree reconciled, notifications
+// requeued) and the worktree assessments of the runs MarkInterrupted
+// settled. It returns once the queue is drained or ctx is done: it then
+// stops taking jobs, and the records it did not reach stay exactly as
+// loaded.
 func (d *Dispatcher) ReconcileRestart(ctx context.Context, workers int) RestartReconcileSummary {
 	began := time.Now()
-	var summary RestartReconcileSummary
+	gitCalls, gitTimeouts := d.restartGitCalls.Load(), d.restartGitTimeouts.Load()
+	summary := RestartReconcileSummary{Sweep: d.SweepRunFiles()}
 	recorder, _ := d.recorder.(*FileRecorder)
-	for _, job := range d.takeRestartJobs() {
-		if ctx.Err() != nil {
-			summary.Canceled = true
-			break
+	jobs := d.takeRestartJobs()
+	var mu sync.Mutex
+	next := 0
+	take := func() (restartJob, bool) {
+		mu.Lock()
+		defer mu.Unlock()
+		if next == len(jobs) || ctx.Err() != nil {
+			return restartJob{}, false
 		}
-		summary.Records++
-		if !d.runRestartJob(ctx, recorder, job) {
-			summary.Skipped++
-		}
+		next++
+		return jobs[next-1], true
 	}
+	tally := func(rec Record, ran bool) {
+		mu.Lock()
+		defer mu.Unlock()
+		summary.tally(rec, ran)
+	}
+	var wg sync.WaitGroup
+	for range max(workers, 1) {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for job, ok := take(); ok; job, ok = take() {
+				rec, ran := d.runRestartJob(ctx, recorder, job)
+				tally(rec, ran)
+			}
+		}()
+	}
+	wg.Wait()
+	summary.Canceled = next < len(jobs)
+	summary.GitCalls = d.restartGitCalls.Load() - gitCalls
+	summary.GitTimeouts = d.restartGitTimeouts.Load() - gitTimeouts
 	summary.Took = time.Since(began)
 	return summary
 }
 
+// LogLine renders the summary for the startup log. tmuxCalls is the tmux
+// call count the caller measured over the pass, which includes whatever
+// else ran meanwhile, so it is approximate.
+func (s RestartReconcileSummary) LogLine(tmuxCalls int64) string {
+	line := fmt.Sprintf("restart reconcile: %d records (%d skipped), worktrees removed %d / kept %d / deferred %d, %d git calls (%d timed out), ~%d tmux calls, run files kept/removed %d/%d, took %s",
+		s.Records, s.Skipped, s.Removed, s.Kept, s.Deferred, s.GitCalls, s.GitTimeouts, tmuxCalls, s.Sweep.Kept, s.Sweep.Removed, s.Took.Round(time.Millisecond))
+	if s.Canceled {
+		line += ", canceled"
+	}
+	return line
+}
+
+// tally counts one job's outcome: rec is the record it left, when it ran.
+func (s *RestartReconcileSummary) tally(rec Record, ran bool) {
+	s.Records++
+	if !ran {
+		s.Skipped++
+		return
+	}
+	if rec.Isolation != "worktree" {
+		return
+	}
+	switch rec.WorktreeState {
+	case WorktreeRemoved:
+		s.Removed++
+	case WorktreeKept:
+		s.Kept++
+	case WorktreeDeferred:
+		s.Deferred++
+	}
+}
+
 // runRestartJob runs job under its record's serial lock, unless another run
-// has taken the record over since it was queued, and reports whether it ran.
-func (d *Dispatcher) runRestartJob(ctx context.Context, recorder *FileRecorder, job restartJob) bool {
+// has taken the record over since it was queued, and returns the record it
+// left and whether it ran.
+func (d *Dispatcher) runRestartJob(ctx context.Context, recorder *FileRecorder, job restartJob) (Record, bool) {
 	defer d.finishRestartJob(job.id)
 	unlock := d.serialLocks([]string{job.id})
 	defer unlock()
@@ -188,32 +253,30 @@ func (d *Dispatcher) runRestartJob(ctx context.Context, recorder *FileRecorder, 
 	owned := d.runs[job.id] == job.owner
 	d.mu.Unlock()
 	if !owned || recorder == nil {
-		return false
+		return Record{}, false
 	}
 	rec, state, err := d.lookup(job.id)
 	if err != nil {
-		return false
+		return Record{}, false
 	}
 	tm := d.newRecordTimings()
 	defer d.warnSlowRecord("restart reconcile", job.id, tm)
 	if job.kind == restartTerminal {
-		d.reconcileTerminalRecord(ctx, recorder, rec, tm)
-		return true
+		return d.reconcileTerminalRecord(ctx, recorder, rec, tm), true
 	}
 	if rec.WorktreeState == WorktreeRemoved {
-		return false
+		return Record{}, false
 	}
 	stop := tm.start("worktree cleanup")
-	d.applyWorktreeAssessment(d.restartGit(ctx, job.id), d.restartGit(context.WithoutCancel(ctx), job.id), rec, state)
-	stop()
-	return true
+	defer stop()
+	return d.applyWorktreeAssessment(d.restartGit(ctx, job.id), d.restartGit(context.WithoutCancel(ctx), job.id), rec, state), true
 }
 
 // reconcileTerminalRecord reconciles a record that was already terminal when
 // the previous daemon stopped: its split viewer looked up, a pane still
 // standing closed, its worktree cleaned up or deferred, and the
-// notifications it still owes requeued.
-func (d *Dispatcher) reconcileTerminalRecord(ctx context.Context, recorder *FileRecorder, rec Record, tm *recordTimings) {
+// notifications it still owes requeued. It returns the record it left.
+func (d *Dispatcher) reconcileTerminalRecord(ctx context.Context, recorder *FileRecorder, rec Record, tm *recordTimings) Record {
 	stop := tm.start("viewer pane lookup")
 	rec = d.reconcileRestartViewer(rec)
 	stop()
@@ -264,4 +327,5 @@ func (d *Dispatcher) reconcileTerminalRecord(ctx context.Context, recorder *File
 	stop = tm.start("notification restore")
 	d.restorePendingNotifications(rec)
 	stop()
+	return rec
 }
