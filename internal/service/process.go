@@ -951,10 +951,15 @@ func defaultSupervisedExec(opts RunSupervisedOptions) error {
 	}
 	// First thing, before the log rotator, tmux or the socket: a daemon that
 	// loses the lock must not unlink the winner's leo.sock or touch its logs.
-	stepDone := timer.Step("lock")
+	// The lock step's line is logged once the rotator is installed (below),
+	// so it reaches service.log like every other startup line; a losing
+	// daemon logs it to stderr only. Its duration then also covers the
+	// microseconds of dump, locale and rotator setup.
+	logLockStep := sync.OnceFunc(timer.Step("lock"))
+	defer logLockStep()
 	releaseLock, err := AcquireDaemonLock(filepath.Join(homePath, "state"))
-	stepDone()
 	if err != nil {
+		logLockStep()
 		return err
 	}
 	defer func() { _ = releaseLock() }()
@@ -985,6 +990,7 @@ func defaultSupervisedExec(opts RunSupervisedOptions) error {
 	} else {
 		defer func() { _ = closer.Close() }()
 	}
+	logLockStep()
 
 	executable := opts.Executable
 	if executable == nil {
@@ -992,7 +998,7 @@ func defaultSupervisedExec(opts RunSupervisedOptions) error {
 	}
 
 	// Find tmux early so we can cache it
-	stepDone = timer.Step("tmux server")
+	stepDone := timer.Step("tmux server")
 	tmuxPath, err := resolveDaemonTmux(opts.TmuxPath, os.Stderr)
 	if err != nil {
 		return err
@@ -1154,6 +1160,10 @@ func defaultSupervisedExec(opts RunSupervisedOptions) error {
 	// `leo update` and `leo service restart` wait on this before asking the
 	// daemon about agents (daemon.WaitReady).
 	srv.MarkReady()
+	// Reconciling what the previous daemon's dispatches left (worktree
+	// cleanup, terminal records' panes, run files) runs in the background
+	// from here on, never before ready.
+	srv.StartRestartReconcile()
 	// Failed and dropped restores publish nothing themselves; tell event
 	// followers how every agent they saw as "restoring" turned out. After
 	// MarkReady, so a snapshot taken once these events arrive already reports

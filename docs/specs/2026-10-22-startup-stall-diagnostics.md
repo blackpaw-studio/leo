@@ -60,3 +60,34 @@ This phase gets its own short spec addendum once Phase B names the cause. Likely
 ## Out of scope
 - The attach-before-restore UX (separate spec).
 - Prune/deferred-worktree confirmation (Rocket's follow-up, which is pending Evan).
+
+## Phase C — fix (addendum 2026-10-24)
+**Phase B result:** reproduced on an isolated daemon (`scripts/stall-repro/`). `web.New: MarkInterrupted`
+accounts for 99.9% of startup: 25 s at 300 records, about 3 min at 1,100, and 11 min at 3,000. That's about
+1.8 serial git calls per record (`cleanupWorktree → assessWorktree`: `status --porcelain`,
+`worktree list`, ref check) at 85–220 ms each under load, and the per-record cost grows with N. No single hang:
+a goroutine dump shows the stall is in `execGit` under `cleanupWorktree`. `chat.Recover` (0.4 ms) is ruled out.
+
+**Fix: split restart reconciliation into a fast pass and a background pass.**
+1. **Fast pass (stays pre-bind, in `MarkInterrupted`):** only records that were *non-terminal* at
+   shutdown. These get the interrupt/adopt/settle decisions that dispatch APIs depend on. No worktree git
+   assessment runs here. Terminal records are skipped.
+2. **Background pass (after `MarkReady`):** worktree assessment and cleanup for terminal records,
+   the viewer-pane reconcile for terminal split-viewer records, and `SweepRunFiles`. Bounded
+   concurrency (4 workers), and it stops on daemon shutdown. Results are logged as a summary line using the Phase A counters.
+   Prune and the other worktree tools keep their existing behaviour for anything not yet reconciled.
+3. **Timeouts:** every git call on the restart path (fast and background, including `reconcileCreating`)
+   gets a context timeout of 30 s. A timeout leaves that record's worktree untouched and logs it; it never
+   deletes anything.
+4. **Lock line:** install the log rotator before the `lock` step logs, or log `lock` after the rotator
+   is installed, so every `startup:` line reaches `state/service.log`.
+
+**Success criterion:** with the repro harness at 3,000 records under host load, `web UI listening` and `ready`
+arrive in under 5 s. The background pass then finishes, and the end state matches today's synchronous
+behaviour (the same records settled, the same worktrees removed or kept).
+
+**Tests:** the fast pass doesn't call git for terminal records (counted via an exec seam). The background pass
+reaches the same end state as the old synchronous pass on a mixed fixture. A git timeout leaves the worktree
+in place. Shutdown cancels the background pass cleanly.
+
+**Out of scope:** capping or pruning dispatch records at startup (retention is already handled by `FileRecorder.prune` and `leo dispatch prune`).

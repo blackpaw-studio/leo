@@ -164,7 +164,7 @@ func TestRestartClosedRunNotifiesOnceAcrossReloads(t *testing.T) {
 		}
 	}
 	reloaded := NewDispatcher(NewFileRecorder(state))
-	reloaded.MarkInterrupted()
+	markInterruptedAndReconcile(t, reloaded)
 	again := &fakeNotificationDelivery{ready: true}
 	reloaded.SetNotificationDelivery(again)
 	reloaded.SweepNotifications(context.Background())

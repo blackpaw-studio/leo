@@ -43,7 +43,7 @@ func TestMarkInterruptedWarnsOnSlowRecord(t *testing.T) {
 		cost:                   map[string]time.Duration{"%A": 3 * time.Second, "%B": time.Second},
 	})
 
-	summary := d.MarkInterrupted()
+	summary := markInterruptedAndReconcile(t, d)
 
 	if summary.Records != 2 {
 		t.Fatalf("Records = %d, want 2", summary.Records)

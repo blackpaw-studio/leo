@@ -20,12 +20,12 @@ func (r spillRuntime) ReleaseRunFiles(id string) {
 	_ = os.Remove(filepath.Join(r.dir, "dispatch-"+id+".json"))
 }
 
-func (r spillRuntime) SweepRunFiles(keep map[string]bool) int {
+func (r spillRuntime) SweepRunFiles(keep func(string) bool) int {
 	removed := 0
 	matches, _ := filepath.Glob(filepath.Join(r.dir, "dispatch-*.json"))
 	for _, m := range matches {
 		id := filepath.Base(m)[len("dispatch-") : len(filepath.Base(m))-len(".json")]
-		if !keep[id] {
+		if !keep(id) {
 			_ = os.Remove(m)
 			removed++
 		}
@@ -124,7 +124,7 @@ func TestTmuxRuntimeRunFileCleanup(t *testing.T) {
 
 	rt.ReleaseRunFiles("d-a")
 	rt.ReleaseRunFiles("../../escape")
-	rt.SweepRunFiles(map[string]bool{"d-b": true})
+	rt.SweepRunFiles(func(id string) bool { return id == "d-b" })
 
 	assertGone(t, gone)
 	assertGone(t, orphan)

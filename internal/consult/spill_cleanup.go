@@ -17,10 +17,10 @@ const dispatchSpillPrefix = "dispatch-"
 // runFileCleaner is an optional InteractiveRuntime capability for runtimes
 // that leave per-run files behind (the claude settings spill, which can hold
 // credentials). ReleaseRunFiles removes one run's files once it can never
-// launch again; SweepRunFiles removes every run file whose id is not in keep.
+// launch again; SweepRunFiles removes every run file whose id keep rejects.
 type runFileCleaner interface {
 	ReleaseRunFiles(id string)
-	SweepRunFiles(keep map[string]bool) (removed int)
+	SweepRunFiles(keep func(id string) bool) (removed int)
 }
 
 // releaseRunFilesLocked drops a finalized run's files. Callers hold d.mu.
@@ -37,22 +37,29 @@ type SweepSummary struct {
 
 // SweepRunFiles removes run files for every run that is not a live
 // interactive dispatch. Best-effort; meant for daemon startup, after
-// MarkInterrupted has settled the previous daemon's runs.
+// MarkInterrupted has settled the previous daemon's runs. Each file's run is
+// looked up as the sweep reaches it, under mu: a run is registered before its
+// launch writes any file, so a dispatch started while the sweep runs keeps
+// its files. Kept counts the live runs whose files were kept.
 func (d *Dispatcher) SweepRunFiles() SweepSummary {
 	d.mu.Lock()
 	c, ok := d.interactiveRuntime.(runFileCleaner)
-	keep := make(map[string]bool)
-	for id, s := range d.runs {
-		if s.record.Mode == ModeInteractive && !s.record.Status.Terminal() {
-			keep[id] = true
-		}
-	}
 	d.mu.Unlock()
-	summary := SweepSummary{Kept: len(keep)}
-	if ok {
-		summary.Removed = c.SweepRunFiles(keep)
+	if !ok {
+		return SweepSummary{}
 	}
-	return summary
+	kept := map[string]bool{}
+	removed := c.SweepRunFiles(func(id string) bool {
+		d.mu.Lock()
+		defer d.mu.Unlock()
+		s := d.runs[id]
+		live := s != nil && s.record.Mode == ModeInteractive && !s.record.Status.Terminal()
+		if live {
+			kept[id] = true
+		}
+		return live
+	})
+	return SweepSummary{Kept: len(kept), Removed: removed}
 }
 
 // dispatchSpillPath is the settings spill file of run id ("" if unusable).
@@ -88,9 +95,9 @@ func removeIfExists(path, what, id string) {
 }
 
 // SweepRunFiles removes every dispatch settings spill and opening-brief file
-// whose run id is not in keep. Agent spill files (<agent>.json) are left
+// whose run id keep rejects. Agent spill files (<agent>.json) are left
 // alone.
-func (r *TmuxInteractiveRuntime) SweepRunFiles(keep map[string]bool) int {
+func (r *TmuxInteractiveRuntime) SweepRunFiles(keep func(id string) bool) int {
 	home := r.spillHome()
 	if home == "" {
 		return 0
@@ -99,9 +106,9 @@ func (r *TmuxInteractiveRuntime) SweepRunFiles(keep map[string]bool) int {
 		sweepGlob(filepath.Join(home, "state", claudeharness.DispatchBriefSpillDir, "*.txt"), "", ".txt", "opening brief", keep)
 }
 
-// sweepGlob removes the files matching pattern whose run id is not in keep
-// and returns how many it removed.
-func sweepGlob(pattern, prefix, suffix, what string, keep map[string]bool) int {
+// sweepGlob removes the files matching pattern whose run id keep rejects and
+// returns how many it removed. keep is asked once per file, as it is reached.
+func sweepGlob(pattern, prefix, suffix, what string, keep func(id string) bool) int {
 	matches, err := filepath.Glob(pattern)
 	if err != nil {
 		return 0
@@ -109,7 +116,7 @@ func sweepGlob(pattern, prefix, suffix, what string, keep map[string]bool) int {
 	removed := 0
 	for _, path := range matches {
 		id := strings.TrimSuffix(strings.TrimPrefix(filepath.Base(path), prefix), suffix)
-		if keep[id] {
+		if keep(id) {
 			continue
 		}
 		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {

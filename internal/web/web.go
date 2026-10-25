@@ -171,9 +171,16 @@ type Server struct {
 	// placementTicks replaces the placement loop's ticker when set (a test
 	// seam): one poll per value received.
 	placementTicks <-chan time.Time
+	// viewerTicks replaces the consult loop's viewer ticker, and
+	// pruneConsults the dispatcher's Prune, when set (test seams).
+	viewerTicks   <-chan time.Time
+	pruneConsults func()
 	// stopConsultLoop cancels the consult runtime loop and waits for it to
 	// exit. nil when no loop was started (no ParentContext).
 	stopConsultLoop func()
+	// startRestartReconcile starts the background restart reconcile, at most
+	// once (see StartRestartReconcile).
+	startRestartReconcile func()
 
 	// activity is the read seam onto the activity tracker (internal/observe),
 	// wired via WithActivityProvider. nil is a supported default: every agent

@@ -17,6 +17,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -127,6 +128,17 @@ type Dispatcher struct {
 	// slowRestartRecord overrides defaultSlowRestartRecord when non-zero.
 	startupLog        func(format string, args ...any)
 	slowRestartRecord time.Duration
+	// restartGitTimeout overrides restartGitTimeout (the constant) when
+	// non-zero; restartGitCalls and restartGitTimeouts count the restart
+	// path's git calls for its summary.
+	restartGitTimeout  time.Duration
+	restartGitCalls    atomic.Int64
+	restartGitTimeouts atomic.Int64
+	// restartJobs is the reconciliation MarkInterrupted left to
+	// ReconcileRestart, and restartPending the ids it has yet to finish;
+	// both are guarded by mu.
+	restartJobs    []restartJob
+	restartPending map[string]int
 }
 
 func (d *Dispatcher) SetCloseFinishedViewer(fn func(Record, func(string) error) (Record, error)) {
@@ -1207,85 +1219,56 @@ func (d *Dispatcher) waitDone(id string) {
 // RestartSummary reports what MarkInterrupted processed.
 type RestartSummary struct {
 	Records int
+	// Queued is how many jobs it left to ReconcileRestart.
+	Queued int
+	// GitTimeouts counts its git calls that ran past the restart timeout.
+	GitTimeouts int64
 }
 
-// MarkInterrupted marks persisted in-flight dispatches as failed after a
-// daemon restart. In-memory runs belong to this process and are untouched.
+// MarkInterrupted settles the persisted in-flight dispatches the previous
+// daemon left, adopting or failing each one, so no API ever reads a dead
+// daemon's "running". It is the fast pass of a restart's reconciliation:
+// records already terminal at shutdown, and the worktree assessments of the
+// runs it settles, are queued for ReconcileRestart. In-memory runs belong to
+// this process and are untouched.
 func (d *Dispatcher) MarkInterrupted() RestartSummary {
 	recorder, ok := d.recorder.(*FileRecorder)
 	if !ok {
 		return RestartSummary{}
 	}
 	markedAt := d.now()
+	timeouts := d.restartGitTimeouts.Load()
 	records, _ := Load(filepath.Dir(recorder.dir))
+	list := d.memoRestartLister(context.Background())
+	queued := 0
 	for _, rec := range records {
+		if rec.Status.Terminal() {
+			d.enqueueRestart(rec.ID, restartTerminal, recordHasUnresolvedNotification(rec))
+			queued++
+			continue
+		}
 		tm := d.newRecordTimings()
-		d.markInterruptedRecord(recorder, rec, markedAt, tm)
-		d.warnSlowRecord(rec.ID, tm)
+		queued += d.markInterruptedRecord(recorder, rec, markedAt, tm, list)
+		d.warnSlowRecord("MarkInterrupted", rec.ID, tm)
 	}
-	return RestartSummary{Records: len(records)}
+	return RestartSummary{Records: len(records), Queued: queued, GitTimeouts: d.restartGitTimeouts.Load() - timeouts}
 }
 
-// markInterruptedRecord settles one persisted record left by the previous daemon.
-func (d *Dispatcher) markInterruptedRecord(recorder *FileRecorder, rec Record, markedAt time.Time, tm *recordTimings) {
+// markInterruptedRecord settles one record the previous daemon left in
+// flight, and returns how many jobs it queued for ReconcileRestart.
+func (d *Dispatcher) markInterruptedRecord(recorder *FileRecorder, rec Record, markedAt time.Time, tm *recordTimings, list func(id string) worktreeLister) int {
 	stop := tm.start("viewer pane lookup")
 	rec = d.reconcileRestartViewer(rec)
 	stop()
 	if rec.WorktreeState == WorktreeCreating {
 		stop = tm.start("worktree reconcile")
-		rec = d.reconcileCreating(rec)
+		rec = d.reconcileCreating(rec, list(rec.ID))
 		stop()
-	}
-	if rec.Status.Terminal() {
-		writerUncertain := false
-		if rec.Isolation == "worktree" && rec.WorktreeState != WorktreeRemoved && rec.Mode != ModeInteractive {
-			writerUncertain = true
-		}
-		// A released run's pane was killed (release fails otherwise); any
-		// other interactive run without a recorded pane may still have an
-		// unrecorded one.
-		if rec.Isolation == "worktree" && rec.WorktreeState != WorktreeRemoved && rec.Mode == ModeInteractive && rec.PaneID == "" && rec.Status != StatusReleased {
-			writerUncertain = true
-		}
-		if rec.Mode == ModeInteractive && rec.PaneID != "" && d.interactiveRuntime != nil {
-			stop = tm.start("pane presence")
-			alive, certain := panePresent(d.interactiveRuntime, rec.PaneID)
-			stop()
-			if !certain && rec.Isolation == "worktree" && rec.WorktreeState != WorktreeRemoved {
-				writerUncertain = true
-			} else if alive {
-				stop = tm.start("pane close")
-				cleaned, killErr := d.closeRestartPane(rec)
-				stop()
-				if killErr != nil {
-					if rec.Isolation == "worktree" && rec.WorktreeState != WorktreeRemoved {
-						rec.WorktreeState = WorktreeDeferred
-						writerUncertain = true
-					}
-					d.trackRestartKill(rec)
-				} else {
-					rec = cleaned
-					_ = writeRecord(recorder.dir, rec)
-				}
-			}
-		}
-		stop = tm.start("worktree cleanup")
-		if writerUncertain {
-			rec = d.setWorktreeState(rec, nil, WorktreeDeferred)
-		} else {
-			rec = d.cleanupWorktree(rec.ID)
-		}
-		stop()
-		stop = tm.start("notification restore")
-		d.restorePendingNotifications(rec)
-		stop()
-		return
 	}
 	if rec.Mode == ModeInteractive {
 		stop = tm.start("interactive restore")
-		d.restoreInteractive(rec)
-		stop()
-		return
+		defer stop()
+		return d.restoreInteractive(rec)
 	}
 	rec.Error, rec.EndedAt = "daemon restarted", markedAt
 	if rec.Mode == "" {
@@ -1307,16 +1290,18 @@ func (d *Dispatcher) markInterruptedRecord(recorder *FileRecorder, rec Record, m
 	}
 	rec.foldActive(markedAt)
 	stop = tm.start("settle")
+	defer stop()
 	d.mu.Lock()
 	d.addRestartCandidates(&rec)
 	d.mu.Unlock()
-	d.persistRestartSettle(recorder, rec)
-	stop()
+	return d.persistRestartSettle(recorder, rec)
 }
 
+// closeRestartPane kills the pane a restart found still standing. The
+// worktree cleanup its run is then due is left to the caller.
 func (d *Dispatcher) closeRestartPane(rec Record) (Record, error) {
 	rt := d.interactiveRuntime
-	return d.closeRecordedPane(rec, rec.PaneID, rt.Kill, runtimeLayout(rt))
+	return d.closeRecordedPaneThen(rec, rec.PaneID, rt.Kill, runtimeLayout(rt), func(rec Record) Record { return rec })
 }
 
 // trackRestartKill retains a terminal record solely to retry cleanup. Terminal

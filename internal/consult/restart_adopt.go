@@ -48,21 +48,19 @@ const adoptWaitLostText = "may have been waiting on background work when the dae
 
 // restoreInteractive adopts an interactive run the previous daemon left
 // live, when its pane survived the restart and nothing it was doing lived
-// only in that daemon; any other run is settled as "daemon restarted".
-func (d *Dispatcher) restoreInteractive(rec Record) {
+// only in that daemon; any other run is settled as "daemon restarted". It
+// returns how many jobs it queued for ReconcileRestart.
+func (d *Dispatcher) restoreInteractive(rec Record) int {
 	rt, ok := d.interactiveRuntime.(adoptionRuntime)
 	switch {
 	case !ok:
-		d.settleRestarted(rec, settleNoRuntime)
-		return
+		return d.settleRestarted(rec, settleNoRuntime)
 	case rec.PaneID == "":
-		d.settleRestarted(rec, settleNoPane)
-		return
+		return d.settleRestarted(rec, settleNoPane)
 	case rec.Status == StatusSettling:
 		// Its settle target, deadline and close reason lived only in the
 		// old daemon: finish it as a restart, as before adoption.
-		d.settleRestarted(rec, settleSettling)
-		return
+		return d.settleRestarted(rec, settleSettling)
 	}
 	probe, err := rt.ProbeAdoption(rec.PaneID, rec.ID)
 	if reason := adoptRefusal(rec, probe, err); reason != "" {
@@ -70,10 +68,9 @@ func (d *Dispatcher) restoreInteractive(rec Record) {
 			// Whatever runs there now is not this dispatch's to close.
 			rec.PaneID = ""
 		}
-		d.settleRestarted(rec, reason)
-		return
+		return d.settleRestarted(rec, reason)
 	}
-	d.adoptRestarted(rec, probe, rt)
+	return d.adoptRestarted(rec, probe, rt)
 }
 
 // adoptRefusal is why rec cannot be adopted given its pane's probe, or ""
@@ -102,11 +99,12 @@ func adoptRefusal(rec Record, probe AdoptProbe, probeErr error) string {
 // adoptRestarted takes rec over as a live run: same id, status and open
 // turns, its slot and pane re-registered and, when its pane was tagged with
 // a bridge launch, its bridge key re-opened for that launch. It stays
-// adopting until it shows activity (see Sweep).
-func (d *Dispatcher) adoptRestarted(rec Record, probe AdoptProbe, rt adoptionRuntime) {
+// adopting until it shows activity (see Sweep). It returns how many jobs it
+// queued for ReconcileRestart.
+func (d *Dispatcher) adoptRestarted(rec Record, probe AdoptProbe, rt adoptionRuntime) int {
 	recorder, ok := d.recorder.(*FileRecorder)
 	if !ok {
-		return
+		return 0
 	}
 	now := d.now()
 	waits := adoptedWaits(rec)
@@ -117,8 +115,7 @@ func (d *Dispatcher) adoptRestarted(rec Record, probe AdoptProbe, rt adoptionRun
 	handle, err := recorder.Resume(rec)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "dispatch %s: reopening recording to adopt: %v\n", rec.ID, err)
-		d.settleRestarted(rec, "recording unavailable")
-		return
+		return d.settleRestarted(rec, "recording unavailable")
 	}
 	// The run's process is not this daemon's child: there is no context of
 	// it to cancel.
@@ -156,6 +153,7 @@ func (d *Dispatcher) adoptRestarted(rec Record, probe AdoptProbe, rt adoptionRun
 		go d.watchLiveUsage(s)
 	}
 	fmt.Fprintf(os.Stderr, "dispatch %s: adopted (%s)\n", rec.ID, via)
+	return 0
 }
 
 // adoptedWaits is the open turns of rec a restart cannot read the end of
@@ -365,11 +363,12 @@ func adoptedPlacement(viewerKind string) string {
 // settleRestarted ends an interactive run the previous daemon left live, as
 // "daemon restarted": its open turns are lost, the caller is sent the close
 // notice, and a pane still standing is killed. reason is why it was not
-// adopted, for the log.
-func (d *Dispatcher) settleRestarted(rec Record, reason string) {
+// adopted, for the log. It returns how many jobs it queued for
+// ReconcileRestart.
+func (d *Dispatcher) settleRestarted(rec Record, reason string) int {
 	recorder, ok := d.recorder.(*FileRecorder)
 	if !ok {
-		return
+		return 0
 	}
 	markedAt := d.now()
 	rec.Error, rec.EndedAt = closeReasonDaemonRestart, markedAt
@@ -414,20 +413,32 @@ func (d *Dispatcher) settleRestarted(rec Record, reason string) {
 			}
 		}
 	}
-	d.persistRestartSettle(recorder, rec)
+	queued := d.persistRestartSettle(recorder, rec)
 	fmt.Fprintf(os.Stderr, "dispatch %s: settled: %s\n", rec.ID, reason)
+	return queued
 }
 
-// persistRestartSettle writes a run settled at startup, removes its worktree
-// unless it must be kept, and requeues the notifications it still owes.
-func (d *Dispatcher) persistRestartSettle(recorder *FileRecorder, rec Record) {
+// persistRestartSettle writes a run settled at startup, defers its worktree
+// cleanup when its writers may live on, requeues the notifications it still
+// owes, and queues the worktree's assessment for ReconcileRestart when it is
+// due one. It returns how many jobs it queued.
+//
+// The cleanup decision comes before the notifications are restored: a
+// restored run in d.runs would read to the decision as a run of this daemon.
+func (d *Dispatcher) persistRestartSettle(recorder *FileRecorder, rec Record) int {
 	if err := writeRecord(recorder.dir, rec); err != nil {
 		fmt.Fprintf(os.Stderr, "dispatch %s: recording: %v\n", rec.ID, err)
 	}
+	due := false
 	if rec.Status.Terminal() {
-		rec = d.cleanupWorktree(rec.ID)
+		rec, _, due = d.cleanupDue(rec.ID)
 	}
 	d.restorePendingNotifications(rec)
+	if !due {
+		return 0
+	}
+	d.enqueueRestart(rec.ID, restartAssess, false)
+	return 1
 }
 
 // RunningInteractive returns the live interactive runs with a turn at
