@@ -93,14 +93,19 @@ func (d *Dispatcher) killRunPane(s *runState) {
 }
 
 // closeStalePane kills pane if, now, the run has settled or moved on to a
-// different pane: an opening that outlived its run. A pane that is already
-// gone (a cancel's kill got there first) is left alone, as killRunPane does.
+// different pane: an opening that outlived its run. A pane tmux confirms is
+// already gone (a cancel's kill got there first) is left alone; one that is
+// dead but listed, or whose probe failed, is still killed, since nothing else
+// targets it once the record has moved on.
 func (d *Dispatcher) closeStalePane(s *runState, rt InteractiveRuntime, pane string) {
 	d.mu.Lock()
 	stale := s.killRequested || s.record.Status.Terminal() || s.record.Status == StatusSettling || s.record.PaneID != pane
 	rec := cloneRecord(s.record)
 	d.mu.Unlock()
-	if stale && rt.Alive(pane) {
+	if !stale {
+		return
+	}
+	if present, certain := panePresent(rt, pane); present || !certain {
 		_, _ = d.closeRecordedPane(rec, pane, rt.Kill, runtimeLayout(rt))
 	}
 }
