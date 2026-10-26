@@ -123,7 +123,9 @@ func TestDispatchContextFailsOpenWhenTheDaemonIsDownOrSlow(t *testing.T) {
 			t.Fatal(err)
 		}
 		_, port, _ := net.SplitHostPort(listener.Addr().String())
-		listener.Close() // nothing listens here now
+		if err := listener.Close(); err != nil { // nothing listens here now
+			t.Fatal(err)
+		}
 		t.Setenv("LEO_WEB_PORT", port)
 
 		out, errOut := runContext(t, promptInput)
