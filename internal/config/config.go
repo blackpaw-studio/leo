@@ -890,20 +890,25 @@ func (c *Config) expandPaths() {
 // symlink, Save writes through it: the link survives and its target is
 // replaced (see resolveWriteTarget).
 func Save(path string, cfg *Config) error {
+	if cfg.shared != nil {
+		return saveSplit(path, cfg)
+	}
 	data, err := yaml.Marshal(cfg)
 	if err != nil {
 		return fmt.Errorf("marshaling config: %w", err)
 	}
+	if err := writeConfigFile(path, data, false); err != nil {
+		return fmt.Errorf("writing config: %w", err)
+	}
+	return nil
+}
 
+// writeConfigFile atomically writes data at path, creating its directory.
+func writeConfigFile(path string, data []byte, keepMode bool) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0750); err != nil {
 		return fmt.Errorf("creating config directory: %w", err)
 	}
-
-	if err := writeFileAtomic(path, data); err != nil {
-		return fmt.Errorf("writing config: %w", err)
-	}
-
-	return nil
+	return writeFileAtomicWith(path, data, keepMode)
 }
 
 // defaultHomeFn is a testability seam for DefaultHome.

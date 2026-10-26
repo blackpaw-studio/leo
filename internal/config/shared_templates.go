@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 
 	"gopkg.in/yaml.v3"
 )
@@ -198,4 +199,143 @@ func (c *Config) AddTemplate(name string, tmpl TemplateConfig, shared bool) erro
 		c.shared.newShared[name] = true
 	}
 	return nil
+}
+
+// sharedTemplatesDoc is the on-disk shape of a templates_file.
+type sharedTemplatesDoc struct {
+	Templates map[string]TemplateConfig `yaml:"templates"`
+}
+
+// saveSplit writes shared-sourced templates to the shared file and everything
+// else to leo.yaml, rewriting each file only when its parsed content changed
+// so editing a local template never touches a git-tracked shared file.
+func saveSplit(path string, cfg *Config) error {
+	sh := cfg.shared
+	sharedData, sharedChanged, err := sh.marshalShared(cfg)
+	if err != nil {
+		return err
+	}
+	leoData, leoChanged, err := sh.marshalLeo(path, cfg)
+	if err != nil {
+		return err
+	}
+	if sharedChanged {
+		if err := writeConfigFile(sh.path, sharedData, true); err != nil {
+			return fmt.Errorf("writing templates_file %s: %w", sh.path, err)
+		}
+	}
+	if leoChanged {
+		if err := writeConfigFile(path, leoData, false); err != nil {
+			return fmt.Errorf("writing config: %w", err)
+		}
+	}
+	return nil
+}
+
+// marshalShared renders the shared file for cfg's current templates and says
+// whether it differs from what was loaded. Entries that were not edited come
+// from raw, so hand-written ~ paths survive; edited ones are re-contracted so
+// one machine's expanded home never lands in a file other machines read.
+func (sh *sharedTemplates) marshalShared(cfg *Config) ([]byte, bool, error) {
+	out := make(map[string]TemplateConfig, len(sh.raw)+len(sh.newShared))
+	for name, rawTmpl := range sh.raw {
+		switch sh.sources[name] {
+		case SourceLocalOverride:
+			out[name] = rawTmpl
+		case SourceShared:
+			cur, ok := cfg.Templates[name]
+			if !ok {
+				continue // deleted or renamed away
+			}
+			same, err := sameYAML(cur, sh.baseline[name])
+			if err != nil {
+				return nil, false, err
+			}
+			if same {
+				out[name] = rawTmpl
+			} else {
+				out[name] = contractHome(cur)
+			}
+		}
+	}
+	for name := range sh.newShared {
+		if _, done := out[name]; done {
+			continue
+		}
+		if cur, ok := cfg.Templates[name]; ok {
+			out[name] = contractHome(cur)
+		}
+	}
+	changed, err := sameYAML(sharedTemplatesDoc{Templates: out}, sharedTemplatesDoc{Templates: sh.raw})
+	if err != nil {
+		return nil, false, err
+	}
+	data, err := yaml.Marshal(sharedTemplatesDoc{Templates: out})
+	if err != nil {
+		return nil, false, fmt.Errorf("marshaling templates_file: %w", err)
+	}
+	return data, !changed, nil
+}
+
+// marshalLeo renders leo.yaml with only the templates that live there and says
+// whether it differs from the leo.yaml that was loaded.
+func (sh *sharedTemplates) marshalLeo(path string, cfg *Config) ([]byte, bool, error) {
+	local := *cfg
+	local.Templates = make(map[string]TemplateConfig, len(cfg.Templates))
+	for name, tmpl := range cfg.Templates {
+		if cfg.TemplateSource(name) != SourceShared {
+			local.Templates[name] = tmpl
+		}
+	}
+	data, err := yaml.Marshal(&local)
+	if err != nil {
+		return nil, false, fmt.Errorf("marshaling config: %w", err)
+	}
+	loaded, err := parse(path, sh.leoBytes)
+	if err != nil {
+		return nil, false, err
+	}
+	same, err := sameYAML(loaded, &local)
+	if err != nil {
+		return nil, false, err
+	}
+	return data, !same, nil
+}
+
+// sameYAML reports whether a and b marshal to the same YAML.
+func sameYAML(a, b any) (bool, error) {
+	ab, err := yaml.Marshal(a)
+	if err != nil {
+		return false, fmt.Errorf("marshaling for comparison: %w", err)
+	}
+	bb, err := yaml.Marshal(b)
+	if err != nil {
+		return false, fmt.Errorf("marshaling for comparison: %w", err)
+	}
+	return string(ab) == string(bb), nil
+}
+
+// contractHome rewrites paths under the user's home as ~/... in a copy of
+// tmpl, the inverse of expandTemplatePaths.
+func contractHome(tmpl TemplateConfig) TemplateConfig {
+	home, err := os.UserHomeDir()
+	if err != nil || home == "" {
+		return tmpl
+	}
+	contract := func(p string) string {
+		switch {
+		case p == home:
+			return "~"
+		case strings.HasPrefix(p, home+string(filepath.Separator)):
+			return "~/" + filepath.ToSlash(strings.TrimPrefix(p, home+string(filepath.Separator)))
+		}
+		return p
+	}
+	tmpl.Workspace = contract(tmpl.Workspace)
+	tmpl.MCPConfig = contract(tmpl.MCPConfig)
+	tmpl.AddDirs = slices.Clone(tmpl.AddDirs)
+	for i, dir := range tmpl.AddDirs {
+		tmpl.AddDirs[i] = contract(dir)
+	}
+	return tmpl
 }
