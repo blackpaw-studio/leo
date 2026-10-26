@@ -215,7 +215,9 @@ func (s *Server) feedHook(agent string, p agentHookPayload) {
 
 // isAgentHookSession reports whether a hook for sessionID belongs to the
 // named agent, whose launch token is token. A session the agent's own
-// SessionStart hook announced (a /clear or fork names a new one) is its. Codex hooks are home-global and child harness processes
+// SessionStart hook announced (a /clear or fork names a new one) is its,
+// durably: the claim is on the agent's record. Codex hooks are home-global
+// and child harness processes
 // inherit the agent's env, so a payload naming a session other than the
 // agent's known one is some other process's turn. Either id missing (codex
 // discovers its id after the first turn) is accepted.
@@ -227,9 +229,9 @@ func (s *Server) isAgentHookSession(name, token, sessionID string) bool {
 	if !ok {
 		return false
 	}
-	if sessionID == "" || h.IDs == nil || s.sessionClaimedBy(token) == sessionID {
+	if sessionID == "" || h.IDs == nil {
 		return true
 	}
 	known := h.IDs.Get()
-	return known == "" || known == sessionID
+	return known == "" || known == sessionID || s.sessionClaimedBy(name, token) == sessionID
 }

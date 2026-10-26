@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/blackpaw-studio/leo/internal/agentstore"
 	"github.com/blackpaw-studio/leo/internal/bridge"
 	"github.com/blackpaw-studio/leo/internal/harness"
 	"github.com/blackpaw-studio/leo/internal/observe"
@@ -445,16 +446,63 @@ func TestAgentContextIsEmptyWhereItShouldNotSpeak(t *testing.T) {
 	}
 }
 
-func TestAgentHooksAfterClearAreStillTheAgents(t *testing.T) {
+// restarted is a new Server over the same state, attention and bridge wiring
+// as s: what a daemon restart that adopts the agents' sessions leaves.
+func restarted(t *testing.T, s *Server) *Server {
+	t.Helper()
+	fresh := New(s.configPath, s.processes, s.scheduler, s.reloader, s.agentSvc, Options{Port: testPort, APIToken: testAPIToken})
+	raw := fresh.httpServer.Handler
+	fresh.httpServer.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		authorizeTestRequest(r)
+		raw.ServeHTTP(w, r)
+	})
+	fresh.attention, fresh.bridgeFeed, fresh.delegationCtx = s.attention, s.bridgeFeed, s.delegationCtx
+	return fresh
+}
+
+func TestAgentHooksAfterClearSurviveARestart(t *testing.T) {
 	policy := delegationOn
 	s := contextServer(t, &policy)
+	home := filepath.Dir(s.configPath)
+	if err := agentstore.Save(home, agentstore.Record{Name: "leo-a"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := agentstore.SetAttentionToken(home, "leo-a", "tok-a"); err != nil {
+		t.Fatal(err)
+	}
 	feed := s.bridgeFeed.(*observe.BridgeFeed)
 	postContext(t, s, "tok-a", `{"hook_event_name":"SessionStart","source":"clear","session_id":"sid-after-clear"}`)
 
-	postHook(t, s, "tok-a", `{"hook_event_name":"SubagentStart","session_id":"sid-after-clear","agent_id":"a"}`)
-	postHook(t, s, "tok-a", `{"hook_event_name":"SubagentStart","session_id":"other-session","agent_id":"b"}`)
+	fresh := restarted(t, s)
+	postHook(t, fresh, "tok-a", `{"hook_event_name":"SubagentStart","session_id":"sid-after-clear","agent_id":"a"}`)
+	postHook(t, fresh, "tok-a", `{"hook_event_name":"SubagentStart","session_id":"unrelated","agent_id":"b"}`)
 
 	if got := feed.BridgeAgents()["leo-a"].Subagents; got != 1 {
 		t.Fatalf("subagents = %d, want only the post-/clear session's", got)
+	}
+}
+
+func TestAgentHookSessionClaimIsScopedToTheLaunchToken(t *testing.T) {
+	policy := delegationOn
+	s := contextServer(t, &policy)
+	home := filepath.Dir(s.configPath)
+	if err := agentstore.Save(home, agentstore.Record{Name: "leo-a"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := agentstore.SetAttentionToken(home, "leo-a", "tok-a"); err != nil {
+		t.Fatal(err)
+	}
+	feed := s.bridgeFeed.(*observe.BridgeFeed)
+	postContext(t, s, "tok-a", `{"hook_event_name":"SessionStart","source":"clear","session_id":"sid-after-clear"}`)
+
+	// The agent relaunches under a new token; its old claim must not carry over.
+	if err := agentstore.SetAttentionToken(home, "leo-a", "tok-a2"); err != nil {
+		t.Fatal(err)
+	}
+	s.attention.RegisterToken("tok-a2", "leo-a")
+	postHook(t, restarted(t, s), "tok-a2", `{"hook_event_name":"SubagentStart","session_id":"sid-after-clear","agent_id":"a"}`)
+
+	if got := feed.BridgeAgents()["leo-a"].Subagents; got != 0 {
+		t.Fatalf("subagents = %d, want the previous launch's claim dropped", got)
 	}
 }

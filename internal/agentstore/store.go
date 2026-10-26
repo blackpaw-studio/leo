@@ -158,6 +158,13 @@ type Record struct {
 	// before the launch can never wipe it.
 	AttentionToken string `json:"attention_token,omitempty"`
 
+	// ClaimedSession is the session id the current launch's SessionStart
+	// hook last announced: a /clear or fork moves a running agent to a new
+	// session id the launch never named. It belongs to AttentionToken's
+	// launch, so SetAttentionToken drops it with the token; SetClaimedSession
+	// is its only writer, and Save keeps the stored value.
+	ClaimedSession string `json:"claimed_session,omitempty"`
+
 	// OpeningBriefID identifies the private file a claude ephemeral agent's
 	// initial opening prompt was written to at spawn time (see
 	// claudeharness.AgentBriefPathForID), or "" when the agent was spawned
@@ -232,6 +239,7 @@ func Save(homePath string, record Record) error {
 	records, _ := loadLocked(path)
 	stored := records[record.Name]
 	record.AttentionToken = stored.AttentionToken
+	record.ClaimedSession = stored.ClaimedSession
 	record.OpeningAckedID = stored.OpeningAckedID
 	record.OpeningQueuedLaunch, record.OpeningQueuedID = stored.OpeningQueuedLaunch, stored.OpeningQueuedID
 	records[record.Name] = record
@@ -338,9 +346,47 @@ func Update(homePath, name string, mutate func(Record) Record) error {
 // ("" for an unhooked launch). It errors if name is absent.
 func SetAttentionToken(homePath, name, token string) error {
 	return Update(homePath, name, func(r Record) Record {
+		if r.AttentionToken != token {
+			r.ClaimedSession = ""
+		}
 		r.AttentionToken = token
 		return r
 	})
+}
+
+// SetClaimedSession records sessionID as the session name's launch holding
+// token is in now. It is a no-op unless token is still the record's
+// AttentionToken, so a claim never outlives or crosses launches. A missing
+// record is not an error.
+func SetClaimedSession(homePath, name, token, sessionID string) error {
+	if token == "" || sessionID == "" {
+		return nil
+	}
+	storeMu.Lock()
+	defer storeMu.Unlock()
+	path := FilePath(homePath)
+	records, _ := loadLocked(path)
+	rec, ok := records[name]
+	if !ok || rec.AttentionToken != token || rec.ClaimedSession == sessionID {
+		return nil
+	}
+	rec.ClaimedSession = sessionID
+	records[name] = rec
+	return write(path, records)
+}
+
+// ClaimedSession returns the session name's launch holding token last
+// claimed, "" if none or if token is not the record's current one.
+func ClaimedSession(homePath, name, token string) string {
+	records, err := Load(FilePath(homePath))
+	if err != nil {
+		return ""
+	}
+	rec, ok := records[name]
+	if !ok || token == "" || rec.AttentionToken != token {
+		return ""
+	}
+	return rec.ClaimedSession
 }
 
 // SetOpeningAcked records that name's opening prompt reached a conversation

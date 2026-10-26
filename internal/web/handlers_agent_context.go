@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/blackpaw-studio/leo/internal/agentstore"
 	"github.com/blackpaw-studio/leo/internal/bridge"
 )
 
@@ -111,7 +112,7 @@ func (s *Server) agentContext(token string, hook contextHook) string {
 		return ""
 	}
 	if hook.Event == "SessionStart" {
-		s.claimSession(token, hook.SessionID)
+		s.claimSession(agent, token, hook.SessionID)
 	}
 	return s.delegationCtx.contextFor(agent, hook)
 }
@@ -121,20 +122,34 @@ func encodeContext(w http.ResponseWriter, context string) error {
 	return json.NewEncoder(w).Encode(agentContextResponse{Context: context})
 }
 
-// claimSession records sessionID as the session token's launch is in now.
-func (s *Server) claimSession(token, sessionID string) {
-	s.sessionClaimsMu.Lock()
-	defer s.sessionClaimsMu.Unlock()
-	if s.sessionClaims == nil {
-		s.sessionClaims = map[string]string{}
+// claimSession records sessionID, durably, as the session the launch holding
+// token is in now, so hooks keep being the agent's across a daemon restart
+// that adopts the session. A failure is logged, not fatal: the cost is that
+// the new session's hooks are dropped until its next SessionStart.
+func (s *Server) claimSession(agent, token, sessionID string) {
+	home, ok := s.homePath()
+	if !ok {
+		return
 	}
-	s.sessionClaims[token] = sessionID
+	if err := agentstore.SetClaimedSession(home, agent, token, sessionID); err != nil {
+		fmt.Fprintf(os.Stderr, "[%s] recording claimed session: %v\n", agent, err)
+	}
 }
 
-// sessionClaimedBy returns the session token's launch last announced, "" if
-// none.
-func (s *Server) sessionClaimedBy(token string) string {
-	s.sessionClaimsMu.Lock()
-	defer s.sessionClaimsMu.Unlock()
-	return s.sessionClaims[token]
+// sessionClaimedBy returns the session agent's launch holding token last
+// announced, "" if none.
+func (s *Server) sessionClaimedBy(agent, token string) string {
+	home, ok := s.homePath()
+	if !ok {
+		return ""
+	}
+	return agentstore.ClaimedSession(home, agent, token)
+}
+
+func (s *Server) homePath() (string, bool) {
+	cfg, err := s.loadConfig()
+	if err != nil {
+		return "", false
+	}
+	return cfg.HomePath, true
 }

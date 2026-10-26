@@ -12,7 +12,6 @@ import (
 	"net/netip"
 	"os/exec"
 	"strings"
-	"sync"
 	"sync/atomic"
 	"time"
 
@@ -120,15 +119,11 @@ type Server struct {
 	agentToken string // token exported to agents; /api/* and agent-messaging routes only
 	// delegationCtx answers the agents' SessionStart/UserPromptSubmit
 	// context hooks; nil until the bridge runtime is wired.
-	delegationCtx *delegationContext
-	// sessionClaims holds, by launch token, the session id the launch's
-	// SessionStart hook last announced (see isAgentHookSession).
-	sessionClaimsMu sync.Mutex
-	sessionClaims   map[string]string
-	clients         atomic.Pointer[[]ClientPolicy] // external API clients, scoped per route; swapped whole by SetClients, never mutated
-	allowedHosts    []string                       // extra hosts permitted beyond loopback (e.g. LAN IPs)
-	trustedProxies  []netip.Prefix                 // peers whose Remote-User header is trusted
-	sessions        *sessionStore                  // in-memory browser sessions for cookie-based auth
+	delegationCtx  *delegationContext
+	clients        atomic.Pointer[[]ClientPolicy] // external API clients, scoped per route; swapped whole by SetClients, never mutated
+	allowedHosts   []string                       // extra hosts permitted beyond loopback (e.g. LAN IPs)
+	trustedProxies []netip.Prefix                 // peers whose Remote-User header is trusted
+	sessions       *sessionStore                  // in-memory browser sessions for cookie-based auth
 
 	// Testability seam for exec.CommandContext (exec.Command lives on
 	// ConfigService).
