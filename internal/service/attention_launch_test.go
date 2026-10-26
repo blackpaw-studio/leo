@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -14,6 +15,7 @@ import (
 	"github.com/blackpaw-studio/leo/internal/agentstore"
 	"github.com/blackpaw-studio/leo/internal/daemon"
 	"github.com/blackpaw-studio/leo/internal/harness"
+	claudeharness "github.com/blackpaw-studio/leo/internal/harness/claude"
 	"github.com/blackpaw-studio/leo/internal/observe"
 )
 
@@ -524,5 +526,79 @@ func TestDefaultReportCmdFallsBackToBareLeo(t *testing.T) {
 	stable := func() (string, error) { return "/stable/leo", nil }
 	if got, want := reportCmdFor(stable), []string{"/stable/leo", "dispatch", "report"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("got %#v, want %#v", got, want)
+	}
+}
+
+// With claude's real driver, an agent's final argv carries one --settings
+// holding the attention hooks, the delegation context hooks and the
+// operator's own settings: inline when the operator gave inline JSON, in the
+// private spill file when they gave a file.
+func TestAttentionLaunchArgsCarryContextHooksForClaude(t *testing.T) {
+	home := t.TempDir()
+	operatorFile := filepath.Join(t.TempDir(), "operator.json")
+	if err := os.WriteFile(operatorFile, []byte(`{"theme":"dark","hooks":{"SessionStart":[{"hooks":[{"type":"command","command":"operator-hook"}]}]}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	reportCmd := []string{"/stable/leo", "dispatch", "report"}
+	drv := claudeharness.Claude{}.Driver()
+
+	for _, tc := range []struct {
+		name         string
+		base         []string
+		wantSpill    bool
+		wantOperator string
+	}{
+		{"no operator settings", []string{"--model", "sonnet"}, false, ""},
+		{"operator settings file", []string{"--model", "sonnet", "--settings", operatorFile}, true, "operator-hook"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := harness.SessionHandle{Name: "a", HomePath: home, Workspace: t.TempDir()}
+
+			got, hooked := attentionLaunchArgs(drv, h, tc.base, ProcessSpec{Kind: harness.KindAgent}, "a", reportCmd)
+
+			if !hooked || len(got) != 4 || got[0] != "--model" || got[1] != "sonnet" || got[2] != "--settings" {
+				t.Fatalf("argv = %#v, want the base flags then one --settings", got)
+			}
+			raw := got[3]
+			if tc.wantSpill {
+				if raw != claudeharness.SettingsSpillPath(home, "a") {
+					t.Fatalf("settings = %q, want the spill path", raw)
+				}
+				data, err := os.ReadFile(raw)
+				if err != nil {
+					t.Fatal(err)
+				}
+				raw = string(data)
+			}
+			var settings struct {
+				Hooks map[string][]struct {
+					Matcher string `json:"matcher"`
+					Hooks   []struct {
+						Command string `json:"command"`
+					} `json:"hooks"`
+				} `json:"hooks"`
+			}
+			if err := json.Unmarshal([]byte(raw), &settings); err != nil {
+				t.Fatalf("settings %q: %v", raw, err)
+			}
+			var starts []string
+			for _, g := range settings.Hooks["SessionStart"] {
+				for _, hook := range g.Hooks {
+					starts = append(starts, g.Matcher+" "+hook.Command)
+				}
+			}
+			want := []string{"startup|resume|clear|compact|fork /stable/leo dispatch context"}
+			if tc.wantOperator != "" {
+				want = []string{" " + tc.wantOperator, want[0]}
+			}
+			if !reflect.DeepEqual(starts, want) {
+				t.Fatalf("SessionStart hooks = %#v, want %#v", starts, want)
+			}
+			for _, event := range []string{"Stop", "UserPromptSubmit", "PermissionRequest", "Elicitation", "SubagentStart", "SubagentStop", "PostCompact"} {
+				if len(settings.Hooks[event]) == 0 {
+					t.Fatalf("hooks = %v, missing %s", settings.Hooks, event)
+				}
+			}
+		})
 	}
 }
