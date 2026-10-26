@@ -24,7 +24,7 @@
   <div class="card-head"><b>New template</b></div>
   <form method="post" action="/web/template/add" hx-boost="false" class="frow-inline">
     <input type="text" name="name" placeholder="template-name" required>
-    {{if .Data.HasTemplatesFile}}<label class="dim"><input type="checkbox" name="shared"> shared</label>{{end}}
+    {{if .Data.HasTemplatesFile}}<label class="check-inline dim"><input type="checkbox" name="shared"> shared</label>{{end}}
     <button type="submit" class="btn hot">Create</button>
   </form>
 </div>

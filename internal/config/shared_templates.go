@@ -99,7 +99,7 @@ func resolveTemplatesFile(home, p string) string {
 // later editing, and the `templates` value node. Unknown keys inside a
 // template are tolerated, as in leo.yaml.
 func parseSharedTemplates(data []byte) (doc, templates yaml.Node, err error) {
-	if err = yaml.Unmarshal(data, &doc); err != nil {
+	if err := yaml.Unmarshal(data, &doc); err != nil {
 		return yaml.Node{}, yaml.Node{}, err
 	}
 	root := documentRoot(&doc)
