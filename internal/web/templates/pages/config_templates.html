@@ -2,11 +2,12 @@
 <h1 class="page-title">Templates</h1>
 <div class="card">
   <div class="table-wrap"><table>
-    <thead><tr><th>name</th><th>workspace</th><th>model</th><th>harness</th><th>agent</th><th></th></tr></thead>
+    <thead><tr><th>name</th>{{if .Data.HasTemplatesFile}}<th>source</th>{{end}}<th>workspace</th><th>model</th><th>harness</th><th>agent</th><th></th></tr></thead>
     <tbody>
     {{range .Data.Rows}}
     <tr>
       <td><a href="/config/templates/{{.Name}}">{{.Name}}</a></td>
+      {{if $.Data.HasTemplatesFile}}<td>{{template "template_source_badge" .}}</td>{{end}}
       <td class="dim">{{.Workspace}}</td>
       <td>{{if .Model}}{{.Model}}{{else}}<span class="dim">inherit</span>{{end}}</td>
       <td>{{if .HarnessInherited}}<span class="dim">{{.Harness}}</span>{{else}}{{.Harness}}{{end}}</td>
@@ -14,7 +15,7 @@
       <td><a class="btn" href="/config/templates/{{.Name}}">edit</a></td>
     </tr>
     {{else}}
-    <tr><td colspan="6" class="empty-state">No templates configured</td></tr>
+    <tr><td colspan="{{if .Data.HasTemplatesFile}}7{{else}}6{{end}}" class="empty-state">No templates configured</td></tr>
     {{end}}
     </tbody>
   </table></div>
@@ -23,7 +24,10 @@
   <div class="card-head"><b>New template</b></div>
   <form method="post" action="/web/template/add" hx-boost="false" class="frow-inline">
     <input type="text" name="name" placeholder="template-name" required>
+    {{if .Data.HasTemplatesFile}}<label class="dim"><input type="checkbox" name="shared"> shared</label>{{end}}
     <button type="submit" class="btn hot">Create</button>
   </form>
 </div>
 {{end}}
+
+{{define "template_source_badge"}}{{if .Source}}<span class="pill {{if eq .SourceKey "local"}}off{{else}}warn{{end}}">{{.Source}}</span>{{end}}{{end}}

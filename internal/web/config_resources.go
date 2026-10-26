@@ -128,14 +128,17 @@ var configResources = []*configResource{
 		setHarnessOptions: func(t any, o map[string]any) {
 			t.(*config.TemplateConfig).HarnessOptions = o
 		},
-		add: func(cfg *config.Config, name string, _ map[string]string) *ConfigError {
-			if cfg.Templates == nil {
-				cfg.Templates = make(map[string]config.TemplateConfig)
-			}
+		add: func(cfg *config.Config, name string, extra map[string]string) *ConfigError {
 			if _, exists := cfg.Templates[name]; exists {
 				return taken("name", "Template", name)
 			}
-			cfg.Templates[name] = config.TemplateConfig{}
+			shared := extra["shared"] == "true"
+			if shared && !cfg.HasTemplatesFile() {
+				return errInvalid("shared", "templates_file is not set")
+			}
+			if err := cfg.AddTemplate(name, config.TemplateConfig{}, shared); err != nil {
+				return errInvalid("name", err.Error())
+			}
 			return nil
 		},
 		remove: func(cfg *config.Config, name string) bool {

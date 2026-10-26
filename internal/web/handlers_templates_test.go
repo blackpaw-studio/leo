@@ -339,3 +339,128 @@ func loadConfigFromDisk(t *testing.T, dir string) *config.Config {
 	}
 	return &cfg
 }
+
+// enableSharedTemplates points the test server's config at a shared file
+// holding "team" (shared only) and "research" (also defined locally, so an
+// override).
+func enableSharedTemplates(t *testing.T, dir string) string {
+	t.Helper()
+	leoPath := filepath.Join(dir, "leo.yaml")
+	data, err := os.ReadFile(leoPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(leoPath, append(data, []byte("\ntemplates_file: shared.yaml\n")...), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	sharedPath := filepath.Join(dir, "shared.yaml")
+	shared := "templates:\n  team:\n    model: opus\n  research:\n    model: haiku\n"
+	if err := os.WriteFile(sharedPath, []byte(shared), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return sharedPath
+}
+
+func serveGET(t *testing.T, s *Server, target string) string {
+	t.Helper()
+	w := httptest.NewRecorder()
+	s.httpServer.Handler.ServeHTTP(w, httptest.NewRequest("GET", target, nil))
+	if w.Code != http.StatusOK {
+		t.Fatalf("GET %s = %d", target, w.Code)
+	}
+	return w.Body.String()
+}
+
+func postTemplateAdd(s *Server, form url.Values) *httptest.ResponseRecorder {
+	req := httptest.NewRequest("POST", "/web/template/add", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	w := httptest.NewRecorder()
+	s.httpServer.Handler.ServeHTTP(w, req)
+	return w
+}
+
+func TestPageConfigTemplatesShowsSourceBadges(t *testing.T) {
+	s, dir, _ := newTestServerWithAgents(t)
+	enableSharedTemplates(t, dir)
+
+	body := serveGET(t, s, "/config/templates")
+	for _, want := range []string{">shared<", "local · overrides shared", ">local<"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("templates page missing %q", want)
+		}
+	}
+}
+
+func TestPageConfigTemplatesSharedOptionOnlyWithTemplatesFile(t *testing.T) {
+	s, dir, _ := newTestServerWithAgents(t)
+	const checkbox = `name="shared"`
+
+	if body := serveGET(t, s, "/config/templates"); strings.Contains(body, checkbox) {
+		t.Error("shared checkbox shown without templates_file")
+	}
+	enableSharedTemplates(t, dir)
+	if body := serveGET(t, s, "/config/templates"); !strings.Contains(body, checkbox) {
+		t.Error("shared checkbox missing with templates_file set")
+	}
+}
+
+func TestTemplateAddSharedWritesSharedFile(t *testing.T) {
+	s, dir, _ := newTestServerWithAgents(t)
+	sharedPath := enableSharedTemplates(t, dir)
+
+	form := url.Values{}
+	form.Set("name", "fresh")
+	form.Set("shared", "on")
+	if w := postTemplateAdd(s, form); w.Code != http.StatusSeeOther {
+		t.Fatalf("add: status=%d body=%s", w.Code, w.Body.String())
+	}
+
+	shared, _ := os.ReadFile(sharedPath)
+	leo, _ := os.ReadFile(filepath.Join(dir, "leo.yaml"))
+	if !strings.Contains(string(shared), "fresh") || strings.Contains(string(leo), "fresh") {
+		t.Errorf("fresh not in shared file only:\nshared:\n%s\nleo:\n%s", shared, leo)
+	}
+}
+
+func TestTemplateAddWithoutSharedStaysLocal(t *testing.T) {
+	s, dir, _ := newTestServerWithAgents(t)
+	sharedPath := enableSharedTemplates(t, dir)
+
+	form := url.Values{}
+	form.Set("name", "fresh")
+	if w := postTemplateAdd(s, form); w.Code != http.StatusSeeOther {
+		t.Fatalf("add: status=%d", w.Code)
+	}
+	shared, _ := os.ReadFile(sharedPath)
+	leo, _ := os.ReadFile(filepath.Join(dir, "leo.yaml"))
+	if strings.Contains(string(shared), "fresh") || !strings.Contains(string(leo), "fresh") {
+		t.Errorf("fresh not in leo.yaml only:\nshared:\n%s\nleo:\n%s", shared, leo)
+	}
+}
+
+func TestTemplateAddSharedWithoutTemplatesFileIsRejected(t *testing.T) {
+	s, dir, _ := newTestServerWithAgents(t)
+
+	form := url.Values{}
+	form.Set("name", "fresh")
+	form.Set("shared", "on")
+	w := postTemplateAdd(s, form)
+	if !strings.Contains(w.Body.String(), "templates_file is not set") {
+		t.Errorf("expected templates_file error, got %d %s", w.Code, w.Body.String())
+	}
+	if _, ok := loadConfigFromDisk(t, dir).Templates["fresh"]; ok {
+		t.Error("template created despite the error")
+	}
+}
+
+func TestTemplateEditShowsSourceBadge(t *testing.T) {
+	s, dir, _ := newTestServerWithAgents(t)
+	enableSharedTemplates(t, dir)
+
+	if body := serveGET(t, s, "/config/templates/team"); !strings.Contains(body, ">shared<") {
+		t.Error("shared template edit page missing the shared badge")
+	}
+	if body := serveGET(t, s, "/config/templates/research"); !strings.Contains(body, "local · overrides shared") {
+		t.Error("override edit page missing the override badge")
+	}
+}

@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -661,7 +662,8 @@ func (s *Server) handleTemplateAdd(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	name := r.FormValue("name")
-	if _, err := s.AddItem("", resourceByKey("templates"), name, nil); err != nil {
+	extra := map[string]string{"shared": strconv.FormatBool(r.FormValue("shared") != "")}
+	if _, err := s.AddItem("", resourceByKey("templates"), name, extra); err != nil {
 		s.renderFlash(w, "error", err.Error())
 		return
 	}
