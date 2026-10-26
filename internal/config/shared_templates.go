@@ -48,10 +48,28 @@ type sharedTemplates struct {
 	sources  map[string]TemplateSource
 	// newShared holds names created or renamed into the shared file since load.
 	newShared map[string]bool
+	// renamed maps a shared template's new name to the name it has in the
+	// shared file, so a save renames the entry in place instead of deleting
+	// it and appending a fresh one.
+	renamed map[string]string
 	// leoBytes is leo.yaml as loaded, the baseline for "did leo.yaml change".
 	leoBytes []byte
 	// sharedBytes is the shared file as loaded, hashed into the revision.
 	sharedBytes []byte
+}
+
+// markRenamed records that the shared template oldName now lives under
+// newName, still in the shared file. A chain of renames collapses to the name
+// the file has; a template created this session has no entry to rename.
+func (sh *sharedTemplates) markRenamed(oldName, newName string) {
+	sh.newShared[newName] = true
+	delete(sh.newShared, oldName)
+	if fileName, ok := sh.renamed[oldName]; ok {
+		delete(sh.renamed, oldName)
+		sh.renamed[newName] = fileName
+		return
+	}
+	sh.renamed[newName] = oldName
 }
 
 // HasTemplatesFile reports whether a shared templates file was loaded.
@@ -183,6 +201,7 @@ func (c *Config) loadSharedTemplates(leoBytes []byte) error {
 		baseline:    baseline,
 		sources:     sources,
 		newShared:   map[string]bool{},
+		renamed:     map[string]string{},
 		leoBytes:    leoBytes,
 		sharedBytes: data,
 	}
@@ -258,13 +277,16 @@ type sharedEdits struct {
 	deleted map[string]bool
 	// added are new shared entries, ~ paths restored.
 	added map[string]TemplateConfig
+	// renamed maps an entry's name in the file to its new name; changed and
+	// current are keyed by the file's name for these.
+	renamed map[string]string
 	// current holds the expanded templates for changed and added entries,
 	// to check a rewritten file against what was meant.
 	current map[string]TemplateConfig
 }
 
 func (e sharedEdits) empty() bool {
-	return len(e.changed) == 0 && len(e.deleted) == 0 && len(e.added) == 0
+	return len(e.changed) == 0 && len(e.deleted) == 0 && len(e.added) == 0 && len(e.renamed) == 0
 }
 
 // planEdits compares cfg's templates with the shared file as loaded.
@@ -272,6 +294,7 @@ func (sh *sharedTemplates) planEdits(cfg *Config) (sharedEdits, error) {
 	edits := sharedEdits{
 		changed: map[string]TemplateConfig{}, deleted: map[string]bool{},
 		added: map[string]TemplateConfig{}, current: map[string]TemplateConfig{},
+		renamed: map[string]string{},
 	}
 	present := map[string]bool{}
 	if mapping := findTemplatesMapping(&sh.doc); mapping != nil {
@@ -302,7 +325,34 @@ func (sh *sharedTemplates) planEdits(cfg *Config) (sharedEdits, error) {
 			edits.current[name] = cur
 		}
 	}
+	if err := sh.planRenames(cfg, &edits); err != nil {
+		return sharedEdits{}, err
+	}
 	return edits, nil
+}
+
+// planRenames turns a delete of the old name plus an add of the new one into
+// an in-place rename, keeping the entry's position, comments and content.
+func (sh *sharedTemplates) planRenames(cfg *Config, edits *sharedEdits) error {
+	for newName, oldName := range sh.renamed {
+		cur, ok := cfg.Templates[newName]
+		if !ok || !edits.deleted[oldName] {
+			continue
+		}
+		edits.renamed[oldName] = newName
+		delete(edits.deleted, oldName)
+		delete(edits.added, newName)
+		delete(edits.current, newName)
+		same, err := sameYAML(cur, sh.baseline[oldName])
+		if err != nil {
+			return err
+		}
+		if !same {
+			edits.changed[oldName] = contractHome(cur)
+			edits.current[oldName] = cur
+		}
+	}
+	return nil
 }
 
 // marshalShared renders the shared file for cfg's current templates and says
@@ -340,10 +390,16 @@ func (sh *sharedTemplates) encodeSharedNodes(edits sharedEdits) ([]byte, bool, e
 			continue
 		}
 		if tmpl, ok := edits.changed[key.Value]; ok {
-			var err error
-			if val, err = replacementValue(val, tmpl); err != nil {
-				return nil, false, err
+			var fresh yaml.Node
+			if err := fresh.Encode(tmpl); err != nil {
+				return nil, false, fmt.Errorf("encoding template: %w", err)
 			}
+			val = mergeMapping(val, &fresh, true)
+		}
+		if newName, ok := edits.renamed[key.Value]; ok {
+			renamed := *key
+			renamed.Value, renamed.Style = newName, 0
+			key = &renamed
 		}
 		content = append(content, key, val)
 	}

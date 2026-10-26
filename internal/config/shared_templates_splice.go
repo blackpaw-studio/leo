@@ -3,9 +3,11 @@ package config
 import (
 	"bytes"
 	"maps"
+	"reflect"
 	"slices"
 	"sort"
 	"strings"
+	"sync"
 
 	"gopkg.in/yaml.v3"
 )
@@ -78,7 +80,14 @@ func (sh *sharedTemplates) decodesTo(data string, edits sharedEdits) bool {
 	for name := range edits.deleted {
 		delete(want, name)
 	}
+	for oldName, newName := range edits.renamed {
+		want[newName] = want[oldName]
+		delete(want, oldName)
+	}
 	for name, cur := range edits.current {
+		if newName, ok := edits.renamed[name]; ok {
+			name = newName
+		}
 		cur.AddDirs = slices.Clone(cur.AddDirs) // expandTemplatePaths edits it in place
 		want[name] = expandTemplatePaths(cur)
 	}
@@ -103,14 +112,25 @@ func spliceEdits(lines []string, mapping *yaml.Node, entries []entryRange, edits
 	}
 	var todo []edit
 	for i, entry := range entries {
+		newName, renamed := edits.renamed[entry.name]
 		switch tmpl, changed := edits.changed[entry.name]; {
 		case changed:
-			repl, ok := encodeChangedEntry(mapping, i, tmpl, entry, indent)
+			if !renamed {
+				newName = entry.name
+			}
+			repl, ok := encodeChangedEntry(mapping, i, tmpl, newName, entry, indent)
 			if !ok {
 				return nil, false
 			}
 			todo = append(todo, edit{entry.keyLine, entry.end, repl})
 			claim(entry.keyLine, entry.end)
+		case renamed:
+			line, ok := renameKeyLine(lines[entry.keyLine], entry.col, entry.name, newName)
+			if !ok {
+				return nil, false
+			}
+			todo = append(todo, edit{entry.keyLine, entry.keyLine, []string{line}})
+			claim(entry.keyLine, entry.keyLine)
 		case edits.deleted[entry.name]:
 			start, end := entry.start, entry.end
 			switch {
@@ -175,27 +195,43 @@ func spliceAdds(lines []string, edits sharedEdits, indent int) ([]string, bool) 
 // original value node is kept key by key, so untouched fields keep their text
 // style, comments and order; changed fields take the new value, cleared ones
 // disappear and new ones go last.
-func encodeChangedEntry(mapping *yaml.Node, i int, tmpl TemplateConfig, entry entryRange, indent int) ([]string, bool) {
+func encodeChangedEntry(mapping *yaml.Node, i int, tmpl TemplateConfig, name string, entry entryRange, indent int) ([]string, bool) {
 	origKey, origVal := mapping.Content[2*i], mapping.Content[2*i+1]
 	var fresh yaml.Node
 	if err := fresh.Encode(tmpl); err != nil {
 		return nil, false
 	}
-	val := mergeMapping(origVal, &fresh)
+	val := mergeMapping(origVal, &fresh, true)
 	key := &yaml.Node{Kind: yaml.ScalarNode, Tag: origKey.Tag, Style: origKey.Style,
-		Value: origKey.Value, LineComment: origKey.LineComment}
+		Value: name, LineComment: origKey.LineComment}
+	if name != origKey.Value {
+		key.Style = 0
+	}
 	return encodeEntryLines(key, val, entry.col, indent)
+}
+
+// renameKeyLine swaps a plain key at col for newName and leaves the rest of
+// the line (value, comment) as written. It reports false for a quoted or
+// otherwise unusual key.
+func renameKeyLine(line string, col int, oldName, newName string) (string, bool) {
+	rest, ok := strings.CutPrefix(line[col:], oldName+":")
+	if !ok {
+		return "", false
+	}
+	return line[:col] + newName + ":" + rest, true
 }
 
 // mergeMapping returns orig with fresh's values applied: keys in orig's order,
 // unchanged values (compared structurally, ignoring comments and style) keep
-// orig's node, changed ones take fresh's with orig's comments, keys missing
-// from fresh are dropped and keys new in fresh are appended.
-func mergeMapping(orig, fresh *yaml.Node) *yaml.Node {
+// orig's node, changed mappings are merged recursively, other changed values
+// take fresh's node with orig's comments, keys missing from fresh are dropped
+// and keys new in fresh are appended. At the top level of a template entry
+// (topLevel), keys TemplateConfig does not know are kept as written: the
+// loader tolerates them, and a file shared across leo versions may carry
+// fields this version has never heard of.
+func mergeMapping(orig, fresh *yaml.Node, topLevel bool) *yaml.Node {
 	if orig.Kind != yaml.MappingNode || fresh.Kind != yaml.MappingNode {
-		out := *fresh
-		out.HeadComment, out.LineComment, out.FootComment = orig.HeadComment, orig.LineComment, orig.FootComment
-		return &out
+		return mergeValue(orig, fresh)
 	}
 	freshByKey := make(map[string]*yaml.Node, len(fresh.Content)/2)
 	for i := 0; i+1 < len(fresh.Content); i += 2 {
@@ -208,13 +244,14 @@ func mergeMapping(orig, fresh *yaml.Node) *yaml.Node {
 		key, val := orig.Content[i], orig.Content[i+1]
 		next, ok := freshByKey[key.Value]
 		if !ok {
+			if topLevel && !templateYAMLKeys()[key.Value] {
+				out.Content = append(out.Content, key, val)
+			}
 			continue
 		}
 		seen[key.Value] = true
 		if !nodesEqual(val, next) {
-			merged := *next
-			merged.HeadComment, merged.LineComment, merged.FootComment = val.HeadComment, val.LineComment, val.FootComment
-			val = &merged
+			val = mergeValue(val, next)
 		}
 		out.Content = append(out.Content, key, val)
 	}
@@ -224,6 +261,18 @@ func mergeMapping(orig, fresh *yaml.Node) *yaml.Node {
 		}
 	}
 	return &out
+}
+
+// mergeValue is the node for a changed value: a merge for mappings, so nested
+// keys keep their order and comments, otherwise fresh's node with orig's
+// comments.
+func mergeValue(orig, fresh *yaml.Node) *yaml.Node {
+	if orig.Kind == yaml.MappingNode && fresh.Kind == yaml.MappingNode {
+		return mergeMapping(orig, fresh, false)
+	}
+	merged := *fresh
+	merged.HeadComment, merged.LineComment, merged.FootComment = orig.HeadComment, orig.LineComment, orig.FootComment
+	return &merged
 }
 
 // nodesEqual compares two nodes by meaning: scalars by resolved type and
@@ -309,19 +358,26 @@ func mapEntries(lines []string, mapping *yaml.Node) ([]entryRange, bool) {
 // it at the key's own column (a head comment; a blank line detaches it).
 func headCommentStart(lines []string, keyLine, col int) int {
 	start := keyLine
-	for start > 0 && leadingSpaces(lines[start-1]) == col && strings.HasPrefix(strings.TrimSpace(lines[start-1]), "#") {
+	for start > 0 && leadingSpaces(lines[start-1]) == col && isCommentLine(lines[start-1]) {
 		start--
 	}
 	return start
 }
 
-// entryEnd is the last non-blank line after keyLine that is indented deeper
-// than the key; the entry stops at the first line that is not.
+// entryEnd is the last non-blank line after keyLine that belongs to the
+// entry: one indented deeper than the key, or a comment (commented-out fields
+// are often written at column 0) followed by such a line. The entry stops at
+// the first line that is neither.
 func entryEnd(lines []string, keyLine, col int) int {
 	end := keyLine
 	for i := keyLine + 1; i < len(lines); i++ {
 		switch {
 		case isBlankLine(lines[i]):
+		case isCommentLine(lines[i]):
+			next := nextContentLine(lines, i+1)
+			if next < 0 || leadingSpaces(lines[next]) <= col {
+				return end
+			}
 		case leadingSpaces(lines[i]) > col:
 			end = i
 		default:
@@ -330,6 +386,19 @@ func entryEnd(lines []string, keyLine, col int) int {
 	}
 	return end
 }
+
+// nextContentLine is the index of the first non-blank, non-comment line at or
+// after from, or -1.
+func nextContentLine(lines []string, from int) int {
+	for i := from; i < len(lines); i++ {
+		if !isBlankLine(lines[i]) && !isCommentLine(lines[i]) {
+			return i
+		}
+	}
+	return -1
+}
+
+func isCommentLine(line string) bool { return strings.HasPrefix(strings.TrimSpace(line), "#") }
 
 func hasAnchorsOrAliases(n *yaml.Node) bool {
 	if n.Anchor != "" || n.Kind == yaml.AliasNode || (n.Kind == yaml.ScalarNode && n.Value == "<<" && n.Tag == "!!merge") {
@@ -349,3 +418,32 @@ func splitLinesKeepEnds(s string) []string {
 func leadingSpaces(line string) int { return len(line) - len(strings.TrimLeft(line, " ")) }
 
 func isBlankLine(line string) bool { return strings.TrimSpace(line) == "" }
+
+// templateYAMLKeys is the set of top-level yaml keys TemplateConfig reads,
+// derived from its struct tags (inline structs included).
+var templateYAMLKeys = sync.OnceValue(func() map[string]bool {
+	keys := map[string]bool{}
+	addYAMLKeys(reflect.TypeFor[TemplateConfig](), keys)
+	return keys
+})
+
+func addYAMLKeys(t reflect.Type, keys map[string]bool) {
+	for i := range t.NumField() {
+		field := t.Field(i)
+		if !field.IsExported() {
+			continue
+		}
+		name, opts, _ := strings.Cut(field.Tag.Get("yaml"), ",")
+		switch {
+		case name == "-":
+		case slices.Contains(strings.Split(opts, ","), "inline"):
+			if field.Type.Kind() == reflect.Struct {
+				addYAMLKeys(field.Type, keys)
+			}
+		case name == "":
+			keys[strings.ToLower(field.Name)] = true
+		default:
+			keys[name] = true
+		}
+	}
+}

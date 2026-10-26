@@ -33,7 +33,7 @@ func RenameTemplate(cfg *Config, oldName, newName string) error {
 	cfg.Templates[newName] = tmpl
 	delete(cfg.Templates, oldName)
 	if keepShared {
-		cfg.shared.newShared[newName] = true
+		cfg.shared.markRenamed(oldName, newName)
 	}
 
 	for name, task := range cfg.Tasks {
