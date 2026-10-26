@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/blackpaw-studio/leo/internal/config"
@@ -256,5 +257,57 @@ func TestDeleteItemUnknownIs404AndReferencedEnvironmentIs422(t *testing.T) {
 	_, err = svc.DeleteItem("", resourceByKey("environments"), "base")
 	if ce := mustConfigError(t, err); ce.Status != http.StatusUnprocessableEntity {
 		t.Errorf("deleting a referenced environment: %d, want 422", ce.Status)
+	}
+}
+
+func newSharedConfigService(t *testing.T) (svc *ConfigService, leoPath, sharedPath string) {
+	t.Helper()
+	dir := t.TempDir()
+	leoPath = filepath.Join(dir, "leo.yaml")
+	sharedPath = filepath.Join(dir, "shared.yaml")
+	if err := os.WriteFile(leoPath, []byte("defaults:\n  model: sonnet\ntemplates_file: shared.yaml\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(sharedPath, []byte("templates:\n  a:\n    model: opus\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(dir, "state"), 0o750); err != nil {
+		t.Fatal(err)
+	}
+	return NewConfigService(ConfigServiceOptions{ConfigPath: leoPath}), leoPath, sharedPath
+}
+
+func TestMutateRevisionCoversSharedFile(t *testing.T) {
+	svc, leoPath, sharedPath := newSharedConfigService(t)
+	_, rev, err := config.LoadWithRevision(leoPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	res, err := svc.Mutate(mutateOpts{IfMatch: rev}, func(cfg *config.Config) error {
+		tmpl := cfg.Templates["a"]
+		tmpl.Model = "haiku"
+		cfg.Templates["a"] = tmpl
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("Mutate: %v", err)
+	}
+	_, onDisk, _ := config.LoadWithRevision(leoPath)
+	if res.Revision != onDisk || res.Revision == rev {
+		t.Errorf("revision = %q, want the new combined revision %q (old %q)", res.Revision, onDisk, rev)
+	}
+
+	// A shared file that changes under a reader (a git pull) must 409 a stale edit.
+	if err := os.WriteFile(sharedPath, []byte("templates:\n  a:\n    model: opus\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, err = svc.Mutate(mutateOpts{IfMatch: res.Revision}, func(cfg *config.Config) error {
+		cfg.Defaults.MaxTurns = 3
+		return nil
+	})
+	ce := mustConfigError(t, err)
+	if ce.Status != http.StatusConflict || ce.Code != CodeRevisionMismatch {
+		t.Fatalf("got %d %q, want 409 revision_mismatch", ce.Status, ce.Code)
 	}
 }

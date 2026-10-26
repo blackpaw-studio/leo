@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"log"
 	"net/url"
-	"os"
 	"sync/atomic"
 
 	"gopkg.in/yaml.v3"
@@ -103,14 +102,15 @@ func (c *ConfigService) Mutate(opts mutateOpts, apply func(*config.Config) error
 	return res, nil
 }
 
-// currentRevision re-reads leo.yaml's revision after a save, falling back to
-// the pre-save one only if the read fails.
+// currentRevision re-reads the config revision (leo.yaml plus any shared
+// templates file) after a save, falling back to the pre-save one only if the
+// read fails.
 func (c *ConfigService) currentRevision(fallback string) string {
-	data, err := os.ReadFile(c.configPath)
+	_, rev, err := config.LoadWithRevision(c.configPath)
 	if err != nil {
 		return fallback
 	}
-	return config.RevisionOf(data)
+	return rev
 }
 
 // asConfigError passes a *ConfigError through and wraps anything else as a
