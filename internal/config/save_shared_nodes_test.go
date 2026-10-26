@@ -7,14 +7,16 @@ import (
 )
 
 // handFormattedShared is how a person writes a shared file: header comments,
-// comments on entries, 2-space indents, quoting styles, and key orders
-// yaml.Marshal would not produce (model before workspace in shared-b).
+// comments on entries, blank lines between entries, 2-space indents, quoting
+// styles, and key orders yaml.Marshal would not produce (model before
+// workspace in shared-b).
 const handFormattedShared = `# Shared agent templates
 # (maintained by the team)
 templates:
   shared-a:
-    workspace: ~/somewhere # keep this
+    workspace: ~/somewhere   # keep this
     model: opus
+
   # the reviewer
   shared-b:
     model: sonnet
@@ -22,139 +24,208 @@ templates:
     add_dirs:
       - ~/one
       - ~/two
+
   shared-c:
     model: "haiku"
     env:
       FOO: 'bar'
 `
 
-func newNodeFixture(t *testing.T) splitFixture {
+const sharedBBlock = `  # the reviewer
+  shared-b:
+    model: sonnet
+    workspace: ~/review
+    add_dirs:
+      - ~/one
+      - ~/two
+
+`
+
+func newNodeFixtureWith(t *testing.T, shared string) splitFixture {
 	t.Helper()
 	dir := t.TempDir()
 	return splitFixture{
 		dir:        dir,
 		leoPath:    writeFile(t, dir, "leo.yaml", "templates_file: shared.yaml\n"),
-		sharedPath: writeFile(t, dir, "shared.yaml", handFormattedShared),
+		sharedPath: writeFile(t, dir, "shared.yaml", shared),
 	}
 }
 
-// splitAt returns the text before the line starting with marker (exclusive)
-// and from it on (inclusive).
-func splitAt(t *testing.T, text, marker string) (before, from string) {
+// editSharedAndRead loads the fixture, applies edit to the config, saves and
+// returns the shared file's new content.
+func editSharedAndRead(t *testing.T, shared string, edit func(*Config)) string {
 	t.Helper()
-	i := strings.Index(text, "\n"+marker)
-	if i < 0 {
-		t.Fatalf("marker %q not found in:\n%s", marker, text)
+	f := newNodeFixtureWith(t, shared)
+	cfg := f.load(t)
+	edit(cfg)
+	f.save(t, cfg)
+	return readFile(t, f.sharedPath)
+}
+
+func setModel(name, model string) func(*Config) {
+	return func(cfg *Config) {
+		tmpl := cfg.Templates[name]
+		tmpl.Model = model
+		cfg.Templates[name] = tmpl
 	}
-	return text[:i+1], text[i+1:]
 }
 
 func TestSaveSplitEditSharedChangesOnlyThatEntry(t *testing.T) {
-	f := newNodeFixture(t)
-	cfg := f.load(t)
-	tmpl := cfg.Templates["shared-b"]
-	tmpl.Model = "opus"
-	cfg.Templates["shared-b"] = tmpl
-	f.save(t, cfg)
+	got := editSharedAndRead(t, handFormattedShared, setModel("shared-b", "opus"))
+	want := strings.Replace(handFormattedShared, "model: sonnet", "model: opus", 1)
+	if got != want {
+		t.Errorf("--- want\n%s--- got\n%s", want, got)
+	}
+}
 
-	got := readFile(t, f.sharedPath)
-	wantHead, _ := splitAt(t, handFormattedShared, "  shared-b:")
-	_, wantTail := splitAt(t, handFormattedShared, "  shared-c:")
-	gotHead, gotRest := splitAt(t, got, "  shared-b:")
-	_, gotTail := splitAt(t, got, "  shared-c:")
-	if gotHead != wantHead {
-		t.Errorf("text before shared-b changed:\n--- want\n%s--- got\n%s", wantHead, gotHead)
-	}
-	if gotTail != wantTail {
-		t.Errorf("text from shared-c on changed:\n--- want\n%s--- got\n%s", wantTail, gotTail)
-	}
-	entry, _, _ := strings.Cut(gotRest, "  shared-c:")
-	for _, want := range []string{"model: opus", "workspace: ~/review", "- ~/one"} {
-		if !strings.Contains(entry, want) {
-			t.Errorf("edited entry missing %q:\n%s", want, entry)
+func TestSaveSplitAddSharedAppendsWithTheFilesSeparator(t *testing.T) {
+	got := editSharedAndRead(t, handFormattedShared, func(cfg *Config) {
+		if err := cfg.AddTemplate("shared-d", TemplateConfig{Model: "sonnet", Workspace: "~/d"}, true); err != nil {
+			t.Fatal(err)
 		}
-	}
-	if strings.Contains(entry, "sonnet") {
-		t.Errorf("edited entry kept the old model:\n%s", entry)
-	}
-}
-
-func TestSaveSplitAddSharedAppendsAndKeepsEverythingElse(t *testing.T) {
-	f := newNodeFixture(t)
-	cfg := f.load(t)
-	if err := cfg.AddTemplate("shared-d", TemplateConfig{Model: "sonnet", Workspace: "~/d"}, true); err != nil {
-		t.Fatal(err)
-	}
-	f.save(t, cfg)
-
-	got := readFile(t, f.sharedPath)
-	if !strings.HasPrefix(got, handFormattedShared) {
-		t.Errorf("existing text changed:\n%s", got)
-	}
-	added := strings.TrimPrefix(got, handFormattedShared)
-	if added != "  shared-d:\n    workspace: ~/d\n    model: sonnet\n" {
-		t.Errorf("appended entry = %q", added)
+	})
+	want := handFormattedShared + "\n  shared-d:\n    workspace: ~/d\n    model: sonnet\n"
+	if got != want {
+		t.Errorf("--- want\n%s--- got\n%s", want, got)
 	}
 }
 
-func TestSaveSplitDeleteSharedRemovesOnlyThatEntry(t *testing.T) {
-	f := newNodeFixture(t)
-	cfg := f.load(t)
-	delete(cfg.Templates, "shared-b")
-	f.save(t, cfg)
+func TestSaveSplitAddSharedToFileWithoutBlankSeparators(t *testing.T) {
+	const src = "templates:\n  a:\n    model: opus\n  b:\n    model: haiku\n"
+	got := editSharedAndRead(t, src, func(cfg *Config) {
+		if err := cfg.AddTemplate("c", TemplateConfig{Model: "sonnet"}, true); err != nil {
+			t.Fatal(err)
+		}
+	})
+	if want := src + "  c:\n    model: sonnet\n"; got != want {
+		t.Errorf("--- want\n%s--- got\n%s", want, got)
+	}
+}
 
-	got := readFile(t, f.sharedPath)
-	wantHead, _ := splitAt(t, handFormattedShared, "  shared-b:")
-	_, wantTail := splitAt(t, handFormattedShared, "  shared-c:")
-	if !strings.HasPrefix(got, strings.TrimSuffix(wantHead, "  # the reviewer\n")) {
-		t.Errorf("text before the deleted entry changed:\n%s", got)
+func TestSaveSplitDeleteSharedRemovesOnlyThatEntryAndOneSeparator(t *testing.T) {
+	got := editSharedAndRead(t, handFormattedShared, func(cfg *Config) { delete(cfg.Templates, "shared-b") })
+	want := strings.Replace(handFormattedShared, sharedBBlock, "", 1)
+	if got != want {
+		t.Errorf("--- want\n%s--- got\n%s", want, got)
 	}
-	if !strings.HasSuffix(got, wantTail) {
-		t.Errorf("text after the deleted entry changed:\n%s", got)
-	}
-	if strings.Contains(got, "shared-b") || strings.Contains(got, "~/review") {
-		t.Errorf("deleted entry still present:\n%s", got)
+}
+
+func TestSaveSplitDeleteLastSharedEntryRemovesThePrecedingSeparator(t *testing.T) {
+	const src = "templates:\n  a:\n    model: opus\n\n  b:\n    model: haiku\n"
+	got := editSharedAndRead(t, src, func(cfg *Config) { delete(cfg.Templates, "b") })
+	if want := "templates:\n  a:\n    model: opus\n"; got != want {
+		t.Errorf("--- want\n%s--- got\n%s", want, got)
 	}
 }
 
 func TestSaveSplitPreservesFourSpaceIndentOfSharedFile(t *testing.T) {
-	f := newNodeFixture(t)
-	four := "templates:\n    a:\n        model: opus\n    b:\n        model: haiku\n"
-	if err := os.WriteFile(f.sharedPath, []byte(four), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	cfg := f.load(t)
-	tmpl := cfg.Templates["b"]
-	tmpl.Model = "sonnet"
-	cfg.Templates["b"] = tmpl
-	f.save(t, cfg)
-
-	want := "templates:\n    a:\n        model: opus\n    b:\n        model: sonnet\n"
-	if got := readFile(t, f.sharedPath); got != want {
+	const src = "templates:\n    a:\n        model: opus\n    b:\n        model: haiku\n"
+	got := editSharedAndRead(t, src, setModel("b", "sonnet"))
+	if want := "templates:\n    a:\n        model: opus\n    b:\n        model: sonnet\n"; got != want {
 		t.Errorf("got:\n%s\nwant:\n%s", got, want)
 	}
 }
 
-// Constructs yaml.v3 cannot round-trip through yaml.Node: it drops blank lines
-// between entries and normalizes the spaces before a line comment to one. The
-// rest of an untouched region survives, but not byte for byte. This is the
-// acceptance test for a byte-splicing writer, should one replace the node
-// encoder.
 func TestSaveSplitEditSharedKeepsBlankLinesAndCommentSpacing(t *testing.T) {
-	t.Skip("yaml.v3 re-encoding drops blank lines between entries and normalizes spacing before line comments")
 	const src = "templates:\n  a:\n    model: opus   # wide\n\n  b:\n    model: haiku\n"
-	f := newNodeFixture(t)
-	if err := os.WriteFile(f.sharedPath, []byte(src), 0o600); err != nil {
+	got := editSharedAndRead(t, src, setModel("b", "sonnet"))
+	if want := "templates:\n  a:\n    model: opus   # wide\n\n  b:\n    model: sonnet\n"; got != want {
+		t.Errorf("got:\n%s\nwant:\n%s", got, want)
+	}
+}
+
+func TestSaveSplitEditSharedKeepsLeadingDocumentMarker(t *testing.T) {
+	const src = "---\n# head\ntemplates:\n  a:\n    model: opus\n  b:\n    model: haiku\n"
+	got := editSharedAndRead(t, src, setModel("b", "sonnet"))
+	if want := strings.Replace(src, "haiku", "sonnet", 1); got != want {
+		t.Errorf("got:\n%s\nwant:\n%s", got, want)
+	}
+}
+
+func TestSaveSplitEditSharedLeavesNonIndentedSequencesAlone(t *testing.T) {
+	const src = "templates:\n  a:\n    model: opus\n    add_dirs:\n    - ~/x\n    - ~/y\n\n  b:\n    model: haiku\n"
+	got := editSharedAndRead(t, src, setModel("b", "sonnet"))
+	if want := strings.Replace(src, "haiku", "sonnet", 1); got != want {
+		t.Errorf("got:\n%s\nwant:\n%s", got, want)
+	}
+}
+
+func TestSaveSplitEditedEntryKeepsItsKeyOrder(t *testing.T) {
+	const src = "templates:\n  b:\n    model: sonnet   # pick\n    workspace: ~/review\n    add_dirs:\n      - ~/one\n"
+	tests := []struct {
+		name string
+		edit func(*Config)
+		want string
+	}{
+		{
+			"change a later key",
+			func(cfg *Config) { t := cfg.Templates["b"]; t.Workspace = "~/other"; cfg.Templates["b"] = t },
+			"templates:\n  b:\n    model: sonnet # pick\n    workspace: ~/other\n    add_dirs:\n      - ~/one\n",
+		},
+		{
+			"new key goes last",
+			func(cfg *Config) { t := cfg.Templates["b"]; t.MaxTurns = 5; cfg.Templates["b"] = t },
+			"templates:\n  b:\n    model: sonnet # pick\n    workspace: ~/review\n    add_dirs:\n      - ~/one\n    max_turns: 5\n",
+		},
+		{
+			"cleared key is dropped",
+			func(cfg *Config) { t := cfg.Templates["b"]; t.Workspace = ""; cfg.Templates["b"] = t },
+			"templates:\n  b:\n    model: sonnet # pick\n    add_dirs:\n      - ~/one\n",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := editSharedAndRead(t, src, tt.edit); got != tt.want {
+				t.Errorf("got:\n%s\nwant:\n%s", got, tt.want)
+			}
+		})
+	}
+}
+
+// Structures the byte-splicing writer cannot range-map fall back to the node
+// encoder; the file must still hold exactly the intended templates.
+func TestSaveSplitFallsBackForUnmappableStructures(t *testing.T) {
+	tests := []struct {
+		name string
+		src  string
+	}{
+		{"flow mapping", "templates: {a: {model: opus}, b: {model: haiku}}\n"},
+		{"anchors and aliases", "templates:\n  a: &base\n    model: opus\n  b: *base\n"},
+		{"crlf line endings", "templates:\r\n  a:\r\n    model: opus\r\n  b:\r\n    model: haiku\r\n"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			f := newNodeFixtureWith(t, tt.src)
+			cfg := f.load(t)
+			setModel("b", "sonnet")(cfg)
+			if err := cfg.AddTemplate("c", TemplateConfig{Model: "opus"}, true); err != nil {
+				t.Fatal(err)
+			}
+			delete(cfg.Templates, "a")
+			f.save(t, cfg)
+
+			got := f.load(t)
+			if got.Templates["b"].Model != "sonnet" || got.Templates["c"].Model != "opus" {
+				t.Errorf("edit or add lost: %+v", got.Templates)
+			}
+			if _, ok := got.Templates["a"]; ok {
+				t.Errorf("deleted template still present: %+v", got.Templates)
+			}
+		})
+	}
+}
+
+func TestSaveSplitEditsEmptySharedFile(t *testing.T) {
+	f := newNodeFixtureWith(t, "")
+	if err := os.WriteFile(f.sharedPath, []byte("# nothing yet\ntemplates:\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	cfg := f.load(t)
-	tmpl := cfg.Templates["b"]
-	tmpl.Model = "sonnet"
-	cfg.Templates["b"] = tmpl
+	if err := cfg.AddTemplate("a", TemplateConfig{Model: "opus"}, true); err != nil {
+		t.Fatal(err)
+	}
 	f.save(t, cfg)
-
-	want := "templates:\n  a:\n    model: opus   # wide\n\n  b:\n    model: sonnet\n"
-	if got := readFile(t, f.sharedPath); got != want {
-		t.Errorf("got:\n%s\nwant:\n%s", got, want)
+	if got := f.load(t); got.Templates["a"].Model != "opus" || got.TemplateSource("a") != SourceShared {
+		t.Errorf("a = %+v source %q", got.Templates["a"], got.TemplateSource("a"))
 	}
 }

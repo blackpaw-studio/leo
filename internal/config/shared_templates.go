@@ -251,55 +251,108 @@ func saveSplit(path string, cfg *Config) error {
 	return nil
 }
 
+// sharedEdits is what a save changes in the shared file.
+type sharedEdits struct {
+	// changed are existing shared entries to rewrite, ~ paths restored.
+	changed map[string]TemplateConfig
+	deleted map[string]bool
+	// added are new shared entries, ~ paths restored.
+	added map[string]TemplateConfig
+	// current holds the expanded templates for changed and added entries,
+	// to check a rewritten file against what was meant.
+	current map[string]TemplateConfig
+}
+
+func (e sharedEdits) empty() bool {
+	return len(e.changed) == 0 && len(e.deleted) == 0 && len(e.added) == 0
+}
+
+// planEdits compares cfg's templates with the shared file as loaded.
+func (sh *sharedTemplates) planEdits(cfg *Config) (sharedEdits, error) {
+	edits := sharedEdits{
+		changed: map[string]TemplateConfig{}, deleted: map[string]bool{},
+		added: map[string]TemplateConfig{}, current: map[string]TemplateConfig{},
+	}
+	present := map[string]bool{}
+	if mapping := findTemplatesMapping(&sh.doc); mapping != nil {
+		for i := 0; i+1 < len(mapping.Content); i += 2 {
+			name := mapping.Content[i].Value
+			present[name] = true
+			if sh.sources[name] != SourceShared {
+				continue
+			}
+			cur, ok := cfg.Templates[name]
+			if !ok {
+				edits.deleted[name] = true // deleted or renamed away
+				continue
+			}
+			same, err := sameYAML(cur, sh.baseline[name])
+			if err != nil {
+				return sharedEdits{}, err
+			}
+			if !same {
+				edits.changed[name] = contractHome(cur)
+				edits.current[name] = cur
+			}
+		}
+	}
+	for name := range sh.newShared {
+		if cur, ok := cfg.Templates[name]; ok && !present[name] {
+			edits.added[name] = contractHome(cur)
+			edits.current[name] = cur
+		}
+	}
+	return edits, nil
+}
+
 // marshalShared renders the shared file for cfg's current templates and says
-// whether it changed. It edits a copy of the parsed document: an entry that was
-// not edited keeps its nodes (so its text, comments and key order survive), an
-// edited entry gets a new value node encoded from the template with ~ paths
-// restored, a deleted one is dropped, and new shared ones are appended. The
-// file's own indentation is reused.
+// whether it changed. Only entries that were added, edited or removed are
+// touched: the original bytes are spliced where possible (see spliceShared),
+// so everything else stays byte-identical; otherwise the parsed document is
+// re-encoded (see encodeSharedNodes).
 func (sh *sharedTemplates) marshalShared(cfg *Config) ([]byte, bool, error) {
+	edits, err := sh.planEdits(cfg)
+	if err != nil {
+		return nil, false, err
+	}
+	if edits.empty() {
+		return nil, false, nil
+	}
+	if out, ok := sh.spliceShared(edits); ok {
+		return out, true, nil
+	}
+	return sh.encodeSharedNodes(edits)
+}
+
+// encodeSharedNodes is the fallback writer for files whose structure cannot be
+// range-mapped (a flow-style `templates:`, anchors or aliases, CRLF endings,
+// an empty file). It re-encodes the parsed document at the file's indentation:
+// comments, quoting, flow style and key order survive, but blank lines
+// between entries, spacing before line comments and a leading `---` do not.
+func (sh *sharedTemplates) encodeSharedNodes(edits sharedEdits) ([]byte, bool, error) {
 	doc := cloneNode(&sh.doc)
 	mapping := templatesMapping(doc)
 
-	changed := false
-	present := make(map[string]bool, len(mapping.Content)/2)
 	content := make([]*yaml.Node, 0, len(mapping.Content))
 	for i := 0; i+1 < len(mapping.Content); i += 2 {
 		key, val := mapping.Content[i], mapping.Content[i+1]
-		present[key.Value] = true
-		if sh.sources[key.Value] == SourceShared {
-			cur, ok := cfg.Templates[key.Value]
-			if !ok {
-				changed = true // deleted or renamed away
-				continue
-			}
-			same, err := sameYAML(cur, sh.baseline[key.Value])
-			if err != nil {
+		if edits.deleted[key.Value] {
+			continue
+		}
+		if tmpl, ok := edits.changed[key.Value]; ok {
+			var err error
+			if val, err = replacementValue(val, tmpl); err != nil {
 				return nil, false, err
-			}
-			if !same {
-				if val, err = replacementValue(val, contractHome(cur)); err != nil {
-					return nil, false, err
-				}
-				changed = true
 			}
 		}
 		content = append(content, key, val)
 	}
-	for _, name := range slices.Sorted(maps.Keys(sh.newShared)) {
-		cur, ok := cfg.Templates[name]
-		if !ok || present[name] {
-			continue
-		}
-		val, err := replacementValue(&yaml.Node{}, contractHome(cur))
+	for _, name := range slices.Sorted(maps.Keys(edits.added)) {
+		val, err := replacementValue(&yaml.Node{}, edits.added[name])
 		if err != nil {
 			return nil, false, err
 		}
 		content = append(content, &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: name}, val)
-		changed = true
-	}
-	if !changed {
-		return nil, false, nil
 	}
 	mapping.Content = content
 
@@ -313,6 +366,21 @@ func (sh *sharedTemplates) marshalShared(cfg *Config) ([]byte, bool, error) {
 		return nil, false, fmt.Errorf("marshaling templates_file: %w", err)
 	}
 	return buf.Bytes(), true, nil
+}
+
+// findTemplatesMapping returns the block or flow mapping under the `templates`
+// key, nil when the file has none (empty file, `templates:` with no value).
+func findTemplatesMapping(doc *yaml.Node) *yaml.Node {
+	root := documentRoot(doc)
+	if root == nil {
+		return nil
+	}
+	for i := 0; i+1 < len(root.Content); i += 2 {
+		if root.Content[i].Value == sharedTemplatesKey && root.Content[i+1].Kind == yaml.MappingNode {
+			return root.Content[i+1]
+		}
+	}
+	return nil
 }
 
 // replacementValue encodes tmpl as a value node that takes over old's comments.
