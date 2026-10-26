@@ -207,11 +207,15 @@ func pruneDecide(git gitFunc, probe writerProbe, rec Record) (action, reason str
 // recorded process group is empty (the daemon's own check); an interactive
 // run when its pane was killed, which only a release does for certain. A
 // record neither proves is still released once it has been over for a day
-// and no live process works inside its worktree.
+// and no live process works inside its worktree, unless it recorded a process
+// group: a group that is alive, or that cannot be checked, is never overridden.
 func deferredWriterReason(probe writerProbe, rec Record) string {
 	reason := recordedWriterReason(probe.ps, rec)
 	if reason == "" {
 		return ""
+	}
+	if rec.Mode != ModeInteractive && rec.ProcessGroup > 1 {
+		return reason
 	}
 	if quiet := probe.quietReason(rec); quiet != "" {
 		return reason + "; " + quiet

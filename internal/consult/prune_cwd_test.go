@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync/atomic"
@@ -184,5 +185,35 @@ func TestPruneKeepsRecordsTheLegacyChecksAlreadyRelease(t *testing.T) {
 	}
 	if n := fake.calls.Load(); n != 0 {
 		t.Fatalf("scans = %d, want 0", n)
+	}
+}
+
+func TestPruneNeverOverridesAKnownLiveProcessGroupWithTheCwdCheck(t *testing.T) {
+	const group = 4242
+	cases := map[string]func(context.Context, string, ...string) *exec.Cmd{
+		"group alive":        psTable("1 1 0\n9001 4242 1\n", false),
+		"process table down": psTable("", true),
+	}
+	for name, proc := range cases {
+		t.Run(name, func(t *testing.T) {
+			repo, stateDir := gitTestRepo(t), t.TempDir()
+			rec := seedIsolated(t, repo, stateDir, "d-live", func(r *Record) {
+				r.Mode, r.Status, r.WorktreeState, r.ProcessGroup = ModeHeadless, StatusDone, WorktreeDeferred, group
+				r.EndedAt = cwdTestNow.Add(-48 * time.Hour)
+			})
+			fake := &cwdScanFake{procs: []procCwd{{PID: 1, Cwd: "/"}}}
+
+			report, err := PruneWorktrees(stateDir, PruneOptions{DryRun: true, ProcessCommand: proc, now: func() time.Time { return cwdTestNow }, processCwds: fake.scan})
+			if err != nil {
+				t.Fatal(err)
+			}
+			got := itemsByID(report)[rec.ID]
+			if got.Action != PruneKeepDeferred || !strings.Contains(got.Reason, "process group 4242 may still be alive") {
+				t.Fatalf("got %q (%s), want keep:deferred on the process group", got.Action, got.Reason)
+			}
+			if n := fake.calls.Load(); n != 0 {
+				t.Fatalf("scans = %d, want 0", n)
+			}
+		})
 	}
 }
