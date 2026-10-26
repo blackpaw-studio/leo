@@ -15,6 +15,7 @@ import (
 	"github.com/blackpaw-studio/leo/internal/agent"
 	"github.com/blackpaw-studio/leo/internal/bridge"
 	"github.com/blackpaw-studio/leo/internal/chat"
+	"github.com/blackpaw-studio/leo/internal/clienttools"
 	"github.com/blackpaw-studio/leo/internal/config"
 	"github.com/blackpaw-studio/leo/internal/consult"
 	"github.com/blackpaw-studio/leo/internal/cron"
@@ -150,7 +151,10 @@ type Server struct {
 	clientSink atomic.Pointer[clientSinkHolder]
 	// chatHandler serves the socket's /api/v1/chat routes; set by StartWeb
 	// when chat is on (see SetChat).
-	chatHandler        atomic.Pointer[controlHolder]
+	chatHandler atomic.Pointer[controlHolder]
+	// clientTools is the client-tools relay the socket's /api/v1/client-tools
+	// routes and `?client_tools=1` provider streams serve; nil answers 503.
+	clientTools        *clienttools.Relay
 	chatStore          *chat.Store
 	chatAttachmentsDir string
 	chatPublisher      observe.Publisher
@@ -200,6 +204,12 @@ func WithGoroutineDump() Option {
 // WithBridge serves hub on the bridge routes instead of a private one.
 func WithBridge(hub *bridge.Hub) Option {
 	return func(s *Server) { s.bridge = hub }
+}
+
+// WithClientTools serves relay on the socket and hands the same relay to the
+// web server, so apps on either listener see one set of tools.
+func WithClientTools(relay *clienttools.Relay) Option {
+	return func(s *Server) { s.clientTools = relay }
 }
 
 // WithLeoMCP sets the daemon's own leo binary (see leomcp.ResolveServer):
@@ -348,6 +358,10 @@ func New(sockPath, configPath string, processes ProcessStateProvider, opts ...Op
 	// Claude mod bridge: the mod's `leo bridge` process holds the command
 	// stream open and posts acks/events back. The 0600 socket is the auth,
 	// as for every route on this mux.
+	// Client-tools relay: the same paths as the TCP API, for the Mac app.
+	clientTools := web.NewClientToolsHandler(func() *clienttools.Relay { return s.clientTools })
+	mux.Handle(clientToolsSocketPath, clientTools)
+	mux.Handle(clientToolsSocketPath+"/", clientTools)
 	mux.HandleFunc(chatSocketPrefix, s.handleChat)
 	mux.HandleFunc("POST "+chatTaskFailurePath, s.handleChat)
 	mux.HandleFunc("GET /api/bridge/{agent}/stream", s.handleBridgeStream)
@@ -531,6 +545,9 @@ func (s *Server) StartWeb(cfg *config.Config, agentSvc web.AgentService) error {
 	// Supervised agents' turn hooks complete their in-flight persistent-task
 	// invocations, whatever the harness (see sessionRouter.ObserveTurn).
 	observeOpts = append(observeOpts, web.WithTurnObserver(s.observeAgentTurn))
+	if s.clientTools != nil {
+		observeOpts = append(observeOpts, web.WithClientTools(s.clientTools))
+	}
 	stop := s.startup.Step("web.New")
 	s.webServer = web.New(s.configPath, &processAdapter{inner: s.processes}, s.scheduler, s, agentSvc, web.Options{
 		Config:         s.configSvc,
@@ -647,6 +664,15 @@ func (s *Server) ReloadConfig() error {
 		}
 	}
 	return s.scheduler.Install(cfg)
+}
+
+// AgentGone tells the daemon an agent is gone (stopped or deleted): its open
+// chat asks close and its parked client-tool calls are cancelled.
+func (s *Server) AgentGone(name string) {
+	s.CloseChatAsksOf(name)
+	if s.clientTools != nil {
+		s.clientTools.CancelAgent(name)
+	}
 }
 
 // CloseChatAsksOf closes a gone (stopped or deleted) agent's open chat asks.

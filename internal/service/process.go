@@ -23,12 +23,14 @@ import (
 	"github.com/blackpaw-studio/leo/internal/agent"
 	"github.com/blackpaw-studio/leo/internal/agentstore"
 	"github.com/blackpaw-studio/leo/internal/chat"
+	"github.com/blackpaw-studio/leo/internal/clienttools"
 	"github.com/blackpaw-studio/leo/internal/config"
 	"github.com/blackpaw-studio/leo/internal/daemon"
 	"github.com/blackpaw-studio/leo/internal/env"
 	"github.com/blackpaw-studio/leo/internal/harness"
 	claudeharness "github.com/blackpaw-studio/leo/internal/harness/claude"
 	"github.com/blackpaw-studio/leo/internal/leomcp"
+	"github.com/blackpaw-studio/leo/internal/leotools"
 	"github.com/blackpaw-studio/leo/internal/machine"
 	"github.com/blackpaw-studio/leo/internal/managed"
 	"github.com/blackpaw-studio/leo/internal/observe"
@@ -1050,6 +1052,9 @@ func defaultSupervisedExec(opts RunSupervisedOptions) error {
 	// this same binary's MCP server, never whichever leo is first on PATH.
 	leoMCP := leomcp.ResolveServer(executable, os.Stderr)
 	srv := daemon.New(sockPath, configPath, supervisor,
+		// One client-tools relay for the socket and the web server, so an app
+		// on either listener sees the same tools and calls.
+		daemon.WithClientTools(newClientToolsRelay(homePath, obs.Bus)),
 		daemon.WithLeoMCP(leoMCP),
 		daemon.WithTmuxPath(tmuxPath),
 		daemon.WithBridge(bridgeHub),
@@ -1135,7 +1140,7 @@ func defaultSupervisedExec(opts RunSupervisedOptions) error {
 				fmt.Fprintf(os.Stderr, "warning: web UI failed to start: %v\n", err)
 			} else {
 				// An operator stop or delete ends the agent's open chat asks.
-				agentMgr.SetGoneHook(srv.CloseChatAsksOf)
+				agentMgr.SetGoneHook(srv.AgentGone)
 			}
 		}
 		stepDone()
@@ -1249,6 +1254,21 @@ func wireObservability(ctx context.Context, sv *Supervisor, tmuxPath string) obs
 	go tracker.Start(ctx)
 
 	return observability{Bus: bus, RunLog: runLog, MessageLog: messageLog, Tracker: tracker, Attention: attention, Publisher: pub}
+}
+
+// newClientToolsRelay builds the client-tools relay. Its ever-registered flag
+// and tool names persist at <home>/state/client-tools.json; events go out on
+// the observability bus.
+func newClientToolsRelay(homePath string, pub observe.Publisher) *clienttools.Relay {
+	flag := clienttools.NewEverRegistered(
+		clienttools.NewFileFlagStore(filepath.Join(homePath, "state", leotools.ClientToolsStateFile)),
+		func(format string, args ...any) { fmt.Fprintf(os.Stderr, format+"\n", args...) },
+	)
+	return clienttools.NewRelay(clienttools.RelayOptions{
+		Registry: clienttools.RegistryOptions{IsBuiltin: leotools.IsKnownTool},
+		Flag:     flag,
+		Publish:  pub,
+	})
 }
 
 // openChat opens Leo Chat's store at <home>/state/chat.db and names its

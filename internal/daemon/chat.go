@@ -11,6 +11,10 @@ import (
 // the TCP API, for the Mac app. The 0600 socket is the auth.
 const chatSocketPrefix = "/api/v1/chat/"
 
+// clientToolsSocketPath is where the socket serves the client-tools relay:
+// the same paths as the TCP API. The 0600 socket is the auth.
+const clientToolsSocketPath = "/api/v1/client-tools"
+
 // chatTaskFailurePath is the CLI-only route a `leo run` process reports a
 // failed oneshot task run to. It is served on the socket alone.
 const chatTaskFailurePath = "/chat/task-failure"
