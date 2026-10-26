@@ -145,3 +145,15 @@ func (r *Relay) Pending() []PendingRequest { return r.calls.Pending() }
 
 // CancelAgent ends a gone agent's parked calls.
 func (r *Relay) CancelAgent(agent string) { r.calls.CancelAgent(agent) }
+
+// ProviderStream adapts a Relay to the string ids the events stream uses.
+type ProviderStream struct{ relay *Relay }
+
+// Provider returns the adapter for a provider events stream.
+func (r *Relay) Provider() ProviderStream { return ProviderStream{relay: r} }
+
+// Connect admits the stream and returns its client id.
+func (p ProviderStream) Connect() string { return string(p.relay.Connect()) }
+
+// Disconnect ends the stream's client.
+func (p ProviderStream) Disconnect(id string) { p.relay.Disconnect(ClientID(id)) }

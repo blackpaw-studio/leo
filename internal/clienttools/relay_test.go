@@ -114,3 +114,16 @@ func TestRelayDisconnectWithdrawsFailsParkedCallsAndAnnounces(t *testing.T) {
 		t.Fatalf("tools survive disconnect: %+v", got)
 	}
 }
+
+func TestProviderStreamAdapterConnectsAndDisconnects(t *testing.T) {
+	r, _, _ := newTestRelay(t)
+	p := r.Provider()
+	id := p.Connect()
+	if !r.ClientExists(ClientID(id)) {
+		t.Fatalf("client %q not connected", id)
+	}
+	p.Disconnect(id)
+	if r.ClientExists(ClientID(id)) {
+		t.Fatal("client survives Disconnect")
+	}
+}
