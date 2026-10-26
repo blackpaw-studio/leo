@@ -432,7 +432,8 @@ func TestPendingResponseFixtureMatchesRelayState(t *testing.T) {
 	park := func(agent, tool, args string) {
 		t.Helper()
 		before := len(c.relay.Pending())
-		go c.do(t, http.MethodPost, "/api/agent/"+agent+"/client-tools/call", testAgentToken, map[string]any{"tool": tool, "args": json.RawMessage(args)})
+		body := `{"tool":"` + tool + `","args":` + args + `}`
+		go chatRequest(t, c.s, http.MethodPost, "/api/agent/"+agent+"/client-tools/call", testAgentToken, body)
 		deadline := time.After(5 * time.Second)
 		for len(c.relay.Pending()) == before {
 			select {
