@@ -217,3 +217,77 @@ func TestAgentHookForwardsTurnToObserver(t *testing.T) {
 		})
 	}
 }
+
+func TestAgentHookRaisesNeedsInputWithReason(t *testing.T) {
+	for _, tc := range []struct {
+		name, body string
+		want       *observe.AttentionReason
+	}{
+		{"permission request names the tool and its summary",
+			`{"hook_event_name":"PermissionRequest","session_id":"sid-a","tool_name":"Bash","tool_input":{"command":"rm -rf /tmp/x"}}`,
+			&observe.AttentionReason{Kind: observe.AttentionReasonPermission, Tool: "Bash", Detail: "rm"}},
+		{"elicitation names the server",
+			`{"hook_event_name":"Elicitation","session_id":"sid-a","mcp_server_name":"github"}`,
+			&observe.AttentionReason{Kind: observe.AttentionReasonElicitation, Detail: "github"}},
+		{"a subagent's permission request is not the main loop's",
+			`{"hook_event_name":"PermissionRequest","session_id":"sid-a","agent_id":"sub-1","tool_name":"Bash","tool_input":{"command":"ls"}}`, nil},
+		{"a question is the bridge's to raise",
+			`{"hook_event_name":"PermissionRequest","session_id":"sid-a","tool_name":"AskUserQuestion","tool_input":{"questions":[]}}`, nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := newHookServer(t)
+
+			postHook(t, s, "tok-a", tc.body)
+
+			att, ok := s.attention.Get("leo-a")
+			if tc.want == nil {
+				if ok {
+					t.Fatalf("attention = %+v, want none", att)
+				}
+				return
+			}
+			if !ok || att.State != observe.AttentionNeedsInput || att.Reason == nil || *att.Reason != *tc.want {
+				t.Fatalf("attention = %+v, %v; want needs_input with reason %+v", att, ok, *tc.want)
+			}
+		})
+	}
+}
+
+func TestAgentHookNotificationKeepsTheReason(t *testing.T) {
+	s := newHookServer(t)
+	postHook(t, s, "tok-a", `{"hook_event_name":"Elicitation","session_id":"sid-a","mcp_server_name":"github"}`)
+
+	postHook(t, s, "tok-a", `{"hook_event_name":"Notification","notification_type":"elicitation_dialog","session_id":"sid-a"}`)
+
+	att, _ := s.attention.Get("leo-a")
+	if att.State != observe.AttentionNeedsInput || att.Reason == nil || att.Reason.Kind != observe.AttentionReasonElicitation {
+		t.Fatalf("attention = %+v, want needs_input keeping the elicitation reason", att)
+	}
+}
+
+func TestAgentHookToolSettledClearsNeedsInput(t *testing.T) {
+	for _, event := range []string{"PostToolUse", "PostToolUseFailure", "PermissionDenied"} {
+		t.Run(event, func(t *testing.T) {
+			s := newHookServer(t)
+			postHook(t, s, "tok-a", `{"hook_event_name":"PermissionRequest","session_id":"sid-a","tool_name":"Bash","tool_input":{"command":"ls"}}`)
+
+			postHook(t, s, "tok-a", `{"hook_event_name":"`+event+`","session_id":"sid-a"}`)
+
+			att, _ := s.attention.Get("leo-a")
+			if att.State != observe.AttentionWorking || att.Reason != nil {
+				t.Fatalf("attention = %+v, want working without a reason", att)
+			}
+		})
+	}
+}
+
+func TestAgentHookSubagentToolDoesNotClearMainLoopPrompt(t *testing.T) {
+	s := newHookServer(t)
+	postHook(t, s, "tok-a", `{"hook_event_name":"PermissionRequest","session_id":"sid-a","tool_name":"Bash","tool_input":{"command":"ls"}}`)
+
+	postHook(t, s, "tok-a", `{"hook_event_name":"PostToolUse","session_id":"sid-a","agent_id":"sub-1"}`)
+
+	if att, _ := s.attention.Get("leo-a"); att.State != observe.AttentionNeedsInput {
+		t.Fatalf("attention = %+v, want the main loop's prompt still pending", att)
+	}
+}

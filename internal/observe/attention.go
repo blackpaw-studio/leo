@@ -531,6 +531,27 @@ func (s *AttentionStore) SetByTokenFinished(token, preview string) (AgentAttenti
 	return s.setByToken(token, AttentionFinished, preview, nil)
 }
 
+// SetByTokenNeedsInput moves the agent token routes to into needs_input with
+// reason (clamped), resolved and applied atomically like SetByToken. A
+// repeat of the same reason is not a new transition.
+func (s *AttentionStore) SetByTokenNeedsInput(token string, reason AttentionReason) (AgentAttention, bool) {
+	if s == nil || token == "" {
+		return AgentAttention{}, false
+	}
+	reason = ClampAttentionReason(reason)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	agent, ok := s.tokens[token]
+	if !ok {
+		return AgentAttention{}, false
+	}
+	if prev, has := s.reasons[agent]; s.states[agent] == AttentionNeedsInput && has && prev == reason {
+		return AgentAttention{}, false
+	}
+	s.reasons[agent] = reason
+	return s.setLocked(agent, AttentionNeedsInput), true
+}
+
 func (s *AttentionStore) setByToken(token string, state AttentionState, preview string, from []AttentionState) (AgentAttention, bool) {
 	if s == nil || token == "" {
 		return AgentAttention{}, false
