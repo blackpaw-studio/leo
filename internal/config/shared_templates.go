@@ -1,6 +1,7 @@
 package config
 
 import (
+	"bytes"
 	"fmt"
 	"maps"
 	"os"
@@ -36,9 +37,10 @@ func (s TemplateSource) Label() string {
 // copies Config goes through (rename, web enable) keep it.
 type sharedTemplates struct {
 	path string
-	// raw is the shared file as parsed, paths NOT expanded: unchanged
-	// templates are written back from it so ~ paths stay portable.
-	raw map[string]TemplateConfig
+	// doc is the shared file's parsed YAML document, paths NOT expanded.
+	// Saving edits a copy of it, so untouched entries (and the header,
+	// comments and key order around them) are written back as they were.
+	doc yaml.Node
 	// baseline is a second, path-expanded parse used to detect edits. It
 	// must not share backing storage with the effective templates, or an
 	// in-place edit would compare as unchanged and be lost.
@@ -92,20 +94,37 @@ func resolveTemplatesFile(home, p string) string {
 	return filepath.Join(home, p)
 }
 
-// decodeSharedTemplates validates the shared file's shape (a single top-level
-// `templates:` key) and returns its template node. Unknown keys inside a
+// parseSharedTemplates parses the shared file and validates its shape (a
+// single top-level `templates:` key). It returns the whole document, for
+// later editing, and the `templates` value node. Unknown keys inside a
 // template are tolerated, as in leo.yaml.
-func decodeSharedTemplates(data []byte) (yaml.Node, error) {
-	var top map[string]yaml.Node
-	if err := yaml.Unmarshal(data, &top); err != nil {
-		return yaml.Node{}, err
+func parseSharedTemplates(data []byte) (doc, templates yaml.Node, err error) {
+	if err = yaml.Unmarshal(data, &doc); err != nil {
+		return yaml.Node{}, yaml.Node{}, err
 	}
-	for _, key := range slices.Sorted(maps.Keys(top)) {
+	root := documentRoot(&doc)
+	if root == nil {
+		return doc, yaml.Node{}, nil
+	}
+	if root.Kind != yaml.MappingNode {
+		return yaml.Node{}, yaml.Node{}, fmt.Errorf("top level must be a mapping with a single %q key", sharedTemplatesKey)
+	}
+	for i := 0; i+1 < len(root.Content); i += 2 {
+		key := root.Content[i].Value
 		if key != sharedTemplatesKey {
-			return yaml.Node{}, fmt.Errorf("unknown top-level key %q (only %q is allowed)", key, sharedTemplatesKey)
+			return yaml.Node{}, yaml.Node{}, fmt.Errorf("unknown top-level key %q (only %q is allowed)", key, sharedTemplatesKey)
 		}
+		templates = *root.Content[i+1]
 	}
-	return top[sharedTemplatesKey], nil
+	return doc, templates, nil
+}
+
+// documentRoot is the top-level node of a parsed document, nil for an empty one.
+func documentRoot(doc *yaml.Node) *yaml.Node {
+	if doc.Kind != yaml.DocumentNode || len(doc.Content) == 0 {
+		return nil
+	}
+	return doc.Content[0]
 }
 
 func decodeTemplates(node yaml.Node) (map[string]TemplateConfig, error) {
@@ -128,11 +147,7 @@ func (c *Config) loadSharedTemplates(leoBytes []byte) error {
 	if err != nil {
 		return fmt.Errorf("templates_file %s: %w", path, err)
 	}
-	node, err := decodeSharedTemplates(data)
-	if err != nil {
-		return fmt.Errorf("templates_file %s: %w", path, err)
-	}
-	raw, err := decodeTemplates(node)
+	doc, node, err := parseSharedTemplates(data)
 	if err != nil {
 		return fmt.Errorf("templates_file %s: %w", path, err)
 	}
@@ -147,8 +162,8 @@ func (c *Config) loadSharedTemplates(leoBytes []byte) error {
 	expandTemplates(baseline)
 	expandTemplates(effective)
 
-	sources := make(map[string]TemplateSource, len(raw)+len(c.Templates))
-	merged := make(map[string]TemplateConfig, len(raw)+len(c.Templates))
+	sources := make(map[string]TemplateSource, len(baseline)+len(c.Templates))
+	merged := make(map[string]TemplateConfig, len(baseline)+len(c.Templates))
 	for name, tmpl := range effective {
 		merged[name] = tmpl
 		sources[name] = SourceShared
@@ -164,7 +179,7 @@ func (c *Config) loadSharedTemplates(leoBytes []byte) error {
 	c.Templates = merged
 	c.shared = &sharedTemplates{
 		path:        path,
-		raw:         raw,
+		doc:         doc,
 		baseline:    baseline,
 		sources:     sources,
 		newShared:   map[string]bool{},
@@ -210,11 +225,6 @@ func (c *Config) AddTemplate(name string, tmpl TemplateConfig, shared bool) erro
 	return nil
 }
 
-// sharedTemplatesDoc is the on-disk shape of a templates_file.
-type sharedTemplatesDoc struct {
-	Templates map[string]TemplateConfig `yaml:"templates"`
-}
-
 // saveSplit writes shared-sourced templates to the shared file and everything
 // else to leo.yaml, rewriting each file only when its parsed content changed
 // so editing a local template never touches a git-tracked shared file.
@@ -242,48 +252,129 @@ func saveSplit(path string, cfg *Config) error {
 }
 
 // marshalShared renders the shared file for cfg's current templates and says
-// whether it differs from what was loaded. Entries that were not edited come
-// from raw, so hand-written ~ paths survive; edited ones are re-contracted so
-// one machine's expanded home never lands in a file other machines read.
+// whether it changed. It edits a copy of the parsed document: an entry that was
+// not edited keeps its nodes (so its text, comments and key order survive), an
+// edited entry gets a new value node encoded from the template with ~ paths
+// restored, a deleted one is dropped, and new shared ones are appended. The
+// file's own indentation is reused.
 func (sh *sharedTemplates) marshalShared(cfg *Config) ([]byte, bool, error) {
-	out := make(map[string]TemplateConfig, len(sh.raw)+len(sh.newShared))
-	for name, rawTmpl := range sh.raw {
-		switch sh.sources[name] {
-		case SourceLocalOverride:
-			out[name] = rawTmpl
-		case SourceShared:
-			cur, ok := cfg.Templates[name]
+	doc := cloneNode(&sh.doc)
+	mapping := templatesMapping(doc)
+
+	changed := false
+	present := make(map[string]bool, len(mapping.Content)/2)
+	content := make([]*yaml.Node, 0, len(mapping.Content))
+	for i := 0; i+1 < len(mapping.Content); i += 2 {
+		key, val := mapping.Content[i], mapping.Content[i+1]
+		present[key.Value] = true
+		if sh.sources[key.Value] == SourceShared {
+			cur, ok := cfg.Templates[key.Value]
 			if !ok {
-				continue // deleted or renamed away
+				changed = true // deleted or renamed away
+				continue
 			}
-			same, err := sameYAML(cur, sh.baseline[name])
+			same, err := sameYAML(cur, sh.baseline[key.Value])
 			if err != nil {
 				return nil, false, err
 			}
-			if same {
-				out[name] = rawTmpl
-			} else {
-				out[name] = contractHome(cur)
+			if !same {
+				if val, err = replacementValue(val, contractHome(cur)); err != nil {
+					return nil, false, err
+				}
+				changed = true
 			}
 		}
+		content = append(content, key, val)
 	}
-	for name := range sh.newShared {
-		if _, done := out[name]; done {
+	for _, name := range slices.Sorted(maps.Keys(sh.newShared)) {
+		cur, ok := cfg.Templates[name]
+		if !ok || present[name] {
 			continue
 		}
-		if cur, ok := cfg.Templates[name]; ok {
-			out[name] = contractHome(cur)
+		val, err := replacementValue(&yaml.Node{}, contractHome(cur))
+		if err != nil {
+			return nil, false, err
 		}
+		content = append(content, &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: name}, val)
+		changed = true
 	}
-	changed, err := sameYAML(sharedTemplatesDoc{Templates: out}, sharedTemplatesDoc{Templates: sh.raw})
-	if err != nil {
-		return nil, false, err
+	if !changed {
+		return nil, false, nil
 	}
-	data, err := yaml.Marshal(sharedTemplatesDoc{Templates: out})
-	if err != nil {
+	mapping.Content = content
+
+	var buf bytes.Buffer
+	enc := yaml.NewEncoder(&buf)
+	enc.SetIndent(detectIndent(sh.sharedBytes))
+	if err := enc.Encode(doc); err != nil {
 		return nil, false, fmt.Errorf("marshaling templates_file: %w", err)
 	}
-	return data, !changed, nil
+	if err := enc.Close(); err != nil {
+		return nil, false, fmt.Errorf("marshaling templates_file: %w", err)
+	}
+	return buf.Bytes(), true, nil
+}
+
+// replacementValue encodes tmpl as a value node that takes over old's comments.
+func replacementValue(old *yaml.Node, tmpl TemplateConfig) (*yaml.Node, error) {
+	var n yaml.Node
+	if err := n.Encode(tmpl); err != nil {
+		return nil, fmt.Errorf("encoding template: %w", err)
+	}
+	n.HeadComment, n.LineComment, n.FootComment = old.HeadComment, old.LineComment, old.FootComment
+	return &n, nil
+}
+
+// templatesMapping returns the mapping node holding the templates inside doc,
+// creating the document, the `templates` key or its mapping when the file has
+// none (empty file, `templates:` with no value).
+func templatesMapping(doc *yaml.Node) *yaml.Node {
+	root := documentRoot(doc)
+	if root == nil {
+		*doc = yaml.Node{Kind: yaml.DocumentNode}
+		root = &yaml.Node{Kind: yaml.MappingNode, Tag: "!!map"}
+		doc.Content = []*yaml.Node{root}
+	}
+	for i := 0; i+1 < len(root.Content); i += 2 {
+		if root.Content[i].Value != sharedTemplatesKey {
+			continue
+		}
+		if root.Content[i+1].Kind != yaml.MappingNode {
+			root.Content[i+1] = &yaml.Node{Kind: yaml.MappingNode, Tag: "!!map"}
+		}
+		return root.Content[i+1]
+	}
+	mapping := &yaml.Node{Kind: yaml.MappingNode, Tag: "!!map"}
+	root.Content = append(root.Content,
+		&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: sharedTemplatesKey}, mapping)
+	return mapping
+}
+
+// cloneNode deep-copies a node tree so edits never reach the loaded document.
+// Alias targets stay shared; they are only read when encoding.
+func cloneNode(n *yaml.Node) *yaml.Node {
+	c := *n
+	c.Content = make([]*yaml.Node, len(n.Content))
+	for i, child := range n.Content {
+		c.Content[i] = cloneNode(child)
+	}
+	return &c
+}
+
+// detectIndent is the indentation of the first indented, non-comment line of
+// data, clamped to what the encoder supports; 2 when there is none.
+func detectIndent(data []byte) int {
+	const defaultIndent, minIndent, maxIndent = 2, 2, 8
+	for _, line := range strings.Split(string(data), "\n") {
+		trimmed := strings.TrimLeft(line, " ")
+		if trimmed == "" || strings.HasPrefix(trimmed, "#") {
+			continue
+		}
+		if n := len(line) - len(trimmed); n > 0 {
+			return min(max(n, minIndent), maxIndent)
+		}
+	}
+	return defaultIndent
 }
 
 // marshalLeo renders leo.yaml with only the templates that live there and says
