@@ -1,0 +1,8 @@
+{
+  "ok": false,
+  "error": "tool \"leo_chat_post\" conflicts with an existing tool",
+  "code": "name_conflict",
+  "data": {
+    "tool": "leo_chat_post"
+  }
+}

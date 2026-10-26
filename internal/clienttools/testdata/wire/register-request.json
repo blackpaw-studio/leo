@@ -1,0 +1,41 @@
+{
+  "client_id": "ct_01JC8Z3K4M5N6P7Q8R9S0T1V2W",
+  "group": "browser",
+  "tools": [
+    {
+      "name": "browser_click",
+      "description": "Click an element by ref from the latest snapshot.",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "ref": {
+            "type": "string"
+          },
+          "tab": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "ref"
+        ]
+      },
+      "timeout_s": 30
+    },
+    {
+      "name": "browser_handoff",
+      "description": "Ask the user to take over the browser.",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "message": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "message"
+        ]
+      },
+      "timeout_s": 0
+    }
+  ]
+}

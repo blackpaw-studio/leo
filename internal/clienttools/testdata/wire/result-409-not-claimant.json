@@ -1,0 +1,5 @@
+{
+  "ok": false,
+  "error": "request was claimed by another client",
+  "code": "not_claimant"
+}

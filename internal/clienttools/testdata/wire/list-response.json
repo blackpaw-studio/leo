@@ -1,0 +1,46 @@
+{
+  "ok": true,
+  "data": {
+    "revision": 7,
+    "ever_registered": true,
+    "tools": [
+      {
+        "group": "browser",
+        "name": "browser_click",
+        "description": "Click an element by ref from the latest snapshot.",
+        "input_schema": {
+          "type": "object",
+          "properties": {
+            "ref": {
+              "type": "string"
+            },
+            "tab": {
+              "type": "integer"
+            }
+          },
+          "required": [
+            "ref"
+          ]
+        },
+        "timeout_s": 30
+      },
+      {
+        "group": "browser",
+        "name": "browser_handoff",
+        "description": "Ask the user to take over the browser.",
+        "input_schema": {
+          "type": "object",
+          "properties": {
+            "message": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "message"
+          ]
+        },
+        "timeout_s": 0
+      }
+    ]
+  }
+}

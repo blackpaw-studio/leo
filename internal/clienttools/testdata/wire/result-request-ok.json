@@ -1,0 +1,15 @@
+{
+  "client_id": "ct_01JC8Z3K4M5N6P7Q8R9S0T1V2W",
+  "ok": true,
+  "content": [
+    {
+      "type": "text",
+      "text": "clicked e12"
+    },
+    {
+      "type": "image",
+      "data": "iVBORw0KGgoAAAANSUhEUgAAAAgAAAAICAYAAADED76LAAAAEklEQVR4nGP4z8Dwn4GBgYEBAB8MAv+FZ7JQAAAAAElFTkSuQmCC",
+      "mimeType": "image/png"
+    }
+  ]
+}

@@ -1,0 +1,31 @@
+{
+  "ok": true,
+  "data": {
+    "requests": [
+      {
+        "id": "ctr_01JC8Z4A5B6C7D8E9F0G1H2J3K",
+        "agent": "alfred",
+        "group": "browser",
+        "tool": "browser_click",
+        "args": {
+          "ref": "e12"
+        },
+        "owner": "ct_01JC8Z3K4M5N6P7Q8R9S0T1V2W",
+        "timeout_s": 30,
+        "created_at": "2026-10-26T15:21:02.123Z",
+        "claimed_by": ""
+      },
+      {
+        "id": "ctr_01JC8Z4A5B6C7D8E9F0G1H2J4M",
+        "agent": "alfred",
+        "group": "browser",
+        "tool": "browser_snapshot",
+        "args": {},
+        "owner": "",
+        "timeout_s": 30,
+        "created_at": "2026-10-26T15:21:03.500Z",
+        "claimed_by": "ct_01JC8Z3K4M5N6P7Q8R9S0T1V3X"
+      }
+    ]
+  }
+}

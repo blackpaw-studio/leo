@@ -1,0 +1,10 @@
+{
+  "ok": true,
+  "data": {
+    "ok": false,
+    "error": {
+      "code": "stale_ref",
+      "message": "ref e12 is not in the current snapshot"
+    }
+  }
+}

@@ -1,0 +1,16 @@
+{
+  "seq": 43,
+  "at": "2026-10-26T15:21:02.123Z",
+  "request": {
+    "id": "ctr_01JC8Z4A5B6C7D8E9F0G1H2J3K",
+    "agent": "alfred",
+    "group": "browser",
+    "tool": "browser_click",
+    "args": {
+      "ref": "e12"
+    },
+    "owner": "ct_01JC8Z3K4M5N6P7Q8R9S0T1V2W",
+    "timeout_s": 30,
+    "created_at": "2026-10-26T15:21:02.123Z"
+  }
+}
