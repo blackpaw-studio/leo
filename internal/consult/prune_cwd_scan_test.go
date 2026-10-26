@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"slices"
 	"testing"
+	"time"
 )
 
 func TestParseLsofCwdsReadsFieldOutput(t *testing.T) {
@@ -34,7 +35,7 @@ func TestParseLsofCwdsSkipsIncompleteProcesses(t *testing.T) {
 
 func shCmd(script string) func(context.Context, string, ...string) *exec.Cmd {
 	return func(ctx context.Context, name string, args ...string) *exec.Cmd {
-		if name != "lsof" || !slices.Equal(args, []string{"-nP", "-a", "-d", "cwd", "-Fpcn"}) {
+		if name != "lsof" || !slices.Equal(args, []string{"-b", "-nP", "-a", "-d", "cwd", "-Fpcn"}) {
 			panic("unexpected lsof argv: " + name)
 		}
 		return exec.CommandContext(ctx, "sh", "-c", script)
@@ -59,6 +60,30 @@ func TestRunLsofCwdsWithNoEntriesIsAnError(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestRunLsofCwdsRejectsPartialOutputFromAFailedRun(t *testing.T) {
+	partial := "printf 'p5\\ncsh\\nn/x\\n'; "
+	t.Run("exit 2", func(t *testing.T) {
+		if got, err := runLsofCwds(context.Background(), shCmd(partial+"exit 2")); err == nil {
+			t.Fatalf("got %+v, want an error", got)
+		}
+	})
+	t.Run("killed by signal", func(t *testing.T) {
+		if got, err := runLsofCwds(context.Background(), shCmd(partial+"kill -KILL $$")); err == nil {
+			t.Fatalf("got %+v, want an error", got)
+		}
+	})
+	t.Run("timeout", func(t *testing.T) {
+		old := lsofTimeout
+		lsofTimeout = 50 * time.Millisecond
+		t.Cleanup(func() { lsofTimeout = old })
+		// lsof hung on a remote mount: the timeout kills it mid-listing.
+		got, err := runLsofCwds(context.Background(), shCmd(partial+"exec sleep 30"))
+		if err == nil {
+			t.Fatalf("got %+v, want an error", got)
+		}
+	})
 }
 
 func TestRunLsofCwdsReportsAMissingBinary(t *testing.T) {

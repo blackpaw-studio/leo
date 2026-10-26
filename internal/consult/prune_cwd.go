@@ -15,7 +15,7 @@ import (
 )
 
 // lsofTimeout bounds the darwin cwd scan; lsof walks every process.
-const lsofTimeout = 30 * time.Second
+var lsofTimeout = 30 * time.Second
 
 // deferredQuietAfter is how long a deferred dispatch must have been over
 // before prune will take "no process works in its worktree" as proof its
@@ -62,17 +62,23 @@ func parseLsofCwds(out []byte) []procCwd {
 }
 
 // runLsofCwds lists every process's cwd with lsof. lsof exits 1 when some
-// processes are unreadable, so output with at least one entry is success and
-// no entries is an error.
+// processes are unreadable, so exit 1 with at least one entry is success. A
+// timeout, any other exit status or no entries at all is a failed scan: a
+// listing cut short would leave unseen processes looking absent. -b keeps
+// lsof from blocking in stat calls on hung remote mounts.
 func runLsofCwds(ctx context.Context, command func(context.Context, string, ...string) *exec.Cmd) ([]procCwd, error) {
 	ctx, cancel := context.WithTimeout(ctx, lsofTimeout)
 	defer cancel()
 	var stderr bytes.Buffer
-	cmd := command(ctx, "lsof", "-nP", "-a", "-d", "cwd", "-Fpcn")
+	cmd := command(ctx, "lsof", "-b", "-nP", "-a", "-d", "cwd", "-Fpcn")
 	cmd.Stderr = &stderr
 	out, runErr := cmd.Output()
-	procs := parseLsofCwds(out)
-	if len(procs) > 0 {
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return nil, fmt.Errorf("lsof: %w", ctxErr)
+	}
+	var exitErr *exec.ExitError
+	partialOK := errors.As(runErr, &exitErr) && exitErr.ExitCode() == 1
+	if procs := parseLsofCwds(out); len(procs) > 0 && (runErr == nil || partialOK) {
 		return procs, nil
 	}
 	if runErr == nil {
