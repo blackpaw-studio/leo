@@ -113,8 +113,16 @@ type Config struct {
 	// ignores unknown keys).
 	Providers map[string]any `yaml:"providers,omitempty"`
 
+	// TemplatesFile optionally names a YAML file holding shared agent
+	// templates (a single `templates:` key). Its templates merge beneath
+	// the local ones at load; see shared_templates.go.
+	TemplatesFile string `yaml:"templates_file,omitempty"`
+
 	// Set at load time from the config file path, not serialized.
 	HomePath string `yaml:"-"`
+
+	// shared records the loaded templates_file; nil when the key is unset.
+	shared *sharedTemplates
 }
 
 // ClientConfig holds remote-host definitions used when leo is invoked as a
@@ -830,6 +838,11 @@ func LoadWithRevision(path string) (*Config, string, error) {
 	if err != nil {
 		return nil, "", err
 	}
+	if cfg.TemplatesFile != "" {
+		if err := cfg.loadSharedTemplates(data); err != nil {
+			return nil, "", err
+		}
+	}
 	return cfg, RevisionOf(data), nil
 }
 
@@ -858,14 +871,7 @@ func (c *Config) expandPaths() {
 		task.Workspace = expandHome(task.Workspace)
 		c.Tasks[name] = task
 	}
-	for name, tmpl := range c.Templates {
-		tmpl.Workspace = expandHome(tmpl.Workspace)
-		tmpl.MCPConfig = expandHome(tmpl.MCPConfig)
-		for i, dir := range tmpl.AddDirs {
-			tmpl.AddDirs[i] = expandHome(dir)
-		}
-		c.Templates[name] = tmpl
-	}
+	expandTemplates(c.Templates)
 }
 
 // Save writes the config to a YAML file atomically: readers see either the
