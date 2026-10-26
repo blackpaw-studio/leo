@@ -198,7 +198,7 @@ type Server struct {
 	turnObserver func(agent string, turn AgentTurn)
 	// chat is Leo Chat; nil when the daemon has no chat store.
 	chat *chat.Service
-	// clientTools is the client-tools relay (docs/api/client-tools.md); nil
+	// clientTools is the client-tools relay (docs/configuration/client-tools.md); nil
 	// answers its routes 503.
 	clientTools *clienttools.Relay
 

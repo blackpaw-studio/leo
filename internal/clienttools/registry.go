@@ -1,7 +1,7 @@
 // Package clienttools is the daemon's generic client-tools relay: connected
 // apps declare tools, agents see them while a providing app is connected, and
 // calls are parked until the owning app posts a result. The daemon knows
-// nothing about what the tools do (docs/api/client-tools.md).
+// nothing about what the tools do (docs/configuration/client-tools.md).
 package clienttools
 
 import (

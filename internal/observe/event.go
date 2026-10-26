@@ -87,7 +87,7 @@ const (
 	FeatureAgentStatusRestoring = "agent_status_restoring"
 	// FeatureClientTools: connected apps can declare tools for agents through
 	// the client-tools relay (`?client_tools=1` provider streams and
-	// /api/v1/client-tools; docs/api/client-tools.md).
+	// /api/v1/client-tools; docs/configuration/client-tools.md).
 	FeatureClientTools = "client_tools"
 )
 

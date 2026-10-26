@@ -5,7 +5,7 @@ import (
 	"time"
 )
 
-// Client-tools relay events (docs/api/client-tools.md). The relay itself
+// Client-tools relay events (docs/configuration/client-tools.md). The relay itself
 // lives in internal/clienttools; these are its wire shapes.
 const (
 	// EventClientToolsChanged tells every stream the set of registered client

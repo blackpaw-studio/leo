@@ -10,7 +10,7 @@ import (
 	"github.com/blackpaw-studio/leo/internal/clienttools"
 )
 
-// Client-tools relay HTTP surface (docs/api/client-tools.md). The app routes
+// Client-tools relay HTTP surface (docs/configuration/client-tools.md). The app routes
 // live under /api/v1/client-tools on TCP (operator and paired-device tokens)
 // and, unauthenticated, at the same paths on the daemon's 0600 socket. The
 // agent routes (list, call) are TCP-only and take the agent token.
