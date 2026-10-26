@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/blackpaw-studio/leo/internal/clienttools"
+	"github.com/blackpaw-studio/leo/internal/leotools"
 )
 
 // Client-tools relay HTTP surface (docs/configuration/client-tools.md). The app routes
@@ -21,7 +22,7 @@ const (
 	maxClientToolsJSONBody = 1 << 20
 	// maxClientToolResultBody caps a result body: an app returns screenshots
 	// as base64 image blocks, far past the global request cap.
-	maxClientToolResultBody = 32 << 20
+	maxClientToolResultBody = leotools.MaxClientToolResultBytes
 )
 
 // isClientToolResultPath reports whether path is a result post.

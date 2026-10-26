@@ -17,12 +17,18 @@ import (
 
 	"github.com/blackpaw-studio/leo/internal/config"
 	"github.com/blackpaw-studio/leo/internal/consult"
+	"github.com/blackpaw-studio/leo/internal/leotools"
 )
 
 // maxDaemonResponseBytes caps how much response body the MCP client will read
 // from the local daemon. The daemon is trusted, so this is a safety net against
 // a runaway handler rather than an adversarial boundary.
 const maxDaemonResponseBytes = 10 << 20
+
+// maxClientToolResponseBytes is how much of a relayed client-tool result the
+// MCP server reads: the largest result an app may post, plus headroom for the
+// envelope. Truncating it would hand the model broken JSON.
+const maxClientToolResponseBytes = leotools.MaxClientToolResultBytes + 1<<20
 
 // consultHTTPTimeout is slightly longer than the daemon's own consultant
 // deadline so the daemon can return its structured timeout error. Derived
@@ -66,6 +72,11 @@ func (c *daemonClient) do(method, path string, body any) (json.RawMessage, error
 }
 
 func (c *daemonClient) doContext(ctx context.Context, method, path string, body any) (json.RawMessage, error) {
+	return c.doContextLimit(ctx, method, path, body, maxDaemonResponseBytes)
+}
+
+// doContextLimit is doContext reading at most limit bytes of response.
+func (c *daemonClient) doContextLimit(ctx context.Context, method, path string, body any, limit int64) (json.RawMessage, error) {
 	var reqBody io.Reader
 	if body != nil {
 		buf, err := json.Marshal(body)
@@ -88,10 +99,10 @@ func (c *daemonClient) doContext(ctx context.Context, method, path string, body 
 	}
 	defer resp.Body.Close()
 
-	// Cap the response body to a generous 10 MiB. The daemon is local and
+	// Cap the response body (10 MiB by default). The daemon is local and
 	// trusted, so this is belt-and-suspenders against a runaway handler —
 	// list responses scale with the number of agents/tasks.
-	raw, err := io.ReadAll(io.LimitReader(resp.Body, maxDaemonResponseBytes))
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, limit))
 	if err != nil {
 		return nil, fmt.Errorf("read response: %w", err)
 	}
@@ -449,7 +460,7 @@ func (c *daemonClient) callClientTool(ctx context.Context, agent, tool string, a
 	if len(args) == 0 {
 		args = json.RawMessage(`{}`)
 	}
-	raw, err := client.doContext(ctx, http.MethodPost, "/api/agent/"+url.PathEscape(agent)+"/client-tools/call", map[string]any{"tool": tool, "args": args})
+	raw, err := client.doContextLimit(ctx, http.MethodPost, "/api/agent/"+url.PathEscape(agent)+"/client-tools/call", map[string]any{"tool": tool, "args": args}, maxClientToolResponseBytes)
 	if err != nil {
 		return clientToolResult{}, err
 	}

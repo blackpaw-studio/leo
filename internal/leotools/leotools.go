@@ -98,6 +98,12 @@ func IsKnownTool(name string) bool {
 	return false
 }
 
+// MaxClientToolResultBytes caps the body an app may post as a client tool's
+// result (screenshots ride in it). The daemon enforces it on the way in and
+// the MCP server sizes its read of the relayed result from it, so the two
+// cannot drift apart.
+const MaxClientToolResultBytes = 32 << 20
+
 // ClientToolsStateFile is the file under the state directory where the
 // client-tools relay persists the tool names apps have registered. Config
 // validation reads it so a deny_tools entry for a client tool stays valid

@@ -283,3 +283,19 @@ func TestClientToolCallDeadlineIsTimeoutPlusGrace(t *testing.T) {
 		t.Fatalf("timeout 0 -> %v, want none", got)
 	}
 }
+
+func TestClientToolResultLargerThanTheDefaultReadCapSurvives(t *testing.T) {
+	cd, client := newClientToolsDaemon(t)
+	// A screenshot result: bigger than the 10 MiB cap other daemon replies get,
+	// well inside what the daemon accepts from an app.
+	big := strings.Repeat("A", maxDaemonResponseBytes+4096)
+	cd.callBody = `{"ok":true,"data":{"ok":true,"content":[{"type":"image","data":"` + big + `","mimeType":"image/png"}]}}`
+
+	out := nativeRegistry(client, leotools.Permissions{}).callTool(context.Background(), "browser_click", json.RawMessage(`{}`))
+	if out.IsError {
+		t.Fatalf("large result failed: %.200s", out.Content)
+	}
+	if len(out.Content) <= maxDaemonResponseBytes || !strings.HasSuffix(string(out.Content), `"mimeType":"image/png"}]`) {
+		t.Fatalf("result truncated: %d bytes", len(out.Content))
+	}
+}
