@@ -555,3 +555,31 @@ func TestErrorResultPassesThrough(t *testing.T) {
 		t.Fatalf("outcome = %+v", o)
 	}
 }
+
+func TestSettleRequiresAConnectedNamedClient(t *testing.T) {
+	f := newCallFixture(t)
+	_, req := f.start(t, context.Background(), "alfred", "browser_click")
+	if err := f.calls.Settle(req.ID, "", okResult(`[]`)); !errors.Is(err, ErrUnknownClient) {
+		t.Fatalf("empty client on unclaimed request err = %v, want ErrUnknownClient", err)
+	}
+	if _, err := f.calls.Claim(req.ID, f.a); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.calls.Settle(req.ID, "", okResult(`[]`)); !errors.Is(err, ErrUnknownClient) {
+		t.Fatalf("empty client on claimed request err = %v, want ErrUnknownClient", err)
+	}
+	if err := f.calls.Settle(req.ID, "ct_nope", okResult(`[]`)); !errors.Is(err, ErrUnknownClient) {
+		t.Fatalf("unconnected client err = %v, want ErrUnknownClient", err)
+	}
+	if got := len(f.calls.Pending()); got != 1 {
+		t.Fatalf("request settled by a bogus client: %d pending", got)
+	}
+}
+
+func TestClaimRejectsEmptyClient(t *testing.T) {
+	f := newCallFixture(t)
+	_, req := f.start(t, context.Background(), "alfred", "browser_click")
+	if _, err := f.calls.Claim(req.ID, ""); !errors.Is(err, ErrUnknownClient) {
+		t.Fatalf("empty client err = %v, want ErrUnknownClient", err)
+	}
+}

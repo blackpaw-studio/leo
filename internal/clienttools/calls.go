@@ -286,7 +286,8 @@ func providesLocked(r *Registry, group string, client ClientID) bool {
 }
 
 // Settle ends a claimed request with the app's result. Only the claimant may
-// settle, and only once.
+// settle, and only once; client must be a connected client id, so an empty id
+// never matches an unclaimed request.
 func (c *Calls) Settle(id string, client ClientID, res Result) error {
 	c.mu.Lock()
 	p, ok := c.pending[id]
@@ -297,6 +298,10 @@ func (c *Calls) Settle(id string, client ClientID, res Result) error {
 			return ErrAlreadySettled
 		}
 		return ErrUnknownRequest
+	}
+	if client == "" || !c.opts.Registry.ClientExists(client) {
+		c.mu.Unlock()
+		return ErrUnknownClient
 	}
 	if p.claimedBy != client {
 		c.mu.Unlock()
