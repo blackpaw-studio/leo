@@ -416,7 +416,7 @@ func TestOwnerDisconnectReannouncesUnclaimedRequestsItOwned(t *testing.T) {
 	if again.Request.ID != req.ID || again.Request.Owner != "" {
 		t.Fatalf("re-announced request = %+v", again.Request)
 	}
-	if pending := f.calls.Pending(); len(pending) != 1 || pending[0].Request.Owner != "" {
+	if pending := f.calls.Pending(); len(pending) != 1 || pending[0].Owner != "" {
 		t.Fatalf("pending = %+v, want the request unowned", pending)
 	}
 	if _, err := f.calls.Claim(req.ID, f.b); err != nil {
@@ -454,7 +454,7 @@ func TestReleaseWhileCallsPublishDoesNotRace(t *testing.T) {
 		// Make A the owner (claiming any parked request does), then let a new
 		// call park owned by A while A leaves.
 		for _, p := range f.calls.Pending() {
-			if _, err := f.calls.Claim(p.Request.ID, f.a); err == nil {
+			if _, err := f.calls.Claim(p.ID, f.a); err == nil {
 				break
 			}
 		}
