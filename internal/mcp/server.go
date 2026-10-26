@@ -120,6 +120,9 @@ func runWith(in io.Reader, out io.Writer, reg *registry) error {
 			writeErr = fmt.Errorf("flush: %w", err)
 		}
 	}
+	reg.watch.attach(ctx, &wg, func(method string) {
+		writeResponse(jsonRPCMessage{JSONRPC: "2.0", Method: method})
+	})
 
 	for {
 		var msg jsonRPCMessage
@@ -191,10 +194,22 @@ func dispatch(ctx context.Context, msg *jsonRPCMessage, reg *registry) (jsonRPCM
 
 	switch msg.Method {
 	case "initialize":
+		var params struct {
+			ClientInfo struct {
+				Name string `json:"name"`
+			} `json:"clientInfo"`
+		}
+		_ = json.Unmarshal(msg.Params, &params) // a malformed initialize just gets the fallback tools
+		reg.setClientName(params.ClientInfo.Name)
+		reg.startWatch()
+		tools := map[string]any{}
+		if reg.watching() {
+			tools["listChanged"] = true
+		}
 		resp.Result = map[string]any{
 			"protocolVersion": protocolVersion,
 			"capabilities": map[string]any{
-				"tools": map[string]any{},
+				"tools": tools,
 			},
 			"serverInfo": map[string]any{
 				"name":    "leo",

@@ -69,9 +69,28 @@ var Names = []string{
 	"leo_chat_schedule_cancel",
 }
 
+// AppToolsTool and AppCallTool are the fixed tools that stand in for client
+// tools on harnesses that never re-list their tools mid-session: one lists
+// what apps have registered, the other calls one by name. They are listed only
+// once some app has ever registered, so they are not part of Names.
+const (
+	AppToolsTool = "leo_app_tools"
+	AppCallTool  = "leo_app_call"
+)
+
+// FallbackNames lists the client-tools fallback tools. Like Names, their
+// names are reserved: a client tool cannot take one, and deny_tools may name
+// them.
+var FallbackNames = []string{AppToolsTool, AppCallTool}
+
 // IsKnownTool reports whether name is a tool Leo's MCP server registers.
 func IsKnownTool(name string) bool {
 	for _, n := range Names {
+		if n == name {
+			return true
+		}
+	}
+	for _, n := range FallbackNames {
 		if n == name {
 			return true
 		}

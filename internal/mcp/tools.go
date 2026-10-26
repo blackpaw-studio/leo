@@ -8,6 +8,7 @@ import (
 	"math"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/blackpaw-studio/leo/internal/consult"
@@ -74,10 +75,19 @@ type registry struct {
 	// clientTools is this agent's view of the daemon's client tools; nil in
 	// local-only mode, where there is no daemon to ask.
 	clientTools *clientToolsView
+	// clientMu guards the per-session client state below: initialize sets it
+	// on one request goroutine and later requests read it on others.
+	clientMu sync.Mutex
 	// clientName is the MCP client's initialize clientInfo.name, and
 	// nativeClientTools whether that client honors list_changed.
 	clientName        string
 	nativeClientTools bool
+	// fallbackSampled and fallbackOn record whether the fallback tools are
+	// listed. The daemon's ever_registered flag is read once, at the first
+	// tools/list, so a non-honoring client's list never changes mid-session.
+	fallbackSampled, fallbackOn bool
+	// watch is the list_changed machinery runWith attaches to a session.
+	watch clientToolsWatch
 }
 
 // registryOption adjusts a registry before its tools are registered.
@@ -836,25 +846,44 @@ func (r *registry) skip(name string) bool {
 }
 
 // list is the tools/list result: the built-in tools plus, for a client that
-// honors list_changed, every client tool currently registered with the daemon.
+// honors list_changed, every client tool currently registered with the daemon,
+// or, for one that does not, the fixed fallback tools once any app has ever
+// registered.
 func (r *registry) list() []toolDef {
-	if r.clientTools == nil || !r.nativeClientTools {
+	if r.clientTools == nil {
 		return r.defs
 	}
-	return append(append([]toolDef(nil), r.defs...), r.clientTools.defs(context.Background())...)
+	switch {
+	case r.isNativeClient():
+		return append(append([]toolDef(nil), r.defs...), r.clientTools.defs(context.Background())...)
+	case r.fallbackListed(context.Background()):
+		return append(append([]toolDef(nil), r.defs...), r.fallbackDefs()...)
+	}
+	return r.defs
 }
 
 // setClientName records the MCP client's name (initialize clientInfo.name)
 // and whether it honors list_changed, which decides how client tools reach it.
 func (r *registry) setClientName(name string) {
+	r.clientMu.Lock()
+	defer r.clientMu.Unlock()
 	r.clientName = name
 	r.nativeClientTools = honorsToolListChanged(name)
+}
+
+func (r *registry) isNativeClient() bool {
+	r.clientMu.Lock()
+	defer r.clientMu.Unlock()
+	return r.nativeClientTools
 }
 
 // callTool runs a tool and returns its MCP result: client tools pass the
 // app's content blocks (text and images) through, every other tool returns
 // text.
 func (r *registry) callTool(ctx context.Context, name string, raw json.RawMessage) toolOutcome {
+	if out, ok := r.callFallback(ctx, name, raw); ok {
+		return out
+	}
 	if r.isClientTool(name) {
 		return r.clientTools.call(ctx, name, raw)
 	}
