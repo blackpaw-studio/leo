@@ -234,27 +234,6 @@ func (r *Registry) validate(groupName string, tools []Tool) *RegisterError {
 	return nil
 }
 
-// validateSchema is a structural check only: an object whose type is
-// "object", with an object `properties` and a string-array `required` when
-// present. There is no JSON Schema library in the module.
-func validateSchema(raw json.RawMessage) error {
-	if len(bytes.TrimSpace(raw)) == 0 {
-		return fmt.Errorf("is required")
-	}
-	var s struct {
-		Type       any                        `json:"type"`
-		Properties map[string]json.RawMessage `json:"properties"`
-		Required   []string                   `json:"required"`
-	}
-	if err := json.Unmarshal(raw, &s); err != nil {
-		return fmt.Errorf("must be a JSON Schema object: %v", err)
-	}
-	if s.Type != "object" {
-		return fmt.Errorf(`must have "type": "object"`)
-	}
-	return nil
-}
-
 func (r *Registry) toolCountExcluding(groupName string) int {
 	n := 0
 	for name, g := range r.groups {

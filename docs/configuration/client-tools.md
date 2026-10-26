@@ -22,7 +22,18 @@ and on the daemon's unix socket. Responses use the usual `{ok, data, error, code
    whole. `timeout_s: 0` means the call never times out (a handoff). Errors:
    `invalid_tool`, `too_many_tools` (64 per group and per daemon),
    `unknown_client` (404), `name_conflict` (409). Tool names cannot collide
-   with Leo's own tools or another client's.
+   with Leo's own tools or another client's. `input_schema` is forwarded to
+   every agent's harness, so it is validated in full: an object schema using
+   only `type` (a primitive type or a list of them), `properties`, `required`,
+   `items`, `additionalProperties` (bool or schema), `anyOf`/`oneOf`/`allOf`,
+   `enum`, `const`, `default`, `examples`, `description`, `title`, `format`,
+   `pattern`, `minimum`/`maximum` (and `exclusive*`, `multipleOf`),
+   `min/maxLength`, `min/maxItems`, `min/maxProperties`, `uniqueItems`,
+   `deprecated`/`readOnly`/`writeOnly`, `$schema`, `$comment`; every nested
+   schema is checked, to 16 levels and 512 schemas. Unknown keywords (`$ref`,
+   `patternProperties`, tuple `items`, ...) and wrong value types are
+   `invalid_tool`, with the JSON path in the message (`at
+   $.properties.ref.type: unknown type "bogus"`).
 3. **Serve.** On a provider stream you receive `client_tool.request` events
    with the agent, tool and arguments. Claim it with
    `POST /requests/{id}/claim {client_id}`, then answer with
@@ -34,7 +45,8 @@ and on the daemon's unix socket. Responses use the usual `{ok, data, error, code
    then on (`409 owned_by_other` for a different client, `already_claimed`
    for a second claim). A second result is `409 already_settled`; a result from
    a non-claimant is `409 not_claimant`; an unknown or settled id is
-   `404 unknown_request`.
+   `404 unknown_request`. A claim or result without a `client_id` that names a
+   connected client is `404 unknown_client`.
 
 Other event streams never see call arguments: `client_tool.request` and
 `client_tool.cancelled` arrive redacted to ids, so `seq` stays contiguous.
