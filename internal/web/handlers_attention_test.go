@@ -356,7 +356,9 @@ func TestAgentHookReportsCompaction(t *testing.T) {
 }
 
 // recordingFeedPublisher keeps the compaction events published to it.
-type recordingFeedPublisher struct{ compactions []observe.AgentCompactionPayload }
+type recordingFeedPublisher struct {
+	compactions []observe.AgentCompactionPayload
+}
 
 func (p *recordingFeedPublisher) Publish(ev observe.Event) {
 	if c, ok := ev.Payload.(*observe.AgentCompactionPayload); ok {
