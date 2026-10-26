@@ -84,6 +84,12 @@ type callFixture struct {
 // browser_handoff: no timeout) provided by two clients.
 func newCallFixture(t *testing.T) *callFixture {
 	t.Helper()
+	return newCallFixtureWith(t, func(*CallsOptions) {})
+}
+
+// newCallFixtureWith is newCallFixture with the call tracker's options adjusted.
+func newCallFixtureWith(t *testing.T, adjust func(*CallsOptions)) *callFixture {
+	t.Helper()
 	reg := newTestRegistry()
 	f := &callFixture{reg: reg, pub: newRecordingPublisher(), clock: &fakeClock{}}
 	f.a, f.b = reg.Connect(), reg.Connect()
@@ -96,7 +102,7 @@ func newCallFixture(t *testing.T) *callFixture {
 		}
 	}
 	n := 0
-	f.calls = NewCalls(CallsOptions{
+	opts := CallsOptions{
 		Registry: reg,
 		Publish:  f.pub,
 		After:    f.clock.After,
@@ -105,7 +111,9 @@ func newCallFixture(t *testing.T) *callFixture {
 			n++
 			return fmt.Sprintf("ctr_%026d", n)
 		},
-	})
+	}
+	adjust(&opts)
+	f.calls = NewCalls(opts)
 	return f
 }
 
@@ -192,6 +200,37 @@ func TestTimeoutZeroWaitsForCtx(t *testing.T) {
 	}
 	if c := f.pub.next(t, observe.EventClientToolCancelled).Payload.(*observe.ClientToolCancelledPayload); c.Reason != observe.CancelCancelled {
 		t.Fatalf("reason = %q", c.Reason)
+	}
+}
+
+func TestTimeoutZeroIsBoundedByTheDaemonCeiling(t *testing.T) {
+	// A harness kills a tool call at its own ceiling and may never tell the
+	// daemon, so a no-timeout tool must not stay parked past it.
+	const ceiling = 31 * time.Minute
+	f := newCallFixtureWith(t, func(o *CallsOptions) { o.MaxWait = ceiling })
+	out, req := f.start(t, context.Background(), "alfred", "browser_handoff")
+	if got := f.clock.waited(); len(got) != 1 || got[0] != ceiling {
+		t.Fatalf("waited = %v, want [%s]", got, ceiling)
+	}
+	f.clock.fire(0)
+	o := wait(t, out)
+	if o.res.OK || o.res.Error == nil || o.res.Error.Code != "timeout" {
+		t.Fatalf("outcome = %+v", o)
+	}
+	cancelled := f.pub.next(t, observe.EventClientToolCancelled).Payload.(*observe.ClientToolCancelledPayload)
+	if cancelled.ID != req.ID || cancelled.Reason != observe.CancelTimeout {
+		t.Fatalf("cancelled = %+v", cancelled)
+	}
+	if len(f.calls.Pending()) != 0 {
+		t.Fatal("timed-out request still pending")
+	}
+}
+
+func TestToolTimeoutLongerThanTheCeilingIsCapped(t *testing.T) {
+	f := newCallFixtureWith(t, func(o *CallsOptions) { o.MaxWait = 10 * time.Second })
+	f.start(t, context.Background(), "alfred", "browser_click")
+	if got := f.clock.waited(); len(got) != 1 || got[0] != 10*time.Second {
+		t.Fatalf("waited = %v, a 30 s tool must not outlive the ceiling", got)
 	}
 }
 
@@ -348,6 +387,45 @@ func TestOwnerDisconnectReleasesAndUnclaims(t *testing.T) {
 		t.Fatal(err)
 	}
 	if o := wait(t, out); !o.res.OK {
+		t.Fatalf("outcome = %+v", o)
+	}
+}
+
+func TestOwnerDisconnectReannouncesUnclaimedRequestsItOwned(t *testing.T) {
+	f := newCallFixture(t)
+	// A becomes the owner of alfred's browser group by serving one call.
+	first, firstReq := f.start(t, context.Background(), "alfred", "browser_click")
+	if _, err := f.calls.Claim(firstReq.ID, f.a); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.calls.Settle(firstReq.ID, f.a, okResult(`[]`)); err != nil {
+		t.Fatal(err)
+	}
+	wait(t, first)
+
+	// The next call is published owned by A; A leaves before claiming it.
+	second, req := f.start(t, context.Background(), "alfred", "browser_click")
+	if req.Owner != string(f.a) {
+		t.Fatalf("request owner = %q, want %q", req.Owner, f.a)
+	}
+	f.reg.Disconnect(f.a)
+	f.calls.ReleaseClient(f.a)
+
+	// Apps skip requests owned by someone else, so B only sees it if it is announced again, unowned.
+	again := f.pub.next(t, observe.EventClientToolRequest).Payload.(*observe.ClientToolRequestPayload)
+	if again.Request.ID != req.ID || again.Request.Owner != "" {
+		t.Fatalf("re-announced request = %+v", again.Request)
+	}
+	if pending := f.calls.Pending(); len(pending) != 1 || pending[0].Request.Owner != "" {
+		t.Fatalf("pending = %+v, want the request unowned", pending)
+	}
+	if _, err := f.calls.Claim(req.ID, f.b); err != nil {
+		t.Fatalf("B claims: %v", err)
+	}
+	if err := f.calls.Settle(req.ID, f.b, okResult(`[]`)); err != nil {
+		t.Fatal(err)
+	}
+	if o := wait(t, second); !o.res.OK {
 		t.Fatalf("outcome = %+v", o)
 	}
 }

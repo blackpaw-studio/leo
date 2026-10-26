@@ -71,6 +71,11 @@ type CallsOptions struct {
 	Publish  observe.Publisher
 	// After returns a channel that fires after d (nil: time.After).
 	After func(time.Duration) <-chan time.Time
+	// MaxWait bounds how long any call stays parked, so a tool with no
+	// timeout of its own (timeout_s 0) cannot outlive the harness that
+	// called it: harnesses kill a tool call at their own ceiling and may
+	// never say so. Zero means unbounded.
+	MaxWait time.Duration
 	// Now stamps requests (nil: time.Now).
 	Now func() time.Time
 	// NewRequestID mints a request id (nil: "ctr_<ulid>").
@@ -142,19 +147,30 @@ func (c *Calls) Call(ctx context.Context, agent, toolName string, args json.RawM
 	p := c.park(agent, group, t, args)
 	c.publishRequest(p.req)
 
+	wait := c.waitFor(t)
 	var timer <-chan time.Time
-	if t.TimeoutS > 0 {
-		timer = c.opts.After(time.Duration(t.TimeoutS) * time.Second)
+	if wait > 0 {
+		timer = c.opts.After(wait)
 	}
 	select {
 	case <-p.done:
 	case <-timer:
-		c.finish(p, failure(CodeTimeout, fmt.Sprintf("the app did not answer within %d s", t.TimeoutS)), observe.CancelTimeout)
+		c.finish(p, failure(CodeTimeout, fmt.Sprintf("the app did not answer within %d s", int(wait/time.Second))), observe.CancelTimeout)
 	case <-ctx.Done():
 		c.finish(p, failure(CodeCancelled, "the call was cancelled"), observe.CancelCancelled)
 	}
 	<-p.done
 	return p.res, nil
+}
+
+// waitFor is how long a call to t stays parked: the tool's own timeout_s,
+// capped by MaxWait, which also stands in for timeout_s 0. Zero is unbounded.
+func (c *Calls) waitFor(t Tool) time.Duration {
+	wait := time.Duration(t.TimeoutS) * time.Second
+	if c.opts.MaxWait > 0 && (wait == 0 || wait > c.opts.MaxWait) {
+		return c.opts.MaxWait
+	}
+	return wait
 }
 
 func noClient() Result {
@@ -357,7 +373,9 @@ func (c *Calls) parkedWhere(match func(*parked) bool) []*parked {
 
 // ReleaseClient drops a disconnected client's ownerships and unclaims its
 // in-flight requests, announcing them again so another provider can take
-// over.
+// over. That includes requests published to it as owner but never claimed:
+// apps skip requests owned by someone else, so without a fresh, unowned
+// announcement no other provider would ever pick them up.
 func (c *Calls) ReleaseClient(client ClientID) {
 	c.mu.Lock()
 	for key, owner := range c.owners {
@@ -367,11 +385,10 @@ func (c *Calls) ReleaseClient(client ClientID) {
 	}
 	var again []Request
 	for _, p := range c.pending {
-		if p.claimedBy == client {
+		if p.claimedBy == client || (p.claimedBy == "" && p.req.Owner == string(client)) {
 			p.claimedBy = ""
-			req := p.req
-			req.Owner = string(c.ownerLocked(req.Agent, req.Group))
-			again = append(again, req)
+			p.req.Owner = string(c.ownerLocked(p.req.Agent, p.req.Group))
+			again = append(again, p.req)
 		}
 	}
 	c.mu.Unlock()

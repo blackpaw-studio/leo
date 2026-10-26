@@ -1256,6 +1256,11 @@ func wireObservability(ctx context.Context, sv *Supervisor, tmuxPath string) obs
 	return observability{Bus: bus, RunLog: runLog, MessageLog: messageLog, Tracker: tracker, Attention: attention, Publisher: pub}
 }
 
+// clientToolCeilingMargin is how far under the harness's tool-call ceiling
+// (leomcp.ToolTimeout) a parked client-tool call gives up, so leo reports the
+// timeout itself rather than the harness killing the call unannounced.
+const clientToolCeilingMargin = time.Minute
+
 // newClientToolsRelay builds the client-tools relay. Its ever-registered flag
 // and tool names persist at <home>/state/client-tools.json; events go out on
 // the observability bus.
@@ -1266,6 +1271,7 @@ func newClientToolsRelay(homePath string, pub observe.Publisher) *clienttools.Re
 	)
 	return clienttools.NewRelay(clienttools.RelayOptions{
 		Registry: clienttools.RegistryOptions{IsBuiltin: leotools.IsKnownTool},
+		Calls:    clienttools.CallsOptions{MaxWait: leomcp.ToolTimeout - clientToolCeilingMargin},
 		Flag:     flag,
 		Publish:  pub,
 	})
