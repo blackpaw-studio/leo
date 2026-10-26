@@ -644,3 +644,105 @@ func TestCompleteTemplateNames(t *testing.T) {
 		t.Errorf("expected 'coding' in completions; got %v", names)
 	}
 }
+
+// newSharedTemplatesConfig writes a leo.yaml with a templates_file holding
+// "team" (shared) and "research" (also local, so an override), plus a
+// local-only "mine", and returns the leo.yaml and shared file paths.
+func newSharedTemplatesConfig(t *testing.T) (cfgPath, sharedPath string) {
+	t.Helper()
+	home := t.TempDir()
+	cfgPath = filepath.Join(home, "leo.yaml")
+	sharedPath = filepath.Join(home, "shared.yaml")
+	leo := "defaults:\n  model: sonnet\ntemplates_file: shared.yaml\ntemplates:\n  mine:\n    model: haiku\n  research:\n    model: haiku\n"
+	shared := "templates:\n  team:\n    model: opus\n  research:\n    model: opus\n"
+	for p, body := range map[string]string{cfgPath: leo, sharedPath: shared} {
+		if err := os.WriteFile(p, []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	oldCfgFile := cfgFile
+	cfgFile = cfgPath
+	t.Cleanup(func() { cfgFile = oldCfgFile })
+	return cfgPath, sharedPath
+}
+
+func TestTemplateList_ShowsSourceColumn(t *testing.T) {
+	newSharedTemplatesConfig(t)
+
+	out := captureStdout(t, func() {
+		cmd := newTemplateListCmd()
+		if err := cmd.RunE(cmd, nil); err != nil {
+			t.Fatalf("RunE: %v", err)
+		}
+	})
+	for _, want := range []string{"SOURCE", "shared", "local · overrides shared"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("list output missing %q; got:\n%s", want, out)
+		}
+	}
+}
+
+func TestTemplateList_OmitsSourceColumnWithoutTemplatesFile(t *testing.T) {
+	newTestConfigWithTemplates(t)
+
+	out := captureStdout(t, func() {
+		cmd := newTemplateListCmd()
+		if err := cmd.RunE(cmd, nil); err != nil {
+			t.Fatalf("RunE: %v", err)
+		}
+	})
+	if strings.Contains(out, "SOURCE") {
+		t.Errorf("SOURCE column shown without templates_file:\n%s", out)
+	}
+}
+
+func TestTemplateList_JSONIncludesSource(t *testing.T) {
+	newSharedTemplatesConfig(t)
+	got := map[string]string{}
+	for _, e := range runListJSON(t) {
+		got[e.Name] = e.Source
+	}
+	want := map[string]string{"team": "shared", "mine": "local", "research": "local-override"}
+	for name, src := range want {
+		if got[name] != src {
+			t.Errorf("source[%s] = %q, want %q (all: %v)", name, got[name], src, got)
+		}
+	}
+}
+
+func TestTemplateAdd_SharedWritesSharedFile(t *testing.T) {
+	cfgPath, sharedPath := newSharedTemplatesConfig(t)
+	withTemplateTTY(t, false)
+
+	cmd := newTemplateAddCmd()
+	for k, v := range map[string]string{"name": "ops", "model": "haiku", "shared": "true"} {
+		if err := cmd.Flags().Set(k, v); err != nil {
+			t.Fatalf("set %s: %v", k, err)
+		}
+	}
+	if err := cmd.RunE(cmd, nil); err != nil {
+		t.Fatalf("RunE: %v", err)
+	}
+
+	shared, _ := os.ReadFile(sharedPath)
+	leo, _ := os.ReadFile(cfgPath)
+	if !strings.Contains(string(shared), "ops") || strings.Contains(string(leo), "ops:") {
+		t.Errorf("ops not in shared file only:\nshared:\n%s\nleo:\n%s", shared, leo)
+	}
+}
+
+func TestTemplateAdd_SharedWithoutTemplatesFileErrors(t *testing.T) {
+	newTestConfigWithTemplates(t)
+	withTemplateTTY(t, false)
+
+	cmd := newTemplateAddCmd()
+	for k, v := range map[string]string{"name": "ops", "shared": "true"} {
+		if err := cmd.Flags().Set(k, v); err != nil {
+			t.Fatalf("set %s: %v", k, err)
+		}
+	}
+	err := cmd.RunE(cmd, nil)
+	if err == nil || !strings.Contains(err.Error(), "templates_file is not set") {
+		t.Fatalf("err = %v, want templates_file error", err)
+	}
+}

@@ -26,8 +26,15 @@ func RenameTemplate(cfg *Config, oldName, newName string) error {
 		return fmt.Errorf("template %q already exists", newName)
 	}
 
+	// A renamed shared template stays in the shared file; an override
+	// renames to a plain local template (the shared one shows through again).
+	keepShared := cfg.TemplateSource(oldName) == SourceShared
+
 	cfg.Templates[newName] = tmpl
 	delete(cfg.Templates, oldName)
+	if keepShared {
+		cfg.shared.markRenamed(oldName, newName)
+	}
 
 	for name, task := range cfg.Tasks {
 		if task.Template == oldName {

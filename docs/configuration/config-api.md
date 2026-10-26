@@ -38,6 +38,8 @@ Every write must send it back in `If-Match`:
 | 409 `revision_mismatch` | the file changed since the read; the body's `data.revision` is the current one. Re-read, re-apply, retry |
 | 200 / 201 | written; the body carries the new revision |
 
+When `templates_file` is set the revision covers both `leo.yaml` and the shared templates file, so a change to either (a `git pull`, say) invalidates a stale `If-Match`.
+
 `If-Match` takes the revision bare (`sha256:...`), quoted as the `ETag` header
 carries it (`"sha256:..."`), or weak (`W/"sha256:..."`). There is no way to
 write blindly: `*` is not accepted.

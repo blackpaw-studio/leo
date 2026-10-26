@@ -39,15 +39,25 @@ func fileOwner(fi os.FileInfo) (uid, gid int, ok bool) {
 	return int(st.Uid), int(st.Gid), true
 }
 
-// writeFileAtomic replaces path with data (mode 0600) so a concurrent reader
+// writeFileAtomicWith replaces path with data so a concurrent reader
 // or a crash never observes a truncated file: the content goes to a temp file
 // in the same directory, is fsynced, renamed over the target, and the
 // directory is fsynced to persist the rename. A failure at any step leaves
 // the original untouched and removes the temp file.
-func writeFileAtomic(path string, data []byte) (err error) {
+//
+// The mode is 0600, or with keepMode the existing target's permission bits
+// (a shared templates file in a repo checkout is usually 0644); a new file is
+// 0600 either way.
+func writeFileAtomicWith(path string, data []byte, keepMode bool) (err error) {
 	target, err := resolveWriteTarget(path)
 	if err != nil {
 		return err
+	}
+	mode := os.FileMode(0600)
+	if keepMode {
+		if fi, statErr := os.Stat(target); statErr == nil {
+			mode = fi.Mode().Perm()
+		}
 	}
 	dir := filepath.Dir(target)
 
@@ -61,7 +71,7 @@ func writeFileAtomic(path string, data []byte) (err error) {
 		}
 	}()
 
-	if err = tmp.Chmod(0600); err != nil {
+	if err = tmp.Chmod(mode); err != nil {
 		_ = tmp.Close()
 		return fmt.Errorf("setting temp config permissions: %w", err)
 	}

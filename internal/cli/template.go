@@ -76,6 +76,18 @@ type templateListEntry struct {
 	Model     string `json:"model,omitempty"`
 	Agent     string `json:"agent,omitempty"`
 	Workspace string `json:"workspace,omitempty"`
+	// Source is "local", "shared" or "local-override"; empty without a
+	// templates_file.
+	Source string `json:"source,omitempty"`
+}
+
+// templateSourceKey is a template's machine-readable source, empty when the
+// config has no shared templates file.
+func templateSourceKey(cfg *config.Config, name string) string {
+	if !cfg.HasTemplatesFile() {
+		return ""
+	}
+	return string(cfg.TemplateSource(name))
 }
 
 func newTemplateListCmd() *cobra.Command {
@@ -109,6 +121,7 @@ Pass --json for machine-readable output suitable for scripting.`,
 						Model:     tmpl.Model,
 						Agent:     templateOwnOptions(tmpl).AgentFile,
 						Workspace: tmpl.Workspace,
+						Source:    templateSourceKey(cfg, name),
 					})
 				}
 				enc := json.NewEncoder(templateStdout)
@@ -121,7 +134,12 @@ Pass --json for machine-readable output suitable for scripting.`,
 				return nil
 			}
 
-			fmt.Printf("  %-20s %-10s %-20s %s\n", "NAME", "MODEL", "AGENT", "WORKSPACE")
+			showSource := cfg.HasTemplatesFile()
+			header := fmt.Sprintf("  %-20s %-10s %-20s %s", "NAME", "MODEL", "AGENT", "WORKSPACE")
+			if showSource {
+				header = fmt.Sprintf("  %-20s %-24s %-10s %-20s %s", "NAME", "SOURCE", "MODEL", "AGENT", "WORKSPACE")
+			}
+			fmt.Println(header)
 			for _, name := range names {
 				tmpl := cfg.Templates[name]
 				model := tmpl.Model
@@ -135,6 +153,10 @@ Pass --json for machine-readable output suitable for scripting.`,
 				ws := tmpl.Workspace
 				if ws == "" {
 					ws = "(default)"
+				}
+				if showSource {
+					fmt.Printf("  %-20s %-24s %-10s %-20s %s\n", name, cfg.TemplateSource(name).Label(), model, agent, ws)
+					continue
 				}
 				fmt.Printf("  %-20s %-10s %-20s %s\n", name, model, agent, ws)
 			}
@@ -209,6 +231,7 @@ func newTemplateAddCmd() *cobra.Command {
 		model          string
 		agent          string
 		permissionMode string
+		shared         bool
 	)
 	cmd := &cobra.Command{
 		Use:   "add",
@@ -252,12 +275,6 @@ spawned with 'leo agent spawn <template>'.`,
 			if strings.TrimSpace(name) == "" {
 				return fmt.Errorf("--name is required")
 			}
-			if cfg.Templates == nil {
-				cfg.Templates = make(map[string]config.TemplateConfig)
-			}
-			if _, exists := cfg.Templates[name]; exists {
-				return fmt.Errorf("template %q already exists", name)
-			}
 
 			tmpl := config.TemplateConfig{
 				Workspace: strings.TrimSpace(workspace),
@@ -277,7 +294,9 @@ spawned with 'leo agent spawn <template>'.`,
 			if len(harnessOpts) > 0 {
 				tmpl.HarnessOptions = harnessOpts
 			}
-			cfg.Templates[name] = tmpl
+			if err := cfg.AddTemplate(name, tmpl, shared); err != nil {
+				return err
+			}
 
 			if err := cfg.Validate(); err != nil {
 				return err
@@ -294,6 +313,7 @@ spawned with 'leo agent spawn <template>'.`,
 	cmd.Flags().StringVar(&channels, "channels", "", "Comma-separated channel plugin IDs")
 	cmd.Flags().StringVar(&model, "model", "", "Model override (defaults to global default)")
 	cmd.Flags().StringVar(&agent, "agent", "", "Agent identifier (optional)")
+	cmd.Flags().BoolVar(&shared, "shared", false, "Create the template in the shared templates_file instead of leo.yaml")
 	cmd.Flags().StringVar(&permissionMode, "permission-mode", "", "Permission mode (acceptEdits, auto, bypassPermissions, default, dontAsk, plan)")
 	return cmd
 }

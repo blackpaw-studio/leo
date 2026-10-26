@@ -113,8 +113,16 @@ type Config struct {
 	// ignores unknown keys).
 	Providers map[string]any `yaml:"providers,omitempty"`
 
+	// TemplatesFile optionally names a YAML file holding shared agent
+	// templates (a single `templates:` key). Its templates merge beneath
+	// the local ones at load; see shared_templates.go.
+	TemplatesFile string `yaml:"templates_file,omitempty"`
+
 	// Set at load time from the config file path, not serialized.
 	HomePath string `yaml:"-"`
+
+	// shared records the loaded templates_file; nil when the key is unset.
+	shared *sharedTemplates
 }
 
 // ClientConfig holds remote-host definitions used when leo is invoked as a
@@ -818,6 +826,15 @@ func RevisionOf(data []byte) string {
 	return "sha256:" + hex.EncodeToString(sum[:])
 }
 
+// revisionOfFiles is the revision of leo.yaml plus its shared templates file:
+// "sha256:" plus the digest of both files' digests, so a change to either one
+// changes it. A config without a shared file keeps RevisionOf's plain digest.
+func revisionOfFiles(leo, shared []byte) string {
+	l, s := sha256.Sum256(leo), sha256.Sum256(shared)
+	sum := sha256.Sum256(append(l[:], s[:]...))
+	return "sha256:" + hex.EncodeToString(sum[:])
+}
+
 // LoadWithRevision is Load plus the revision of the exact bytes it parsed, so
 // a caller that compares revisions under the config write lock cannot race a
 // separate read of the file.
@@ -829,6 +846,12 @@ func LoadWithRevision(path string) (*Config, string, error) {
 	cfg, err := parse(path, data)
 	if err != nil {
 		return nil, "", err
+	}
+	if cfg.TemplatesFile != "" {
+		if err := cfg.loadSharedTemplates(data); err != nil {
+			return nil, "", err
+		}
+		return cfg, revisionOfFiles(data, cfg.shared.sharedBytes), nil
 	}
 	return cfg, RevisionOf(data), nil
 }
@@ -858,14 +881,7 @@ func (c *Config) expandPaths() {
 		task.Workspace = expandHome(task.Workspace)
 		c.Tasks[name] = task
 	}
-	for name, tmpl := range c.Templates {
-		tmpl.Workspace = expandHome(tmpl.Workspace)
-		tmpl.MCPConfig = expandHome(tmpl.MCPConfig)
-		for i, dir := range tmpl.AddDirs {
-			tmpl.AddDirs[i] = expandHome(dir)
-		}
-		c.Templates[name] = tmpl
-	}
+	expandTemplates(c.Templates)
 }
 
 // Save writes the config to a YAML file atomically: readers see either the
@@ -874,20 +890,25 @@ func (c *Config) expandPaths() {
 // symlink, Save writes through it: the link survives and its target is
 // replaced (see resolveWriteTarget).
 func Save(path string, cfg *Config) error {
+	if cfg.shared != nil {
+		return saveSplit(path, cfg)
+	}
 	data, err := yaml.Marshal(cfg)
 	if err != nil {
 		return fmt.Errorf("marshaling config: %w", err)
 	}
+	if err := writeConfigFile(path, data, false); err != nil {
+		return fmt.Errorf("writing config: %w", err)
+	}
+	return nil
+}
 
+// writeConfigFile atomically writes data at path, creating its directory.
+func writeConfigFile(path string, data []byte, keepMode bool) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0750); err != nil {
 		return fmt.Errorf("creating config directory: %w", err)
 	}
-
-	if err := writeFileAtomic(path, data); err != nil {
-		return fmt.Errorf("writing config: %w", err)
-	}
-
-	return nil
+	return writeFileAtomicWith(path, data, keepMode)
 }
 
 // defaultHomeFn is a testability seam for DefaultHome.

@@ -249,6 +249,7 @@ func buildConfig(workspace string, existing *config.Config) *config.Config {
 		cfg.Web = existing.Web
 		cfg.Client = existing.Client
 		cfg.Client.Hosts = maps.Clone(existing.Client.Hosts)
+		cfg.InheritTemplatesFile(existing)
 		for k, v := range existing.Templates {
 			cfg.Templates[k] = v
 		}

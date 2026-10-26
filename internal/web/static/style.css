@@ -132,6 +132,8 @@ select.form-input {
 .row-actions--fixed .btn { width: 100%; text-align: center; }
 .frow-inline { display: flex; flex-wrap: wrap; gap: var(--sp-2); align-items: center; padding: var(--sp-3) var(--sp-4); }
 .frow-inline input { width: auto; flex: 1; min-width: 120px; }
+.check-inline { display: inline-flex; align-items: center; gap: var(--sp-2); white-space: nowrap; }
+.frow-inline .check-inline input { flex: none; min-width: 0; margin: 0; }
 
 /* flash + banner (keep existing class names used by flash.html) */
 .flash { padding: var(--sp-2) var(--sp-3); border-radius: var(--radius); margin-bottom: var(--sp-3); font-size: var(--fs-sm); }

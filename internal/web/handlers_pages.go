@@ -145,11 +145,27 @@ type templateRow struct {
 	Agent            string
 	Harness          string
 	HarnessInherited bool
+	// Source is the templates_file source badge ("shared", "local",
+	// "local · overrides shared"); empty when no shared file is configured.
+	Source    string
+	SourceKey string // machine value, drives the badge colour
 }
 
 // templatesPageData feeds page_config_templates.
 type templatesPageData struct {
 	Rows []templateRow
+	// HasTemplatesFile gates the "shared" option on the create form.
+	HasTemplatesFile bool
+}
+
+// templateSourceLabels returns the badge text and machine key for a template,
+// both empty when the config has no shared templates file.
+func templateSourceLabels(cfg *config.Config, name string) (label, key string) {
+	if !cfg.HasTemplatesFile() {
+		return "", ""
+	}
+	src := cfg.TemplateSource(name)
+	return src.Label(), string(src)
 }
 
 // buildTemplatesData assembles the templates list: a name-sorted table of
@@ -164,7 +180,10 @@ func (s *Server) buildTemplatesData(r *http.Request) (any, error) {
 
 	rows := make([]templateRow, 0, len(cfg.Templates))
 	for name, tmpl := range cfg.Templates {
+		label, key := templateSourceLabels(cfg, name)
 		rows = append(rows, templateRow{
+			Source:           label,
+			SourceKey:        key,
 			Name:             name,
 			Workspace:        tmpl.Workspace,
 			Model:            tmpl.Model,
@@ -175,7 +194,7 @@ func (s *Server) buildTemplatesData(r *http.Request) (any, error) {
 	}
 	sort.Slice(rows, func(i, j int) bool { return rows[i].Name < rows[j].Name })
 
-	return templatesPageData{Rows: rows}, nil
+	return templatesPageData{Rows: rows, HasTemplatesFile: cfg.HasTemplatesFile()}, nil
 }
 
 // buildDefaultsData feeds page_config_defaults with a schema-driven form
@@ -423,8 +442,10 @@ func (s *Server) buildServiceData(r *http.Request) (any, error) {
 // templateEditData feeds page_template_edit: the schema-driven form over the
 // template's config.
 type templateEditData struct {
-	Name string
-	Form formData
+	Name      string
+	Source    string // templates_file badge text; empty without a shared file
+	SourceKey string
+	Form      formData
 }
 
 // handleTemplateEditPage renders a single template's edit page: every
@@ -455,12 +476,15 @@ func (s *Server) handleTemplateEditPage(w http.ResponseWriter, r *http.Request) 
 	form.Fields = append(form.Fields, s.permissionFields(&tmpl.Permissions, cfg, name)...)
 	form.Fields = append(form.Fields, s.pushFields(schema.SectionPushTemplate, &tmpl.Push, cfg, scopeSuffix(schema.SectionTemplate, name), name)...)
 
+	srcLabel, srcKey := templateSourceLabels(cfg, name)
 	pd := pageData{
 		Page:  "template_edit",
 		Title: "Template: " + name,
 		Data: templateEditData{
-			Name: name,
-			Form: form,
+			Name:      name,
+			Source:    srcLabel,
+			SourceKey: srcKey,
+			Form:      form,
 		},
 	}
 	if err := s.fillStatus(&pd); err != nil {

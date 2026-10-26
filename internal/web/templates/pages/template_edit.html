@@ -1,5 +1,5 @@
 {{define "page_template_edit"}}
-<h1 class="page-title"><a href="/config/templates">Templates</a> / {{.Data.Name}}</h1>
+<h1 class="page-title"><a href="/config/templates">Templates</a> / {{.Data.Name}} {{template "template_source_badge" .Data}}</h1>
 <div class="card">
   <div class="card-head"><b>Rename</b></div>
   <form hx-post="/web/template/{{.Data.Name}}/rename" hx-target="#flash-container" hx-swap="innerHTML" class="inline-rename">
