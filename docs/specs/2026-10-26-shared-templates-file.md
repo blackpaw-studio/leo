@@ -41,6 +41,11 @@ templates_file: ~/dotfiles/leo/templates.yaml
   mode; a new file is created at 0600.
 - A file is rewritten only when its content changed, so editing a local template
   never touches the shared file (no git noise).
+- The shared file is edited at the YAML node level (`yaml.Node`). Only entries that
+  were added, changed or removed are touched. Untouched entries, the header, comments,
+  indentation and key order stay byte-identical. A changed entry is re-encoded at the
+  file's existing indentation, and comments attached to it are kept where the node
+  structure allows. `leo.yaml` keeps today's whole-struct marshal.
 - Editing or deleting a shared template writes or removes it in the shared file.
   Editing a local override writes `leo.yaml`. Deleting a local override removes it
   from `leo.yaml`, which uncovers the shared template again.
@@ -66,7 +71,7 @@ templates_file: ~/dotfiles/leo/templates.yaml
 - Multiple shared files, field-level merge, and moving a template between files
   (users can delete it and recreate it in the other file).
 - Sharing any section other than `templates:`.
-- Preserving comments in either file (`leo.yaml` already loses them on save).
+- Preserving comments in `leo.yaml` (it already loses them on save).
 
 ## Trust
 
@@ -80,6 +85,9 @@ The shared file has the same trust level as `leo.yaml`. Templates can set
   file error, unknown top-level key error, relative and `~` paths.
 - Save round-trip: edit shared → only the shared file changes; edit local → only
   `leo.yaml` changes; delete override uncovers shared; new template `shared` option.
+- Editing one shared template in a hand-formatted file (comments, 2-space indents,
+  custom key order) changes only that entry's lines; the rest of the file is
+  byte-identical. The same holds for adding and deleting a shared template.
 - Revision changes when only the shared file changes.
 - Validate: a shared template referencing a missing environment errors with a
   `templates.<name>` path.
