@@ -73,3 +73,31 @@ func TestValidateReturnsStructuredErrors(t *testing.T) {
 		t.Errorf("Error() text changed: %q", got)
 	}
 }
+
+func TestLoadWithRevisionChangesWhenOnlySharedFileChanges(t *testing.T) {
+	dir := t.TempDir()
+	leoPath := writeFile(t, dir, "leo.yaml", "templates_file: shared.yaml\n")
+	sharedPath := writeFile(t, dir, "shared.yaml", "templates:\n  a:\n    model: opus\n")
+
+	_, first, err := LoadWithRevision(leoPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, same, _ := LoadWithRevision(leoPath)
+	if first != same {
+		t.Fatal("revision must be stable for unchanged files")
+	}
+	if err := os.WriteFile(sharedPath, []byte("templates:\n  a:\n    model: haiku\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, second, err := LoadWithRevision(leoPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first == second {
+		t.Error("revision must change when only the shared file changes")
+	}
+	if first == RevisionOf([]byte("templates_file: shared.yaml\n")) {
+		t.Error("revision with a shared file must not equal the leo.yaml-only digest")
+	}
+}

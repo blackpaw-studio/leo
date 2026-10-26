@@ -826,6 +826,15 @@ func RevisionOf(data []byte) string {
 	return "sha256:" + hex.EncodeToString(sum[:])
 }
 
+// revisionOfFiles is the revision of leo.yaml plus its shared templates file:
+// "sha256:" plus the digest of both files' digests, so a change to either one
+// changes it. A config without a shared file keeps RevisionOf's plain digest.
+func revisionOfFiles(leo, shared []byte) string {
+	l, s := sha256.Sum256(leo), sha256.Sum256(shared)
+	sum := sha256.Sum256(append(l[:], s[:]...))
+	return "sha256:" + hex.EncodeToString(sum[:])
+}
+
 // LoadWithRevision is Load plus the revision of the exact bytes it parsed, so
 // a caller that compares revisions under the config write lock cannot race a
 // separate read of the file.
@@ -842,6 +851,7 @@ func LoadWithRevision(path string) (*Config, string, error) {
 		if err := cfg.loadSharedTemplates(data); err != nil {
 			return nil, "", err
 		}
+		return cfg, revisionOfFiles(data, cfg.shared.sharedBytes), nil
 	}
 	return cfg, RevisionOf(data), nil
 }
