@@ -335,6 +335,17 @@ func (s *AttentionStore) BindBridgeKey(key, launch, agent string) {
 	}
 }
 
+// BoundLaunch returns the bridge key and launch id agent's live bridged
+// launch is bound under; ok=false for an agent with none.
+func (s *AttentionStore) BoundLaunch(agent string) (key, launch string, ok bool) {
+	if s == nil {
+		return "", "", false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.bridge.boundLaunchOf(agent)
+}
+
 // IsBoundLaunch reports whether launch is the launch bound to bridge key
 // key now.
 func (s *AttentionStore) IsBoundLaunch(key, launch string) bool {

@@ -291,3 +291,75 @@ func TestAgentHookSubagentToolDoesNotClearMainLoopPrompt(t *testing.T) {
 		t.Fatalf("attention = %+v, want the main loop's prompt still pending", att)
 	}
 }
+
+// hookFeedServer is a hook server whose leo-a is bridged under key "k" and
+// whose bridge feed is real.
+func hookFeedServer(t *testing.T) (*Server, *observe.BridgeFeed) {
+	t.Helper()
+	s := newHookServer(t)
+	feed := observe.NewBridgeFeed(
+		observe.KeyResolverFunc(func(key string) (string, bool) { return "leo-a", key == "k" }),
+		nil, observe.WithFeedAttention(s.attention))
+	s.attention.BindBridgeKey("k", "launch-1", "leo-a")
+	s.bridgeFeed = feed
+	return s, feed
+}
+
+func TestAgentHookCountsSubagents(t *testing.T) {
+	s, feed := hookFeedServer(t)
+	hook := func(event, id string) {
+		postHook(t, s, "tok-a", `{"hook_event_name":"`+event+`","session_id":"sid-a","agent_id":"`+id+`","agent_type":"general-purpose"}`)
+	}
+
+	hook("SubagentStart", "a")
+	hook("SubagentStart", "a")
+	hook("SubagentStart", "b")
+	if got := feed.BridgeAgents()["leo-a"].Subagents; got != 2 {
+		t.Fatalf("subagents = %d, want 2", got)
+	}
+
+	hook("SubagentStop", "a")
+	if got := feed.BridgeAgents()["leo-a"].Subagents; got != 1 {
+		t.Fatalf("subagents after a stop = %d, want 1", got)
+	}
+
+	s.attention.BindBridgeKey("k", "launch-2", "leo-a") // a relaunch
+	hook("SubagentStart", "c")
+	if got := feed.BridgeAgents()["leo-a"].Subagents; got != 1 {
+		t.Fatalf("subagents on the new launch = %d, want 1", got)
+	}
+}
+
+func TestAgentHookReportsCompaction(t *testing.T) {
+	s, _ := hookFeedServer(t)
+	pub := &recordingFeedPublisher{}
+	feed := observe.NewBridgeFeed(
+		observe.KeyResolverFunc(func(key string) (string, bool) { return "leo-a", key == "k" }),
+		pub, observe.WithFeedAttention(s.attention))
+	s.bridgeFeed = feed
+
+	postHook(t, s, "tok-a", `{"hook_event_name":"PreCompact","session_id":"sid-a","trigger":"auto"}`)
+	postHook(t, s, "tok-a", `{"hook_event_name":"PostCompact","session_id":"sid-a","trigger":"auto","compact_summary":"x"}`)
+
+	want := []observe.AgentCompactionPayload{
+		{Agent: "leo-a", Phase: observe.CompactionStarted, Trigger: observe.CompactionAuto},
+		{Agent: "leo-a", Phase: observe.CompactionCompleted, Trigger: observe.CompactionAuto},
+	}
+	if len(pub.compactions) != len(want) {
+		t.Fatalf("compactions = %+v, want %+v", pub.compactions, want)
+	}
+	for i, got := range pub.compactions {
+		if got.Agent != want[i].Agent || got.Phase != want[i].Phase || got.Trigger != want[i].Trigger {
+			t.Fatalf("compaction %d = %+v, want %+v", i, got, want[i])
+		}
+	}
+}
+
+// recordingFeedPublisher keeps the compaction events published to it.
+type recordingFeedPublisher struct{ compactions []observe.AgentCompactionPayload }
+
+func (p *recordingFeedPublisher) Publish(ev observe.Event) {
+	if c, ok := ev.Payload.(*observe.AgentCompactionPayload); ok {
+		p.compactions = append(p.compactions, *c)
+	}
+}

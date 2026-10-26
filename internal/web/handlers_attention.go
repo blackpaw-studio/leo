@@ -25,6 +25,8 @@ type agentHookPayload struct {
 	// ToolName and ToolInput describe the call a PermissionRequest asks about.
 	ToolName  string          `json:"tool_name"`
 	ToolInput json.RawMessage `json:"tool_input"`
+	// Trigger says who asked for a compaction (PreCompact/PostCompact).
+	Trigger string `json:"trigger"`
 	// MCPServerName names the server an Elicitation hook comes from.
 	MCPServerName string `json:"mcp_server_name"`
 	// LastAssistantMessage is the turn's final message, on a Stop hook.
@@ -165,6 +167,7 @@ func (s *Server) handleAPIAgentHook(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if ours {
+		s.feedHook(name, payload)
 		s.chatHook(name, req.Payload)
 		if s.turnObserver != nil {
 			s.turnObserver(name, AgentTurn{
@@ -178,6 +181,36 @@ func (s *Server) handleAPIAgentHook(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	writeJSON(w, http.StatusOK, apiResponse{OK: true})
+}
+
+// agentHookFeed is the part of the bridge feed that takes what harness
+// command hooks report about an agent's bridged launch.
+type agentHookFeed interface {
+	HookSubagent(agent, id string, running bool)
+	HookCompaction(agent string, phase observe.CompactionPhase, trigger observe.CompactionTrigger)
+}
+
+// feedHook folds the hooks that report subagents and compaction into the
+// bridge feed, which keeps what the mod's classic.* handlers used to send.
+func (s *Server) feedHook(agent string, p agentHookPayload) {
+	feed, ok := s.bridgeFeed.(agentHookFeed)
+	if !ok {
+		return
+	}
+	trigger := observe.CompactionManual
+	if p.Trigger == "auto" {
+		trigger = observe.CompactionAuto
+	}
+	switch p.HookEventName {
+	case "SubagentStart":
+		feed.HookSubagent(agent, p.AgentID, true)
+	case "SubagentStop":
+		feed.HookSubagent(agent, p.AgentID, false)
+	case "PreCompact":
+		feed.HookCompaction(agent, observe.CompactionStarted, trigger)
+	case "PostCompact":
+		feed.HookCompaction(agent, observe.CompactionCompleted, trigger)
+	}
 }
 
 // isAgentHookSession reports whether a hook for sessionID belongs to the

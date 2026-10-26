@@ -804,3 +804,104 @@ func TestBridgeFeedPublishesTurnPreviewBeforeFinishedAttention(t *testing.T) {
 		t.Fatalf("event order = %v, want %v", order, want)
 	}
 }
+
+func hookSubagents(h *feedHarness) int { return h.feed.BridgeAgents()["alice"].Subagents }
+
+func TestBridgeFeedHookSubagentsCountDistinctIDs(t *testing.T) {
+	h := newFeedHarness(t, nil)
+
+	h.feed.HookSubagent("alice", "a", true)
+	h.feed.HookSubagent("alice", "a", true)
+	h.feed.HookSubagent("alice", "b", true)
+
+	if got := hookSubagents(h); got != 2 {
+		t.Fatalf("subagents = %d, want 2", got)
+	}
+	if att, _ := h.store.Get("alice"); att.Outstanding == nil || att.Outstanding.Subagents != 2 {
+		t.Fatalf("outstanding = %+v, want 2 subagents", att.Outstanding)
+	}
+
+	h.feed.HookSubagent("alice", "a", false)
+	h.feed.HookSubagent("alice", "a", false)
+
+	if got := hookSubagents(h); got != 1 {
+		t.Fatalf("subagents after a stop = %d, want 1", got)
+	}
+}
+
+func TestBridgeFeedHookSubagentsEndWithTheirLaunch(t *testing.T) {
+	h := newFeedHarness(t, nil)
+	h.feed.HookSubagent("alice", "a", true)
+	h.feed.HookSubagent("alice", "b", true)
+
+	h.store.BindBridgeKey("alice-key", "alice-key-launch-2", "alice")
+	h.feed.HookSubagent("alice", "c", true)
+
+	if got := hookSubagents(h); got != 1 {
+		t.Fatalf("subagents on the new launch = %d, want 1 (a and b died with the old one)", got)
+	}
+}
+
+func TestBridgeFeedHookSubagentsIgnoreUnboundAgents(t *testing.T) {
+	h := newFeedHarness(t, nil)
+
+	h.feed.HookSubagent("stranger", "a", true)
+
+	if got := h.feed.BridgeAgents(); len(got) != 0 && got["stranger"].Subagents != 0 {
+		t.Fatalf("BridgeAgents = %+v, want nothing for an unbridged agent", got)
+	}
+}
+
+func TestBridgeFeedHelloWithoutSubagentsKeepsTheHookCount(t *testing.T) {
+	h := newFeedHarness(t, nil)
+	h.send(bridge.Event{Name: bridge.ReportHello})
+	h.feed.HookSubagent("alice", "a", true)
+
+	h.send(bridge.Event{Name: bridge.ReportHello})
+
+	if got := hookSubagents(h); got != 1 {
+		t.Fatalf("subagents = %d, want the hook's 1 kept across a reconnect hello", got)
+	}
+}
+
+func TestBridgeFeedHookCompactionPublishesPhasesWithContext(t *testing.T) {
+	h := newFeedHarness(t, nil)
+	h.send(bridge.Event{Name: bridge.EventTurnComplete, EventID: "t1", Usage: usageJSON(t, 0.1, 1000)})
+	h.pub.reset()
+
+	h.feed.HookCompaction("alice", CompactionStarted, CompactionAuto)
+	h.feed.HookCompaction("alice", CompactionCompleted, CompactionAuto)
+
+	got := h.ofType(EventAgentCompaction)
+	if len(got) != 2 {
+		t.Fatalf("compaction events = %d, want 2", len(got))
+	}
+	first := got[0].Payload.(*AgentCompactionPayload)
+	if first.Agent != "alice" || first.Phase != CompactionStarted || first.Trigger != CompactionAuto || first.ContextPercent == nil || *first.ContextPercent != 0.5 {
+		t.Fatalf("started = %+v (percent %v)", first, first.ContextPercent)
+	}
+	if p := got[1].Payload.(*AgentCompactionPayload); p.Phase != CompactionCompleted {
+		t.Fatalf("second = %+v, want completed", p)
+	}
+}
+
+func TestBridgeFeedCompactionReportedByBothSourcesCountsOnce(t *testing.T) {
+	h := newFeedHarness(t, nil)
+
+	h.feed.HookCompaction("alice", CompactionStarted, CompactionManual)
+	h.send(bridge.Event{Name: bridge.EventCompact, Compact: &bridge.CompactReport{Phase: bridge.CompactStarted, Trigger: bridge.CompactManual}})
+	h.clock.Advance(3 * time.Second)
+	h.feed.HookCompaction("alice", CompactionCompleted, CompactionManual)
+	h.send(bridge.Event{Name: bridge.EventCompact, Compact: &bridge.CompactReport{Phase: bridge.CompactCompleted, Trigger: bridge.CompactManual}})
+
+	if n := len(h.ofType(EventAgentCompaction)); n != 2 {
+		t.Fatalf("compaction events = %d, want started + completed once each", n)
+	}
+
+	h.clock.Advance(time.Minute)
+	h.send(bridge.Event{Name: bridge.EventCompact, Compact: &bridge.CompactReport{Phase: bridge.CompactStarted, Trigger: bridge.CompactManual}})
+
+	if n := len(h.ofType(EventAgentCompaction)); n != 3 {
+		t.Fatalf("compaction events = %d, want the next compaction reported", n)
+	}
+}
