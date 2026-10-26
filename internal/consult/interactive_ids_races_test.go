@@ -239,3 +239,88 @@ func TestPendingWorkIsOnlyClearedByItsOwnTurnsStop(t *testing.T) {
 		t.Fatalf("its own stop did not settle the wait: %+v", rec)
 	}
 }
+
+// monitorAndCronStop is a hook Stop leaving a monitor and a session cron
+// pending. No shell task: the background tracker would hold the turn for
+// that on its own, masking whether the Stop's own work was carried.
+func monitorAndCronStop(t *testing.T, eventID, promptID, message string) HookReport {
+	t.Helper()
+	return idHook(t, eventID, "Stop", promptID, map[string]any{
+		"last_assistant_message": message,
+		"background_tasks":       []any{map[string]any{"id": "m1", "type": "monitor", "status": "running", "description": "watch build"}},
+		"session_crons":          []any{map[string]any{"id": "c1", "schedule": "*/5 * * * *"}},
+	})
+}
+
+// A bridged dispatch hears each turn from two sources: the bridge's
+// turn.start/turn.complete, which drive the dispatcher, and claude's own
+// UserPromptSubmit/Stop hooks, which the daemon supersedes (see
+// ReportSupersededStop). The mod no longer sends pending work (it cannot see
+// claude's classic.Stop hook once cc-plugin-sec-default passes it over), so
+// the hook Stop alone knows of a monitor or a session cron, and the bridge
+// turn.complete that follows it must not end the wait. Claude finishes a
+// turn only after its Stop hooks return, so the hook Stop comes first.
+func TestBridgedTurnWaitsOnTheSupersededHookStopsPendingWork(t *testing.T) {
+	d, rt, id := startBridgedIdle(t)
+	turn, err := d.Send(context.Background(), id, "build it")
+	if err != nil {
+		t.Fatal(err)
+	}
+	reportAll(t, d, id, bridgeStart(t, "e1", "t2", "build it", rt.lastCommandID()))
+
+	if err := d.ReportSupersededStop(id, monitorAndCronStop(t, "e2", "p2", "waiting")); err != nil {
+		t.Fatal(err)
+	}
+	reportAll(t, d, id, bridgeStop(t, "e3", "t2", "waiting"))
+
+	rec := idleRecord(t, d, id)
+	if w := turnByID(rec, turn.TurnID); w.Outcome != "" || rec.Status != StatusWaiting || rec.PendingWork == nil {
+		t.Fatalf("the turn did not wait: status=%s pending=%v turn=%+v", rec.Status, rec.PendingWork, w)
+	}
+	if w := rec.PendingWork; w.Tasks["monitor"] != 1 || w.Wakeups != 1 {
+		t.Fatalf("pending work = %+v, want the monitor and cron the hook Stop carried", w)
+	}
+	reportAll(t, d, id, bridgeWake(t, "e4", "t3", taskNotification), bridgeStop(t, "e5", "t3", "Build passed."))
+	if rec = idleRecord(t, d, id); rec.Status != StatusIdle || rec.PendingWork != nil {
+		t.Fatalf("the wake did not settle the wait: %+v", rec)
+	}
+}
+
+// A hook Stop's pending work belongs to the turn that stopped: a stale one
+// (its bridge complete never came) is not carried onto a later turn, and a
+// Stop with nothing pending clears it.
+func TestSupersededHookStopsPendingWorkDoesNotLeakToLaterTurns(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		setup func(t *testing.T, d *Dispatcher, id string, now *time.Time)
+	}{
+		{"it went stale", func(t *testing.T, d *Dispatcher, id string, now *time.Time) {
+			advanceClock(now, hookStopFreshness+time.Second)
+		}},
+		{"a later Stop had nothing pending", func(t *testing.T, d *Dispatcher, id string, now *time.Time) {
+			if err := d.ReportSupersededStop(id, idStop(t, "e3", "p3", "done")); err != nil {
+				t.Fatal(err)
+			}
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			d, rt, id, now := startBridgedIdleClock(t)
+			turn, err := d.Send(context.Background(), id, "build it")
+			if err != nil {
+				t.Fatal(err)
+			}
+			reportAll(t, d, id, bridgeStart(t, "e1", "t2", "build it", rt.lastCommandID()))
+			if err := d.ReportSupersededStop(id, monitorAndCronStop(t, "e2", "p2", "waiting")); err != nil {
+				t.Fatal(err)
+			}
+			tc.setup(t, d, id, now)
+
+			reportAll(t, d, id, bridgeStop(t, "e4", "t2", "finished"))
+
+			rec := idleRecord(t, d, id)
+			if w := turnByID(rec, turn.TurnID); w.Outcome != TurnFinished || rec.Status != StatusIdle || rec.PendingWork != nil {
+				t.Fatalf("the turn waited on stale work: status=%s pending=%v turn=%+v", rec.Status, rec.PendingWork, w)
+			}
+		})
+	}
+}

@@ -131,3 +131,44 @@ func TestClearAttentionTokenOnlyClearsMatchingToken(t *testing.T) {
 		t.Fatalf("missing record: %v", err)
 	}
 }
+
+func TestClaimedSessionBelongsToTheLaunchThatClaimedIt(t *testing.T) {
+	home := t.TempDir()
+	if err := Save(home, Record{Name: "a"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := SetAttentionToken(home, "a", "tok-1"); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := SetClaimedSession(home, "a", "tok-other", "sid-forged"); err != nil {
+		t.Fatal(err)
+	}
+	if got := ClaimedSession(home, "a", "tok-1"); got != "" {
+		t.Fatalf("claim by another token = %q, want none", got)
+	}
+
+	if err := SetClaimedSession(home, "a", "tok-1", "sid-cleared"); err != nil {
+		t.Fatal(err)
+	}
+	if got := ClaimedSession(home, "a", "tok-1"); got != "sid-cleared" {
+		t.Fatalf("claim = %q, want sid-cleared", got)
+	}
+	if got := ClaimedSession(home, "a", "tok-other"); got != "" {
+		t.Fatalf("claim read with another token = %q, want none", got)
+	}
+
+	if err := Save(home, Record{Name: "a", SessionID: "later"}); err != nil {
+		t.Fatal(err)
+	}
+	if got := ClaimedSession(home, "a", "tok-1"); got != "sid-cleared" {
+		t.Fatalf("claim after a stale Save = %q, want it kept", got)
+	}
+
+	if err := SetAttentionToken(home, "a", "tok-2"); err != nil {
+		t.Fatal(err)
+	}
+	if got := ClaimedSession(home, "a", "tok-2"); got != "" {
+		t.Fatalf("claim after a new launch = %q, want none", got)
+	}
+}

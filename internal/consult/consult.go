@@ -165,7 +165,10 @@ type runState struct {
 	armedTurn      string
 	armedUntil     time.Time
 	pendingCloses  map[string]pendingClose
-	eventIDs       []string
+	// hookStop is the pending work the newest superseded hook Stop left,
+	// until a bridge turn.complete takes it (see ReportSupersededStop).
+	hookStop *hookStopWork
+	eventIDs []string
 	// idMode latches once a hook payload carries a harness id: from then on
 	// attribution is by id, and an id-less payload never closes more than
 	// the one working turn. Runs whose payloads carry no ids never set it.

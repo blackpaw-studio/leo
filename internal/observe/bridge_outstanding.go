@@ -116,6 +116,16 @@ func (b *bridgeOutstanding) boundAgent(key, launch string) (string, bool) {
 	return bl.agent, true
 }
 
+// boundLaunchOf returns the key and launch agent's live launch is bound
+// under.
+func (b *bridgeOutstanding) boundLaunchOf(agent string) (key, launch string, ok bool) {
+	key, ok = b.keyOf[agent]
+	if !ok {
+		return "", "", false
+	}
+	return key, b.launches[key].launch, true
+}
+
 // launchAgent returns the agent launch belongs to now, if it is bound.
 func (b *bridgeOutstanding) launchAgent(launch string) (string, bool) {
 	key, ok := b.byLaunch[launch]

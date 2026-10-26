@@ -1,12 +1,17 @@
 package web
 
 import (
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/blackpaw-studio/leo/internal/agentstore"
+	"github.com/blackpaw-studio/leo/internal/bridge"
 	"github.com/blackpaw-studio/leo/internal/harness"
 	"github.com/blackpaw-studio/leo/internal/observe"
 )
@@ -215,5 +220,289 @@ func TestAgentHookForwardsTurnToObserver(t *testing.T) {
 				t.Fatalf("observed %+v, want %+v", got, tc.want)
 			}
 		})
+	}
+}
+
+func TestAgentHookRaisesNeedsInputWithReason(t *testing.T) {
+	for _, tc := range []struct {
+		name, body string
+		want       *observe.AttentionReason
+	}{
+		{"permission request names the tool and its summary",
+			`{"hook_event_name":"PermissionRequest","session_id":"sid-a","tool_name":"Bash","tool_input":{"command":"rm -rf /tmp/x"}}`,
+			&observe.AttentionReason{Kind: observe.AttentionReasonPermission, Tool: "Bash", Detail: "rm"}},
+		{"elicitation names the server",
+			`{"hook_event_name":"Elicitation","session_id":"sid-a","mcp_server_name":"github"}`,
+			&observe.AttentionReason{Kind: observe.AttentionReasonElicitation, Detail: "github"}},
+		{"a subagent's permission request is not the main loop's",
+			`{"hook_event_name":"PermissionRequest","session_id":"sid-a","agent_id":"sub-1","tool_name":"Bash","tool_input":{"command":"ls"}}`, nil},
+		{"a question is the bridge's to raise",
+			`{"hook_event_name":"PermissionRequest","session_id":"sid-a","tool_name":"AskUserQuestion","tool_input":{"questions":[]}}`, nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := newHookServer(t)
+
+			postHook(t, s, "tok-a", tc.body)
+
+			att, ok := s.attention.Get("leo-a")
+			if tc.want == nil {
+				if ok {
+					t.Fatalf("attention = %+v, want none", att)
+				}
+				return
+			}
+			if !ok || att.State != observe.AttentionNeedsInput || att.Reason == nil || *att.Reason != *tc.want {
+				t.Fatalf("attention = %+v, %v; want needs_input with reason %+v", att, ok, *tc.want)
+			}
+		})
+	}
+}
+
+func TestAgentHookNotificationKeepsTheReason(t *testing.T) {
+	s := newHookServer(t)
+	postHook(t, s, "tok-a", `{"hook_event_name":"Elicitation","session_id":"sid-a","mcp_server_name":"github"}`)
+
+	postHook(t, s, "tok-a", `{"hook_event_name":"Notification","notification_type":"elicitation_dialog","session_id":"sid-a"}`)
+
+	att, _ := s.attention.Get("leo-a")
+	if att.State != observe.AttentionNeedsInput || att.Reason == nil || att.Reason.Kind != observe.AttentionReasonElicitation {
+		t.Fatalf("attention = %+v, want needs_input keeping the elicitation reason", att)
+	}
+}
+
+func TestAgentHookToolSettledClearsNeedsInput(t *testing.T) {
+	for _, event := range []string{"PostToolUse", "PostToolUseFailure", "PermissionDenied"} {
+		t.Run(event, func(t *testing.T) {
+			s := newHookServer(t)
+			postHook(t, s, "tok-a", `{"hook_event_name":"PermissionRequest","session_id":"sid-a","tool_name":"Bash","tool_input":{"command":"ls"}}`)
+
+			postHook(t, s, "tok-a", `{"hook_event_name":"`+event+`","session_id":"sid-a"}`)
+
+			att, _ := s.attention.Get("leo-a")
+			if att.State != observe.AttentionWorking || att.Reason != nil {
+				t.Fatalf("attention = %+v, want working without a reason", att)
+			}
+		})
+	}
+}
+
+func TestAgentHookSubagentToolDoesNotClearMainLoopPrompt(t *testing.T) {
+	s := newHookServer(t)
+	postHook(t, s, "tok-a", `{"hook_event_name":"PermissionRequest","session_id":"sid-a","tool_name":"Bash","tool_input":{"command":"ls"}}`)
+
+	postHook(t, s, "tok-a", `{"hook_event_name":"PostToolUse","session_id":"sid-a","agent_id":"sub-1"}`)
+
+	if att, _ := s.attention.Get("leo-a"); att.State != observe.AttentionNeedsInput {
+		t.Fatalf("attention = %+v, want the main loop's prompt still pending", att)
+	}
+}
+
+// hookFeedServer is a hook server whose leo-a is bridged under key "k" and
+// whose bridge feed is real.
+func hookFeedServer(t *testing.T) (*Server, *observe.BridgeFeed) {
+	t.Helper()
+	s := newHookServer(t)
+	feed := observe.NewBridgeFeed(
+		observe.KeyResolverFunc(func(key string) (string, bool) { return "leo-a", key == "k" }),
+		nil, observe.WithFeedAttention(s.attention))
+	s.attention.BindBridgeKey("k", "launch-1", "leo-a")
+	s.bridgeFeed = feed
+	return s, feed
+}
+
+func TestAgentHookCountsSubagents(t *testing.T) {
+	s, feed := hookFeedServer(t)
+	hook := func(event, id string) {
+		postHook(t, s, "tok-a", `{"hook_event_name":"`+event+`","session_id":"sid-a","agent_id":"`+id+`","agent_type":"general-purpose"}`)
+	}
+
+	hook("SubagentStart", "a")
+	hook("SubagentStart", "a")
+	hook("SubagentStart", "b")
+	if got := feed.BridgeAgents()["leo-a"].Subagents; got != 2 {
+		t.Fatalf("subagents = %d, want 2", got)
+	}
+
+	hook("SubagentStop", "a")
+	if got := feed.BridgeAgents()["leo-a"].Subagents; got != 1 {
+		t.Fatalf("subagents after a stop = %d, want 1", got)
+	}
+
+	s.attention.BindBridgeKey("k", "launch-2", "leo-a") // a relaunch
+	hook("SubagentStart", "c")
+	if got := feed.BridgeAgents()["leo-a"].Subagents; got != 1 {
+		t.Fatalf("subagents on the new launch = %d, want 1", got)
+	}
+}
+
+func TestAgentHookReportsCompaction(t *testing.T) {
+	s, _ := hookFeedServer(t)
+	pub := &recordingFeedPublisher{}
+	feed := observe.NewBridgeFeed(
+		observe.KeyResolverFunc(func(key string) (string, bool) { return "leo-a", key == "k" }),
+		pub, observe.WithFeedAttention(s.attention))
+	s.bridgeFeed = feed
+
+	postHook(t, s, "tok-a", `{"hook_event_name":"PreCompact","session_id":"sid-a","trigger":"auto"}`)
+	postHook(t, s, "tok-a", `{"hook_event_name":"PostCompact","session_id":"sid-a","trigger":"auto","compact_summary":"x"}`)
+
+	want := []observe.AgentCompactionPayload{
+		{Agent: "leo-a", Phase: observe.CompactionStarted, Trigger: observe.CompactionAuto},
+		{Agent: "leo-a", Phase: observe.CompactionCompleted, Trigger: observe.CompactionAuto},
+	}
+	if len(pub.compactions) != len(want) {
+		t.Fatalf("compactions = %+v, want %+v", pub.compactions, want)
+	}
+	for i, got := range pub.compactions {
+		if got.Agent != want[i].Agent || got.Phase != want[i].Phase || got.Trigger != want[i].Trigger {
+			t.Fatalf("compaction %d = %+v, want %+v", i, got, want[i])
+		}
+	}
+}
+
+// recordingFeedPublisher keeps the compaction events published to it.
+type recordingFeedPublisher struct {
+	compactions []observe.AgentCompactionPayload
+}
+
+func (p *recordingFeedPublisher) Publish(ev observe.Event) {
+	if c, ok := ev.Payload.(*observe.AgentCompactionPayload); ok {
+		p.compactions = append(p.compactions, *c)
+	}
+}
+
+// contextServer is a bridged hook server whose delegation policy is policy().
+func contextServer(t *testing.T, policy *bridge.DelegationState) *Server {
+	t.Helper()
+	s, _ := hookFeedServer(t)
+	s.delegationCtx = &delegationContext{
+		source: func() bridge.DelegationState { return *policy },
+		told:   newToldStore(filepath.Join(t.TempDir(), "told.json"), func() time.Time { return contextNow }),
+		now:    func() time.Time { return contextNow },
+	}
+	return s
+}
+
+func postContext(t *testing.T, s *Server, token, payload string) string {
+	t.Helper()
+	body := `{"token":"` + token + `","payload":` + payload + `}`
+	req := httptest.NewRequest(http.MethodPost, "/api/agent/context", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	s.httpServer.Handler.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, body %s", w.Code, w.Body)
+	}
+	var resp struct{ Context string }
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decoding %s: %v", w.Body, err)
+	}
+	return resp.Context
+}
+
+func TestAgentContextTellsOnceAndAgainWhenChanged(t *testing.T) {
+	policy := delegationOn
+	s := contextServer(t, &policy)
+	start := func(source, sid string) string {
+		return postContext(t, s, "tok-a", `{"hook_event_name":"SessionStart","source":"`+source+`","session_id":"`+sid+`"}`)
+	}
+	prompt := func(sid string) string {
+		return postContext(t, s, "tok-a", `{"hook_event_name":"UserPromptSubmit","session_id":"`+sid+`","prompt":"hi"}`)
+	}
+
+	if got := start("startup", "sid-a"); got != "SECTION v1" {
+		t.Fatalf("startup = %q, want the section", got)
+	}
+	if got := prompt("sid-a"); got != "" {
+		t.Fatalf("first prompt = %q, want nothing", got)
+	}
+	policy = delegationV2
+	if got := prompt("sid-a"); !strings.Contains(got, "SECTION v2") {
+		t.Fatalf("prompt after a change = %q, want the new section", got)
+	}
+	if got := prompt("sid-a"); got != "" {
+		t.Fatalf("second prompt after the change = %q, want nothing", got)
+	}
+	if got := start("clear", "sid-new"); got != "SECTION v2" {
+		t.Fatalf("clear = %q, want the section for the new session", got)
+	}
+}
+
+func TestAgentContextIsEmptyWhereItShouldNotSpeak(t *testing.T) {
+	policy := delegationOn
+	for _, tc := range []struct{ name, token, payload string }{
+		{"unknown token", "tok-nope", `{"hook_event_name":"SessionStart","source":"startup","session_id":"sid-a"}`},
+		{"unbridged agent", "tok-b", `{"hook_event_name":"SessionStart","source":"startup","session_id":"sid-b"}`},
+		{"a subagent's hook", "tok-a", `{"hook_event_name":"SessionStart","source":"startup","session_id":"sid-a","agent_id":"sub"}`},
+		{"no session id", "tok-a", `{"hook_event_name":"SessionStart","source":"startup"}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := contextServer(t, &policy)
+
+			if got := postContext(t, s, tc.token, tc.payload); got != "" {
+				t.Fatalf("context = %q, want none", got)
+			}
+		})
+	}
+}
+
+// restarted is a new Server over the same state, attention and bridge wiring
+// as s: what a daemon restart that adopts the agents' sessions leaves.
+func restarted(t *testing.T, s *Server) *Server {
+	t.Helper()
+	fresh := New(s.configPath, s.processes, s.scheduler, s.reloader, s.agentSvc, Options{Port: testPort, APIToken: testAPIToken})
+	raw := fresh.httpServer.Handler
+	fresh.httpServer.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		authorizeTestRequest(r)
+		raw.ServeHTTP(w, r)
+	})
+	fresh.attention, fresh.bridgeFeed, fresh.delegationCtx = s.attention, s.bridgeFeed, s.delegationCtx
+	return fresh
+}
+
+func TestAgentHooksAfterClearSurviveARestart(t *testing.T) {
+	policy := delegationOn
+	s := contextServer(t, &policy)
+	home := filepath.Dir(s.configPath)
+	if err := agentstore.Save(home, agentstore.Record{Name: "leo-a"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := agentstore.SetAttentionToken(home, "leo-a", "tok-a"); err != nil {
+		t.Fatal(err)
+	}
+	feed := s.bridgeFeed.(*observe.BridgeFeed)
+	postContext(t, s, "tok-a", `{"hook_event_name":"SessionStart","source":"clear","session_id":"sid-after-clear"}`)
+
+	fresh := restarted(t, s)
+	postHook(t, fresh, "tok-a", `{"hook_event_name":"SubagentStart","session_id":"sid-after-clear","agent_id":"a"}`)
+	postHook(t, fresh, "tok-a", `{"hook_event_name":"SubagentStart","session_id":"unrelated","agent_id":"b"}`)
+
+	if got := feed.BridgeAgents()["leo-a"].Subagents; got != 1 {
+		t.Fatalf("subagents = %d, want only the post-/clear session's", got)
+	}
+}
+
+func TestAgentHookSessionClaimIsScopedToTheLaunchToken(t *testing.T) {
+	policy := delegationOn
+	s := contextServer(t, &policy)
+	home := filepath.Dir(s.configPath)
+	if err := agentstore.Save(home, agentstore.Record{Name: "leo-a"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := agentstore.SetAttentionToken(home, "leo-a", "tok-a"); err != nil {
+		t.Fatal(err)
+	}
+	feed := s.bridgeFeed.(*observe.BridgeFeed)
+	postContext(t, s, "tok-a", `{"hook_event_name":"SessionStart","source":"clear","session_id":"sid-after-clear"}`)
+
+	// The agent relaunches under a new token; its old claim must not carry over.
+	if err := agentstore.SetAttentionToken(home, "leo-a", "tok-a2"); err != nil {
+		t.Fatal(err)
+	}
+	s.attention.RegisterToken("tok-a2", "leo-a")
+	postHook(t, restarted(t, s), "tok-a2", `{"hook_event_name":"SubagentStart","session_id":"sid-after-clear","agent_id":"a"}`)
+
+	if got := feed.BridgeAgents()["leo-a"].Subagents; got != 0 {
+		t.Fatalf("subagents = %d, want the previous launch's claim dropped", got)
 	}
 }

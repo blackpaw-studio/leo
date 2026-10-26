@@ -63,18 +63,6 @@ export class Feed {
   }
 }
 
-const CLASSIC_OBSERVED = [
-  'classic.PermissionRequest',
-  'classic.Elicitation',
-  'classic.PostToolUse',
-  'classic.PostToolUseFailure',
-  'classic.PermissionDenied',
-  'classic.SubagentStart',
-  'classic.SubagentStop',
-  'classic.Notification',
-  'classic.Stop',
-]
-
 export type SubmitResponder = (e: { text: string; asUser?: boolean }) => unknown
 
 export interface HarnessOptions {
@@ -93,8 +81,6 @@ export interface HarnessOptions {
   beforeStoreSet?: (key: string) => Promise<void> | void
   // Answers a tool call the plugin passes on (the engine running the tool).
   toolCall?: (e: Record<string, unknown>) => unknown
-  // Awaited before each $.session.id answers, so a test can hold one back.
-  beforeSessionId?: () => Promise<void> | void
 }
 
 export interface Harness {
@@ -174,8 +160,6 @@ export function setup(on: any, opts: HarnessOptions = {}): Harness {
   })
   on('prompt.compose', () => ({ sections: [{ id: 'intro', text: 'core prompt', scope: 'shared' }] }))
   on('agent.offer', () => ({ isOffered: true }))
-  // The classic events the mod observes: nothing beneath answers them.
-  for (const name of CLASSIC_OBSERVED) on(name, () => ({}))
   on('tool.call', ($: any, e: any) => {
     h.toolCalls.push({ ...e })
     if (opts.toolCall) return opts.toolCall(e)
@@ -192,8 +176,7 @@ export function setup(on: any, opts: HarnessOptions = {}): Harness {
     return { value: undefined }
   })
   on('store.keys', () => ({ value: [...store.keys()] }))
-  on('session.id', async () => {
-    if (opts.beforeSessionId) await opts.beforeSessionId()
+  on('session.id', () => {
     return { value: h.sessionId }
   })
   on('session.version', () => ({ value: { version: '2.1.289', base: '2.1.289' } }))

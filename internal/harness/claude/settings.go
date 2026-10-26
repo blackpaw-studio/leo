@@ -23,40 +23,78 @@ const attentionNotificationMatcher = "permission_prompt|elicitation_dialog"
 // its own; the daemon applies the configured, shorter wait.
 const AgentPermissionWait = time.Hour
 
-// AttentionHooks is TurnHooks plus a Notification group, so a supervised
-// agent also reports when it is blocked on a permission prompt or an
-// elicitation dialog, and a PostToolUse group, whose report clears that
-// needs_input once the prompt is answered and the tool runs.
+// contextHookTimeout bounds the SessionStart/UserPromptSubmit context
+// hooks, in seconds. `leo dispatch context` fails open well inside it.
+const contextHookTimeout = 10
+
+// contextSessionStartMatcher is every SessionStart source that rebuilds the
+// model's context, so the delegation context is told again after each.
+const contextSessionStartMatcher = "startup|resume|clear|compact|fork"
+
+// attentionReportEvents are the hooks, besides TurnHooks' Stop,
+// UserPromptSubmit and SessionEnd, relayed to the daemon as they fire. They
+// carry what the leo-bridge mod reported through the mod API events that
+// cc-plugin-sec-default passes over (permission and elicitation attention and
+// its clearing, subagents, compaction); command hooks are unaffected by it.
+var attentionReportEvents = []string{
+	"PostToolUse", "PostToolUseFailure", "PermissionDenied", "Elicitation",
+	"SubagentStart", "SubagentStop", "PreCompact", "PostCompact",
+}
+
+// AttentionHooks is TurnHooks plus the hooks a supervised agent reports
+// attention, subagents and compaction through, and the hooks that add the
+// delegation context to its model.
+//
+// Each of attentionReportEvents, and a Notification group limited to the
+// prompts that block on the operator, runs the report command; the daemon
+// raises needs_input from a permission prompt or elicitation and clears it
+// once the prompt is answered.
 //
 // A PermissionRequest group (`<leo> dispatch permission`, derived from a
 // `<leo> dispatch report` command) offers each permission prompt in Leo
 // Chat. Claude keeps its own dialog up while the hook waits, so the
 // terminal can still answer first; the hook is then killed.
+//
+// A SessionStart group and a UserPromptSubmit group (`<leo> dispatch
+// context`, derived the same way) add the delegation section as
+// additionalContext, and again only when the roster changed.
 func (c Claude) AttentionHooks(reportCmd []string) ([]string, error) {
 	turn, err := c.TurnHooks(reportCmd)
 	if err != nil {
 		return nil, err
 	}
-	command := []any{map[string]any{"type": "command", "command": harness.ShellCommand(reportCmd)}}
+	report := []any{map[string]any{"type": "command", "command": harness.ShellCommand(reportCmd)}}
+	reportGroup := map[string]any{"hooks": report}
 	groups := map[string]any{
 		"Notification": []any{map[string]any{
 			"matcher": attentionNotificationMatcher,
-			"hooks":   command,
+			"hooks":   report,
 		}},
-		"PostToolUse": []any{map[string]any{"hooks": command}},
+		"PermissionRequest": []any{reportGroup},
+	}
+	for _, event := range attentionReportEvents {
+		groups[event] = []any{reportGroup}
 	}
 	if n := len(reportCmd); n > 0 && reportCmd[n-1] == "report" {
-		permissionCmd := append(slices.Clone(reportCmd[:n-1]), "permission")
-		groups["PermissionRequest"] = []any{map[string]any{"hooks": []any{map[string]any{
-			"type": "command", "command": harness.ShellCommand(permissionCmd),
+		derived := func(subcommand string) string {
+			return harness.ShellCommand(append(slices.Clone(reportCmd[:n-1]), subcommand))
+		}
+		groups["PermissionRequest"] = append(groups["PermissionRequest"].([]any), map[string]any{"hooks": []any{map[string]any{
+			"type": "command", "command": derived("permission"),
 			"timeout": int((AgentPermissionWait + permissionHookGrace).Seconds()),
-		}}}}
+		}}})
+		contextHook := map[string]any{"type": "command", "command": derived("context"), "timeout": contextHookTimeout}
+		groups["SessionStart"] = []any{map[string]any{
+			"matcher": contextSessionStartMatcher,
+			"hooks":   []any{contextHook},
+		}}
+		groups["UserPromptSubmit"] = []any{map[string]any{"hooks": []any{contextHook}}}
 	}
-	notification, err := json.Marshal(map[string]any{"hooks": groups})
+	encoded, err := json.Marshal(map[string]any{"hooks": groups})
 	if err != nil {
 		return nil, fmt.Errorf("claude: encoding attention hooks: %w", err)
 	}
-	return MergeSettingsArgs(turn, []string{"--settings", string(notification)}, MergeOptions{})
+	return MergeSettingsArgs(turn, []string{"--settings", string(encoded)}, MergeOptions{})
 }
 
 // attentionLaunch backs the driver's harness.AttentionHooker capability.

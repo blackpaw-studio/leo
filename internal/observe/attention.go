@@ -335,6 +335,17 @@ func (s *AttentionStore) BindBridgeKey(key, launch, agent string) {
 	}
 }
 
+// BoundLaunch returns the bridge key and launch id agent's live bridged
+// launch is bound under; ok=false for an agent with none.
+func (s *AttentionStore) BoundLaunch(agent string) (key, launch string, ok bool) {
+	if s == nil {
+		return "", "", false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.bridge.boundLaunchOf(agent)
+}
+
 // IsBoundLaunch reports whether launch is the launch bound to bridge key
 // key now.
 func (s *AttentionStore) IsBoundLaunch(key, launch string) bool {
@@ -529,6 +540,27 @@ func (s *AttentionStore) SetByToken(token string, state AttentionState, from ...
 // assistant message as the transition's preview (empty for none).
 func (s *AttentionStore) SetByTokenFinished(token, preview string) (AgentAttention, bool) {
 	return s.setByToken(token, AttentionFinished, preview, nil)
+}
+
+// SetByTokenNeedsInput moves the agent token routes to into needs_input with
+// reason (clamped), resolved and applied atomically like SetByToken. A
+// repeat of the same reason is not a new transition.
+func (s *AttentionStore) SetByTokenNeedsInput(token string, reason AttentionReason) (AgentAttention, bool) {
+	if s == nil || token == "" {
+		return AgentAttention{}, false
+	}
+	reason = ClampAttentionReason(reason)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	agent, ok := s.tokens[token]
+	if !ok {
+		return AgentAttention{}, false
+	}
+	if prev, has := s.reasons[agent]; s.states[agent] == AttentionNeedsInput && has && prev == reason {
+		return AgentAttention{}, false
+	}
+	s.reasons[agent] = reason
+	return s.setLocked(agent, AttentionNeedsInput), true
 }
 
 func (s *AttentionStore) setByToken(token string, state AttentionState, preview string, from []AttentionState) (AgentAttention, bool) {

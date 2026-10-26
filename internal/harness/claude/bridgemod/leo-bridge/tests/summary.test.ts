@@ -1,5 +1,5 @@
 import { expect, test } from 'claude-code/testing'
-import { compactTrigger, MAX_SUMMARY_CHARS, toolActivity } from '../hooks/protocol.js'
+import { MAX_SUMMARY_CHARS, toolActivity } from '../hooks/protocol.js'
 
 const HOME = '/Users/me'
 
@@ -58,11 +58,4 @@ test('every field is capped', () => {
   const got = toolActivity('Grep', { pattern: long }, HOME)
   expect(got.summary!.length).toBe(MAX_SUMMARY_CHARS)
   expect(toolActivity('mcp__' + long, {}, HOME).tool!.length).toBe(MAX_SUMMARY_CHARS)
-})
-
-test('compact triggers map to manual or auto; precompute is not reported', () => {
-  expect(compactTrigger('manual')).toBe('manual')
-  expect(compactTrigger('plugin')).toBe('manual')
-  expect(compactTrigger('auto')).toBe('auto')
-  expect(compactTrigger('precompute')).toBe(null)
 })

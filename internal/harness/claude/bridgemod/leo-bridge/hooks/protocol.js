@@ -246,13 +246,11 @@ export function nextBackoff(current, livedMs) {
  * @param {boolean | undefined} busy whether a main-loop turn is running right
  *   now; undefined (left out, so the daemon keeps what it knows) when the
  *   mod cannot tell
- * @param {number} subagents the subagents this mod sees running, so a
- *   reconnect's hello keeps the daemon's count instead of resetting it
- * @returns {{ type: 'hello', session_id: string, claude_version: string, busy?: boolean, subagents: number }}
+ * @returns {{ type: 'hello', session_id: string, claude_version: string, busy?: boolean }}
  */
-export function helloReport(sessionId, claudeVersion, busy, subagents) {
+export function helloReport(sessionId, claudeVersion, busy) {
   const hello = { type: 'hello', session_id: sessionId, claude_version: claudeVersion }
-  return { ...(busy === undefined ? hello : { ...hello, busy }), subagents }
+  return busy === undefined ? hello : { ...hello, busy }
 }
 
 /** @returns {{ type: 'ack', id: string, ok: boolean, error?: string }} */
@@ -325,43 +323,6 @@ export function turnTokens(usage) {
     cache_creation: tokenCount(u.cache_creation_input_tokens),
   }
   return typeof u.model === 'string' && u.model !== '' ? { ...tokens, model: u.model } : tokens
-}
-
-// Background-task statuses that no longer wake the session; Claude lists
-// only in-flight work, so these are defensive.
-const SETTLED_TASK_STATUSES = ['completed', 'failed', 'killed', 'stopped', 'canceled', 'cancelled']
-// Bounds the daemon holds a pending report to.
-const MAX_PENDING_TYPES = 16
-const MAX_PENDING_TYPE_LEN = 32
-const MAX_PENDING_COUNT = 1000
-
-/**
- * The pending work a turn.complete report carries, from Claude's Stop hook
- * input: in-flight background tasks counted by type, and the session crons
- * that will wake the session. Undefined when nothing is pending, as when an
- * older claude sends neither list.
- * @param {unknown} stop the classic.Stop input
- * @returns {{ tasks: Record<string, number>, wakeups: number } | undefined}
- */
-export function stopHookPending(stop) {
-  const s = isRecord(stop) ? stop : {}
-  // A Map, not an object: a type may name an Object.prototype key.
-  const counts = (Array.isArray(s.background_tasks) ? s.background_tasks : [])
-    .filter((t) => isRecord(t) && !SETTLED_TASK_STATUSES.includes(String(t.status).toLowerCase()))
-    .map((t) => pendingTaskType(t.type))
-    .reduce((acc, type) => {
-      if (!acc.has(type) && acc.size >= MAX_PENDING_TYPES) return acc
-      return new Map([...acc, [type, Math.min(MAX_PENDING_COUNT, (acc.get(type) ?? 0) + 1)]])
-    }, new Map())
-  const wakeups = Math.min(MAX_PENDING_COUNT, (Array.isArray(s.session_crons) ? s.session_crons : []).filter(isRecord).length)
-  if (counts.size === 0 && wakeups === 0) return undefined
-  return { tasks: Object.fromEntries(counts), wakeups }
-}
-
-// A task type as the daemon accepts it: [a-z0-9_-], at most 32 long.
-function pendingTaskType(type) {
-  const clean = (typeof type === 'string' ? type : '').trim().toLowerCase().replace(/ /g, '_').replace(/[^a-z0-9_-]/g, '').slice(0, MAX_PENDING_TYPE_LEN)
-  return clean === '' ? 'other' : clean
 }
 
 /**
@@ -483,17 +444,4 @@ export function questionSummary(questions) {
 export function toolActivity(tool, input, home) {
   const fields = { tool: capField(tool), summary: capField(toolSummary(tool, input, home)) }
   return Object.fromEntries(Object.entries(fields).filter(([, v]) => v !== undefined))
-}
-
-/**
- * A session.compact trigger as a compact report names it: a plugin's
- * compaction (leo's own command) counts as manual; a precompute installs
- * nothing, so it is not reported (null).
- * @param {unknown} trigger
- * @returns {'manual' | 'auto' | null}
- */
-export function compactTrigger(trigger) {
-  if (trigger === 'auto') return 'auto'
-  if (trigger === 'manual' || trigger === 'plugin') return 'manual'
-  return null
 }

@@ -203,8 +203,41 @@ func (d *Dispatcher) ReportSupersededStop(id string, r HookReport) error {
 		return nil
 	}
 	d.setTrackedLocked(s, reconcileStop(s.record.BackgroundTasks, p, d.now(), true))
+	s.hookStop = stashHookStop(pendingWorkFromStop(p), d.now())
 	return nil
 }
+
+// hookStopWork is the pending work a superseded hook Stop reported, kept for
+// the bridge turn.complete that ends the same turn. The mod cannot report it
+// itself: claude's classic.Stop hook is one cc-plugin-sec-default passes over.
+type hookStopWork struct {
+	work *PendingWork
+	at   time.Time
+}
+
+// stashHookStop is the stash a Stop leaves: its pending work, or nothing when
+// it left none (which also drops an older Stop's).
+func stashHookStop(work *PendingWork, now time.Time) *hookStopWork {
+	if work == nil {
+		return nil
+	}
+	return &hookStopWork{work: work, at: now}
+}
+
+// takeHookStopWorkLocked hands a bridge turn.complete the pending work the
+// hook Stop before it left, if that is recent enough to be the same turn's.
+func (d *Dispatcher) takeHookStopWorkLocked(s *runState) *PendingWork {
+	stash := s.hookStop
+	s.hookStop = nil
+	if stash == nil || d.now().Sub(stash.at) >= hookStopFreshness {
+		return nil
+	}
+	return stash.work
+}
+
+// hookStopFreshness is how long a superseded hook Stop's pending work waits
+// for the bridge turn.complete it belongs to (see ReportSupersededStop).
+const hookStopFreshness = 10 * time.Second
 
 // setTrackedLocked replaces the run's tracked tasks, persisting a change.
 func (d *Dispatcher) setTrackedLocked(s *runState, tasks []BackgroundTask) {

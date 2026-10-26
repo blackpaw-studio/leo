@@ -44,6 +44,11 @@ func (f KeyResolverFunc) AgentForKey(key string) (string, bool) { return f(key) 
 // a reported total above it is treated as malformed.
 const MaxUsageCostUSD = 1e6
 
+// compactDedupWindow is how close two reports of one compaction phase must
+// be to count as the same one: the PreCompact/PostCompact hooks and the mod's
+// own report of its compaction land together.
+const compactDedupWindow = 5 * time.Second
+
 // maxFeedSeenEvents bounds each agent's replay-dedup memory.
 const maxFeedSeenEvents = 64
 
@@ -91,8 +96,16 @@ type feedAgent struct {
 	hasUsage    bool
 
 	subagents int
-	reason    *AttentionReason
-	action    *Action
+	// hookSubagents holds the ids of the subagents the SubagentStart/Stop
+	// hooks reported running, so a repeated hook counts once. It dies with
+	// the launch.
+	hookSubagents map[string]bool
+	reason        *AttentionReason
+	action        *Action
+	// compacted is when each compaction phase (see compactKey) was last
+	// published, so a phase reported by both the harness hooks and the mod
+	// within compactDedupWindow publishes once.
+	compacted map[string]time.Time
 
 	// seen holds digests, not the ids, so its size is fixed whatever the
 	// mod sends.
@@ -346,7 +359,7 @@ func (f *BridgeFeed) throttleActivityLocked(name string, st *feedAgent) {
 func (st *feedAgent) relaunch(launch string) {
 	st.cancelTrailing()
 	st.launch = launch
-	st.subagents, st.reason, st.action = 0, nil, nil
+	st.subagents, st.hookSubagents, st.reason, st.action = 0, nil, nil, nil
 	st.seen, st.seenOrder = nil, nil
 }
 
@@ -395,14 +408,90 @@ func (f *BridgeFeed) attentionLocked(name string, st *feedAgent, r *bridge.Atten
 
 func (f *BridgeFeed) setSubagentsLocked(name string, st *feedAgent, n int) {
 	st.subagents = max(n, 0)
+	st.hookSubagents = nil
 	f.attention.SetOutstandingSubagents(st.key, st.launch, st.subagents)
+}
+
+// HookSubagent records one SubagentStart (running) or SubagentStop hook of
+// agent's bridged launch: the count is the distinct subagent ids running. A
+// launch's first report replaces whatever a previous launch of the key left,
+// and an agent with no bridged launch is ignored.
+func (f *BridgeFeed) HookSubagent(agent, id string, running bool) {
+	if f == nil || id == "" {
+		return
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	st, ok := f.hookStateLocked(agent)
+	if !ok || st.hookSubagents[id] == running {
+		return
+	}
+	next := make(map[string]bool, len(st.hookSubagents)+1)
+	for known := range st.hookSubagents {
+		next[known] = true
+	}
+	if running {
+		next[id] = true
+	} else {
+		delete(next, id)
+	}
+	st.hookSubagents = next
+	st.subagents = len(next)
+	f.attention.SetOutstandingSubagents(st.key, st.launch, st.subagents)
+}
+
+// HookCompaction publishes one compaction phase reported by a harness hook
+// for agent's bridged launch.
+func (f *BridgeFeed) HookCompaction(agent string, phase CompactionPhase, trigger CompactionTrigger) {
+	if f == nil {
+		return
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if st, ok := f.hookStateLocked(agent); ok {
+		f.publishCompactionLocked(agent, st, phase, trigger)
+	}
+}
+
+// hookStateLocked is agent's projection for its bound launch, made when the
+// launch has reported nothing yet and handed over when the key moved to a
+// newer launch.
+func (f *BridgeFeed) hookStateLocked(agent string) (*feedAgent, bool) {
+	if f.attention == nil {
+		return nil, false
+	}
+	key, launch, ok := f.attention.BoundLaunch(agent)
+	if !ok {
+		return nil, false
+	}
+	st, known := f.agents[key]
+	switch {
+	case !known:
+		st = &feedAgent{key: key, launch: launch}
+		f.agents[key] = st
+	case st.launch != launch:
+		st.relaunch(launch)
+	}
+	return st, true
 }
 
 func (f *BridgeFeed) compactLocked(name string, st *feedAgent, r *bridge.CompactReport) {
 	if r == nil {
 		return
 	}
-	p := &AgentCompactionPayload{Agent: name, Phase: CompactionPhase(r.Phase), Trigger: CompactionTrigger(r.Trigger)}
+	f.publishCompactionLocked(name, st, CompactionPhase(r.Phase), CompactionTrigger(r.Trigger))
+}
+
+func (f *BridgeFeed) publishCompactionLocked(name string, st *feedAgent, phase CompactionPhase, trigger CompactionTrigger) {
+	now, key := f.clock.Now(), string(phase)+"|"+string(trigger)
+	if at, ok := st.compacted[key]; ok && now.Sub(at) < compactDedupWindow {
+		return
+	}
+	if st.compacted == nil {
+		st.compacted = map[string]time.Time{}
+	}
+	st.compacted[key] = now
+	p := &AgentCompactionPayload{Agent: name, Phase: phase, Trigger: trigger}
 	if st.context != nil {
 		pct := st.context.Percent
 		p.ContextPercent = &pct

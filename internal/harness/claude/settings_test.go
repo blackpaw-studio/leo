@@ -56,20 +56,95 @@ func TestMergeSettingsArgsSingleSettings(t *testing.T) {
 	}
 }
 
-func TestAttentionHooksAddsNotificationGroupToTurnHooks(t *testing.T) {
+// hookGroup is one decoded hook group: its matcher and each hook's command
+// and timeout.
+type hookGroup struct {
+	Matcher  string
+	Commands []hookCommand
+}
+
+type hookCommand struct {
+	Command string
+	Timeout int
+}
+
+// decodeHooks returns the hooks of the one --settings in args, by event.
+func decodeHooks(t *testing.T, args []string) map[string][]hookGroup {
+	t.Helper()
+	if len(args) != 2 || args[0] != "--settings" {
+		t.Fatalf("args = %#v, want one --settings", args)
+	}
+	var settings struct {
+		CrossSessionInbound string `json:"crossSessionInbound"`
+		Hooks               map[string][]struct {
+			Matcher string `json:"matcher"`
+			Hooks   []struct {
+				Type    string `json:"type"`
+				Command string `json:"command"`
+				Timeout int    `json:"timeout"`
+			} `json:"hooks"`
+		} `json:"hooks"`
+	}
+	if err := json.Unmarshal([]byte(args[1]), &settings); err != nil {
+		t.Fatal(err)
+	}
+	out := map[string][]hookGroup{}
+	for event, groups := range settings.Hooks {
+		for _, g := range groups {
+			group := hookGroup{Matcher: g.Matcher}
+			for _, h := range g.Hooks {
+				if h.Type != "command" {
+					t.Fatalf("%s hook type = %q, want command", event, h.Type)
+				}
+				group.Commands = append(group.Commands, hookCommand{h.Command, h.Timeout})
+			}
+			out[event] = append(out[event], group)
+		}
+	}
+	return out
+}
+
+func TestAttentionHooksCoverEveryEventTheBridgeUsedToReport(t *testing.T) {
 	got, err := (Claude{}).AttentionHooks([]string{"/opt/leo", "dispatch", "report"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := []string{"--settings", `{"crossSessionInbound":"accept","hooks":{` +
-		`"Notification":[{"hooks":[{"command":"/opt/leo dispatch report","type":"command"}],"matcher":"permission_prompt|elicitation_dialog"}],` +
-		`"PermissionRequest":[{"hooks":[{"command":"/opt/leo dispatch permission","timeout":3660,"type":"command"}]}],` +
-		`"PostToolUse":[{"hooks":[{"command":"/opt/leo dispatch report","type":"command"}]}],` +
-		`"SessionEnd":[{"hooks":[{"command":"/opt/leo dispatch report","type":"command"}]}],` +
-		`"Stop":[{"hooks":[{"command":"/opt/leo dispatch report","type":"command"}]}],` +
-		`"UserPromptSubmit":[{"hooks":[{"command":"/opt/leo dispatch report","type":"command"}]}]}}`}
-	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("AttentionHooks() =\n%#v\nwant\n%#v", got, want)
+
+	report := hookGroup{Commands: []hookCommand{{Command: "/opt/leo dispatch report"}}}
+	permission := hookGroup{Commands: []hookCommand{{Command: "/opt/leo dispatch permission", Timeout: 3660}}}
+	want := map[string][]hookGroup{
+		"Stop":               {report},
+		"SessionEnd":         {report},
+		"PostToolUse":        {report},
+		"PostToolUseFailure": {report},
+		"PermissionDenied":   {report},
+		"Elicitation":        {report},
+		"SubagentStart":      {report},
+		"SubagentStop":       {report},
+		"PreCompact":         {report},
+		"PostCompact":        {report},
+		"Notification":       {{Matcher: "permission_prompt|elicitation_dialog", Commands: report.Commands}},
+		"PermissionRequest":  {report, permission},
+		"UserPromptSubmit":   {report, {Commands: []hookCommand{{Command: "/opt/leo dispatch context", Timeout: 10}}}},
+		"SessionStart":       {{Matcher: "startup|resume|clear|compact|fork", Commands: []hookCommand{{Command: "/opt/leo dispatch context", Timeout: 10}}}},
+	}
+	if hooks := decodeHooks(t, got); !reflect.DeepEqual(hooks, want) {
+		t.Fatalf("hooks =\n%#v\nwant\n%#v", hooks, want)
+	}
+}
+
+func TestAttentionHooksWithoutAReportSuffixSkipTheDerivedCommands(t *testing.T) {
+	got, err := (Claude{}).AttentionHooks([]string{"/opt/leo", "custom"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	hooks := decodeHooks(t, got)
+	if _, ok := hooks["SessionStart"]; ok {
+		t.Fatalf("hooks = %#v, want no context hook without a report command to derive it from", hooks)
+	}
+	if len(hooks["PermissionRequest"]) != 1 || hooks["PermissionRequest"][0].Commands[0].Command != "/opt/leo custom" {
+		t.Fatalf("PermissionRequest = %#v, want only the report command", hooks["PermissionRequest"])
 	}
 }
 
@@ -82,13 +157,19 @@ func TestAttentionLaunchMergesSingleSettingsExactly(t *testing.T) {
 		t.Fatalf("AttentionLaunch err=%v supported=%v", err, supported)
 	}
 
-	hook := `[{"hooks":[{"command":"/opt/leo dispatch report","type":"command"}]}]`
-	want := []string{"--model", "sonnet", "--name", "leo-a", "--settings", `{"crossSessionInbound":"accept","hooks":{` +
-		`"Notification":[{"hooks":[{"command":"/opt/leo dispatch report","type":"command"}],"matcher":"permission_prompt|elicitation_dialog"}],` +
-		`"PermissionRequest":[{"hooks":[{"command":"/opt/leo dispatch permission","timeout":3660,"type":"command"}]}],` +
-		`"PostToolUse":` + hook + `,"SessionEnd":` + hook + `,"Stop":` + hook + `,"UserPromptSubmit":` + hook + `},"theme":"dark"}`}
-	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("argv =\n%#v\nwant\n%#v", got, want)
+	if len(got) != 6 || got[0] != "--model" || got[1] != "sonnet" || got[2] != "--name" || got[3] != "leo-a" || got[4] != "--settings" {
+		t.Fatalf("argv = %#v, want the base flags then one trailing --settings", got)
+	}
+	hooks := decodeHooks(t, got[4:])
+	if len(hooks["SessionStart"]) != 1 || len(hooks["PostCompact"]) != 1 {
+		t.Fatalf("merged hooks = %#v, want the attention hooks", hooks)
+	}
+	var merged struct {
+		Theme               string `json:"theme"`
+		CrossSessionInbound string `json:"crossSessionInbound"`
+	}
+	if err := json.Unmarshal([]byte(got[5]), &merged); err != nil || merged.Theme != "dark" || merged.CrossSessionInbound != "accept" {
+		t.Fatalf("merged settings = %s (%v), want the operator's keys kept", got[5], err)
 	}
 	if base[3] != `{"crossSessionInbound":"accept","theme":"dark"}` || len(base) != 6 {
 		t.Fatalf("AttentionLaunch mutated its input: %#v", base)

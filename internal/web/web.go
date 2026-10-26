@@ -112,11 +112,14 @@ type Server struct {
 	// event streams and long polls return as soon as Shutdown begins instead
 	// of holding httpServer.Shutdown for its grace. Nil on a Server not built
 	// by New (tests).
-	endStreams     context.CancelFunc
-	listener       net.Listener
-	port           int                            // port the listener is expected to bind on; used for Host/Origin checks
-	apiToken       string                         // operator bearer token: /api/*, browser routes, and /login
-	agentToken     string                         // token exported to agents; /api/* and agent-messaging routes only
+	endStreams context.CancelFunc
+	listener   net.Listener
+	port       int    // port the listener is expected to bind on; used for Host/Origin checks
+	apiToken   string // operator bearer token: /api/*, browser routes, and /login
+	agentToken string // token exported to agents; /api/* and agent-messaging routes only
+	// delegationCtx answers the agents' SessionStart/UserPromptSubmit
+	// context hooks; nil until the bridge runtime is wired.
+	delegationCtx  *delegationContext
 	clients        atomic.Pointer[[]ClientPolicy] // external API clients, scoped per route; swapped whole by SetClients, never mutated
 	allowedHosts   []string                       // extra hosts permitted beyond loopback (e.g. LAN IPs)
 	trustedProxies []netip.Prefix                 // peers whose Remote-User header is trusted
@@ -662,6 +665,7 @@ func New(configPath string, processes ProcessStateProvider, scheduler SchedulerP
 	apiMux.HandleFunc("POST /api/agent/{name}/rename", s.handleAPIAgentRename)
 	apiMux.HandleFunc("POST /api/agent/{name}/environments", s.handleAPIAgentSetEnvironments)
 	apiMux.HandleFunc("POST /api/agent/hook", s.handleAPIAgentHook)
+	apiMux.HandleFunc("POST /api/agent/context", s.handleAPIAgentContext)
 	apiMux.HandleFunc("POST /api/agent/permission", s.handleAPIPermission)
 	apiMux.HandleFunc("POST /api/agent/{name}/chat/post", s.handleAgentChatPost)
 	apiMux.HandleFunc("POST /api/agent/{name}/chat/ask", s.handleAgentChatAsk)

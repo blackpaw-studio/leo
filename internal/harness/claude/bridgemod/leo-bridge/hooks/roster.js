@@ -1,9 +1,6 @@
 // Pure helpers for what the daemon's state snapshots drive: delegation
 // enforcement and the roster band. Nothing here touches the mods API.
 
-// The system-prompt section the mod adds while delegation is on.
-export const DELEGATION_SECTION_ID = 'leo-bridge:leo-delegation'
-
 // What a native agent call is told while delegation is on.
 export const AGENT_DENY_TEXT =
   'Delegation is on: use leo_dispatch(role: …) — see the leo-delegation section. Native agents are allowed only after a leo_dispatch fails.'
@@ -58,31 +55,6 @@ export function parseStateLine(line) {
   }
 }
 
-// The $.store key prefix for what the model was last told about delegation.
-export const TOLD_KEY_PREFIX = 'told:'
-
-/**
- * The stored form of what session was told: the policy as the model read
- * it, and when it was written (at, ms) so stale entries can be pruned.
- */
-export function toldEntry(session, delegation, at) {
-  return { session, enabled: delegation.enabled, section: delegation.section, at }
-}
-
-/**
- * What a stored entry says session was told, or null when it holds nothing
- * for that session (another session's, a junk value, none).
- * @param {unknown} value
- * @param {string} session
- */
-export function toldFromEntry(value, session) {
-  if (!isRecord(value) || value.session !== session || typeof value.section !== 'string') return null
-  return { enabled: value.enabled === true, section: value.section }
-}
-
-// What the model was told before any state arrived: no delegation section.
-export const NO_DELEGATION = Object.freeze({ enabled: false, section: '', hideAgents: [] })
-
 function parseDispatch(d) {
   return {
     id: d.id,
@@ -100,30 +72,6 @@ function parseDispatch(d) {
     tokensOut: num(d.tokens_out),
     costUsd: num(d.cost_usd),
   }
-}
-
-/**
- * Whether two delegation policies read the same to the model.
- * @param {{ enabled: boolean, section: string } | null | undefined} a
- * @param {{ enabled: boolean, section: string } | null | undefined} b
- */
-export function sameDelegationText(a, b) {
-  const on = (x) => x?.enabled === true && x.section !== ''
-  if (on(a) !== on(b)) return false
-  return !on(a) || a.section === b.section
-}
-
-/**
- * The note that tells the model delegation changed after its system prompt
- * was composed: the engine keeps the prompt it composed first, so a changed
- * section reaches the model only this way.
- * @param {{ enabled: boolean, section: string }} delegation
- */
-export function delegationNote(delegation) {
-  if (delegation.enabled && delegation.section !== '') {
-    return 'leo: delegation settings changed; this replaces the leo-delegation section of your system prompt.\n\n' + delegation.section
-  }
-  return 'leo: delegation is now OFF. Ignore the leo-delegation section of your system prompt; native agents are allowed.'
 }
 
 /**
