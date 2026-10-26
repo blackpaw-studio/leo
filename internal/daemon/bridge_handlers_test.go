@@ -254,7 +254,12 @@ func TestBridgeReportAcceptsLargeTurnText(t *testing.T) {
 	workDir, hub, _ := startBridgeServer(t)
 	message := strings.Repeat("m", 4<<20)
 	body := `{"type":"event","name":"turn.complete","message":"` + message + `"}`
-	if err := PostBridgeReport(bridgeTestCtx(t), workDir, bridgeAgent, bridgeLaunch, []byte(body)); err != nil {
+	// No client deadline: parsing 4 MiB is linear but runs ~25x slower under
+	// -race, so a fixed bound only measures host load. `go test -timeout`
+	// still guards a real hang.
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	if err := PostBridgeReport(ctx, workDir, bridgeAgent, bridgeLaunch, []byte(body)); err != nil {
 		t.Fatalf("PostBridgeReport of a %d-byte report: %v", len(body), err)
 	}
 	if hub.State(bridgeAgent).LastTurnComplete.IsZero() {
