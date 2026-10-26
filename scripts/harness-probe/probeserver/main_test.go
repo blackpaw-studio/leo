@@ -31,11 +31,11 @@ func startServer(t *testing.T, logPath string) *harness {
 	done := make(chan error, 1)
 	go func() {
 		err := run(inR, outW, logPath)
-		outW.Close()
+		_ = outW.Close()
 		done <- err
 	}()
 	t.Cleanup(func() {
-		inW.Close()
+		_ = inW.Close()
 		<-done
 	})
 	return &harness{t: t, in: inW, out: bufio.NewReader(outR)}

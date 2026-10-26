@@ -134,11 +134,11 @@ func startSession(t *testing.T, reg *registry) *session {
 	s := &session{t: t, in: inW, out: bufio.NewReader(outR), done: make(chan error, 1)}
 	go func() {
 		err := runWith(inR, outW, reg)
-		outW.Close()
+		_ = outW.Close()
 		s.done <- err
 	}()
 	t.Cleanup(func() {
-		inW.Close()
+		_ = inW.Close()
 		select {
 		case <-s.done:
 		case <-time.After(5 * time.Second):

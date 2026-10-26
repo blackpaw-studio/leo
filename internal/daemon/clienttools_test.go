@@ -82,7 +82,11 @@ func TestSocketProviderStreamGetsClientID(t *testing.T) {
 		t.Fatalf("hello = %q", hello)
 	}
 	id := hello[i+len(`"client_id":"`):]
-	id = id[:strings.Index(id, `"`)]
+	end := strings.Index(id, `"`)
+	if end < 0 {
+		t.Fatalf("unterminated client_id in %q", hello)
+	}
+	id = id[:end]
 	if !relay.ClientExists(clienttools.ClientID(id)) {
 		t.Fatalf("client %q not connected", id)
 	}

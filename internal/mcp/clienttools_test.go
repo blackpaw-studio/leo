@@ -163,7 +163,7 @@ func roundTrip(t *testing.T, reg *registry, request string) struct {
 	done := make(chan error, 1)
 	go func() {
 		err := runWith(inR, outW, reg)
-		outW.Close()
+		_ = outW.Close()
 		done <- err
 	}()
 	if _, err := io.WriteString(inW, request+"\n"); err != nil {
@@ -173,7 +173,7 @@ func roundTrip(t *testing.T, reg *registry, request string) struct {
 	if err != nil {
 		t.Fatal(err)
 	}
-	inW.Close()
+	_ = inW.Close()
 	<-done
 	var resp struct {
 		ID     json.RawMessage `json:"id"`
@@ -271,7 +271,7 @@ func TestCancelledNotificationAbortsClientCall(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("the daemon call was not cancelled")
 	}
-	writer.Close()
+	_ = writer.Close()
 	<-done
 }
 
