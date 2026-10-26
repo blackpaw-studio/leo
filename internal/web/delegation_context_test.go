@@ -39,8 +39,8 @@ func TestDelegationContextFor(t *testing.T) {
 		{"resume off after on says so", "SessionStart", "resume", delegationOff, toldOf(delegationOn), "delegation is now OFF", delegationOff},
 		{"resume off after off says nothing", "SessionStart", "resume", delegationOff, toldOf(delegationOff), "", delegationOff},
 		{"prompt with the same policy says nothing", "UserPromptSubmit", "", delegationOn, toldOf(delegationOn), "", delegationOn},
-		{"prompt after a change replaces the section", "UserPromptSubmit", "", delegationV2, toldOf(delegationOn), "SECTION v2", delegationV2},
-		{"prompt after turning off", "UserPromptSubmit", "", delegationOff, toldOf(delegationOn), "delegation is now OFF", delegationOff},
+		{"prompt after a change replaces the earlier context", "UserPromptSubmit", "", delegationV2, toldOf(delegationOn), "replaces the leo-delegation context given earlier in this session.\n\nSECTION v2", delegationV2},
+		{"prompt after turning off", "UserPromptSubmit", "", delegationOff, toldOf(delegationOn), "Ignore the leo-delegation context given earlier in this session", delegationOff},
 		{"prompt after turning on", "UserPromptSubmit", "", delegationOn, toldOf(delegationOff), "SECTION v1", delegationOn},
 		{"prompt never told, on", "UserPromptSubmit", "", delegationOn, nil, "SECTION v1", delegationOn},
 		{"prompt never told, off", "UserPromptSubmit", "", delegationOff, nil, "", delegationOff},
@@ -52,6 +52,9 @@ func TestDelegationContextFor(t *testing.T) {
 
 			if tc.wantText == "" && text != "" || !strings.Contains(text, tc.wantText) {
 				t.Fatalf("text = %q, want it to contain %q", text, tc.wantText)
+			}
+			if strings.Contains(text, "system prompt") {
+				t.Fatalf("text = %q, want no reference to the system prompt: the section arrives as hook context", text)
 			}
 			if tc.event == "Stop" {
 				return

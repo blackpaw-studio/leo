@@ -17,8 +17,8 @@ import (
 // What a hook-injected delegation context says. The daemon owns the text:
 // the `leo dispatch context` hook command only prints what it is handed.
 const (
-	delegationReplacedNote = "leo: delegation settings changed; this replaces the leo-delegation section of your system prompt.\n\n"
-	delegationOffNote      = "leo: delegation is now OFF. Ignore the leo-delegation section of your system prompt; native agents are allowed."
+	delegationReplacedNote = "leo: delegation settings changed; this replaces the leo-delegation context given earlier in this session.\n\n"
+	delegationOffNote      = "leo: delegation is now OFF. Ignore the leo-delegation context given earlier in this session; native agents are allowed."
 )
 
 const (
