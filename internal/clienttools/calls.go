@@ -144,8 +144,8 @@ func (c *Calls) Call(ctx context.Context, agent, toolName string, args json.RawM
 		args = json.RawMessage(`{}`)
 	}
 
-	p := c.park(agent, group, t, args)
-	c.publishRequest(p.req)
+	p, req := c.park(agent, group, t, args)
+	c.publishRequest(req)
 
 	wait := c.waitFor(t)
 	var timer <-chan time.Time
@@ -177,7 +177,10 @@ func noClient() Result {
 	return failure(CodeNoClient, "No connected Leo app provides this tool")
 }
 
-func (c *Calls) park(agent, group string, t Tool, args json.RawMessage) *parked {
+// park registers a new call and returns it with a copy of its request as
+// announced: ReleaseClient rewrites a parked request's owner under the lock,
+// so the caller publishes the copy rather than reading p.req.
+func (c *Calls) park(agent, group string, t Tool, args json.RawMessage) (*parked, Request) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.seq++
@@ -191,7 +194,7 @@ func (c *Calls) park(agent, group string, t Tool, args json.RawMessage) *parked 
 		},
 	}
 	c.pending[p.req.ID] = p
-	return p
+	return p, p.req
 }
 
 // ownerLocked is the connected client owning (agent, group), if any.

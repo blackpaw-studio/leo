@@ -430,6 +430,41 @@ func TestOwnerDisconnectReannouncesUnclaimedRequestsItOwned(t *testing.T) {
 	}
 }
 
+type discardPublisher struct{}
+
+func (discardPublisher) Publish(observe.Event) {}
+
+// Call publishes its request while an owner leaving rewrites that request's
+// owner. There is no seam between parking and publishing to interleave them
+// deterministically, so this runs them against each other for the race
+// detector (-race) to catch an unlocked read.
+func TestReleaseWhileCallsPublishDoesNotRace(t *testing.T) {
+	f := newCallFixtureWith(t, func(o *CallsOptions) { o.Publish = discardPublisher{} })
+	ctx, cancel := context.WithCancel(context.Background())
+	var calls sync.WaitGroup
+	call := func() {
+		calls.Add(1)
+		go func() {
+			defer calls.Done()
+			_, _ = f.calls.Call(ctx, "alfred", "browser_click", json.RawMessage(`{}`))
+		}()
+	}
+	call()
+	for i := 0; i < 300; i++ {
+		// Make A the owner (claiming any parked request does), then let a new
+		// call park owned by A while A leaves.
+		for _, p := range f.calls.Pending() {
+			if _, err := f.calls.Claim(p.Request.ID, f.a); err == nil {
+				break
+			}
+		}
+		call()
+		f.calls.ReleaseClient(f.a)
+	}
+	cancel()
+	calls.Wait()
+}
+
 func TestPendingListsUnsettled(t *testing.T) {
 	f := newCallFixture(t)
 	_, r1 := f.start(t, context.Background(), "alfred", "browser_click")
