@@ -1,6 +1,8 @@
 package config
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -247,5 +249,45 @@ func TestValidateRejectsMalformedGlobs(t *testing.T) {
 	}
 	if err := permCfg(ok).Validate(); err != nil {
 		t.Errorf("valid globs must pass: %v", err)
+	}
+}
+
+// Client tools are registered by apps after boot, but a deny_tools entry for
+// one must still validate at boot, so the names persisted by the client-tools
+// relay count as known.
+func TestDenyToolsAcceptsPersistedClientToolName(t *testing.T) {
+	home := t.TempDir()
+	cfg := permCfg(leotools.Permissions{DenyTools: []string{"browser_eval"}})
+	cfg.HomePath = home
+
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("a client tool name nothing ever registered must still be rejected")
+	}
+
+	state := filepath.Join(home, "state")
+	if err := os.MkdirAll(state, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	persisted := `{"ever_registered":true,"tools":["browser_eval","browser_click"]}`
+	if err := os.WriteFile(filepath.Join(state, leotools.ClientToolsStateFile), []byte(persisted), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("persisted client tool name rejected: %v", err)
+	}
+
+	cfg.Templates["scout"] = TemplateConfig{Permissions: leotools.Permissions{DenyTools: []string{"browser_typo"}}}
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("a name missing from the persisted set must be rejected")
+	}
+}
+
+func TestValidatePermissionsUsesInjectedKnownTools(t *testing.T) {
+	perms := leotools.Permissions{DenyTools: []string{"app_tool"}}
+	if errs := validatePermissions("scout", perms, nil, func(n string) bool { return n == "app_tool" }); len(errs) != 0 {
+		t.Fatalf("injected known tool rejected: %v", errs)
+	}
+	if errs := validatePermissions("scout", perms, nil, nil); len(errs) == 0 {
+		t.Fatal("without an injected set the name must be rejected")
 	}
 }

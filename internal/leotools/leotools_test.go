@@ -2,6 +2,9 @@ package leotools
 
 import (
 	"encoding/json"
+	"os"
+	"path/filepath"
+	"reflect"
 	"testing"
 )
 
@@ -148,4 +151,24 @@ func equal(a, b []string) bool {
 		}
 	}
 	return true
+}
+
+func TestReadClientToolNames(t *testing.T) {
+	dir := t.TempDir()
+	if got := ReadClientToolNames(dir); got != nil {
+		t.Fatalf("missing file = %v, want nil", got)
+	}
+	path := filepath.Join(dir, ClientToolsStateFile)
+	if err := os.WriteFile(path, []byte(`{"ever_registered":true,"tools":["b","a"]}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if got := ReadClientToolNames(dir); !reflect.DeepEqual(got, []string{"b", "a"}) {
+		t.Fatalf("names = %v", got)
+	}
+	if err := os.WriteFile(path, []byte(`{nope`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if got := ReadClientToolNames(dir); got != nil {
+		t.Fatalf("corrupt file = %v, want nil", got)
+	}
 }

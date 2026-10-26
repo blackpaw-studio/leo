@@ -14,7 +14,10 @@
 package leotools
 
 import (
+	"encoding/json"
+	"os"
 	"path"
+	"path/filepath"
 	"strings"
 )
 
@@ -74,6 +77,28 @@ func IsKnownTool(name string) bool {
 		}
 	}
 	return false
+}
+
+// ClientToolsStateFile is the file under the state directory where the
+// client-tools relay persists the tool names apps have registered. Config
+// validation reads it so a deny_tools entry for a client tool stays valid
+// at boot, before any app has reconnected.
+const ClientToolsStateFile = "client-tools.json"
+
+// ReadClientToolNames returns the client tool names persisted under stateDir,
+// or nil when there is no (readable) record.
+func ReadClientToolNames(stateDir string) []string {
+	raw, err := os.ReadFile(filepath.Join(stateDir, ClientToolsStateFile)) // #nosec G304 -- leo's own state directory
+	if err != nil {
+		return nil
+	}
+	var st struct {
+		Tools []string `json:"tools"`
+	}
+	if json.Unmarshal(raw, &st) != nil {
+		return nil
+	}
+	return st.Tools
 }
 
 // Permissions is the per-template permission set. The zero value places no
