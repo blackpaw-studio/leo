@@ -407,3 +407,55 @@ func (c *daemonClient) releaseDispatch(ctx context.Context, id string) (consult.
 	}
 	return record, nil
 }
+
+// errUnknownClientTool is what the daemon answers (404) for a client-tool
+// call to a name it has never seen registered.
+const errUnknownClientTool = "unknown client tool"
+
+func errIsUnknownClientTool(err error) bool {
+	return err != nil && err.Error() == errUnknownClientTool
+}
+
+// clientTools lists the daemon's registered client tools for agent.
+func (c *daemonClient) clientTools(ctx context.Context, agent string) (clientToolList, error) {
+	raw, err := c.doContext(ctx, http.MethodGet, "/api/agent/"+url.PathEscape(agent)+"/client-tools", nil)
+	if err != nil {
+		return clientToolList{}, err
+	}
+	var list clientToolList
+	if err := json.Unmarshal(raw, &list); err != nil {
+		return clientToolList{}, fmt.Errorf("decode client tools: %w", err)
+	}
+	return list, nil
+}
+
+// clientToolResult is the daemon's answer to a client-tool call: the app's
+// raw content blocks, or an error from the app or the daemon.
+type clientToolResult struct {
+	OK      bool            `json:"ok"`
+	Content json.RawMessage `json:"content"`
+	Error   *struct {
+		Code    string `json:"code"`
+		Message string `json:"message"`
+	} `json:"error"`
+}
+
+// callClientTool runs a client tool for agent through the daemon's relay. The
+// call blocks for as long as the app takes, so it uses an http.Client with no
+// timeout of its own: the caller bounds it with ctx.
+func (c *daemonClient) callClientTool(ctx context.Context, agent, tool string, args json.RawMessage) (clientToolResult, error) {
+	client := *c
+	client.http = &http.Client{}
+	if len(args) == 0 {
+		args = json.RawMessage(`{}`)
+	}
+	raw, err := client.doContext(ctx, http.MethodPost, "/api/agent/"+url.PathEscape(agent)+"/client-tools/call", map[string]any{"tool": tool, "args": args})
+	if err != nil {
+		return clientToolResult{}, err
+	}
+	var res clientToolResult
+	if err := json.Unmarshal(raw, &res); err != nil {
+		return clientToolResult{}, fmt.Errorf("decode client tool result: %w", err)
+	}
+	return res, nil
+}

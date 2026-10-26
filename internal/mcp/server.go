@@ -215,20 +215,7 @@ func dispatch(ctx context.Context, msg *jsonRPCMessage, reg *registry) (jsonRPCM
 			resp.Error = &jsonRPCError{Code: codeInvalidRequest, Message: fmt.Sprintf("invalid params: %v", err)}
 			break
 		}
-		text, err := reg.callContext(ctx, params.Name, params.Arguments)
-		if err != nil {
-			// MCP convention: tool execution errors come back inside the
-			// result with isError=true (not as protocol-level errors), so
-			// the LLM can see and react to them.
-			resp.Result = map[string]any{
-				"content": []map[string]any{{"type": "text", "text": err.Error()}},
-				"isError": true,
-			}
-			break
-		}
-		resp.Result = map[string]any{
-			"content": []map[string]any{{"type": "text", "text": text}},
-		}
+		resp.Result = reg.callTool(ctx, params.Name, params.Arguments).mcpResult()
 	case "ping":
 		resp.Result = map[string]any{}
 	default:
