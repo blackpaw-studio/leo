@@ -3,9 +3,12 @@ package mcp
 import (
 	"bufio"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -66,7 +69,7 @@ func (r *registry) startWatch() {
 	w.wg.Add(1)
 	go func() {
 		defer w.wg.Done()
-		r.clientTools.watch(w.ctx, w.timer, func() { w.notify(listChangedMethod) })
+		r.clientTools.watch(w.ctx, w.wg, w.timer, func() { w.notify(listChangedMethod) })
 	}()
 }
 
@@ -80,10 +83,10 @@ func (r *registry) watching() bool {
 }
 
 // watch follows the daemon's event stream until ctx ends, calling changed
-// whenever the client-tools revision differs from the one the harness last
+// whenever the set of client tools differs from the one the harness last
 // listed. A dropped stream is retried with backoff; each (re)connect refetches
 // on hello, so a change missed while disconnected is still seen.
-func (v *clientToolsView) watch(ctx context.Context, after func(time.Duration) <-chan time.Time, changed func()) {
+func (v *clientToolsView) watch(ctx context.Context, wg *sync.WaitGroup, after func(time.Duration) <-chan time.Time, changed func()) {
 	trigger := make(chan struct{}, 1)
 	poke := func() {
 		select {
@@ -92,7 +95,11 @@ func (v *clientToolsView) watch(ctx context.Context, after func(time.Duration) <
 		}
 	}
 
+	// Counted with the session, so nothing can write a notification after
+	// runWith has returned.
+	wg.Add(1)
 	go func() {
+		defer wg.Done()
 		for {
 			select {
 			case <-ctx.Done():
@@ -105,7 +112,7 @@ func (v *clientToolsView) watch(ctx context.Context, after func(time.Duration) <
 			case <-after(clientToolsCoalesce):
 			}
 			list, err := v.fetch(ctx)
-			if err == nil && v.markChanged(list.Revision) {
+			if err == nil && v.markChanged(list.Tools) {
 				changed()
 			}
 		}
@@ -129,17 +136,33 @@ func (v *clientToolsView) watch(ctx context.Context, after func(time.Duration) <
 	}
 }
 
-// markChanged records rev as the one the harness is now told about and
+// markChanged records tools as the set the harness is now told about and
 // reports whether that is news: it is not when the harness has not listed yet
-// (its first list will see rev) or already has it.
-func (v *clientToolsView) markChanged(rev uint64) bool {
+// (its first list will see them) or already has this set. The set is compared,
+// not the daemon's revision number, which counts from zero again after a
+// daemon restart: a restart that brings back different tools must notify, and
+// one that brings back the same tools must not.
+func (v *clientToolsView) markChanged(tools []clientToolInfo) bool {
+	sig := toolSetSignature(tools)
 	v.mu.Lock()
 	defer v.mu.Unlock()
-	if !v.listed || rev == v.listedRev {
+	if !v.listed || sig == v.listedSig {
 		return false
 	}
-	v.listedRev = rev
+	v.listedSig = sig
 	return true
+}
+
+// toolSetSignature identifies a set of client tools by name, description and
+// schema, independent of order, as far as a harness can tell them apart.
+func toolSetSignature(tools []clientToolInfo) string {
+	parts := make([]string, 0, len(tools))
+	for _, t := range tools {
+		parts = append(parts, t.Name+"\x00"+t.Description+"\x00"+string(t.InputSchema))
+	}
+	sort.Strings(parts)
+	sum := sha256.Sum256([]byte(strings.Join(parts, "\x01")))
+	return hex.EncodeToString(sum[:])
 }
 
 // streamEvents reads one SSE connection to the daemon, calling poke on hello

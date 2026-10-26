@@ -439,3 +439,68 @@ func TestDeniedFallbackToolsAreHidden(t *testing.T) {
 		t.Fatalf("names = %v", names)
 	}
 }
+
+func TestListChangedIgnoresRevisionResetWhenToolsMatch(t *testing.T) {
+	d := newWatchDaemon(t)
+	d.setRevision(7, "browser_click")
+	s := startSession(t, registryFor(d))
+	s.initialize("claude-code")
+	if names := s.listNames(); !contains(names, "browser_click") {
+		t.Fatalf("names = %v", names)
+	}
+
+	// The daemon restarted: its revision counts from zero again, but the apps
+	// re-registered the same tools, so the harness has nothing to refresh.
+	d.setRevision(1, "browser_click")
+	d.pushChanged(1)
+	d.waitLists(t, 3) // hello's refetch, the list, this change's refetch
+	s.send("ping", nil)
+	if m := s.recv(); m.Method != "" || string(m.Result) != "{}" {
+		t.Fatalf("unexpected message before the ping reply: %+v", m)
+	}
+
+	// A different set under the very same revision number is news.
+	d.setRevision(1, "browser_click", "browser_back")
+	d.pushChanged(1)
+	if m := s.recv(); m.Method != listChangedMethod {
+		t.Fatalf("got %+v, want list_changed", m)
+	}
+}
+
+func TestWatchWaitsForItsCoalescingGoroutineOnShutdown(t *testing.T) {
+	d := newWatchDaemon(t)
+	view := newClientToolsView(d.client, "alfred", leotools.Permissions{})
+	if _, err := view.fetch(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	view.defs(context.Background()) // the harness has listed revision 3
+	d.setRevision(4, "browser_click", "browser_back")
+
+	entered, release := make(chan struct{}), make(chan struct{})
+	ctx, cancel := context.WithCancel(context.Background())
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		view.watch(ctx, &wg, immediate, func() {
+			close(entered)
+			<-release // a notification mid-write when the session ends
+		})
+	}()
+	<-entered
+	cancel()
+
+	done := make(chan struct{})
+	go func() { wg.Wait(); close(done) }()
+	select {
+	case <-done:
+		t.Fatal("the session finished while a notification was still being sent")
+	case <-time.After(100 * time.Millisecond):
+	}
+	close(release)
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("watcher did not stop")
+	}
+}

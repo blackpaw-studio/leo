@@ -76,11 +76,11 @@ type clientToolsView struct {
 	mu    sync.Mutex
 	known map[string]clientToolInfo // by name, as of the last listing
 
-	// listed and listedRev are the revision the harness last saw in
+	// listed and listedSig are the tool set the harness last saw in
 	// tools/list (or was last told had changed): what list_changed is
 	// measured against.
 	listed    bool
-	listedRev uint64
+	listedSig string
 }
 
 func newClientToolsView(client *daemonClient, agent string, perms leotools.Permissions) *clientToolsView {
@@ -113,7 +113,7 @@ func (v *clientToolsView) defs(ctx context.Context) []toolDef {
 		return nil
 	}
 	v.mu.Lock()
-	v.listed, v.listedRev = true, list.Revision
+	v.listed, v.listedSig = true, toolSetSignature(list.Tools)
 	v.mu.Unlock()
 	return v.defsOf(list.Tools)
 }
