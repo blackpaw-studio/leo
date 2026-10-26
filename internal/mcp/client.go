@@ -40,6 +40,9 @@ type daemonClient struct {
 	baseURL string
 	token   string // API bearer token; empty disables the Authorization header
 	http    *http.Client
+	// clientToolResultCap is how much of a relayed client-tool result
+	// callClientTool reads; a field so tests can use a small one.
+	clientToolResultCap int64
 }
 
 func newDaemonClient(port, token string) *daemonClient {
@@ -47,6 +50,8 @@ func newDaemonClient(port, token string) *daemonClient {
 		baseURL: "http://127.0.0.1:" + port,
 		token:   token,
 		http:    &http.Client{Timeout: 30 * time.Second},
+
+		clientToolResultCap: maxClientToolResponseBytes,
 	}
 }
 
@@ -460,7 +465,7 @@ func (c *daemonClient) callClientTool(ctx context.Context, agent, tool string, a
 	if len(args) == 0 {
 		args = json.RawMessage(`{}`)
 	}
-	raw, err := client.doContextLimit(ctx, http.MethodPost, "/api/agent/"+url.PathEscape(agent)+"/client-tools/call", map[string]any{"tool": tool, "args": args}, maxClientToolResponseBytes)
+	raw, err := client.doContextLimit(ctx, http.MethodPost, "/api/agent/"+url.PathEscape(agent)+"/client-tools/call", map[string]any{"tool": tool, "args": args}, c.clientToolResultCap)
 	if err != nil {
 		return clientToolResult{}, err
 	}

@@ -284,18 +284,34 @@ func TestClientToolCallDeadlineIsTimeoutPlusGrace(t *testing.T) {
 	}
 }
 
-func TestClientToolResultLargerThanTheDefaultReadCapSurvives(t *testing.T) {
-	cd, client := newClientToolsDaemon(t)
-	// A screenshot result: bigger than the 10 MiB cap other daemon replies get,
-	// well inside what the daemon accepts from an app.
-	big := strings.Repeat("A", maxDaemonResponseBytes+4096)
-	cd.callBody = `{"ok":true,"data":{"ok":true,"content":[{"type":"image","data":"` + big + `","mimeType":"image/png"}]}}`
-
-	out := nativeRegistry(client, leotools.Permissions{}).callTool(context.Background(), "browser_click", json.RawMessage(`{}`))
-	if out.IsError {
-		t.Fatalf("large result failed: %.200s", out.Content)
+func TestProductionClientToolReadCapFitsTheLargestResultTheDaemonAccepts(t *testing.T) {
+	// Anything the daemon accepts from an app must come back whole, envelope included.
+	if got := newDaemonClient("1", "").clientToolResultCap; got < leotools.MaxClientToolResultBytes {
+		t.Fatalf("read cap %d < max accepted result %d", got, leotools.MaxClientToolResultBytes)
 	}
-	if len(out.Content) <= maxDaemonResponseBytes || !strings.HasSuffix(string(out.Content), `"mimeType":"image/png"}]`) {
-		t.Fatalf("result truncated: %d bytes", len(out.Content))
+}
+
+func TestClientToolResultReadIsCappedByTheClient(t *testing.T) {
+	const limit = 1 << 10
+	cd, client := newClientToolsDaemon(t)
+	client.clientToolResultCap = limit
+	envelope := func(padding int) string {
+		return `{"ok":true,"data":{"ok":true,"content":[{"type":"text","text":"` + strings.Repeat("x", padding) + `"}]}}`
+	}
+	atCap := envelope(limit - len(envelope(0)))
+	if len(atCap) != limit {
+		t.Fatalf("test body is %d bytes, want exactly %d", len(atCap), limit)
+	}
+	reg := nativeRegistry(client, leotools.Permissions{})
+
+	cd.callBody = atCap
+	if out := reg.callTool(context.Background(), "browser_click", json.RawMessage(`{}`)); out.IsError {
+		t.Fatalf("a result exactly at the cap failed: %s", out.Content)
+	}
+
+	cd.callBody = envelope(limit - len(envelope(0)) + 1)
+	out := reg.callTool(context.Background(), "browser_click", json.RawMessage(`{}`))
+	if !out.IsError || !strings.Contains(string(out.Content), "decode response") {
+		t.Fatalf("a result over the cap should fail to decode, got %s (error=%v)", out.Content, out.IsError)
 	}
 }
