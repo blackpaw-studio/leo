@@ -118,7 +118,7 @@ func spliceEdits(lines []string, mapping *yaml.Node, entries []entryRange, edits
 			if !renamed {
 				newName = entry.name
 			}
-			repl, ok := encodeChangedEntry(mapping, i, tmpl, newName, entry, indent)
+			repl, ok := encodeChangedEntry(mapping, i, tmpl, newName, entry, lines, indent)
 			if !ok {
 				return nil, false
 			}
@@ -195,15 +195,19 @@ func spliceAdds(lines []string, edits sharedEdits, indent int) ([]string, bool) 
 // original value node is kept key by key, so untouched fields keep their text
 // style, comments and order; changed fields take the new value, cleared ones
 // disappear and new ones go last.
-func encodeChangedEntry(mapping *yaml.Node, i int, tmpl TemplateConfig, name string, entry entryRange, indent int) ([]string, bool) {
+func encodeChangedEntry(mapping *yaml.Node, i int, tmpl TemplateConfig, name string, entry entryRange, lines []string, indent int) ([]string, bool) {
 	origKey, origVal := mapping.Content[2*i], mapping.Content[2*i+1]
 	var fresh yaml.Node
 	if err := fresh.Encode(tmpl); err != nil {
 		return nil, false
 	}
-	val := mergeMapping(origVal, &fresh, true)
+	// yaml.v3 also hangs comments from the lines around an entry on its
+	// nodes; the lines outside the replaced range stay put, so only comments
+	// written inside it may be emitted again.
+	entryText := strings.Join(lines[entry.keyLine:entry.end+1], "")
+	val := keepOwnComments(mergeMapping(origVal, &fresh, true), entryText)
 	key := &yaml.Node{Kind: yaml.ScalarNode, Tag: origKey.Tag, Style: origKey.Style,
-		Value: name, LineComment: origKey.LineComment}
+		Value: name, LineComment: ownComment(origKey.LineComment, entryText)}
 	if name != origKey.Value {
 		key.Style = 0
 	}
@@ -261,6 +265,30 @@ func mergeMapping(orig, fresh *yaml.Node, topLevel bool) *yaml.Node {
 		}
 	}
 	return &out
+}
+
+// keepOwnComments returns a deep copy of n keeping only the comments whose
+// text appears in entryText.
+func keepOwnComments(n *yaml.Node, entryText string) *yaml.Node {
+	c := *n
+	c.HeadComment = ownComment(n.HeadComment, entryText)
+	c.LineComment = ownComment(n.LineComment, entryText)
+	c.FootComment = ownComment(n.FootComment, entryText)
+	c.Content = make([]*yaml.Node, len(n.Content))
+	for i, child := range n.Content {
+		c.Content[i] = keepOwnComments(child, entryText)
+	}
+	return &c
+}
+
+// ownComment is comment if every line of it occurs in text, else "".
+func ownComment(comment, text string) string {
+	for _, line := range strings.Split(comment, "\n") {
+		if line = strings.TrimSpace(line); line != "" && !strings.Contains(text, line) {
+			return ""
+		}
+	}
+	return comment
 }
 
 // mergeValue is the node for a changed value: a merge for mappings, so nested
@@ -365,21 +393,23 @@ func headCommentStart(lines []string, keyLine, col int) int {
 }
 
 // entryEnd is the last non-blank line after keyLine that belongs to the
-// entry: one indented deeper than the key, or a comment (commented-out fields
-// are often written at column 0) followed by such a line. The entry stops at
-// the first line that is neither.
+// entry: one indented deeper than the key (comments included), or a comment
+// at or left of the key column that is followed by such a line. The entry
+// stops at the first line that is neither.
 func entryEnd(lines []string, keyLine, col int) int {
 	end := keyLine
 	for i := keyLine + 1; i < len(lines); i++ {
 		switch {
 		case isBlankLine(lines[i]):
+		case leadingSpaces(lines[i]) > col:
+			end = i
 		case isCommentLine(lines[i]):
+			// At or left of the key column a comment belongs to the entry
+			// only if more of it follows (a commented-out field at column 0).
 			next := nextContentLine(lines, i+1)
 			if next < 0 || leadingSpaces(lines[next]) <= col {
 				return end
 			}
-		case leadingSpaces(lines[i]) > col:
-			end = i
 		default:
 			return end
 		}

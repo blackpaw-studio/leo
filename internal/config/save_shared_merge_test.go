@@ -115,3 +115,64 @@ func TestSaveSplitFallbackRenamesInPlace(t *testing.T) {
 		t.Errorf("reload = %+v", loaded.Templates)
 	}
 }
+
+func deleteTemplate(name string) func(*Config) {
+	return func(cfg *Config) { delete(cfg.Templates, name) }
+}
+
+// Comments between entries belong to exactly one entry: a deeper-indented
+// comment closing an entry is part of it, a comment at the key column heads
+// the next entry, and a column-0 comment between entries is left in place
+// rather than copied into the edited one.
+func TestSaveSplitCommentsBetweenEntriesStayWithTheirEntry(t *testing.T) {
+	tests := []struct {
+		name string
+		src  string
+		edit func(*Config)
+		want string
+	}{
+		{
+			"edit entry with trailing deeper comment",
+			"templates:\n  a:\n    model: opus\n    # trailing note on a\n  # head of b\n  b:\n    model: haiku\n",
+			setModel("a", "sonnet"),
+			"templates:\n  a:\n    model: sonnet\n    # trailing note on a\n  # head of b\n  b:\n    model: haiku\n",
+		},
+		{
+			"delete entry with trailing deeper comment",
+			"templates:\n  a:\n    model: opus\n    # trailing note on a\n  # head of b\n  b:\n    model: haiku\n",
+			deleteTemplate("a"),
+			"templates:\n  # head of b\n  b:\n    model: haiku\n",
+		},
+		{
+			"edit entry followed by a column-0 section comment",
+			"templates:\n  a:\n    model: opus\n# section B\n  b:\n    model: haiku\n",
+			setModel("a", "sonnet"),
+			"templates:\n  a:\n    model: sonnet\n# section B\n  b:\n    model: haiku\n",
+		},
+		{
+			"column-0 comment with deeper content after it stays in its entry",
+			"templates:\n  a:\n    model: opus\n# keep me\n    max_turns: 5\n  b:\n    model: haiku\n",
+			setModel("a", "sonnet"),
+			"templates:\n  a:\n    model: sonnet\n    # keep me\n    max_turns: 5\n  b:\n    model: haiku\n",
+		},
+		{
+			"next entry's head comment at the key column survives an edit",
+			"templates:\n  a:\n    model: opus\n  # head of b\n  b:\n    model: haiku\n",
+			setModel("a", "sonnet"),
+			"templates:\n  a:\n    model: sonnet\n  # head of b\n  b:\n    model: haiku\n",
+		},
+		{
+			"next entry's head comment at the key column survives a delete",
+			"templates:\n  a:\n    model: opus\n  # head of b\n  b:\n    model: haiku\n",
+			deleteTemplate("a"),
+			"templates:\n  # head of b\n  b:\n    model: haiku\n",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := editSharedAndRead(t, tt.src, tt.edit); got != tt.want {
+				t.Errorf("--- want\n%s--- got\n%s", tt.want, got)
+			}
+		})
+	}
+}
