@@ -240,6 +240,11 @@ func TestInteractiveLaunchArgv(t *testing.T) {
 			t.Fatalf("launch settings missing %s hook %s: %q", event, want, got)
 		}
 	}
+	// The delegation context hooks are an agent's: a dispatch's roster is
+	// blank by design, and its subagent and attention state have no consumer.
+	if got := launch[len(launch)-1]; containsAll(got, "dispatch context") || containsAll(got, "SessionStart") {
+		t.Fatalf("a dispatch launch carries the agent-only context hooks: %q", got)
+	}
 }
 
 // TestInteractiveLaunchClaudePromptGoesToBriefFileNotArgv verifies that a

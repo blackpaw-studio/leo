@@ -358,7 +358,16 @@ func bridgeStop(t *testing.T, eventID, turnID, message string) HookReport {
 
 func startBridgedIdle(t *testing.T) (*Dispatcher, *bridgedFakeRuntime, string) {
 	t.Helper()
+	d, rt, id, _ := startBridgedIdleClock(t)
+	return d, rt, id
+}
+
+// startBridgedIdleClock is startBridgedIdle with a clock the test advances.
+func startBridgedIdleClock(t *testing.T) (*Dispatcher, *bridgedFakeRuntime, string, *time.Time) {
+	t.Helper()
+	now := time.Date(2026, time.October, 8, 12, 0, 0, 0, time.UTC)
 	d := NewDispatcher(newFakeRecorder())
+	d.now = sharedClock(&now)
 	rt := &bridgedFakeRuntime{fakeInteractiveRuntime: &fakeInteractiveRuntime{arm: true, empty: true}, bridges: true}
 	d.SetInteractiveRuntime(rt)
 	started, err := d.Start(context.Background(), testConfig(), Request{Template: "claude", Prompt: "hello", Cwd: t.TempDir(), Mode: ModeInteractive})
@@ -372,7 +381,7 @@ func startBridgedIdle(t *testing.T) (*Dispatcher, *bridgedFakeRuntime, string) {
 	if rec.Status != StatusIdle || len(rec.Turns) != 1 || rec.Turns[0].Outcome != TurnFinished {
 		t.Fatalf("bridged opening record=%+v", rec)
 	}
-	return d, rt, started.ID
+	return d, rt, started.ID, &now
 }
 
 func TestBridgedOpeningIsClaimedByItsCommandID(t *testing.T) {

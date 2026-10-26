@@ -338,6 +338,11 @@ func (d *Dispatcher) stopKeyedLocked(s *runState, key, event string, p map[strin
 	var work *PendingWork
 	if event == "stop" {
 		work = pendingWorkFromStop(p)
+		if work == nil && isBridgeKey(key) {
+			// The bridge's turn.complete carries no pending work; the hook
+			// Stop that came before it did.
+			work = d.takeHookStopWorkLocked(s)
+		}
 	}
 	t := turnForKeyLocked(s, key)
 	if t == nil {
