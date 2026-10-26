@@ -1,6 +1,11 @@
 package web
 
 import (
+	"encoding/json"
+	"path/filepath"
+	"time"
+
+	"github.com/blackpaw-studio/leo/internal/bridge"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
@@ -363,5 +368,94 @@ type recordingFeedPublisher struct {
 func (p *recordingFeedPublisher) Publish(ev observe.Event) {
 	if c, ok := ev.Payload.(*observe.AgentCompactionPayload); ok {
 		p.compactions = append(p.compactions, *c)
+	}
+}
+
+// contextServer is a bridged hook server whose delegation policy is policy().
+func contextServer(t *testing.T, policy *bridge.DelegationState) *Server {
+	t.Helper()
+	s, _ := hookFeedServer(t)
+	s.delegationCtx = &delegationContext{
+		source: func() bridge.DelegationState { return *policy },
+		told:   newToldStore(filepath.Join(t.TempDir(), "told.json"), func() time.Time { return contextNow }),
+		now:    func() time.Time { return contextNow },
+	}
+	return s
+}
+
+func postContext(t *testing.T, s *Server, token, payload string) string {
+	t.Helper()
+	body := `{"token":"` + token + `","payload":` + payload + `}`
+	req := httptest.NewRequest(http.MethodPost, "/api/agent/context", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	s.httpServer.Handler.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, body %s", w.Code, w.Body)
+	}
+	var resp struct{ Context string }
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decoding %s: %v", w.Body, err)
+	}
+	return resp.Context
+}
+
+func TestAgentContextTellsOnceAndAgainWhenChanged(t *testing.T) {
+	policy := delegationOn
+	s := contextServer(t, &policy)
+	start := func(source, sid string) string {
+		return postContext(t, s, "tok-a", `{"hook_event_name":"SessionStart","source":"`+source+`","session_id":"`+sid+`"}`)
+	}
+	prompt := func(sid string) string {
+		return postContext(t, s, "tok-a", `{"hook_event_name":"UserPromptSubmit","session_id":"`+sid+`","prompt":"hi"}`)
+	}
+
+	if got := start("startup", "sid-a"); got != "SECTION v1" {
+		t.Fatalf("startup = %q, want the section", got)
+	}
+	if got := prompt("sid-a"); got != "" {
+		t.Fatalf("first prompt = %q, want nothing", got)
+	}
+	policy = delegationV2
+	if got := prompt("sid-a"); !strings.Contains(got, "SECTION v2") {
+		t.Fatalf("prompt after a change = %q, want the new section", got)
+	}
+	if got := prompt("sid-a"); got != "" {
+		t.Fatalf("second prompt after the change = %q, want nothing", got)
+	}
+	if got := start("clear", "sid-new"); got != "SECTION v2" {
+		t.Fatalf("clear = %q, want the section for the new session", got)
+	}
+}
+
+func TestAgentContextIsEmptyWhereItShouldNotSpeak(t *testing.T) {
+	policy := delegationOn
+	for _, tc := range []struct{ name, token, payload string }{
+		{"unknown token", "tok-nope", `{"hook_event_name":"SessionStart","source":"startup","session_id":"sid-a"}`},
+		{"unbridged agent", "tok-b", `{"hook_event_name":"SessionStart","source":"startup","session_id":"sid-b"}`},
+		{"a subagent's hook", "tok-a", `{"hook_event_name":"SessionStart","source":"startup","session_id":"sid-a","agent_id":"sub"}`},
+		{"no session id", "tok-a", `{"hook_event_name":"SessionStart","source":"startup"}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := contextServer(t, &policy)
+
+			if got := postContext(t, s, tc.token, tc.payload); got != "" {
+				t.Fatalf("context = %q, want none", got)
+			}
+		})
+	}
+}
+
+func TestAgentHooksAfterClearAreStillTheAgents(t *testing.T) {
+	policy := delegationOn
+	s := contextServer(t, &policy)
+	feed := s.bridgeFeed.(*observe.BridgeFeed)
+	postContext(t, s, "tok-a", `{"hook_event_name":"SessionStart","source":"clear","session_id":"sid-after-clear"}`)
+
+	postHook(t, s, "tok-a", `{"hook_event_name":"SubagentStart","session_id":"sid-after-clear","agent_id":"a"}`)
+	postHook(t, s, "tok-a", `{"hook_event_name":"SubagentStart","session_id":"other-session","agent_id":"b"}`)
+
+	if got := feed.BridgeAgents()["leo-a"].Subagents; got != 1 {
+		t.Fatalf("subagents = %d, want only the post-/clear session's", got)
 	}
 }

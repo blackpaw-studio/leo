@@ -12,6 +12,7 @@ import (
 	"net/netip"
 	"os/exec"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -112,15 +113,22 @@ type Server struct {
 	// event streams and long polls return as soon as Shutdown begins instead
 	// of holding httpServer.Shutdown for its grace. Nil on a Server not built
 	// by New (tests).
-	endStreams     context.CancelFunc
-	listener       net.Listener
-	port           int                            // port the listener is expected to bind on; used for Host/Origin checks
-	apiToken       string                         // operator bearer token: /api/*, browser routes, and /login
-	agentToken     string                         // token exported to agents; /api/* and agent-messaging routes only
-	clients        atomic.Pointer[[]ClientPolicy] // external API clients, scoped per route; swapped whole by SetClients, never mutated
-	allowedHosts   []string                       // extra hosts permitted beyond loopback (e.g. LAN IPs)
-	trustedProxies []netip.Prefix                 // peers whose Remote-User header is trusted
-	sessions       *sessionStore                  // in-memory browser sessions for cookie-based auth
+	endStreams context.CancelFunc
+	listener   net.Listener
+	port       int    // port the listener is expected to bind on; used for Host/Origin checks
+	apiToken   string // operator bearer token: /api/*, browser routes, and /login
+	agentToken string // token exported to agents; /api/* and agent-messaging routes only
+	// delegationCtx answers the agents' SessionStart/UserPromptSubmit
+	// context hooks; nil until the bridge runtime is wired.
+	delegationCtx *delegationContext
+	// sessionClaims holds, by launch token, the session id the launch's
+	// SessionStart hook last announced (see isAgentHookSession).
+	sessionClaimsMu sync.Mutex
+	sessionClaims   map[string]string
+	clients         atomic.Pointer[[]ClientPolicy] // external API clients, scoped per route; swapped whole by SetClients, never mutated
+	allowedHosts    []string                       // extra hosts permitted beyond loopback (e.g. LAN IPs)
+	trustedProxies  []netip.Prefix                 // peers whose Remote-User header is trusted
+	sessions        *sessionStore                  // in-memory browser sessions for cookie-based auth
 
 	// Testability seam for exec.CommandContext (exec.Command lives on
 	// ConfigService).
@@ -662,6 +670,7 @@ func New(configPath string, processes ProcessStateProvider, scheduler SchedulerP
 	apiMux.HandleFunc("POST /api/agent/{name}/rename", s.handleAPIAgentRename)
 	apiMux.HandleFunc("POST /api/agent/{name}/environments", s.handleAPIAgentSetEnvironments)
 	apiMux.HandleFunc("POST /api/agent/hook", s.handleAPIAgentHook)
+	apiMux.HandleFunc("POST /api/agent/context", s.handleAPIAgentContext)
 	apiMux.HandleFunc("POST /api/agent/permission", s.handleAPIPermission)
 	apiMux.HandleFunc("POST /api/agent/{name}/chat/post", s.handleAgentChatPost)
 	apiMux.HandleFunc("POST /api/agent/{name}/chat/ask", s.handleAgentChatAsk)

@@ -152,7 +152,7 @@ func (s *Server) handleAPIAgentHook(w http.ResponseWriter, r *http.Request) {
 	if s.attention != nil {
 		name, known = s.attention.AgentForToken(req.Token)
 	}
-	ours := known && s.isAgentHookSession(name, payload.SessionID)
+	ours := known && s.isAgentHookSession(name, req.Token, payload.SessionID)
 	home, _ := os.UserHomeDir()
 	if tr, ok := attentionForHook(payload, home); ok && ours {
 		// The SetByToken family re-resolves the token atomically, so a stop
@@ -214,11 +214,12 @@ func (s *Server) feedHook(agent string, p agentHookPayload) {
 }
 
 // isAgentHookSession reports whether a hook for sessionID belongs to the
-// named agent. Codex hooks are home-global and child harness processes
+// named agent, whose launch token is token. A session the agent's own
+// SessionStart hook announced (a /clear or fork names a new one) is its. Codex hooks are home-global and child harness processes
 // inherit the agent's env, so a payload naming a session other than the
 // agent's known one is some other process's turn. Either id missing (codex
 // discovers its id after the first turn) is accepted.
-func (s *Server) isAgentHookSession(name, sessionID string) bool {
+func (s *Server) isAgentHookSession(name, token, sessionID string) bool {
 	if s.agentSvc == nil || s.attention == nil {
 		return false
 	}
@@ -226,7 +227,7 @@ func (s *Server) isAgentHookSession(name, sessionID string) bool {
 	if !ok {
 		return false
 	}
-	if sessionID == "" || h.IDs == nil {
+	if sessionID == "" || h.IDs == nil || s.sessionClaimedBy(token) == sessionID {
 		return true
 	}
 	known := h.IDs.Get()

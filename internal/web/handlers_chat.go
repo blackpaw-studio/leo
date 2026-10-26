@@ -644,7 +644,7 @@ func (s *Server) agentPermission(ctx context.Context, token string, payload json
 	}
 	var p agentHookPayload
 	_ = json.Unmarshal(payload, &p)
-	if !s.isAgentHookSession(name, p.SessionID) {
+	if !s.isAgentHookSession(name, token, p.SessionID) {
 		return none
 	}
 	return s.chat.RequestPermission(ctx, name, payload, waits)

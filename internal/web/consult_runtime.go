@@ -117,6 +117,7 @@ func (s *Server) setupConsultRuntime(opts Options, resolveCallerSession func(str
 		s.dispatchBridge = runtime
 		hub.SetRequestHandler(s.consults.BridgeRequestHandler())
 		delegation := &delegationSource{path: s.configPath, load: s.loadConfig}
+		s.delegationCtx = s.newDelegationContext(delegation.Get)
 		pusher = &consult.StatePusher{Hub: hub, Records: s.consults.RunRecords, Delegation: delegation.Get, Now: time.Now, Cutoffs: cutoffs}
 		hub.AddSubscriber(cutoffs)
 		// The tmux roster leaves out what a bridged caller's band shows, so
