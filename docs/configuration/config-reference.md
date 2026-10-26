@@ -334,6 +334,33 @@ When dispatching with a repo (`/agent coding owner/repo` via a channel plugin, o
 
 Templates also back **persistent tasks** (`runtime: persistent`): a task with `template: <name>` delivers its prompts into that template's agent instead of spawning `claude -p`, spawning/resuming it on demand rather than at `leo service` boot. Multiple tasks can share one `template:` and therefore one agent and one FIFO queue. A `runtime: persistent` task with no `template:` gets an implicit target instead — an agent named after the task, synthesized from the task's own fields. See [Persistent Tasks](persistent-tasks.md) for the full mechanics (ensure-exists, queueing, completion reporting, `leo agent reset`).
 
+### Sharing templates between machines (`templates_file`)
+
+Set `templates_file` to keep agent templates in a separate file (for example in a git repo you sync across machines) while the rest of `leo.yaml` stays per-machine:
+
+```yaml
+# leo.yaml
+templates_file: ~/dotfiles/leo/templates.yaml
+```
+
+```yaml
+# ~/dotfiles/leo/templates.yaml: one top-level key, same schema as `templates:` above
+templates:
+  coding:
+    model: opus
+    environments: [work]
+```
+
+- **Path.** `~` is expanded; a relative path resolves against the directory holding `leo.yaml`. The file must exist and parse, or Leo refuses to load the config and names the path. Any top-level key other than `templates` is an error.
+- **Merge.** Effective templates are the shared ones, then the local `leo.yaml` templates by name. A local template **replaces** a shared one of the same name entirely; fields are never merged.
+- **Per-machine values** belong in local [`environments`](environments.md) (referenced by name from shared templates) or in `~` paths. A shared template that references an environment the machine lacks fails validation like any other.
+- **Source.** The web UI shows a `shared`, `local` or `local · overrides shared` badge on each template, and `leo template list` gains a SOURCE column (`--json` adds `source`).
+- **Writes.** Editing or deleting a shared template writes the shared file; editing or deleting a local template writes `leo.yaml`. Each file is rewritten only when its content changed, so editing a local template never dirties your repo. Deleting a local override uncovers the shared template again. Renaming a shared template keeps it in the shared file. New templates go to `leo.yaml`, unless you tick **shared** on the web create form or pass `leo template add --shared`. Comments in either file are not preserved on a rewrite.
+- **Revisions.** The config revision (the web/API `If-Match`) covers both files, so a `git pull` that changes the shared file makes a stale edit fail its revision check.
+- **Reload.** Leo does not watch the shared file and never runs git. After a `git pull`, run `leo service reload`, use the web reload, or make any save.
+- **Trust.** The shared file has the same trust level as `leo.yaml`: templates can set `harness_options` (for example, bypass permissions). Only point `templates_file` at a repo you control.
+- Renaming a shared template rewrites task references in this machine's `leo.yaml` only; other machines whose tasks use the old name fail validation after their next pull.
+
 ## Idle-suspend
 
 Ephemeral agents can be **auto-stopped** after a period of inactivity to free
