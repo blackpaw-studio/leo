@@ -37,4 +37,4 @@ Events are the SSE `data:` payload (`seq`/`at` flat at the top level, as every
 | result-409-not-claimant.json | result 409 |
 | result-409-already-settled.json | result 409 |
 | result-404-unknown-request.json | result 404 |
-| pending-response.json | `GET /api/v1/client-tools/requests?pending=1` (request fields flattened + `claimed_by`) |
+| pending-response.json | `GET /api/v1/client-tools/requests?pending=1` (request fields flattened + `claimed_by`); generated from relay state by `TestPendingResponseFixtureMatchesRelayState` (`LEO_UPDATE_FIXTURES=1` rewrites it): claimed (owner = claimant), unclaimed under the same owner, unowned |

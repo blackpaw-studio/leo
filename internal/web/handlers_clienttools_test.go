@@ -386,3 +386,84 @@ func TestClientToolsRoutesUnavailableWithoutRelay(t *testing.T) {
 		t.Fatalf("status %d", w.Code)
 	}
 }
+
+// updateWireFixtures rewrites the generated wire fixtures from live relay
+// state: LEO_UPDATE_FIXTURES=1 go test ./internal/web -run Fixture.
+const updateWireFixtures = "LEO_UPDATE_FIXTURES"
+
+// TestPendingResponseFixtureMatchesRelayState drives a relay into the three
+// states a pending request can be in (claimed, unclaimed under an owner,
+// unowned) and compares the route's response with pending-response.json, so
+// the fixture cannot drift from Calls.Pending().
+func TestPendingResponseFixtureMatchesRelayState(t *testing.T) {
+	const (
+		clientA = "ct_01JC8Z3K4M5N6P7Q8R9S0T1V2W"
+		clientB = "ct_01JC8Z3K4M5N6P7Q8R9S0T1V3X"
+	)
+	clientIDs := []clienttools.ClientID{clientA, clientB}
+	requestIDs := []string{"ctr_01JC8Z4A5B6C7D8E9F0G1H2J3K", "ctr_01JC8Z4A5B6C7D8E9F0G1H2J4M", "ctr_01JC8Z4A5B6C7D8E9F0G1H2J5N"}
+	created := []time.Time{
+		time.Date(2026, 10, 26, 15, 21, 2, 123_000_000, time.UTC),
+		time.Date(2026, 10, 26, 15, 21, 3, 500_000_000, time.UTC),
+		time.Date(2026, 10, 26, 15, 21, 4, 0, time.UTC),
+	}
+	var minted int
+	c := newClientToolsServer(t)
+	c.s.clientTools = clienttools.NewRelay(clienttools.RelayOptions{
+		Registry: clienttools.RegistryOptions{
+			IsBuiltin:   leotools.IsKnownTool,
+			NewClientID: func() clienttools.ClientID { id := clientIDs[0]; clientIDs = clientIDs[1:]; return id },
+		},
+		Calls: clienttools.CallsOptions{
+			Now:          func() time.Time { return created[minted-1] },
+			NewRequestID: func() string { minted++; return requestIDs[minted-1] },
+		},
+		Flag: clienttools.NewEverRegistered(clienttools.NewFileFlagStore(filepath.Join(t.TempDir(), "client-tools.json")), nil),
+	})
+	c.relay = c.s.clientTools
+	if a, b := string(c.relay.Connect()), string(c.relay.Connect()); a != clientA || b != clientB {
+		t.Fatalf("ids = %s, %s", a, b)
+	}
+	for _, id := range []string{clientA, clientB} {
+		if w := c.register(t, id, "browser", ctTool("browser_click", 30), ctTool("browser_snapshot", 30)); w.Code != http.StatusOK {
+			t.Fatalf("register: %d %s", w.Code, w.Body)
+		}
+	}
+	park := func(agent, tool, args string) {
+		t.Helper()
+		before := len(c.relay.Pending())
+		go c.do(t, http.MethodPost, "/api/agent/"+agent+"/client-tools/call", testAgentToken, map[string]any{"tool": tool, "args": json.RawMessage(args)})
+		deadline := time.After(5 * time.Second)
+		for len(c.relay.Pending()) == before {
+			select {
+			case <-deadline:
+				t.Fatal("call was not parked")
+			case <-time.After(5 * time.Millisecond):
+			}
+		}
+	}
+	t.Cleanup(func() { c.relay.CancelAgent("alfred"); c.relay.CancelAgent("beta") })
+
+	park("alfred", "browser_click", `{"ref":"e12"}`)
+	if w := c.do(t, http.MethodPost, "/api/v1/client-tools/requests/"+requestIDs[0]+"/claim", testAPIToken, map[string]string{"client_id": clientA}); w.Code != http.StatusOK {
+		t.Fatalf("claim: %d %s", w.Code, w.Body)
+	}
+	park("alfred", "browser_snapshot", `{}`)
+	park("beta", "browser_snapshot", `{}`)
+
+	w := c.do(t, http.MethodGet, "/api/v1/client-tools/requests?pending=1", testAPIToken, nil)
+	if w.Code != http.StatusOK {
+		t.Fatalf("pending: %d %s", w.Code, w.Body)
+	}
+	if os.Getenv(updateWireFixtures) != "" {
+		var pretty bytes.Buffer
+		if err := json.Indent(&pretty, w.Body.Bytes(), "", "  "); err != nil {
+			t.Fatal(err)
+		}
+		pretty.WriteByte('\n')
+		if err := os.WriteFile(filepath.Join("..", "clienttools", "testdata", "wire", "pending-response.json"), pretty.Bytes(), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	jsonEqualToFixture(t, "pending-response.json", w.Body.Bytes())
+}
