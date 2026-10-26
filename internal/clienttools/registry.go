@@ -94,6 +94,7 @@ type Registry struct {
 	clients  map[ClientID]struct{}
 	groups   map[string]*group
 	byName   map[string]string // tool name -> group
+	seen     map[string]bool   // every tool name ever registered (or seeded)
 	revision uint64
 }
 
@@ -108,6 +109,7 @@ func NewRegistry(opts RegistryOptions) *Registry {
 		clients: map[ClientID]struct{}{},
 		groups:  map[string]*group{},
 		byName:  map[string]string{},
+		seen:    map[string]bool{},
 	}
 }
 
@@ -187,6 +189,7 @@ func (r *Registry) Register(id ClientID, groupName string, tools []Tool) (revisi
 	g.providers = appendUnique(g.providers, id)
 	for _, t := range tools {
 		r.byName[t.Name] = groupName
+		r.seen[t.Name] = true
 	}
 	if _, same := sameTools(old, tools); !same || len(old) == 0 {
 		changed = true
@@ -290,6 +293,24 @@ func (r *Registry) Lookup(name string) (groupName string, t Tool, ok bool) {
 		}
 	}
 	return "", Tool{}, false
+}
+
+// EverSeen reports whether name was ever registered (or seeded), even if it
+// has since been withdrawn: a call to it fails with no_client, not as unknown.
+func (r *Registry) EverSeen(name string) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.seen[name]
+}
+
+// Seed marks names as previously seen, for the names persisted across
+// daemon restarts.
+func (r *Registry) Seed(names []string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for _, n := range names {
+		r.seen[n] = true
+	}
 }
 
 // Has reports whether name is a currently registered client tool.
