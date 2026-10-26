@@ -1,5 +1,5 @@
 import { expect, test } from 'claude-code/testing'
-import { bandHeader, delegationNote, formatElapsed, isAgentHidden, parseState, parseStateLine, rosterRows, rowText, shownDispatches, statusLine, trackTerminal } from '../hooks/roster.js'
+import { bandHeader, formatElapsed, isAgentHidden, parseState, parseStateLine, rosterRows, rowText, shownDispatches, statusLine, trackTerminal } from '../hooks/roster.js'
 
 test('parseState coerces fields and drops dispatches without an id', () => {
   const state = parseState({
@@ -17,12 +17,6 @@ test('parseStateLine leaves commands and garbage to the command path', () => {
   expect(parseStateLine('{"id":"c1","op":"deliver","text":"x"}')).toBeNull()
   expect(parseStateLine('not json')).toBeNull()
   expect(parseStateLine('{"op":"state"}')).toEqual({ delegation: { enabled: false, section: '', hideAgents: [] }, dispatches: [] })
-})
-
-test('the note carries the new section, or says delegation is off', () => {
-  expect(delegationNote({ enabled: true, section: 'roles: implement' })).toContain('roles: implement')
-  expect(delegationNote({ enabled: false, section: 'stale' })).toContain('delegation is now OFF')
-  expect(delegationNote({ enabled: false, section: 'stale' })).not.toContain('stale')
 })
 
 test('a fallback lets every agent through', () => {
