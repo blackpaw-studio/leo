@@ -6,6 +6,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/blackpaw-studio/leo/internal/config"
@@ -309,5 +310,34 @@ func TestMutateRevisionCoversSharedFile(t *testing.T) {
 	ce := mustConfigError(t, err)
 	if ce.Status != http.StatusConflict || ce.Code != CodeRevisionMismatch {
 		t.Fatalf("got %d %q, want 409 revision_mismatch", ce.Status, ce.Code)
+	}
+}
+
+func TestDuplicateSharedTemplateCreatesLocalCopy(t *testing.T) {
+	svc, leoPath, sharedPath := newSharedConfigService(t)
+	sharedBefore, _ := os.ReadFile(sharedPath)
+	sharedStat, _ := os.Stat(sharedPath)
+
+	if _, err := svc.DuplicateItem("", resourceByKey("templates"), "a", "a2"); err != nil {
+		t.Fatalf("duplicate: %v", err)
+	}
+
+	cfg, err := config.Load(leoPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.TemplateSource("a2") != config.SourceLocal || cfg.Templates["a2"].Model != "opus" {
+		t.Errorf("a2 = %+v source %q, want a local copy of a", cfg.Templates["a2"], cfg.TemplateSource("a2"))
+	}
+	if cfg.TemplateSource("a") != config.SourceShared {
+		t.Errorf("original source = %q, want shared", cfg.TemplateSource("a"))
+	}
+	if leo, _ := os.ReadFile(leoPath); !strings.Contains(string(leo), "a2:") {
+		t.Errorf("a2 missing from leo.yaml:\n%s", leo)
+	}
+	sharedAfter, _ := os.ReadFile(sharedPath)
+	afterStat, _ := os.Stat(sharedPath)
+	if string(sharedAfter) != string(sharedBefore) || !os.SameFile(sharedStat, afterStat) {
+		t.Errorf("shared file was touched:\n%s", sharedAfter)
 	}
 }

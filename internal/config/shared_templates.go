@@ -55,6 +55,15 @@ type sharedTemplates struct {
 // HasTemplatesFile reports whether a shared templates file was loaded.
 func (c *Config) HasTemplatesFile() bool { return c.shared != nil }
 
+// InheritTemplatesFile makes c use from's templates_file, so a config rebuilt
+// from scratch (the setup wizard) keeps saving shared templates to the shared
+// file instead of flattening them into leo.yaml. It is a no-op when from has
+// none.
+func (c *Config) InheritTemplatesFile(from *Config) {
+	c.TemplatesFile = from.TemplatesFile
+	c.shared = from.shared
+}
+
 // TemplateSource reports where the named effective template lives. Templates
 // of a config with no shared file are all local; an unknown name yields "".
 func (c *Config) TemplateSource(name string) TemplateSource {

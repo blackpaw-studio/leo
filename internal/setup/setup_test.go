@@ -815,3 +815,44 @@ func TestCheckPrerequisites_OldSystemTmuxDoesNotBlockBundledOne(t *testing.T) {
 		t.Errorf("old system tmux blocked setup: %v", err)
 	}
 }
+
+// A setup re-run must keep templates_file and leave shared templates in the
+// shared file rather than flattening them into leo.yaml.
+func TestBuildConfig_PreservesSharedTemplatesFile(t *testing.T) {
+	dir := t.TempDir()
+	leoPath := filepath.Join(dir, "leo.yaml")
+	sharedPath := filepath.Join(dir, "shared.yaml")
+	const leoYAML = "templates_file: shared.yaml\ntemplates:\n  mine:\n    model: haiku\n"
+	const sharedYAML = "# team\ntemplates:\n  team:\n    model: opus\n    workspace: ~/w\n"
+	for path, body := range map[string]string{leoPath: leoYAML, sharedPath: sharedYAML} {
+		if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	existing, err := config.Load(leoPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sharedBefore, _ := os.Stat(sharedPath)
+
+	cfg := buildConfig("/ws", existing)
+	cfg.HomePath = dir
+	if err := config.Save(leoPath, cfg); err != nil {
+		t.Fatal(err)
+	}
+
+	leo, _ := os.ReadFile(leoPath)
+	if !strings.Contains(string(leo), "templates_file: shared.yaml") {
+		t.Errorf("templates_file dropped from leo.yaml:\n%s", leo)
+	}
+	if strings.Contains(string(leo), "team:") {
+		t.Errorf("shared template flattened into leo.yaml:\n%s", leo)
+	}
+	if got, _ := os.ReadFile(sharedPath); string(got) != sharedYAML {
+		t.Errorf("shared file changed:\n%s", got)
+	}
+	sharedAfter, _ := os.Stat(sharedPath)
+	if !os.SameFile(sharedBefore, sharedAfter) {
+		t.Error("shared file was rewritten")
+	}
+}
