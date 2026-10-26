@@ -300,8 +300,20 @@ const maxRequestBodyBytes int64 = 10 << 20
 
 // bodyLimit raises the body cap for one exact POST path (the chat upload).
 type bodyLimit struct {
-	path string
-	max  int64
+	// path matches one exact path; match, when set, matches any path instead.
+	path  string
+	match func(path string) bool
+	max   int64
+}
+
+func (o bodyLimit) applies(r *http.Request) bool {
+	if r.Method != http.MethodPost {
+		return false
+	}
+	if o.match != nil {
+		return o.match(r.URL.Path)
+	}
+	return r.URL.Path == o.path
 }
 
 // bodySizeMiddleware enforces max on every request body, or an override's
@@ -312,7 +324,7 @@ func bodySizeMiddleware(max int64, next http.Handler, overrides ...bodyLimit) ht
 		if r.Body != nil {
 			limit := max
 			for _, o := range overrides {
-				if r.Method == http.MethodPost && r.URL.Path == o.path {
+				if o.applies(r) {
 					limit = o.max
 				}
 			}

@@ -18,6 +18,7 @@ import (
 	"github.com/blackpaw-studio/leo/internal/agent"
 	"github.com/blackpaw-studio/leo/internal/bridge"
 	"github.com/blackpaw-studio/leo/internal/chat"
+	"github.com/blackpaw-studio/leo/internal/clienttools"
 	"github.com/blackpaw-studio/leo/internal/config"
 	"github.com/blackpaw-studio/leo/internal/consult"
 	"github.com/blackpaw-studio/leo/internal/cron"
@@ -197,6 +198,9 @@ type Server struct {
 	turnObserver func(agent string, turn AgentTurn)
 	// chat is Leo Chat; nil when the daemon has no chat store.
 	chat *chat.Service
+	// clientTools is the client-tools relay (docs/api/client-tools.md); nil
+	// answers its routes 503.
+	clientTools *clienttools.Relay
 
 	// events is the read seam onto the (not-yet-existing) event bus, wired via
 	// WithEventSource. nil is a supported default: GET /api/v1/events still
@@ -299,6 +303,13 @@ type messageProvider interface {
 // the server's existing functionality to keep working unchanged. Passing no
 // options preserves pre-existing behavior for every current caller.
 type Option func(*Server)
+
+// WithClientTools wires the client-tools relay the /api/v1/client-tools and
+// /api/agent/{name}/client-tools routes serve, and that provider event
+// streams register with.
+func WithClientTools(r *clienttools.Relay) Option {
+	return func(s *Server) { s.clientTools = r }
+}
 
 // WithActivityProvider wires the activity tracker's read seam so
 // GET /api/v1/state and GET /api/v1/events can report live agent activity.
@@ -709,6 +720,9 @@ func New(configPath string, processes ProcessStateProvider, scheduler SchedulerP
 	// paired-device token only — the agent token reaches its own thread
 	// through the /api/agent/{name}/chat tool routes instead.
 	s.registerChatRoutes(apiMux, chatAPIPrefix, s.requireOperatorToken)
+	// Client-tools relay: the apps' routes take the operator or a paired
+	// device's token, the agents' list and call routes the agent token.
+	s.registerClientToolsRoutes(apiMux)
 	// /api/* is the agent-facing surface: both tokens work there, as do
 	// paired device tokens.
 	protectedAPI := bearerAuthWith([]string{s.apiToken, s.agentToken}, s.isDeviceToken, s.trustedProxies, apiMux)
@@ -762,7 +776,7 @@ func New(configPath string, processes ProcessStateProvider, scheduler SchedulerP
 	// requests from a non-localhost browser context are rejected. A body-size
 	// cap and baseline security headers sit above that.
 	handler := hostOriginMiddleware(s.port, s.allowedHosts, s.trustedProxies, root, publicOrigins(opts.PublicURLs)...)
-	handler = bodySizeMiddleware(maxRequestBodyBytes, handler, bodyLimit{path: chatUploadPath, max: maxChatUploadBody})
+	handler = bodySizeMiddleware(maxRequestBodyBytes, handler, bodyLimit{path: chatUploadPath, max: maxChatUploadBody}, bodyLimit{match: isClientToolResultPath, max: maxClientToolResultBody})
 	handler = securityHeadersMiddleware(handler)
 	baseCtx, endStreams := context.WithCancel(context.Background())
 	s.endStreams = endStreams
