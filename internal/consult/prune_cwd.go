@@ -10,11 +10,17 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
 // lsofTimeout bounds the darwin cwd scan; lsof walks every process.
 const lsofTimeout = 30 * time.Second
+
+// deferredQuietAfter is how long a deferred dispatch must have been over
+// before prune will take "no process works in its worktree" as proof its
+// writers are gone. A variable so tests can shorten it.
+var deferredQuietAfter = 24 * time.Hour
 
 // procCwd is one process and the directory it is working in.
 type procCwd struct {
@@ -100,4 +106,93 @@ func readProcCwds(procDir string) ([]procCwd, error) {
 		procs = append(procs, procCwd{PID: pid, Comm: strings.TrimSpace(string(comm)), Cwd: cwd})
 	}
 	return procs, nil
+}
+
+// cwdScan runs the process working-directory scan at most once, on first
+// use, and shares the result across prune's concurrent assessments.
+type cwdScan struct {
+	scan  func(context.Context) ([]procCwd, error)
+	once  sync.Once
+	procs []procCwd
+	err   error
+}
+
+func newCwdScan(scan func(context.Context) ([]procCwd, error)) *cwdScan {
+	if scan == nil {
+		scan = osProcessCwds
+	}
+	return &cwdScan{scan: scan}
+}
+
+func (s *cwdScan) load() ([]procCwd, error) {
+	s.once.Do(func() {
+		procs, err := s.scan(context.Background())
+		if err == nil && len(procs) == 0 {
+			// This very process is in the table; an empty one means the scan
+			// saw nothing, not that nothing is running.
+			err = errors.New("no processes listed")
+		}
+		for i := range procs {
+			procs[i].Cwd = resolvedPath(procs[i].Cwd)
+		}
+		s.procs, s.err = procs, err
+	})
+	return s.procs, s.err
+}
+
+// holder is a process whose cwd is dir or lies under it.
+func (s *cwdScan) holder(dir string) (procCwd, bool, error) {
+	procs, err := s.load()
+	if err != nil {
+		return procCwd{}, false, err
+	}
+	dir = resolvedPath(dir)
+	for _, p := range procs {
+		if pathWithin(dir, p.Cwd) {
+			return p, true, nil
+		}
+	}
+	return procCwd{}, false, nil
+}
+
+// resolvedPath is path with symlinks resolved, or cleaned when it cannot be
+// (a deleted directory): lsof and /proc report physical paths, records may not.
+func resolvedPath(path string) string {
+	if resolved, err := filepath.EvalSymlinks(path); err == nil {
+		return resolved
+	}
+	return filepath.Clean(path)
+}
+
+// pathWithin reports whether path is dir or below it, by whole path
+// components, so /wt/d-1 does not contain /wt/d-10.
+func pathWithin(dir, path string) bool {
+	return path == dir || strings.HasPrefix(path, strings.TrimSuffix(dir, string(filepath.Separator))+string(filepath.Separator))
+}
+
+// writerProbe is what prune uses to decide whether a deferred record's
+// writers are gone: the process table, the clock and the cwd scan.
+type writerProbe struct {
+	ps   psFunc
+	now  func() time.Time
+	cwds *cwdScan
+}
+
+// quietReason is why a terminal record's worktree cannot be called quiet, or
+// "" when it ended long enough ago and no live process works inside it.
+func (p writerProbe) quietReason(rec Record) string {
+	switch {
+	case rec.EndedAt.IsZero():
+		return "no end time recorded"
+	case p.now().Sub(rec.EndedAt) < deferredQuietAfter:
+		return fmt.Sprintf("ended < %dh ago", int(deferredQuietAfter.Hours()))
+	}
+	holder, found, err := p.cwds.holder(rec.Worktree)
+	switch {
+	case err != nil:
+		return fmt.Sprintf("cwd scan unavailable: %v", err)
+	case found:
+		return fmt.Sprintf("process %d (%s) working in worktree", holder.PID, holder.Comm)
+	}
+	return ""
 }
