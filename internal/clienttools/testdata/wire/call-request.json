@@ -1,0 +1,6 @@
+{
+  "tool": "browser_click",
+  "args": {
+    "ref": "e12"
+  }
+}

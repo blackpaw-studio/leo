@@ -1,0 +1,5 @@
+{
+  "ok": false,
+  "error": "tool \"Bad Name\": name must match ^[a-z][a-z0-9_]{0,63}$",
+  "code": "invalid_tool"
+}

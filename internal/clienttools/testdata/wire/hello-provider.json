@@ -1,0 +1,26 @@
+{
+  "seq": 41,
+  "at": "2026-10-26T15:21:00Z",
+  "version": 1,
+  "server_time": "2026-10-26T15:21:00Z",
+  "boot_id": "b7f3c2a91d4e5f60",
+  "features": [
+    "bridge_turns",
+    "attention_reason",
+    "dispatch_tree",
+    "agent_usage",
+    "agent_control",
+    "dispatch_attach",
+    "dispatch_removed",
+    "state_seq",
+    "attach_dispatch_placement",
+    "dispatch_placement_live",
+    "agent_environments",
+    "chat.questions",
+    "machine_stats",
+    "config_api",
+    "agent_status_restoring",
+    "client_tools"
+  ],
+  "client_id": "ct_01JC8Z3K4M5N6P7Q8R9S0T1V2W"
+}

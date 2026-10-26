@@ -1,0 +1,17 @@
+{
+  "ok": true,
+  "data": {
+    "ok": true,
+    "content": [
+      {
+        "type": "text",
+        "text": "clicked e12"
+      },
+      {
+        "type": "image",
+        "data": "iVBORw0KGgoAAAANSUhEUgAAAAgAAAAICAYAAADED76LAAAAEklEQVR4nGP4z8Dwn4GBgYEBAB8MAv+FZ7JQAAAAAElFTkSuQmCC",
+        "mimeType": "image/png"
+      }
+    ]
+  }
+}

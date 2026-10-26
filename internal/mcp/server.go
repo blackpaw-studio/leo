@@ -120,6 +120,9 @@ func runWith(in io.Reader, out io.Writer, reg *registry) error {
 			writeErr = fmt.Errorf("flush: %w", err)
 		}
 	}
+	reg.watch.attach(ctx, &wg, func(method string) {
+		writeResponse(jsonRPCMessage{JSONRPC: "2.0", Method: method})
+	})
 
 	for {
 		var msg jsonRPCMessage
@@ -191,10 +194,22 @@ func dispatch(ctx context.Context, msg *jsonRPCMessage, reg *registry) (jsonRPCM
 
 	switch msg.Method {
 	case "initialize":
+		var params struct {
+			ClientInfo struct {
+				Name string `json:"name"`
+			} `json:"clientInfo"`
+		}
+		_ = json.Unmarshal(msg.Params, &params) // a malformed initialize just gets the fallback tools
+		reg.setClientName(params.ClientInfo.Name)
+		reg.startWatch()
+		tools := map[string]any{}
+		if reg.watching() {
+			tools["listChanged"] = true
+		}
 		resp.Result = map[string]any{
 			"protocolVersion": protocolVersion,
 			"capabilities": map[string]any{
-				"tools": map[string]any{},
+				"tools": tools,
 			},
 			"serverInfo": map[string]any{
 				"name":    "leo",
@@ -215,20 +230,7 @@ func dispatch(ctx context.Context, msg *jsonRPCMessage, reg *registry) (jsonRPCM
 			resp.Error = &jsonRPCError{Code: codeInvalidRequest, Message: fmt.Sprintf("invalid params: %v", err)}
 			break
 		}
-		text, err := reg.callContext(ctx, params.Name, params.Arguments)
-		if err != nil {
-			// MCP convention: tool execution errors come back inside the
-			// result with isError=true (not as protocol-level errors), so
-			// the LLM can see and react to them.
-			resp.Result = map[string]any{
-				"content": []map[string]any{{"type": "text", "text": err.Error()}},
-				"isError": true,
-			}
-			break
-		}
-		resp.Result = map[string]any{
-			"content": []map[string]any{{"type": "text", "text": text}},
-		}
+		resp.Result = reg.callTool(ctx, params.Name, params.Arguments).mcpResult()
 	case "ping":
 		resp.Result = map[string]any{}
 	default:

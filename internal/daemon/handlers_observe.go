@@ -93,9 +93,15 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
-	httpapi.ServeEvents(w, r, httpapi.EventsOptions{
+	opts := httpapi.EventsOptions{
 		Source: s.observeBus, Heartbeat: 20 * time.Second, WriteTimeout: 30 * time.Second, Buffer: 32, Clock: s.observeClock,
-	})
+	}
+	// ?client_tools=1 makes this an app's provider stream: it gets a client id
+	// and the client-tools relay, and its tools are withdrawn when it closes.
+	if r.URL.Query().Get("client_tools") == "1" && s.clientTools != nil {
+		opts.Provider = s.clientTools.Provider()
+	}
+	httpapi.ServeEvents(w, r, opts)
 }
 
 func (s *Server) handleState(w http.ResponseWriter, r *http.Request) {

@@ -91,6 +91,7 @@ nav:
       - Permissions: configuration/permissions.md
       - API Clients: configuration/api-clients.md
       - Leo Chat: configuration/chat.md
+      - Client tools: configuration/client-tools.md
       - Config API: configuration/config-api.md
       - Managed Install (Leo.app): configuration/managed-install.md
   - CLI Reference:

@@ -1,0 +1,5 @@
+{
+  "ok": false,
+  "error": "request already settled",
+  "code": "already_settled"
+}

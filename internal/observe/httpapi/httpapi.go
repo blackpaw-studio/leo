@@ -54,6 +54,14 @@ func newBootID() string {
 // BootID returns this process's boot id.
 func BootID() string { return bootID }
 
+// Provider admits a client-tools provider stream (`?client_tools=1`): the
+// stream is given a client id for the length of its connection, and the
+// relay withdraws that client's tools when the stream ends.
+type Provider interface {
+	Connect() string
+	Disconnect(id string)
+}
+
 type EventsOptions struct {
 	// BootID overrides the process boot id reported on hello (tests).
 	BootID       string
@@ -62,6 +70,10 @@ type EventsOptions struct {
 	WriteTimeout time.Duration
 	Buffer       int
 	Clock        Clock
+	// Provider, when non-nil, makes this a client-tools provider stream: the
+	// hello carries its client_id and it receives client_tool.* events in
+	// full. Every other stream sees them redacted to ids.
+	Provider Provider
 }
 
 // ServeEvents streams the local event source. Every connection starts with a
@@ -98,6 +110,12 @@ func ServeEvents(w http.ResponseWriter, r *http.Request, opts EventsOptions) {
 		defer unsubscribe()
 	}
 
+	var clientID string
+	if opts.Provider != nil {
+		clientID = opts.Provider.Connect()
+		defer opts.Provider.Disconnect(clientID)
+	}
+
 	boot := opts.BootID
 	if boot == "" {
 		boot = bootID
@@ -106,7 +124,7 @@ func ServeEvents(w http.ResponseWriter, r *http.Request, opts EventsOptions) {
 	deadline()
 	w.WriteHeader(http.StatusOK)
 	if WriteEvent(w, string(observe.EventHello), observe.HelloPayload{
-		Meta: observe.Meta{Seq: seq, At: now}, Version: observe.SnapshotVersion, ServerTime: now, BootID: boot, Features: observe.Features(),
+		Meta: observe.Meta{Seq: seq, At: now}, Version: observe.SnapshotVersion, ServerTime: now, BootID: boot, Features: observe.Features(), ClientID: clientID,
 	}) != nil || rc.Flush() != nil {
 		return
 	}
@@ -131,11 +149,27 @@ func ServeEvents(w http.ResponseWriter, r *http.Request, opts EventsOptions) {
 				return
 			}
 			deadline()
-			if WriteEvent(w, string(ev.Type), ev.Payload) != nil || rc.Flush() != nil {
+			if WriteEvent(w, string(ev.Type), payloadFor(ev, opts.Provider != nil)) != nil || rc.Flush() != nil {
 				return
 			}
 		}
 	}
+}
+
+// payloadFor is what one stream is allowed to see of ev: client-tool calls
+// carry an agent's arguments, so only provider streams get them whole. The
+// others get the id alone, which keeps their seq contiguous.
+func payloadFor(ev observe.Event, provider bool) any {
+	if provider {
+		return ev.Payload
+	}
+	switch p := ev.Payload.(type) {
+	case *observe.ClientToolRequestPayload:
+		return p.Redacted()
+	case *observe.ClientToolCancelledPayload:
+		return p.Redacted()
+	}
+	return ev.Payload
 }
 
 // ServeState shares snapshot production and envelope/error adaptation between

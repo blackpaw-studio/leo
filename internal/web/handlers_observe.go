@@ -504,9 +504,21 @@ func (s *Server) handleAPIEvents(w http.ResponseWriter, r *http.Request) {
 	// A revoked device's stream ends promptly rather than at disconnect.
 	ctx, release := s.contextEndingOnRevoke(r)
 	defer release()
-	httpapi.ServeEvents(w, r.WithContext(ctx), httpapi.EventsOptions{
+	opts := httpapi.EventsOptions{
 		Source: s.events, Heartbeat: s.sseHeartbeat, WriteTimeout: s.sseWriteTimeout, Buffer: sseSubscriberBuffer,
-	})
+	}
+	// A provider stream (?client_tools=1) registers a client with the relay
+	// for its length; agents' tokens pass the API auth but may not open one.
+	if r.URL.Query().Get("client_tools") == "1" {
+		if !s.isOperatorBearer(extractBearer(r.Header.Get("Authorization"))) {
+			writeJSON(w, http.StatusForbidden, apiResponse{Error: "operator token required"})
+			return
+		}
+		if provider, ok := s.providerFor(r); ok {
+			opts.Provider = provider
+		}
+	}
+	httpapi.ServeEvents(w, r.WithContext(ctx), opts)
 }
 
 // setAgentEnvironments fills a's environment view from current config: the

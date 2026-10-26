@@ -1,0 +1,35 @@
+[
+  {
+    "harness": "claude",
+    "version": "2.1.310",
+    "client_info_name": "claude-code",
+    "relisted": true,
+    "called_late": true,
+    "image_seen": true,
+    "honors": true,
+    "headless_client_info_name": "claude-code",
+    "headless_honors": true
+  },
+  {
+    "harness": "codex",
+    "version": "0.162.1",
+    "client_info_name": "codex-mcp-client",
+    "relisted": false,
+    "called_late": false,
+    "image_seen": false,
+    "honors": false,
+    "headless_client_info_name": "codex-mcp-client",
+    "headless_honors": false
+  },
+  {
+    "harness": "opencode",
+    "version": "1.18.18",
+    "client_info_name": "opencode",
+    "relisted": true,
+    "called_late": true,
+    "image_seen": true,
+    "honors": true,
+    "headless_client_info_name": "opencode",
+    "headless_honors": true
+  }
+]

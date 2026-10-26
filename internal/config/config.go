@@ -704,7 +704,7 @@ func (c *Config) Validate() error {
 		if tmpl.Isolation != "" && tmpl.Isolation != "worktree" {
 			errs = append(errs, fmt.Sprintf("templates.%s.isolation %q must be empty or \"worktree\"", name, tmpl.Isolation))
 		}
-		errs = append(errs, validatePermissions(name, tmpl.Permissions, c.Templates)...)
+		errs = append(errs, validatePermissions(name, tmpl.Permissions, c.Templates, c.persistedClientTool)...)
 	}
 
 	for name, task := range c.Tasks {
@@ -1255,6 +1255,22 @@ func isValidHostOrIP(h string) bool {
 	return true
 }
 
+// persistedClientTool reports whether name is a client tool an app has
+// registered with this daemon, from the names the relay persists in the state
+// directory. It is what lets deny_tools name a tool no app has connected to
+// provide yet this boot.
+func (c *Config) persistedClientTool(name string) bool {
+	if c.HomePath == "" {
+		return false
+	}
+	for _, n := range leotools.ReadClientToolNames(c.StatePath()) {
+		if n == name {
+			return true
+		}
+	}
+	return false
+}
+
 // validatePermissions checks one template's permissions block and returns the
 // error strings it produces (empty when valid).
 //
@@ -1264,7 +1280,10 @@ func isValidHostOrIP(h string) bool {
 // against the defined set; glob patterns are accepted unchecked since they are
 // meant to match names that may not exist yet. can_message is deliberately not
 // validated — agent names are generated at spawn time.
-func validatePermissions(name string, p leotools.Permissions, templates map[string]TemplateConfig) []string {
+//
+// extraKnown, when non-nil, names further tools deny_tools accepts: the client
+// tools apps have registered, which are not in leotools.Names.
+func validatePermissions(name string, p leotools.Permissions, templates map[string]TemplateConfig, extraKnown func(string) bool) []string {
 	var errs []string
 
 	for i, tool := range p.DenyTools {
@@ -1273,7 +1292,7 @@ func validatePermissions(name string, p leotools.Permissions, templates map[stri
 			errs = append(errs, fmt.Sprintf(
 				"templates.%s.permissions.deny_tools[%d]: %s cannot be denied — every agent's system context tells it to call %s to operate Leo",
 				name, i, leotools.SkillTool, leotools.SkillTool))
-		case !leotools.IsKnownTool(tool):
+		case !leotools.IsKnownTool(tool) && (extraKnown == nil || !extraKnown(tool)):
 			errs = append(errs, fmt.Sprintf(
 				"templates.%s.permissions.deny_tools[%d] %q is not a leo tool; valid tools: %s",
 				name, i, tool, strings.Join(leotools.Names, ", ")))

@@ -1,0 +1,5 @@
+{
+  "ok": false,
+  "error": "a group may register at most 64 tools",
+  "code": "too_many_tools"
+}

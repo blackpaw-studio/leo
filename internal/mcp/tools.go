@@ -8,6 +8,7 @@ import (
 	"math"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/blackpaw-studio/leo/internal/consult"
@@ -71,6 +72,22 @@ type registry struct {
 	// task and runID are LEO_TASK and LEO_RUN_ID, set only in a headless
 	// task run.
 	task, runID string
+	// clientTools is this agent's view of the daemon's client tools; nil in
+	// local-only mode, where there is no daemon to ask.
+	clientTools *clientToolsView
+	// clientMu guards the per-session client state below: initialize sets it
+	// on one request goroutine and later requests read it on others.
+	clientMu sync.Mutex
+	// clientName is the MCP client's initialize clientInfo.name, and
+	// nativeClientTools whether that client honors list_changed.
+	clientName        string
+	nativeClientTools bool
+	// fallbackSampled and fallbackOn record whether the fallback tools are
+	// listed. The daemon's ever_registered flag is read once, at the first
+	// tools/list, so a non-honoring client's list never changes mid-session.
+	fallbackSampled, fallbackOn bool
+	// watch is the list_changed machinery runWith attaches to a session.
+	watch clientToolsWatch
 }
 
 // registryOption adjusts a registry before its tools are registered.
@@ -127,6 +144,9 @@ func newRegistry(client *daemonClient, processName string, perms leotools.Permis
 
 	if client == nil {
 		return r
+	}
+	if processName != "" {
+		r.clientTools = newClientToolsView(client, processName, perms)
 	}
 
 	r.add(toolDef{
@@ -825,8 +845,69 @@ func (r *registry) skip(name string) bool {
 	return true
 }
 
+// list is the tools/list result: the built-in tools plus, for a client that
+// honors list_changed, every client tool currently registered with the daemon,
+// or, for one that does not, the fixed fallback tools once any app has ever
+// registered.
 func (r *registry) list() []toolDef {
+	if r.clientTools == nil {
+		return r.defs
+	}
+	switch {
+	case r.isNativeClient():
+		return append(append([]toolDef(nil), r.defs...), r.clientTools.defs(context.Background())...)
+	case r.fallbackListed(context.Background()):
+		return append(append([]toolDef(nil), r.defs...), r.fallbackDefs()...)
+	}
 	return r.defs
+}
+
+// setClientName records the MCP client's name (initialize clientInfo.name)
+// and whether it honors list_changed, which decides how client tools reach it.
+func (r *registry) setClientName(name string) {
+	r.clientMu.Lock()
+	defer r.clientMu.Unlock()
+	r.clientName = name
+	r.nativeClientTools = honorsToolListChanged(name)
+}
+
+func (r *registry) isNativeClient() bool {
+	r.clientMu.Lock()
+	defer r.clientMu.Unlock()
+	return r.nativeClientTools
+}
+
+// callTool runs a tool and returns its MCP result: client tools pass the
+// app's content blocks (text and images) through, every other tool returns
+// text.
+func (r *registry) callTool(ctx context.Context, name string, raw json.RawMessage) toolOutcome {
+	if out, ok := r.callFallback(ctx, name, raw); ok {
+		return out
+	}
+	if r.isClientTool(name) {
+		return r.clientTools.call(ctx, name, raw)
+	}
+	text, err := r.callContext(ctx, name, raw)
+	if err != nil {
+		// MCP convention: tool execution errors come back inside the result
+		// with isError=true (not as protocol-level errors), so the LLM can
+		// see and react to them.
+		return textOutcome(err.Error(), true)
+	}
+	return textOutcome(text, false)
+}
+
+// isClientTool reports whether name should go to the client-tools relay:
+// there is a daemon to ask and no built-in tool of that name.
+func (r *registry) isClientTool(name string) bool {
+	if r.clientTools == nil || r.denied[name] {
+		return false
+	}
+	if _, ok := r.handlers[name]; ok {
+		return false
+	}
+	_, ok := r.contextualHandlers[name]
+	return !ok
 }
 
 func (r *registry) call(name string, raw json.RawMessage) (string, error) {

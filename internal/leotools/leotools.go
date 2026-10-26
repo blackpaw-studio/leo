@@ -14,7 +14,10 @@
 package leotools
 
 import (
+	"encoding/json"
+	"os"
 	"path"
+	"path/filepath"
 	"strings"
 )
 
@@ -66,6 +69,20 @@ var Names = []string{
 	"leo_chat_schedule_cancel",
 }
 
+// AppToolsTool and AppCallTool are the fixed tools that stand in for client
+// tools on harnesses that never re-list their tools mid-session: one lists
+// what apps have registered, the other calls one by name. They are listed only
+// once some app has ever registered, so they are not part of Names.
+const (
+	AppToolsTool = "leo_app_tools"
+	AppCallTool  = "leo_app_call"
+)
+
+// FallbackNames lists the client-tools fallback tools. Like Names, their
+// names are reserved: a client tool cannot take one, and deny_tools may name
+// them.
+var FallbackNames = []string{AppToolsTool, AppCallTool}
+
 // IsKnownTool reports whether name is a tool Leo's MCP server registers.
 func IsKnownTool(name string) bool {
 	for _, n := range Names {
@@ -73,7 +90,40 @@ func IsKnownTool(name string) bool {
 			return true
 		}
 	}
+	for _, n := range FallbackNames {
+		if n == name {
+			return true
+		}
+	}
 	return false
+}
+
+// MaxClientToolResultBytes caps the body an app may post as a client tool's
+// result (screenshots ride in it). The daemon enforces it on the way in and
+// the MCP server sizes its read of the relayed result from it, so the two
+// cannot drift apart.
+const MaxClientToolResultBytes = 32 << 20
+
+// ClientToolsStateFile is the file under the state directory where the
+// client-tools relay persists the tool names apps have registered. Config
+// validation reads it so a deny_tools entry for a client tool stays valid
+// at boot, before any app has reconnected.
+const ClientToolsStateFile = "client-tools.json"
+
+// ReadClientToolNames returns the client tool names persisted under stateDir,
+// or nil when there is no (readable) record.
+func ReadClientToolNames(stateDir string) []string {
+	raw, err := os.ReadFile(filepath.Join(stateDir, ClientToolsStateFile)) // #nosec G304 -- leo's own state directory
+	if err != nil {
+		return nil
+	}
+	var st struct {
+		Tools []string `json:"tools"`
+	}
+	if json.Unmarshal(raw, &st) != nil {
+		return nil
+	}
+	return st.Tools
 }
 
 // Permissions is the per-template permission set. The zero value places no

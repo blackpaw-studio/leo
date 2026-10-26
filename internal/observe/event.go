@@ -85,11 +85,15 @@ const (
 	// capability never sees the value; one that doesn't know it must treat an
 	// unknown status as "stopped".
 	FeatureAgentStatusRestoring = "agent_status_restoring"
+	// FeatureClientTools: connected apps can declare tools for agents through
+	// the client-tools relay (`?client_tools=1` provider streams and
+	// /api/v1/client-tools; docs/configuration/client-tools.md).
+	FeatureClientTools = "client_tools"
 )
 
 // Features returns the hello's features list, a fresh copy each call.
 func Features() []string {
-	return []string{FeatureBridgeTurns, FeatureAttentionReason, FeatureDispatchTree, FeatureAgentUsage, FeatureAgentControl, FeatureDispatchAttach, FeatureDispatchRemoved, FeatureStateSeq, FeatureAttachDispatchPlacement, FeatureDispatchPlacementLive, FeatureAgentEnvironments, FeatureChatQuestions, FeatureMachineStats, FeatureConfigAPI, FeatureAgentStatusRestoring}
+	return []string{FeatureBridgeTurns, FeatureAttentionReason, FeatureDispatchTree, FeatureAgentUsage, FeatureAgentControl, FeatureDispatchAttach, FeatureDispatchRemoved, FeatureStateSeq, FeatureAttachDispatchPlacement, FeatureDispatchPlacementLive, FeatureAgentEnvironments, FeatureChatQuestions, FeatureMachineStats, FeatureConfigAPI, FeatureAgentStatusRestoring, FeatureClientTools}
 }
 
 // ActivityMinInterval is the most often agent_activity is published per
@@ -140,6 +144,9 @@ type HelloPayload struct {
 	// Features lists the optional capabilities this daemon offers (see
 	// Features). Consumers ignore names they do not recognise.
 	Features []string `json:"features"`
+	// ClientID names a provider stream (`?client_tools=1`) to the relay; it is
+	// absent on every other stream.
+	ClientID string `json:"client_id,omitempty"`
 }
 
 // AgentSpawnedPayload carries the whole agent, since the consumer has never seen it.

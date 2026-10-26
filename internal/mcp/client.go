@@ -17,12 +17,18 @@ import (
 
 	"github.com/blackpaw-studio/leo/internal/config"
 	"github.com/blackpaw-studio/leo/internal/consult"
+	"github.com/blackpaw-studio/leo/internal/leotools"
 )
 
 // maxDaemonResponseBytes caps how much response body the MCP client will read
 // from the local daemon. The daemon is trusted, so this is a safety net against
 // a runaway handler rather than an adversarial boundary.
 const maxDaemonResponseBytes = 10 << 20
+
+// maxClientToolResponseBytes is how much of a relayed client-tool result the
+// MCP server reads: the largest result an app may post, plus headroom for the
+// envelope. Truncating it would hand the model broken JSON.
+const maxClientToolResponseBytes = leotools.MaxClientToolResultBytes + 1<<20
 
 // consultHTTPTimeout is slightly longer than the daemon's own consultant
 // deadline so the daemon can return its structured timeout error. Derived
@@ -34,6 +40,9 @@ type daemonClient struct {
 	baseURL string
 	token   string // API bearer token; empty disables the Authorization header
 	http    *http.Client
+	// clientToolResultCap is how much of a relayed client-tool result
+	// callClientTool reads; a field so tests can use a small one.
+	clientToolResultCap int64
 }
 
 func newDaemonClient(port, token string) *daemonClient {
@@ -41,6 +50,8 @@ func newDaemonClient(port, token string) *daemonClient {
 		baseURL: "http://127.0.0.1:" + port,
 		token:   token,
 		http:    &http.Client{Timeout: 30 * time.Second},
+
+		clientToolResultCap: maxClientToolResponseBytes,
 	}
 }
 
@@ -66,6 +77,11 @@ func (c *daemonClient) do(method, path string, body any) (json.RawMessage, error
 }
 
 func (c *daemonClient) doContext(ctx context.Context, method, path string, body any) (json.RawMessage, error) {
+	return c.doContextLimit(ctx, method, path, body, maxDaemonResponseBytes)
+}
+
+// doContextLimit is doContext reading at most limit bytes of response.
+func (c *daemonClient) doContextLimit(ctx context.Context, method, path string, body any, limit int64) (json.RawMessage, error) {
 	var reqBody io.Reader
 	if body != nil {
 		buf, err := json.Marshal(body)
@@ -88,10 +104,10 @@ func (c *daemonClient) doContext(ctx context.Context, method, path string, body 
 	}
 	defer resp.Body.Close()
 
-	// Cap the response body to a generous 10 MiB. The daemon is local and
+	// Cap the response body (10 MiB by default). The daemon is local and
 	// trusted, so this is belt-and-suspenders against a runaway handler —
 	// list responses scale with the number of agents/tasks.
-	raw, err := io.ReadAll(io.LimitReader(resp.Body, maxDaemonResponseBytes))
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, limit))
 	if err != nil {
 		return nil, fmt.Errorf("read response: %w", err)
 	}
@@ -406,4 +422,56 @@ func (c *daemonClient) releaseDispatch(ctx context.Context, id string) (consult.
 		return consult.Record{}, fmt.Errorf("decode dispatch: %w", err)
 	}
 	return record, nil
+}
+
+// errUnknownClientTool is what the daemon answers (404) for a client-tool
+// call to a name it has never seen registered.
+const errUnknownClientTool = "unknown client tool"
+
+func errIsUnknownClientTool(err error) bool {
+	return err != nil && err.Error() == errUnknownClientTool
+}
+
+// clientTools lists the daemon's registered client tools for agent.
+func (c *daemonClient) clientTools(ctx context.Context, agent string) (clientToolList, error) {
+	raw, err := c.doContext(ctx, http.MethodGet, "/api/agent/"+url.PathEscape(agent)+"/client-tools", nil)
+	if err != nil {
+		return clientToolList{}, err
+	}
+	var list clientToolList
+	if err := json.Unmarshal(raw, &list); err != nil {
+		return clientToolList{}, fmt.Errorf("decode client tools: %w", err)
+	}
+	return list, nil
+}
+
+// clientToolResult is the daemon's answer to a client-tool call: the app's
+// raw content blocks, or an error from the app or the daemon.
+type clientToolResult struct {
+	OK      bool            `json:"ok"`
+	Content json.RawMessage `json:"content"`
+	Error   *struct {
+		Code    string `json:"code"`
+		Message string `json:"message"`
+	} `json:"error"`
+}
+
+// callClientTool runs a client tool for agent through the daemon's relay. The
+// call blocks for as long as the app takes, so it uses an http.Client with no
+// timeout of its own: the caller bounds it with ctx.
+func (c *daemonClient) callClientTool(ctx context.Context, agent, tool string, args json.RawMessage) (clientToolResult, error) {
+	client := *c
+	client.http = &http.Client{}
+	if len(args) == 0 {
+		args = json.RawMessage(`{}`)
+	}
+	raw, err := client.doContextLimit(ctx, http.MethodPost, "/api/agent/"+url.PathEscape(agent)+"/client-tools/call", map[string]any{"tool": tool, "args": args}, c.clientToolResultCap)
+	if err != nil {
+		return clientToolResult{}, err
+	}
+	var res clientToolResult
+	if err := json.Unmarshal(raw, &res); err != nil {
+		return clientToolResult{}, fmt.Errorf("decode client tool result: %w", err)
+	}
+	return res, nil
 }
