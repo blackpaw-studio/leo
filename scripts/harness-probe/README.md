@@ -28,9 +28,10 @@ Don't edit `run.sh` while it is running.
 |---|---|---|---|---|
 | Claude Code | 2.1.310 | `claude-code` | yes (interactive + headless) | yes |
 | codex | 0.162.1 | `codex-mcp-client` | no, never re-lists in-session (interactive + headless) | n/a, never reached `probe_late` |
-| opencode | 1.18.18 | `opencode` | yes: headless re-lists and calls `probe_late`; an earlier interactive run did too and the model described the red image | yes (earlier interactive run) |
+| opencode | 1.18.18 | `opencode` | yes (interactive + headless) | yes |
 
-The final recorded opencode *interactive* entry reads `honors: false`: the
-prompt was typed before the TUI was ready and never submitted (the log holds
-only `initialize` + the first `tools/list`), so it says nothing about the
-client. Treat headless + the earlier interactive run as the answer.
+An earlier opencode interactive run read `honors: false` because of a probe bug,
+not the client: opencode paints its input box before MCP connects, then raises
+an "Update Available" modal that swallowed the typed prompt. `run.sh` now waits
+for the MCP footer and Escapes that modal (Enter would confirm the update)
+before typing.

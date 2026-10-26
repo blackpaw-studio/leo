@@ -25,10 +25,10 @@
     "harness": "opencode",
     "version": "1.18.18",
     "client_info_name": "opencode",
-    "relisted": false,
-    "called_late": false,
-    "image_seen": false,
-    "honors": false,
+    "relisted": true,
+    "called_late": true,
+    "image_seen": true,
+    "honors": true,
     "headless_client_info_name": "opencode",
     "headless_honors": true
   }

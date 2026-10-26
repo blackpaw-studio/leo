@@ -145,6 +145,28 @@ dismiss_dialogs() {
   done
 }
 
+# await_ready <target> <harness> — opencode paints its input box and footer
+# ~10s before it has connected MCP servers, then raises an "Update Available"
+# modal over the input: text typed before that lands in the modal, not the
+# prompt. Wait for the MCP status in the footer, then Escape any modal (Enter
+# would confirm the self-update) until the screen is quiet.
+await_ready() {
+  local t="$1" h="$2" i quiet=0 pane
+  [ "$h" = opencode ] || return 0
+  for i in $(seq 1 60); do
+    pane="$(tm capture-pane -p -t "$t" 2>/dev/null || true)"
+    if grep -q "Update Available" <<<"$pane"; then
+      tm send-keys -t "$t" Escape
+      quiet=0
+    elif grep -q "Ask anything" <<<"$pane" && grep -qE "[0-9]+ MCP" <<<"$pane"; then
+      quiet=$((quiet + 1))
+      [ "$quiet" -ge 4 ] && return 0
+    fi
+    sleep 1
+  done
+  echo "warning: $h TUI never reached a quiet ready state" >&2
+}
+
 # summarize <log> — relisted/called_late/client_info_name as JSON.
 summarize() {
   local log="$1"
@@ -171,6 +193,7 @@ probe_one() {
   local session="probe-$h"
   tm new-session -d -s "$session" -x 200 -y 50 -c "$dir" "$cmd"
   dismiss_dialogs "$session"
+  await_ready "$session" "$h"
   sleep 5 # let the TUI finish starting (MCP servers connect after first paint)
   tm send-keys -t "$session" -l "$PROMPT"
   sleep 1

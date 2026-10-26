@@ -1,33 +1,23 @@
 
+  ┃                                                                                                                                                             Image colour probe request
+  ┃  call probe_ping; then re-check your tools; call probe_late if present; say the image colour
+  ┃                                                                                                                                                             Context
+                                                                                                                                                                22,750 tokens
+     ⚙ probe_probe_ping                                                                                                                                         5% used
+     ⚙ probe_probe_late                                                                                                                                         $0.00 spent
+
+     Red.                                                                                                                                                       MCP
+                                                                                                                                                                • aws-mcp MCP error -32603: No AWS
+     ▣  Build · GPT-5.6 Sol · 9.6s                                                                                                                                credentials available. Configure
+                                                                                                                                                                  credentials or use --skip-auth to
+                                                                                                                                                                  send unsigned requests.
+                                                                                                                                                                • probe Connected
+
+                                                                                                                                                                LSP
+                                                                                                                                                                LSPs are disabled
 
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-                                                                                                                  ▄
-                                                                                 █▀▀█ █▀▀█ █▀▀█ █▀▀▄ █▀▀▀ █▀▀█ █▀▀█ █▀▀█
-                                                                                 █  █ █  █ █▀▀▀ █  █ █    █  █ █  █ █▀▀▀
-                                                                                 ▀▀▀▀ █▀▀▀ ▀▀▀▀ ▀▀▀▀ ▀▀▀▀ ▀▀▀▀ ▀▀▀▀ ▀▀▀▀
-
-
-                                                               ┃
-                                                               ┃  Ask anything... "Fix broken tests"
-                                                               ┃
-                                                               ┃  Build · GPT-5.6 Sol OpenAI
-                                                               ╹▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
-                                                               tab agents  ctrl+p commands
 
 
 
@@ -46,4 +36,14 @@
 
 
 
-  /private/var/folders/lm/y8r86zt976dgpqt2d16fvshr0000gn/T/leo-probe.gEs17w/opencode  ⊙ 1 MCP /status                                                                                          1.18.18
+
+
+
+
+
+  ┃
+  ┃                                                                                                                                                             /private/var/folders/lm/
+  ┃                                                                                                                                                             y8r86zt976dgpqt2d16fvshr0000gn/T/leo-
+  ┃  Build · GPT-5.6 Sol OpenAI                                                                                                                                 probe.yYvWmG/opencode
+  ╹▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+   /private/var/folders/lm/y8r86zt976dgpqt2d16fvshr0000gn/T/leo-probe.yYvWmG/opencode                                            22.8K (5%)  ctrl+p commands    • OpenCode 1.18.18
