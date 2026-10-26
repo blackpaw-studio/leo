@@ -180,3 +180,22 @@ func expandTemplatePaths(tmpl TemplateConfig) TemplateConfig {
 	}
 	return tmpl
 }
+
+// AddTemplate adds a new template, to the shared file when shared is set and
+// to leo.yaml otherwise. It mutates c in place and does not save.
+func (c *Config) AddTemplate(name string, tmpl TemplateConfig, shared bool) error {
+	if _, exists := c.Templates[name]; exists {
+		return fmt.Errorf("template %q already exists", name)
+	}
+	if shared && !c.HasTemplatesFile() {
+		return fmt.Errorf("cannot create shared template %q: templates_file is not set", name)
+	}
+	if c.Templates == nil {
+		c.Templates = map[string]TemplateConfig{}
+	}
+	c.Templates[name] = tmpl
+	if shared {
+		c.shared.newShared[name] = true
+	}
+	return nil
+}
