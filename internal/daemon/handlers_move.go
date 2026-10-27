@@ -68,8 +68,10 @@ func (s *Server) handleMoveVerb(verb string) http.HandlerFunc {
 type MoveJobs interface {
 	Start(ctx context.Context, req agentmove.Request) (agentmove.JobStatus, error)
 	Get(id string) (agentmove.JobStatus, bool)
-	// Reconcile settles a fenced agent's pending move.
+	// Reconcile settles a fenced agent's pending move; Abandon lifts its
+	// fence without asking the destination.
 	Reconcile(ctx context.Context, name string) (agentmove.SettleResult, error)
+	Abandon(ctx context.Context, name string) (agentmove.SettleResult, error)
 }
 
 type moveJobsHolder struct{ j MoveJobs }
@@ -117,20 +119,27 @@ func (s *Server) handleMoveJob(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, st)
 }
 
-// handleMoveReconcile settles the path's agent's pending move by asking its
-// destination, and answers with the outcome.
-func (s *Server) handleMoveReconcile(w http.ResponseWriter, r *http.Request) {
-	h := s.moveJobs.Load()
-	if h == nil {
-		writeJSON(w, http.StatusServiceUnavailable, agentmove.VerbError{Code: "unavailable", Message: "this daemon cannot move agents yet"})
-		return
+// handleMoveSettle settles the path's agent's pending move: reconcile asks
+// its destination, abandon lifts the fence without asking. It answers with
+// the outcome.
+func (s *Server) handleMoveSettle(abandon bool) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		h := s.moveJobs.Load()
+		if h == nil {
+			writeJSON(w, http.StatusServiceUnavailable, agentmove.VerbError{Code: "unavailable", Message: "this daemon cannot move agents yet"})
+			return
+		}
+		settle := h.j.Reconcile
+		if abandon {
+			settle = h.j.Abandon
+		}
+		res, err := settle(r.Context(), r.PathValue("name"))
+		if err != nil {
+			writeMoveError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, res)
 	}
-	res, err := h.j.Reconcile(r.Context(), r.PathValue("name"))
-	if err != nil {
-		writeMoveError(w, err)
-		return
-	}
-	writeJSON(w, http.StatusOK, res)
 }
 
 // writeMoveError answers a refused move request: 400 for a bad request,

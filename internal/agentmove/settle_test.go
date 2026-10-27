@@ -90,3 +90,19 @@ func TestReconcilePendingSettlesFencedAgents(t *testing.T) {
 		t.Fatalf("log = %q", logged)
 	}
 }
+
+// Abandon lifts the fence without asking the destination: the escape hatch
+// for a host that is gone for good.
+func TestAbandonLiftsFenceWithoutAsking(t *testing.T) {
+	f := fencedFixture(t)
+	res, err := f.mv.Abandon(context.Background(), "web")
+	if err != nil || res.Outcome != SettleAbandoned || res.To != "laptop" || res.RunID != "run-1" {
+		t.Fatalf("abandon = %+v, %v", res, err)
+	}
+	if f.src.fence(t, "web") != nil || f.log.has("verb ") || f.log.has("mark ") {
+		t.Fatalf("fence %+v, events %v: want the fence lifted with no verb or mark", f.src.fence(t, "web"), f.log.all())
+	}
+	if _, err := f.mv.Abandon(context.Background(), "web"); !HasCode(err, CodeBadRequest) {
+		t.Fatalf("abandon without a fence = %v, want bad_request", err)
+	}
+}

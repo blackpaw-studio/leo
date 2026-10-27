@@ -60,6 +60,12 @@ func ReconcileMove(ctx context.Context, workDir, name string) (agentmove.SettleR
 	return settleCall(ctx, workDir, "/agents/"+url.PathEscape(name)+"/move/reconcile")
 }
 
+// AbandonMove asks the daemon at workDir to lift agent name's move fence
+// without asking its destination.
+func AbandonMove(ctx context.Context, workDir, name string) (agentmove.SettleResult, error) {
+	return settleCall(ctx, workDir, "/agents/"+url.PathEscape(name)+"/move/abandon")
+}
+
 // settleCall decodes a settled move, or the daemon's refusal as an
 // *agentmove.VerbError.
 func settleCall(ctx context.Context, workDir, path string) (agentmove.SettleResult, error) {

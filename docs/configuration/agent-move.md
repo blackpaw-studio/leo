@@ -209,6 +209,10 @@ Only one move or copy of an agent runs at a time (`agent_moving`).
 
 The daemon runs the same reconcile for every fenced agent when it starts, in the background, and logs each outcome.
 
+If the destination is gone for good (wiped, decommissioned, never coming back), `leo agent move <name> --abandon-remote` lifts the fence here without asking it. It prompts first; `--yes` skips the prompt, and without a TTY `--yes` is required.
+
+> **Warning:** `--abandon-remote` cannot know whether the agent is running on the destination. If it is, starting it here leaves two live copies of one conversation, each writing its own history. Use it only when the destination will not come back, and prefer `--reconcile` whenever the destination can answer.
+
 ### Preflight codes
 
 | Code | Meaning |

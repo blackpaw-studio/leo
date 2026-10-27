@@ -340,3 +340,50 @@ func TestAgentMoveReconcile(t *testing.T) {
 		t.Fatalf("--reconcile with --to = %v, want a refusal", err)
 	}
 }
+
+// --abandon-remote lifts the fence only after a confirmation or --yes, and
+// says what it risks.
+func TestAgentMoveAbandonRemote(t *testing.T) {
+	path, home := newAgentWorktreeTestConfig(t)
+	out, _ := withStubStdio(t)
+	d := &moveDaemon{settle: func() (int, any) {
+		return http.StatusOK, agentmove.SettleResult{Name: "leo-x", To: "laptop", RunID: "run-1", Outcome: agentmove.SettleAbandoned}
+	}}
+	startMoveDaemon(t, home, d)
+	oldTTY, oldIn := agentIsTTY, agentStdin
+	t.Cleanup(func() { agentIsTTY, agentStdin = oldTTY, oldIn })
+	run := func(args ...string) error {
+		root := newRootCmd()
+		root.SetArgs(append([]string{"--config", path, "agent", "move", "x"}, args...))
+		root.SilenceErrors, root.SilenceUsage = true, true
+		return root.Execute()
+	}
+
+	agentIsTTY = func() bool { return false }
+	if err := run("--abandon-remote"); err == nil || !strings.Contains(err.Error(), "--yes") || len(d.settled) != 0 {
+		t.Fatalf("unconfirmed abandon without a TTY = %v (settled %v), want a refusal naming --yes", err, d.settled)
+	}
+	agentIsTTY = func() bool { return true }
+	agentStdin = strings.NewReader("n\n")
+	if err := run("--abandon-remote"); err != nil || len(d.settled) != 0 || !strings.Contains(out.String(), "Aborted") {
+		t.Fatalf("declined abandon = %v (settled %v, output %q)", err, d.settled, out)
+	}
+	if !strings.Contains(out.String(), "two live copies") {
+		t.Fatalf("the prompt does not warn of two live copies: %q", out)
+	}
+	agentStdin = strings.NewReader("y\n")
+	if err := run("--abandon-remote"); err != nil || !slices.Equal(d.settled, []string{"abandon"}) {
+		t.Fatalf("confirmed abandon = %v (settled %v)", err, d.settled)
+	}
+	agentIsTTY = func() bool { return false }
+	out.Reset()
+	if err := run("--abandon-remote", "--yes"); err != nil || len(d.settled) != 2 {
+		t.Fatalf("abandon --yes = %v (settled %v)", err, d.settled)
+	}
+	if got := out.String(); !strings.Contains(got, "laptop") || !strings.Contains(got, "two live copies") {
+		t.Fatalf("output = %q, want the lifted fence and its risk", got)
+	}
+	if err := run("--abandon-remote", "--reconcile"); err == nil || len(d.settled) != 2 {
+		t.Fatalf("--abandon-remote with --reconcile = %v, want a refusal", err)
+	}
+}

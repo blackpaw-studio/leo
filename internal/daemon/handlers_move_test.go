@@ -68,6 +68,11 @@ type fakeMoveJobs struct {
 	settled []string
 }
 
+func (f *fakeMoveJobs) Abandon(_ context.Context, name string) (agentmove.SettleResult, error) {
+	f.settled = append(f.settled, "abandon "+name)
+	return agentmove.SettleResult{Name: name, To: "laptop", RunID: "run-1", Outcome: agentmove.SettleAbandoned}, f.err
+}
+
 func (f *fakeMoveJobs) Reconcile(_ context.Context, name string) (agentmove.SettleResult, error) {
 	f.settled = append(f.settled, "reconcile "+name)
 	if f.err != nil {
@@ -142,5 +147,16 @@ func TestMoveReconcileRoute(t *testing.T) {
 	var env agentmove.VerbError
 	if err := json.Unmarshal(w.Body.Bytes(), &env); err != nil || w.Code != http.StatusConflict || env.Code != agentmove.CodeOutcomeUnknown {
 		t.Fatalf("unsettled reconcile = %d %s", w.Code, w.Body)
+	}
+}
+
+func TestMoveAbandonRoute(t *testing.T) {
+	s := New(tmpSockPath(t, "a.sock"), "/nonexistent/leo.yaml", nil)
+	jobs := &fakeMoveJobs{}
+	s.SetMoveJobs(jobs)
+	w := moveRequest(s, "/agents/web/move/abandon", `{}`)
+	var res agentmove.SettleResult
+	if err := json.Unmarshal(w.Body.Bytes(), &res); err != nil || w.Code != http.StatusOK || res.Outcome != agentmove.SettleAbandoned || jobs.settled[0] != "abandon web" {
+		t.Fatalf("abandon = %d %s (%v), settled %v", w.Code, w.Body, err, jobs.settled)
 	}
 }

@@ -18,6 +18,8 @@ const (
 	SettleMoved = "moved"
 	// SettleFailed: the commit failed there; the agent is startable here.
 	SettleFailed = "failed"
+	// SettleAbandoned: the fence was lifted without asking the destination.
+	SettleAbandoned = "abandoned"
 )
 
 // SettleResult is a settled pending move.
@@ -67,6 +69,22 @@ func (mv *Mover) Reconcile(ctx context.Context, name string) (SettleResult, erro
 			name, p.To, phase, p.To, name)
 	}
 	return res, nil
+}
+
+// Abandon lifts name's fence without asking the destination, for a host
+// that is gone for good. If the agent is live there, starting it here
+// leaves two live copies of one conversation.
+func (mv *Mover) Abandon(_ context.Context, name string) (SettleResult, error) {
+	release, _, rec, err := mv.pending(name)
+	if err != nil {
+		return SettleResult{}, err
+	}
+	defer release()
+	p := *rec.MovePending
+	if err := mv.Agents.ClearMoveFence(name, p.RunID); err != nil {
+		return SettleResult{}, fmt.Errorf("lifting %s's move fence: %w", name, err)
+	}
+	return SettleResult{Name: name, To: p.To, RunID: p.RunID, Outcome: SettleAbandoned}, nil
 }
 
 // ReconcilePending reconciles every fenced agent here, best-effort, and logs

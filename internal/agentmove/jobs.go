@@ -187,6 +187,11 @@ func (js *Jobs) Wait(ctx context.Context, id string) (JobStatus, error) {
 	}
 }
 
+// Abandon lifts name's fence without asking (see Mover.Abandon).
+func (js *Jobs) Abandon(ctx context.Context, name string) (SettleResult, error) {
+	return js.mover.Abandon(ctx, name)
+}
+
 // Reconcile settles name's pending move (see Mover.Reconcile).
 func (js *Jobs) Reconcile(ctx context.Context, name string) (SettleResult, error) {
 	return js.mover.Reconcile(ctx, name)

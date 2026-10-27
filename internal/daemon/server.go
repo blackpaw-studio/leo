@@ -377,7 +377,8 @@ func New(sockPath, configPath string, processes ProcessStateProvider, opts ...Op
 	}
 	// Source side: a background job per transfer, polled by id.
 	mux.HandleFunc("POST /agents/{name}/move", s.handleMoveStart)
-	mux.HandleFunc("POST /agents/{name}/move/reconcile", s.handleMoveReconcile)
+	mux.HandleFunc("POST /agents/{name}/move/reconcile", s.handleMoveSettle(false))
+	mux.HandleFunc("POST /agents/{name}/move/abandon", s.handleMoveSettle(true))
 	mux.HandleFunc("GET /moves/{id}", s.handleMoveJob)
 
 	// Claude mod bridge: the mod's `leo bridge` process holds the command

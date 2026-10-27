@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"errors"
@@ -11,6 +12,7 @@ import (
 	"github.com/blackpaw-studio/leo/internal/agentmove"
 	"github.com/blackpaw-studio/leo/internal/config"
 	"github.com/blackpaw-studio/leo/internal/daemon"
+	"github.com/blackpaw-studio/leo/internal/prompt"
 	"github.com/spf13/cobra"
 )
 
@@ -22,12 +24,13 @@ var (
 	moveStartFn     = daemon.StartMove
 	moveJobFn       = daemon.MoveJob
 	moveReconcileFn = daemon.ReconcileMove
+	moveAbandonFn   = daemon.AbandonMove
 	movePollTick    = func() <-chan time.Time { return time.After(movePollInterval) }
 )
 
 func newAgentMoveCmd() *cobra.Command {
 	var host, to string
-	var force, asJSON, reconcile bool
+	var force, asJSON, reconcile, abandon, assumeYes bool
 	cmd := &cobra.Command{
 		Use:   "move <name> --to <host>",
 		Short: "Hand an agent off to another leo host",
@@ -45,21 +48,33 @@ interrupted.
 If the destination's answer to the final start is lost and its status does
 not settle it, the agent stays fenced here (move_pending): nothing starts or
 moves it until --reconcile asks the destination how that move ended. The
-daemon also reconciles fenced agents when it starts. See
+daemon also reconciles fenced agents when it starts. --abandon-remote lifts
+the fence without asking, for a destination that is gone for good: if the
+agent is live there, starting it here leaves two live copies. See
 docs/configuration/agent-move.md.`,
 		Example: `  leo agent move web --to laptop
-  leo agent move web --reconcile`,
+  leo agent move web --reconcile
+  leo agent move web --abandon-remote`,
 		Args:              cobra.ExactArgs(1),
 		ValidArgsFunction: completeAgentNames,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if err := gateCommand(cmd, "leo_agent_move"); err != nil {
 				return err
 			}
-			if reconcile {
-				if to != "" || force {
-					return errors.New("--reconcile asks the host the pending move went to; it takes no --to or --force")
+			if reconcile || abandon {
+				if to != "" || force || (reconcile && abandon) {
+					return errors.New("--reconcile and --abandon-remote settle the pending move on its own; they take no --to, --force or each other")
 				}
-				return runMoveSettle(cmd.Context(), host, args[0], "--reconcile", asJSON, moveReconcileFn)
+				if reconcile {
+					return runMoveSettle(cmd.Context(), host, args[0], []string{"--reconcile"}, asJSON, moveReconcileFn)
+				}
+				if !assumeYes {
+					ok, err := confirmAbandon(args[0])
+					if err != nil || !ok {
+						return err
+					}
+				}
+				return runMoveSettle(cmd.Context(), host, args[0], []string{"--abandon-remote", "--yes"}, asJSON, moveAbandonFn)
 			}
 			if to == "" {
 				return errors.New("name the destination with --to <host> (a client.hosts entry)")
@@ -84,21 +99,40 @@ docs/configuration/agent-move.md.`,
 	cmd.Flags().BoolVar(&force, "force", false, "move a busy agent anyway, cutting its turn off")
 	cmd.Flags().BoolVar(&asJSON, "json", false, "print the finished job as JSON instead of progress")
 	cmd.Flags().BoolVar(&reconcile, "reconcile", false, "settle a pending move (move_pending) by asking its destination how it ended")
+	cmd.Flags().BoolVar(&abandon, "abandon-remote", false, "lift a pending move's fence without asking its destination (risks two live copies)")
+	cmd.Flags().BoolVarP(&assumeYes, "yes", "y", false, "skip the --abandon-remote confirmation prompt")
 	return cmd
+}
+
+// abandonWarning is what --abandon-remote risks.
+const abandonWarning = "if the agent is live on the destination, starting it here leaves two live copies of one conversation"
+
+// confirmAbandon asks before --abandon-remote lifts query's fence; without a
+// TTY it refuses and points at --yes.
+func confirmAbandon(query string) (bool, error) {
+	if !agentIsTTY() {
+		return false, fmt.Errorf("refusing to abandon %s's pending move without confirmation (%s): pass --yes to skip the prompt when stdin is not a TTY", query, abandonWarning)
+	}
+	fmt.Fprintf(agentStdout, "warning: %s\n", abandonWarning)
+	if !prompt.YesNo(bufio.NewReader(agentStdin), fmt.Sprintf("Abandon %s's pending move without asking its destination?", query), false) {
+		fmt.Fprintln(agentStdout, "Aborted.")
+		return false, nil
+	}
+	return true, nil
 }
 
 // settleFn settles a pending move through the daemon at home.
 type settleFn func(ctx context.Context, home, name string) (agentmove.SettleResult, error)
 
 // runMoveSettle settles query's pending move with settle, here or on host
-// (forwarding flag).
-func runMoveSettle(ctx context.Context, host, query, flag string, asJSON bool, settle settleFn) error {
+// (forwarding flags).
+func runMoveSettle(ctx context.Context, host, query string, flags []string, asJSON bool, settle settleFn) error {
 	cfg, res, err := dispatch(host)
 	if err != nil {
 		return err
 	}
 	if !res.Localhost {
-		return runRemote(res, forwardFlags([]string{"move", query, flag}, map[string]bool{"--json": asJSON}))
+		return runRemote(res, forwardFlags(append([]string{"move", query}, flags...), map[string]bool{"--json": asJSON}))
 	}
 	resolved, err := daemon.AgentResolve(ctx, cfg.HomePath, query)
 	if err != nil {
@@ -123,6 +157,8 @@ func printSettled(r agentmove.SettleResult) {
 		fmt.Fprintf(agentStdout, "%s is on %s: marked moved here\nattach with: leo --host %s agent attach %s\n", r.Name, r.To, r.To, r.Name)
 	case agentmove.SettleFailed:
 		fmt.Fprintf(agentStdout, "%s's move failed on %s: the fence is lifted; `leo agent start %s` recovers it here\n", r.Name, r.To, r.Name)
+	case agentmove.SettleAbandoned:
+		fmt.Fprintf(agentStdout, "%s's fence is lifted without asking %s; %s\n", r.Name, r.To, abandonWarning)
 	default:
 		fmt.Fprintf(agentStdout, "%s's move to %s: %s\n", r.Name, r.To, r.Outcome)
 	}
