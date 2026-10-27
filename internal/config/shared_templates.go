@@ -26,8 +26,13 @@ const (
 
 // Label is the human-facing form of the source.
 func (s TemplateSource) Label() string {
-	if s == SourceLocalOverride {
+	switch s {
+	case SourceLocalOverride:
 		return "local · overrides shared"
+	case SourceLocalOverrideLead:
+		return "local · overrides lead"
+	case SourceSharedOverrideLead:
+		return "shared · overrides lead"
 	}
 	return string(s)
 }
@@ -89,6 +94,9 @@ func (c *Config) InheritTemplatesFile(from *Config) {
 func (c *Config) TemplateSource(name string) TemplateSource {
 	if _, ok := c.Templates[name]; !ok {
 		return ""
+	}
+	if s := c.followSource(KindTemplate, name); s != "" {
+		return s
 	}
 	if c.shared == nil {
 		return SourceLocal

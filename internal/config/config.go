@@ -130,6 +130,8 @@ type Config struct {
 
 	// shared records the loaded templates_file; nil when the key is unset.
 	shared *sharedTemplates
+	// follow records the lead layer; nil when follow is unset.
+	follow *followLayer
 }
 
 // ClientConfig holds remote-host definitions used when leo is invoked as a
@@ -872,13 +874,17 @@ func loadData(path string, data []byte, expand bool) (*Config, string, error) {
 	if err != nil {
 		return nil, "", err
 	}
+	rev := RevisionOf(data)
 	if cfg.TemplatesFile != "" {
 		if err := cfg.loadSharedTemplates(data, expand); err != nil {
 			return nil, "", err
 		}
-		return cfg, revisionOfFiles(data, cfg.shared.sharedBytes), nil
+		rev = revisionOfFiles(data, cfg.shared.sharedBytes)
 	}
-	return cfg, RevisionOf(data), nil
+	if expand && cfg.Follow != nil {
+		cfg.applyFollowLayer(data)
+	}
+	return cfg, rev, nil
 }
 
 func parse(path string, data []byte) (*Config, error) {

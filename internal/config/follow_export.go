@@ -112,28 +112,34 @@ func BuildFollowExport(path, leoVersion string) (FollowExport, error) {
 // failure is a *FollowError (malformed or follower_too_old), so a bad pull is
 // rejected whole.
 func ParseFollowExport(data []byte) (FollowExport, error) {
+	exp, _, err := parseFollowExport(data)
+	return exp, err
+}
+
+func parseFollowExport(data []byte) (FollowExport, leadSections, error) {
 	var exp FollowExport
 	dec := json.NewDecoder(bytes.NewReader(data))
 	dec.UseNumber()
 	if err := dec.Decode(&exp); err != nil {
-		return FollowExport{}, &FollowError{Code: FollowMalformed, Detail: err.Error()}
+		return FollowExport{}, leadSections{}, &FollowError{Code: FollowMalformed, Detail: err.Error()}
 	}
 	if _, err := dec.Token(); !errors.Is(err, io.EOF) {
-		return FollowExport{}, &FollowError{Code: FollowMalformed, Detail: "trailing data after the export"}
+		return FollowExport{}, leadSections{}, &FollowError{Code: FollowMalformed, Detail: "trailing data after the export"}
 	}
 	if exp.Kind != FollowExportKind {
-		return FollowExport{}, &FollowError{Code: FollowMalformed, Detail: fmt.Sprintf("kind %q is not %s", exp.Kind, FollowExportKind)}
+		return FollowExport{}, leadSections{}, &FollowError{Code: FollowMalformed, Detail: fmt.Sprintf("kind %q is not %s", exp.Kind, FollowExportKind)}
 	}
 	if exp.Schema > FollowExportSchema {
-		return FollowExport{}, &FollowError{Code: FollowFollowerTooOld, Detail: fmt.Sprintf("schema %d", exp.Schema)}
+		return FollowExport{}, leadSections{}, &FollowError{Code: FollowFollowerTooOld, Detail: fmt.Sprintf("schema %d", exp.Schema)}
 	}
 	if exp.Schema < 1 {
-		return FollowExport{}, &FollowError{Code: FollowMalformed, Detail: fmt.Sprintf("schema %d", exp.Schema)}
+		return FollowExport{}, leadSections{}, &FollowError{Code: FollowMalformed, Detail: fmt.Sprintf("schema %d", exp.Schema)}
 	}
-	if _, err := exp.decodeSections(); err != nil {
-		return FollowExport{}, err
+	sections, err := exp.decodeSections()
+	if err != nil {
+		return FollowExport{}, leadSections{}, err
 	}
-	return exp, nil
+	return exp, sections, nil
 }
 
 // leadSections are an export's sections decoded into the config types,
