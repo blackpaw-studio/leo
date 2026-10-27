@@ -219,7 +219,8 @@ func newWorktreeCopy(t *testing.T) (*moveFixture, *fakeAgents, string) {
 	f, repo := newWorktreeFixture(t)
 	gittest.Write(t, filepath.Join(f.ws, "new.txt"), "untracked\n")
 	f.midTurnTranscript(t)
-	return f, f.localCopy(t), repo
+	agents := f.localCopy(t)
+	return f, agents, repo
 }
 
 // stateOf is a workspace's files, index and status, without the branch.

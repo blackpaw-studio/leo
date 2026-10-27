@@ -26,7 +26,7 @@ func Run(t testing.TB, dir string, args ...string) string {
 // Write writes content to path, creating parents.
 func Write(t testing.TB, path, content string) {
 	t.Helper()
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(path), 0o750); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
@@ -92,9 +92,9 @@ func copyTree(src, dst string, skipTopGit bool) error {
 			if err != nil {
 				return err
 			}
-			return os.Symlink(link, target)
+			return os.Symlink(link, target) // #nosec G122 -- a test fixture's own temp tree
 		}
-		data, err := os.ReadFile(p)
+		data, err := os.ReadFile(p) // #nosec G122 -- a test fixture's own temp tree
 		if err != nil {
 			return err
 		}
@@ -148,7 +148,7 @@ func buildSuper() (string, string) {
 		}
 	}
 	write := func(path, content string) {
-		_ = os.MkdirAll(filepath.Dir(path), 0o755)
+		_ = os.MkdirAll(filepath.Dir(path), 0o750)
 		_ = os.WriteFile(path, []byte(content), 0o644)
 	}
 	bare := func(name, sub string) {

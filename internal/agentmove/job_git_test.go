@@ -238,14 +238,14 @@ func TestMoveSeedsMissingCanonical(t *testing.T) {
 }
 
 func TestMoveDivergedRefusedBeforeStop(t *testing.T) {
-	f, repo := newWorktreeFixture(t)
+	f, _ := newWorktreeFixture(t)
 	f.ep.answer[VerbPreflight] = jsonAnswer(PreflightResponse{Protocol: Protocol, Host: laptopHost(), OK: true, StagingDir: destStage,
 		Git: &GitPreflight{GitPath: "/usr/bin/git", CanonicalPresent: true, HasRoot: true, BranchSHA: strings.Repeat("ab", 20)}})
 	if _, err := f.move(t, false); !HasCode(err, CodeBranchDiverged) || f.log.has("stop ") {
 		t.Fatalf("move onto a branch with unknown commits = %v (events %v)", err, f.log.all())
 	}
 	// A destination branch behind the source is a fast-forward.
-	f, repo = newWorktreeFixture(t)
+	f, repo := newWorktreeFixture(t)
 	old := gittest.Run(t, repo, "rev-parse", "main")
 	f.ep.answer[VerbPreflight] = jsonAnswer(PreflightResponse{Protocol: Protocol, Host: laptopHost(), OK: true, StagingDir: destStage,
 		Git: &GitPreflight{GitPath: "/usr/bin/git", CanonicalPresent: true, HasRoot: true, BranchSHA: old}})

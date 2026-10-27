@@ -66,14 +66,13 @@ func (c instantClock) After(d time.Duration) <-chan time.Time {
 var receiveTime = time.Date(2026, 10, 27, 15, 0, 0, 0, time.UTC)
 
 type receiverFixture struct {
-	r       *Receiver
-	agents  *fakeAgents
-	hooks   *fakeHooks
-	waited  []time.Duration
-	home    string
-	claude  string
-	ws      string
-	running []agent.Record
+	r      *Receiver
+	agents *fakeAgents
+	hooks  *fakeHooks
+	waited []time.Duration
+	home   string
+	claude string
+	ws     string
 }
 
 func newReceiverFixture(t *testing.T) *receiverFixture {
