@@ -20,6 +20,7 @@ import (
 	"github.com/blackpaw-studio/leo/internal/daemon"
 	"github.com/blackpaw-studio/leo/internal/picker"
 	"github.com/blackpaw-studio/leo/internal/prompt"
+	"github.com/blackpaw-studio/leo/internal/remote"
 	"github.com/spf13/cobra"
 )
 
@@ -107,15 +108,9 @@ func dispatch(flagHost string) (*config.Config, config.HostResolution, error) {
 }
 
 // buildSSHArgs returns a fresh slice of SSH argv so appends at the call site
-// cannot alias the config-loaded SSHArgs backing array.
+// cannot alias the config-loaded SSHArgs backing array; see remote.SSHArgv.
 func buildSSHArgs(res config.HostResolution, tail ...string) []string {
-	control := sshControlOpts(res)
-	args := make([]string, 0, 1+len(res.Host.SSHArgs)+len(control)+len(tail))
-	args = append(args, res.Host.SSH)
-	args = append(args, res.Host.SSHArgs...)
-	args = append(args, control...)
-	args = append(args, tail...)
-	return args
+	return remote.SSHArgv(res, false, tail...)
 }
 
 // runRemote executes `ssh <host> <leo_path> agent <subcmd args...>`.
