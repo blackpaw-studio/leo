@@ -151,15 +151,17 @@ func (mv *Mover) Run(ctx context.Context, req Request, p Progress) (Result, erro
 	if p == nil {
 		p = nopProgress{}
 	}
-	if req.Mode != ModeMove {
+	lock := map[string]agent.MoveMode{ModeMove: agent.MoveModeMove, ModeCopy: agent.MoveModeCopy}[req.Mode]
+	if lock == "" {
 		return Result{}, problemf(CodeBadRequest, "unknown transfer mode %q", req.Mode)
 	}
-	release, err := mv.Agents.BeginMove(req.Agent, agent.MoveModeMove)
+	release, err := mv.Agents.BeginMove(req.Agent, lock)
 	if err != nil {
 		return Result{}, problemf(CodeAgentMoving, "%v", err)
 	}
 	defer release()
 	t := &transfer{mv: mv, req: req, p: p}
+	defer t.deleteTempRefs(ctx)
 	if err := t.validate(ctx); err != nil {
 		return Result{}, err
 	}
@@ -168,6 +170,9 @@ func (mv *Mover) Run(ctx context.Context, req Request, p Progress) (Result, erro
 	}
 	if err := t.checkIdle(ctx); err != nil {
 		return Result{}, err
+	}
+	if t.isCopy() {
+		return t.sendCopy(ctx)
 	}
 	return t.send(ctx)
 }
@@ -190,7 +195,15 @@ type transfer struct {
 	env     map[string]string
 	prep    GitPrepareResult
 	notes   []Problem
+	// A copy's candidate names, its source branch and pre-issued fork id.
+	names     []string
+	curBranch string
+	forkID    string
+	// tempRefs are this host's move refs, deleted when the run ends (G5).
+	tempRefs []string
 }
+
+func (t *transfer) isCopy() bool { return t.req.Mode == ModeCopy }
 
 func (t *transfer) note(p Problem) {
 	t.notes = append(t.notes, p)
@@ -231,7 +244,7 @@ func (t *transfer) validate(ctx context.Context) error {
 	if t.ep, err = t.mv.Endpoint(t.cfg, t.req.To); err != nil {
 		return err
 	}
-	if t.ep.Local() {
+	if t.ep.Local() && !t.isCopy() {
 		return problemf(CodeSameHost, "%s is already on this host; name another host with --to", rec.Name)
 	}
 	if t.host, err = t.mv.Host(); err != nil {
@@ -246,11 +259,24 @@ func (t *transfer) validate(ctx context.Context) error {
 		return err
 	}
 	t.env = agentEnv(t.cfg, t.cfg.Templates[rec.Template], t.m)
-	if task, bound := agent.PersistentTaskFor(t.cfg, rec.Name); bound {
-		t.note(Problem{Code: NotePersistentTaskWarned, Message: fmt.Sprintf(
-			"%s backs persistent task %q: its deliveries fail on this host until the agent moves back", rec.Name, task)})
+	t.notePersistentTask()
+	if t.isCopy() {
+		return t.validateCopy(ctx, records)
 	}
 	return nil
+}
+
+func (t *transfer) notePersistentTask() {
+	task, bound := agent.PersistentTaskFor(t.cfg, t.rec.Name)
+	switch {
+	case !bound:
+	case t.isCopy():
+		t.note(Problem{Code: NotePersistentTaskWarned, Message: fmt.Sprintf(
+			"the copy is not wired to persistent task %q, which keeps delivering to %s", task, t.rec.Name)})
+	default:
+		t.note(Problem{Code: NotePersistentTaskWarned, Message: fmt.Sprintf(
+			"%s backs persistent task %q: its deliveries fail on this host until the agent moves back", t.rec.Name, task)})
+	}
 }
 
 func movedText(rec agentstore.Record) error {
@@ -312,7 +338,7 @@ func (t *transfer) gitMode() bool { return t.git.Mode != GitModePlain }
 // main-mode promotion or a seed clone changes the facts.
 func (t *transfer) preflight(ctx context.Context) error {
 	t.p.Stage(StagePreflight)
-	if err := t.ask(ctx); err != nil {
+	if err := t.askName(ctx); err != nil {
 		return err
 	}
 	if t.git.IsRepo && !t.gitMode() && t.resp.Git != nil && t.resp.Git.LinkedWorktrees > 0 {
@@ -332,7 +358,7 @@ func (t *transfer) preflight(ctx context.Context) error {
 	if !t.resp.OK {
 		return Problems(t.resp.Problems)
 	}
-	if t.resp.Host.Hostname == t.host.Hostname {
+	if t.resp.Host.Hostname == t.host.Hostname && !t.isCopy() {
 		return problemf(CodeSameHost, "%s reaches this host (%s)", t.ep.Name(), t.host.Hostname)
 	}
 	for _, p := range []string{t.resp.SessionRoot, t.resp.StagingDir} {
@@ -342,8 +368,11 @@ func (t *transfer) preflight(ctx context.Context) error {
 			}
 		}
 	}
-	if last, ok := t.rec.MoveLog[t.resp.Host.Hostname]; ok {
+	if last, ok := t.rec.MoveLog[t.resp.Host.Hostname]; ok && !t.isCopy() {
 		t.m.LastMove = &last
+	}
+	if t.isCopy() {
+		return t.checkCopyBranch(ctx)
 	}
 	return t.checkDiverged(ctx)
 }
@@ -398,8 +427,13 @@ func (t *transfer) checkDiverged(ctx context.Context) error {
 		t.m.TargetBranch(), t.resp.Host.Hostname, g.BranchSHA)
 }
 
-// checkIdle is P2: a move cuts no turn off unless forced.
+// checkIdle is P2: a move cuts no turn off unless forced. A copy never
+// stops the source, so only a harness that cannot snapshot the last
+// completed turn refuses a busy one, forced or not.
 func (t *transfer) checkIdle(ctx context.Context) error {
+	if t.isCopy() {
+		return t.checkCopyIdle(ctx)
+	}
 	if t.req.Force {
 		return nil
 	}
@@ -435,14 +469,22 @@ func (t *transfer) send(ctx context.Context) (Result, error) {
 	if err := t.mark(); err != nil {
 		return Result{}, err
 	}
+	return t.result(), nil
+}
+
+func (t *transfer) result() Result {
 	return Result{
 		Name: t.m.TargetName(), Host: t.resp.Host.Hostname, To: t.ep.Name(),
 		Workspace: t.m.TargetWorkspace(), Branch: t.m.TargetBranch(), Notes: t.notes,
-	}, nil
+	}
 }
 
-// recoverable says how to get a stopped, unmarked source back.
+// recoverable says how to get a stopped, unmarked source back. A copy's
+// source is never stopped: a re-run reuses its partial workspace.
 func (t *transfer) recoverable(err error) error {
+	if t.isCopy() {
+		return err
+	}
 	return fmt.Errorf("%w; %s is stopped here and not marked moved: `leo agent start %s` recovers it", err, t.rec.Name, t.rec.Name)
 }
 
@@ -458,13 +500,22 @@ func (t *transfer) transfer(ctx context.Context) error {
 		return err
 	}
 	if t.gitMode() {
-		cleanup, err := t.pushGit(ctx)
-		defer cleanup()
-		if err != nil {
+		if err := t.pushGit(ctx); err != nil {
 			return err
 		}
 	}
 	return t.rsyncAll(ctx, stage, ids)
+}
+
+// deleteTempRefs is G5, run when the job ends either way: after the
+// commit, since a destination sharing this repository reads them in G4.
+func (t *transfer) deleteTempRefs(ctx context.Context) {
+	if len(t.tempRefs) == 0 {
+		return
+	}
+	if err := git.DeleteRefs(context.WithoutCancel(ctx), t.rec.Workspace, t.tempRefs...); err != nil {
+		t.note(Problem{Code: NoteCleanupFailed, Message: fmt.Sprintf("deleting %v in %s: %v", t.tempRefs, t.rec.Workspace, err)})
+	}
 }
 
 // finalSessions is S2: the session id to resume, read after the stop.
@@ -514,7 +565,7 @@ func (t *transfer) prepareStaging(ctx context.Context, ids []string) (string, er
 	if err := t.mv.Hooks.RunHooks(ctx, "pre_send", t.moveCfg.PreSend, t.moveCfg.HookTimeout, he); err != nil {
 		return "", err
 	}
-	mc := harness.MoveContext{Env: t.env, Workspace: t.rec.Workspace, SessionIDs: ids, Local: t.ep.Local()}
+	mc := harness.MoveContext{Env: t.env, Workspace: t.rec.Workspace, SessionIDs: ids, Copy: t.isCopy(), Local: t.ep.Local()}
 	if err := t.adapter.PrepareSend(ctx, mc, stage); err != nil {
 		return "", err
 	}
@@ -522,52 +573,46 @@ func (t *transfer) prepareStaging(ctx context.Context, ids []string) (string, er
 }
 
 // pushGit is G1 to G3: snapshot the index, push the head and snapshot into
-// the destination canonical, and prepare the destination worktree. cleanup
-// deletes the local temp refs (G5) and always runs.
-func (t *transfer) pushGit(ctx context.Context) (cleanup func(), err error) {
+// the destination canonical, and prepare the destination worktree.
+func (t *transfer) pushGit(ctx context.Context) error {
 	ws, name := t.rec.Workspace, t.m.TargetName()
 	headRef, indexRef := MoveRef(name, "head"), MoveRef(name, "index")
-	refs := []string{indexRef}
-	cleanup = func() {
-		if err := git.DeleteRefs(context.WithoutCancel(ctx), ws, refs...); err != nil {
-			t.note(Problem{Code: NoteCleanupFailed, Message: fmt.Sprintf("deleting %v in %s: %v", refs, ws, err)})
-		}
-	}
+	t.tempRefs = []string{indexRef}
 	t.p.Stage(StageSnapshot)
 	if err := t.snapshot(ctx, indexRef); err != nil {
-		return cleanup, err
+		return err
 	}
 	t.p.Stage(StagePush)
 	refspecs := []string{"+" + t.m.Git.HeadSHA + ":" + headRef, "+" + indexRef + ":" + indexRef}
 	c, remote, err := t.ep.Push(ws, t.m.Git.Canonical, t.resp.Git.GitPath, refspecs)
 	switch {
 	case err != nil:
-		return cleanup, err
+		return err
 	case remote:
 		if _, err := t.mv.Runner.Run(ctx, c); err != nil {
-			return cleanup, fmt.Errorf("pushing to %s: %w", t.ep.Name(), err)
+			return fmt.Errorf("pushing to %s: %w", t.ep.Name(), err)
 		}
 	default:
 		// One repository: the head ref G3 reads is written here.
-		refs = append(refs, headRef)
+		t.tempRefs = append(t.tempRefs, headRef)
 		if err := git.UpdateRef(ctx, ws, headRef, t.m.Git.HeadSHA); err != nil {
-			return cleanup, err
+			return err
 		}
 	}
 	t.p.Stage(StageGitPrepare)
 	out, err := t.ep.Run(ctx, VerbGitPrepare, t.body())
 	if err != nil {
-		return cleanup, err
+		return err
 	}
 	if err := json.Unmarshal(out, &t.prep); err != nil {
-		return cleanup, fmt.Errorf("decoding the git-prepare answer: %w", err)
+		return fmt.Errorf("decoding the git-prepare answer: %w", err)
 	}
 	for _, p := range []string{t.prep.ModulesDir, t.prep.GitDir} {
 		if err := ValidatePath(p); err != nil {
-			return cleanup, err
+			return err
 		}
 	}
-	return cleanup, nil
+	return nil
 }
 
 // snapshot is G1: HEAD as it is after the stop (the agent may have
@@ -603,8 +648,12 @@ func (t *transfer) snapshot(ctx context.Context, ref string) error {
 func (t *transfer) rsyncAll(ctx context.Context, stage string, ids []string) error {
 	ws, shell := t.rec.Workspace, t.ep.RsyncShell()
 	spec := t.git.WorkspaceSpec(ws, t.moveCfg.Exclude, t.others)
+	target := t.m.TargetWorkspace()
+	if t.isCopy() {
+		target += PartialSuffix
+	}
 	t.p.Stage(StageWorkspace)
-	if err := t.rsync(ctx, WorkspaceRsyncArgv(shell, ws, t.ep.Target(ws), spec.Excludes())); err != nil {
+	if err := t.rsync(ctx, WorkspaceRsyncArgv(shell, ws, t.ep.Target(target), spec.Excludes())); err != nil {
 		return err
 	}
 	if err := t.rsyncSessions(ctx, ids); err != nil {
@@ -619,7 +668,7 @@ func (t *transfer) rsyncAll(ctx context.Context, stage string, ids []string) err
 		return nil
 	}
 	t.p.Stage(StageModules)
-	dst := ModulesTarget(false, t.prep.ModulesDir, t.prep.GitDir)
+	dst := ModulesTarget(t.isCopy(), t.prep.ModulesDir, t.prep.GitDir)
 	if err := ValidatePath(src); err != nil {
 		return err
 	}
@@ -628,8 +677,13 @@ func (t *transfer) rsyncAll(ctx context.Context, stage string, ids []string) err
 
 func (t *transfer) rsyncSessions(ctx context.Context, ids []string) error {
 	root := t.adapter.SessionRoot(t.env)
-	if root == "" || t.resp.SessionRoot == "" {
+	switch {
+	case root == "" || t.resp.SessionRoot == "":
 		return nil
+	case t.isCopy() && snapshotCopier(t.adapter):
+		return nil // the snapshot travels in staging
+	case t.ep.Local() && git.SamePath(root, t.resp.SessionRoot):
+		return nil // the same files
 	}
 	rels, err := t.adapter.SessionFiles(root, t.rec.Workspace, ids)
 	if err != nil || len(rels) == 0 {

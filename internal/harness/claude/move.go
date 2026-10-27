@@ -18,9 +18,14 @@ import (
 const stageDir = "harness/claude"
 
 var (
-	_ harness.SessionMover = Claude{}
-	_ harness.Forker       = Claude{}
+	_ harness.SessionMover   = Claude{}
+	_ harness.Forker         = Claude{}
+	_ harness.SnapshotCopier = Claude{}
 )
+
+// SnapshotCopy: a copy takes the transcript up to its last completed turn
+// (PrepareSend) and the fork pins its new id with --session-id.
+func (Claude) SnapshotCopy() bool { return true }
 
 // SessionRoot is the claude config dir env resolves to.
 func (Claude) SessionRoot(env map[string]string) string {

@@ -52,6 +52,14 @@ type Forker interface {
 	ForkArgs(args []string, src, newID string) []string
 }
 
+// SnapshotCopier is the optional SessionMover capability of copying a
+// session as of its last completed turn: PrepareSend stages that snapshot
+// under the source id and the fork pins a pre-issued id. Such a copy may
+// run while the source is mid-turn and sends no SessionFiles.
+type SnapshotCopier interface {
+	SnapshotCopy() bool
+}
+
 // CopyTree copies the regular files and directories under src into dst,
 // keeping modes. Existing files in dst are overwritten; symlinks are skipped.
 func CopyTree(src, dst string) error {

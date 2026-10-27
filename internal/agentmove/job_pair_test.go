@@ -25,8 +25,12 @@ type pairEndpoint struct {
 	from, to string
 }
 
-func (p *pairEndpoint) mapTo(b []byte) []byte   { return bytes.ReplaceAll(b, []byte(p.from), []byte(p.to)) }
-func (p *pairEndpoint) mapBack(b []byte) []byte { return bytes.ReplaceAll(b, []byte(p.to), []byte(p.from)) }
+func (p *pairEndpoint) mapTo(b []byte) []byte {
+	return bytes.ReplaceAll(b, []byte(p.from), []byte(p.to))
+}
+func (p *pairEndpoint) mapBack(b []byte) []byte {
+	return bytes.ReplaceAll(b, []byte(p.to), []byte(p.from))
+}
 
 func (p *pairEndpoint) Run(ctx context.Context, verb string, stdin []byte) ([]byte, error) {
 	out, err := p.recv.Handle(ctx, verb, p.mapTo(stdin))
@@ -98,8 +102,10 @@ func TestMoveWorktreeEndToEndLocalPair(t *testing.T) {
 	log := &eventLog{}
 	mv := &Mover{
 		Config: func() (*config.Config, error) { return srcCfg, nil }, Agents: &fakeSource{log: log},
-		Endpoint: func(*config.Config, string) (Endpoint, error) { return &pairEndpoint{recv: recv, from: src, to: dst}, nil },
-		Runner:   ExecRunner{}, Hooks: &fakeHooks{}, Prober: &fakeProber{probe: drain.Probe{Exists: true}},
+		Endpoint: func(*config.Config, string) (Endpoint, error) {
+			return &pairEndpoint{recv: recv, from: src, to: dst}, nil
+		},
+		Runner: ExecRunner{}, Hooks: &fakeHooks{}, Prober: &fakeProber{probe: drain.Probe{Exists: true}},
 		Clock: instantClock{&waited}, Host: func() (Host, error) { return studio(), nil },
 	}
 	res, err := mv.Run(context.Background(), Request{Agent: "web", Mode: ModeMove, To: "pair"}, nil)
