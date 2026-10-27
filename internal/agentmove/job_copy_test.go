@@ -388,3 +388,22 @@ func treeDigest(t *testing.T, dir string) string {
 	}
 	return b.String()
 }
+
+func TestCopyWorktreeForksInlineSubmodules(t *testing.T) {
+	f, _ := newWorktreeFixture(t)
+	inlineSubRepo(t, f.ws)
+	f.midTurnTranscript(t)
+	f.localCopy(t)
+	if _, err := f.copy(t, Request{Agent: "web", Mode: ModeCopy}); err != nil {
+		t.Fatalf("copy: %v", err)
+	}
+	newWS := f.ws + "-web-copy"
+	for dir, want := range map[string]string{"emb": "lib", "emb/nested": "deep"} {
+		if got := gittest.Run(t, filepath.Join(newWS, dir), "symbolic-ref", "HEAD"); got != "refs/heads/"+want+"-web-copy" {
+			t.Errorf("copy's %s HEAD = %s, want its branch forked", dir, got)
+		}
+		if got := gittest.Run(t, filepath.Join(f.ws, dir), "symbolic-ref", "HEAD"); got != "refs/heads/"+want {
+			t.Errorf("source's %s HEAD = %s, want it untouched", dir, got)
+		}
+	}
+}

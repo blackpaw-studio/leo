@@ -197,9 +197,10 @@ func destModules(ctx context.Context, ws string) (GitPrepareResult, error) {
 // GitFinalize (G4) runs after the workspace and modules rsyncs: a copy's
 // partial worktree and modules are renamed into place, the index is
 // restored from the pushed tree, absorbed submodules are relinked and
-// verified (a copy's attached ones forked to <b>-<new>), shared submodule
-// config is set where unset, and the temp refs are deleted. It returns the
-// non-fatal notes. Every step is idempotent, so a re-run converges.
+// verified, a copy's submodules are forked (forkSubmodules), shared
+// submodule config is set where unset, and the temp refs are deleted. It
+// returns the non-fatal notes. Every step is idempotent, so a re-run
+// converges.
 func GitFinalize(ctx context.Context, m Manifest, locks *KeyedLocks) ([]Problem, error) {
 	canonical, ws, name := gitTarget(m)
 	defer locks.Lock(canonical)()
@@ -214,6 +215,11 @@ func GitFinalize(ctx context.Context, m Manifest, locks *KeyedLocks) ([]Problem,
 	}
 	if err := relinkSubmodules(ctx, ws, m); err != nil {
 		return nil, err
+	}
+	if m.IsCopy() {
+		if err := forkSubmodules(ctx, ws, m.Copy.Name); err != nil {
+			return nil, err
+		}
 	}
 	notes, err := shareSubmoduleConfig(ctx, ws, m.Git.Submodules)
 	if err != nil {
@@ -288,14 +294,38 @@ func relinkOne(ctx context.Context, ws string, s git.Submodule, gitDir string, m
 	if !m.IsCopy() {
 		return nil
 	}
-	if err := git.FsckConnectivity(ctx, dir); err != nil {
-		return err
-	}
-	return forkSubmodule(ctx, dir, s, m.Copy.Name)
+	return git.FsckConnectivity(ctx, dir)
 }
 
-// forkSubmodule puts a copy's submodule on <b>-<new> when the source's was
-// on <b>; a detached one stays detached. A re-run finds it already forked.
+// forkSubmodules puts every initialized submodule of a copy on its own
+// branch: absorbed ones, inline ones (an embedded repo or an unabsorbed
+// submodule, whose .git dir travelled with the workspace) and those nested
+// inside either. Otherwise the two agents would push the same branches.
+func forkSubmodules(ctx context.Context, dir, newName string) error {
+	subs, err := git.Submodules(ctx, dir)
+	if err != nil {
+		return err
+	}
+	for _, s := range subs {
+		if s.State == git.SubmoduleUninit {
+			continue
+		}
+		sub := filepath.Join(dir, s.Path)
+		if err := forkSubmodule(ctx, sub, s, newName); err != nil {
+			return fmt.Errorf("submodule %s: %w", s.Path, err)
+		}
+		// Submodules lists through absorbed submodules only.
+		if s.State == git.SubmoduleInline {
+			if err := forkSubmodules(ctx, sub, newName); err != nil {
+				return fmt.Errorf("submodule %s: %w", s.Path, err)
+			}
+		}
+	}
+	return nil
+}
+
+// forkSubmodule puts a copy's submodule on <b>-<new> when it is on <b>; a
+// detached one stays detached. A re-run finds it already forked.
 func forkSubmodule(ctx context.Context, dir string, s git.Submodule, newName string) error {
 	b := strings.TrimPrefix(s.HeadRef, "refs/heads/")
 	if b == "" {
@@ -368,7 +398,7 @@ func setUpstream(ctx context.Context, ws, branch string, up *Upstream) error {
 }
 
 // ForkPlainBranch puts a plain-mode copy's own repository on branch at its
-// HEAD, and each attached absorbed submodule on <b>-<newName>; index and
+// HEAD, and each attached submodule (see forkSubmodules) on <b>-<newName>; index and
 // files are untouched. Outside git, or with no branch, it does nothing.
 func ForkPlainBranch(ctx context.Context, ws, branch, newName string) error {
 	if branch == "" {
@@ -390,16 +420,5 @@ func ForkPlainBranch(ctx context.Context, ws, branch, newName string) error {
 			return err
 		}
 	}
-	subs, err := git.Submodules(ctx, ws)
-	if err != nil {
-		return err
-	}
-	for _, s := range subs {
-		if s.State == git.SubmoduleAbsorbed {
-			if err := forkSubmodule(ctx, filepath.Join(ws, s.Path), s, newName); err != nil {
-				return fmt.Errorf("submodule %s: %w", s.Path, err)
-			}
-		}
-	}
-	return nil
+	return forkSubmodules(ctx, ws, newName)
 }

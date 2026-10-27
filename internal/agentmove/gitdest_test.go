@@ -503,3 +503,36 @@ func TestReceiveCopyCreatesBranch(t *testing.T) {
 		t.Errorf("non-git workspace = %v", err)
 	}
 }
+
+// inlineSubRepo commits into ws an embedded repo, emb, on branch lib (an
+// inline submodule: its .git is a directory) holding an absorbed submodule,
+// emb/nested, on branch deep.
+func inlineSubRepo(t *testing.T, ws string) {
+	t.Helper()
+	src := gittest.NewRepo(t)
+	emb := filepath.Join(ws, "emb")
+	gittest.Run(t, ws, "init", "-q", "-b", "lib", emb)
+	gittest.Write(t, filepath.Join(emb, "lib.txt"), "lib\n")
+	gittest.Run(t, emb, "add", ".")
+	gittest.Run(t, emb, "commit", "-qm", "lib")
+	gittest.Run(t, emb, "-c", "protocol.file.allow=always", "submodule", "add", "-q", src, "nested")
+	gittest.Run(t, emb, "commit", "-qm", "nested")
+	gittest.Run(t, filepath.Join(emb, "nested"), "checkout", "-q", "-b", "deep")
+	gittest.Run(t, ws, "add", "emb")
+	gittest.Run(t, ws, "commit", "-qm", "embed")
+}
+
+// A copy's inline submodules, and the submodules inside them, get their
+// own branches too: otherwise both agents push the source's branches.
+func TestForkPlainBranchForksInlineSubmodules(t *testing.T) {
+	ws := gittest.NewRepo(t)
+	inlineSubRepo(t, ws)
+	if err := ForkPlainBranch(context.Background(), ws, "main-web-copy", "web-copy"); err != nil {
+		t.Fatalf("ForkPlainBranch: %v", err)
+	}
+	for dir, want := range map[string]string{"emb": "refs/heads/lib-web-copy", "emb/nested": "refs/heads/deep-web-copy"} {
+		if got := gittest.Run(t, filepath.Join(ws, dir), "symbolic-ref", "HEAD"); got != want {
+			t.Errorf("%s HEAD = %s, want %s", dir, got, want)
+		}
+	}
+}
