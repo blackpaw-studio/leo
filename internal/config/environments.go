@@ -112,16 +112,8 @@ func (c *Config) ResolveEnv(names []string, literal, spawn map[string]string, x 
 func (c *Config) validateEnvironments() []string {
 	var errs []string
 	for name, env := range c.Environments {
-		if name == "" || strings.ContainsAny(name, ", \t\n") {
-			errs = append(errs, fmt.Sprintf("environments name %q must be non-empty and contain no commas or whitespace", name))
-		}
-		for k := range env {
-			if !envKeyPattern.MatchString(k) {
-				errs = append(errs, fmt.Sprintf("environments.%s key %q is not a valid environment variable name", name, k))
-			}
-		}
+		errs = append(errs, validateEnvironment(name, env)...)
 	}
-	errs = append(errs, c.validateEnvironmentList("defaults.environments", c.Defaults.Environments)...)
 	for name, tmpl := range c.Templates {
 		errs = append(errs, c.validateEnvironmentList("templates."+name+".environments", tmpl.Environments)...)
 	}
@@ -129,6 +121,20 @@ func (c *Config) validateEnvironments() []string {
 		errs = append(errs, c.validateEnvironmentList("tasks."+name+".environments", task.Environments)...)
 		if task.Runtime == "persistent" && task.Template != "" && len(task.Environments) > 0 {
 			errs = append(errs, fmt.Sprintf("tasks.%s.environments is not allowed with template: %s (set environments on the template instead)", name, task.Template))
+		}
+	}
+	return errs
+}
+
+// validateEnvironment checks one named environment's name and keys.
+func validateEnvironment(name string, env map[string]string) []string {
+	var errs []string
+	if name == "" || strings.ContainsAny(name, ", \t\n") {
+		errs = append(errs, fmt.Sprintf("environments name %q must be non-empty and contain no commas or whitespace", name))
+	}
+	for k := range env {
+		if !envKeyPattern.MatchString(k) {
+			errs = append(errs, fmt.Sprintf("environments.%s key %q is not a valid environment variable name", name, k))
 		}
 	}
 	return errs

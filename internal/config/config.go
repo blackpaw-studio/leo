@@ -564,8 +564,9 @@ func (c *Config) TaskTimeout(t TaskConfig) time.Duration {
 	return 30 * time.Minute
 }
 
-// Validate checks the config for required fields and valid values.
-func (c *Config) Validate() error {
+// validateDefaults checks the defaults block. Every message starts with
+// "defaults.<key>", which the follow layer relies on to drop a bad lead key.
+func (c *Config) validateDefaults(hr harnessResolver) []string {
 	var errs []string
 	if p := c.DispatchViewerPlacement(); !IsDispatchViewerPlacement(p) {
 		errs = append(errs, fmt.Sprintf("defaults.dispatch.viewer.placement %q must be pane, window or background", p))
@@ -585,35 +586,16 @@ func (c *Config) Validate() error {
 	if _, err := parseAdoptTimeout(c.Defaults.Dispatch.AdoptTimeout); err != nil {
 		errs = append(errs, fmt.Sprintf("defaults.dispatch.adopt_timeout %q: %v", c.Defaults.Dispatch.AdoptTimeout, err))
 	}
-	errs = append(errs, c.validateChat()...)
-
-	// resolveHarness returns the adapter for a scope, emitting at most one
-	// error per bad name: defaults errors at defaults.harness; a scope only
-	// errors when it *explicitly* names an unregistered harness.
-	available := strings.Join(harness.Names(), ", ")
-	defaultsHarness, defaultsHarnessErr := harness.Get(c.DefaultsHarness())
-	if defaultsHarnessErr != nil {
-		errs = append(errs, fmt.Sprintf("defaults.harness %q is not a registered harness (available: %s)", c.DefaultsHarness(), available))
+	if hr.defaultsErr != nil {
+		errs = append(errs, fmt.Sprintf("defaults.harness %q is not a registered harness (available: %s)", c.DefaultsHarness(), hr.available))
 	}
-	resolveHarness := func(scope, explicit string) (harness.Harness, bool) {
-		if explicit == "" {
-			return defaultsHarness, defaultsHarnessErr == nil
-		}
-		h, err := harness.Get(explicit)
-		if err != nil {
-			errs = append(errs, fmt.Sprintf("%s.harness %q is not a registered harness (available: %s)", scope, explicit, available))
-			return nil, false
-		}
-		return h, true
-	}
-
-	if defaultsHarness != nil {
+	if hr.defaults != nil {
 		if c.Defaults.Model != "" {
-			if err := defaultsHarness.ValidateModel(c.Defaults.Model); err != nil {
+			if err := hr.defaults.ValidateModel(c.Defaults.Model); err != nil {
 				errs = append(errs, fmt.Sprintf("defaults.model %v", err))
 			}
 		}
-		if _, err := defaultsHarness.DecodeOptions(c.Defaults.HarnessOptions); err != nil {
+		if _, err := hr.defaults.DecodeOptions(c.Defaults.HarnessOptions); err != nil {
 			errs = append(errs, fmt.Sprintf("defaults.harness_options: %v", err))
 		}
 	}
@@ -626,6 +608,113 @@ func (c *Config) Validate() error {
 		}
 	}
 
+	errs = append(errs, c.validateEnvironmentList("defaults.environments", c.Defaults.Environments)...)
+	return errs
+}
+
+// harnessResolver resolves the adapter a scope runs for validation, so a bad
+// name is reported once: at defaults.harness for the default, and at a
+// scope only when it explicitly names an unregistered harness.
+type harnessResolver struct {
+	defaults    harness.Harness
+	defaultsErr error
+	available   string
+}
+
+func newHarnessResolver(defaultsName string) harnessResolver {
+	h, err := harness.Get(defaultsName)
+	return harnessResolver{defaults: h, defaultsErr: err, available: strings.Join(harness.Names(), ", ")}
+}
+
+// resolve returns the scope's adapter, nil when it has none; msg reports an
+// explicitly named unregistered harness.
+func (r harnessResolver) resolve(scope, explicit string) (h harness.Harness, msg string) {
+	if explicit == "" {
+		if r.defaultsErr != nil {
+			return nil, ""
+		}
+		return r.defaults, ""
+	}
+	h, err := harness.Get(explicit)
+	if err != nil {
+		return nil, fmt.Sprintf("%s.harness %q is not a registered harness (available: %s)", scope, explicit, r.available)
+	}
+	return h, ""
+}
+
+// knownTemplates is the template map existence checks run against.
+func (c *Config) knownTemplates() map[string]TemplateConfig { return c.Templates }
+
+// validateTemplate checks one template; messages start with "templates.<name>".
+func (c *Config) validateTemplate(name string, tmpl TemplateConfig, hr harnessResolver) []string {
+	var errs []string
+	h, msg := hr.resolve("templates."+name, tmpl.Harness)
+	if msg != "" {
+		errs = append(errs, msg)
+	}
+	if h != nil {
+		if tmpl.Model != "" {
+			if err := h.ValidateModel(tmpl.Model); err != nil {
+				errs = append(errs, fmt.Sprintf("templates.%s.model %v", name, err))
+			}
+		}
+		if _, err := h.DecodeOptions(c.TemplateHarnessOptions(tmpl)); err != nil {
+			errs = append(errs, fmt.Sprintf("templates.%s.harness_options: %v", name, err))
+		}
+		if !h.SupportsChannels() && (len(tmpl.Channels) > 0 || len(tmpl.DevChannels) > 0) {
+			errs = append(errs, fmt.Sprintf("templates.%s.channels: the %s harness does not support channel plugins; use leo's MCP tools for messaging", name, h.Name()))
+		}
+		if !h.SupportsKind(harness.KindAgent) {
+			errs = append(errs, fmt.Sprintf("templates.%s.harness: the %s harness cannot run ephemeral agents yet (only scheduled tasks) — see docs/configuration/harnesses.md", name, h.Name()))
+		}
+	}
+	if tmpl.MaxTurns < 0 {
+		errs = append(errs, fmt.Sprintf("templates.%s.max_turns must not be negative", name))
+	}
+	for i, ch := range tmpl.Channels {
+		if !channelPattern.MatchString(ch) {
+			errs = append(errs, fmt.Sprintf("templates.%s.channels[%d] %q contains invalid characters", name, i, ch))
+		}
+	}
+	for i, ch := range tmpl.DevChannels {
+		if !channelPattern.MatchString(ch) {
+			errs = append(errs, fmt.Sprintf("templates.%s.dev_channels[%d] %q contains invalid characters", name, i, ch))
+		}
+	}
+	for k := range tmpl.Env {
+		if !envKeyPattern.MatchString(k) {
+			errs = append(errs, fmt.Sprintf("templates.%s.env key %q is not a valid environment variable name", name, k))
+		}
+	}
+	for i, dir := range tmpl.AddDirs {
+		if err := ValidateAddDir(dir); err != nil {
+			errs = append(errs, fmt.Sprintf("templates.%s.add_dirs[%d]: %v", name, i, err))
+		}
+	}
+	if tmpl.IdleSuspendAfter != "" {
+		if d, err := time.ParseDuration(tmpl.IdleSuspendAfter); err != nil || d <= 0 {
+			errs = append(errs, fmt.Sprintf("templates.%s.idle_suspend_after %q must be a positive duration", name, tmpl.IdleSuspendAfter))
+		}
+	}
+	if tmpl.Isolation != "" && tmpl.Isolation != "worktree" {
+		errs = append(errs, fmt.Sprintf("templates.%s.isolation %q must be empty or \"worktree\"", name, tmpl.Isolation))
+	}
+	errs = append(errs, validatePermissions(name, tmpl.Permissions, c.knownTemplates(), c.persistedClientTool)...)
+	return errs
+}
+
+// Validate checks the config for required fields and valid values.
+func (c *Config) Validate() error {
+	hr := newHarnessResolver(c.DefaultsHarness())
+	errs := c.validateDefaults(hr)
+	errs = append(errs, c.validateChat()...)
+	resolveHarness := func(scope, explicit string) (harness.Harness, bool) {
+		h, msg := hr.resolve(scope, explicit)
+		if msg != "" {
+			errs = append(errs, msg)
+		}
+		return h, h != nil
+	}
 	if len(c.Providers) > 0 {
 		errs = append(errs, "providers: this section has been removed — see docs/configuration/harnesses.md")
 	}
@@ -674,54 +763,7 @@ func (c *Config) Validate() error {
 	}
 
 	for name, tmpl := range c.Templates {
-		if h, ok := resolveHarness("templates."+name, tmpl.Harness); ok {
-			if tmpl.Model != "" {
-				if err := h.ValidateModel(tmpl.Model); err != nil {
-					errs = append(errs, fmt.Sprintf("templates.%s.model %v", name, err))
-				}
-			}
-			if _, err := h.DecodeOptions(c.TemplateHarnessOptions(tmpl)); err != nil {
-				errs = append(errs, fmt.Sprintf("templates.%s.harness_options: %v", name, err))
-			}
-			if !h.SupportsChannels() && (len(tmpl.Channels) > 0 || len(tmpl.DevChannels) > 0) {
-				errs = append(errs, fmt.Sprintf("templates.%s.channels: the %s harness does not support channel plugins; use leo's MCP tools for messaging", name, h.Name()))
-			}
-			if !h.SupportsKind(harness.KindAgent) {
-				errs = append(errs, fmt.Sprintf("templates.%s.harness: the %s harness cannot run ephemeral agents yet (only scheduled tasks) — see docs/configuration/harnesses.md", name, h.Name()))
-			}
-		}
-		if tmpl.MaxTurns < 0 {
-			errs = append(errs, fmt.Sprintf("templates.%s.max_turns must not be negative", name))
-		}
-		for i, ch := range tmpl.Channels {
-			if !channelPattern.MatchString(ch) {
-				errs = append(errs, fmt.Sprintf("templates.%s.channels[%d] %q contains invalid characters", name, i, ch))
-			}
-		}
-		for i, ch := range tmpl.DevChannels {
-			if !channelPattern.MatchString(ch) {
-				errs = append(errs, fmt.Sprintf("templates.%s.dev_channels[%d] %q contains invalid characters", name, i, ch))
-			}
-		}
-		for k := range tmpl.Env {
-			if !envKeyPattern.MatchString(k) {
-				errs = append(errs, fmt.Sprintf("templates.%s.env key %q is not a valid environment variable name", name, k))
-			}
-		}
-		for i, dir := range tmpl.AddDirs {
-			if err := ValidateAddDir(dir); err != nil {
-				errs = append(errs, fmt.Sprintf("templates.%s.add_dirs[%d]: %v", name, i, err))
-			}
-		}
-		if tmpl.IdleSuspendAfter != "" {
-			if d, err := time.ParseDuration(tmpl.IdleSuspendAfter); err != nil || d <= 0 {
-				errs = append(errs, fmt.Sprintf("templates.%s.idle_suspend_after %q must be a positive duration", name, tmpl.IdleSuspendAfter))
-			}
-		}
-		if tmpl.Isolation != "" && tmpl.Isolation != "worktree" {
-			errs = append(errs, fmt.Sprintf("templates.%s.isolation %q must be empty or \"worktree\"", name, tmpl.Isolation))
-		}
-		errs = append(errs, validatePermissions(name, tmpl.Permissions, c.Templates, c.persistedClientTool)...)
+		errs = append(errs, c.validateTemplate(name, tmpl, hr)...)
 	}
 
 	for name, task := range c.Tasks {
