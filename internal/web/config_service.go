@@ -45,6 +45,8 @@ type ConfigServiceOptions struct {
 	// StartedAt and PID identify this daemon in service status.
 	StartedAt time.Time
 	PID       int
+	// Follower resolves the daemon's follow loop (nil result: none runs).
+	Follower func() FollowSyncer
 }
 
 // ConfigService owns everything a leo.yaml write needs: the config path, the
@@ -79,7 +81,10 @@ type ConfigService struct {
 	serviceLogPath string
 	logPath        func() string
 
-	agents    func() AgentRestarter
+	agents   func() AgentRestarter
+	follower func() FollowSyncer
+	// now is the clock follow status ages are measured against.
+	now       func() time.Time
 	processes func() ProcessStateProvider
 	version   func() string
 	startedAt time.Time
@@ -126,6 +131,8 @@ func NewConfigService(opts ConfigServiceOptions) *ConfigService {
 		version:      opts.Version,
 		startedAt:    opts.StartedAt,
 		pid:          opts.PID,
+		follower:     opts.Follower,
+		now:          time.Now,
 		execCommand:  exec.Command,
 	}
 	c.fetchAgentListFn = c.fetchAgentList
