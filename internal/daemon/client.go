@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -51,8 +52,14 @@ func SocketHealthy(ctx context.Context, sockPath string) bool {
 // Send sends a request to the daemon and returns the response. The caller's
 // context is propagated to the HTTP round-trip so Ctrl-C cancels the call.
 func Send(ctx context.Context, workDir, method, path string, body any) (*Response, error) {
-	sockPath := SockPath(workDir)
-	client := newUnixClient(sockPath)
+	return SendTimeout(ctx, workDir, defaultRequestTimeout, method, path, body)
+}
+
+// SendTimeout is Send with its own bound on the whole request, for a route
+// the daemon may take longer than the default to answer.
+func SendTimeout(ctx context.Context, workDir string, timeout time.Duration, method, path string, body any) (*Response, error) {
+	client := newUnixClient(SockPath(workDir))
+	client.Timeout = timeout
 
 	var httpReq *http.Request
 	var err error
@@ -88,9 +95,19 @@ func Send(ctx context.Context, workDir, method, path string, body any) (*Respons
 	return &result, nil
 }
 
+// IsUnreachable reports whether err, from Send, means no daemon took the
+// request: the socket could not be dialed, so nothing was sent.
+func IsUnreachable(err error) bool {
+	var op *net.OpError
+	return errors.As(err, &op) && op.Op == "dial"
+}
+
+// defaultRequestTimeout bounds a Send round-trip.
+const defaultRequestTimeout = 30 * time.Second
+
 func newUnixClient(sockPath string) *http.Client {
 	return &http.Client{
-		Timeout: 30 * time.Second,
+		Timeout: defaultRequestTimeout,
 		Transport: &http.Transport{
 			DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
 				return net.Dial("unix", sockPath)

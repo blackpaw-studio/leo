@@ -89,7 +89,18 @@ func (c *ConfigService) SyncFollow(ctx context.Context) (followSyncResult, error
 	return followSyncResult{Changed: out.Changed, Status: report}, nil
 }
 
+// followSyncWriteTimeout is a sync response's write deadline: a pull may
+// take 30s, the servers' whole WriteTimeout, before the reload after it.
+const followSyncWriteTimeout = 60 * time.Second
+
+// allowSlowSync extends the server's write deadline for a sync request, so
+// a slow pull is answered instead of cut off.
+func allowSlowSync(w http.ResponseWriter) {
+	_ = http.NewResponseController(w).SetWriteDeadline(time.Now().Add(followSyncWriteTimeout))
+}
+
 func (c *ConfigService) handleFollowSyncAPI(w http.ResponseWriter, r *http.Request) {
+	allowSlowSync(w)
 	res, err := c.SyncFollow(r.Context())
 	if err != nil {
 		writeConfigError(w, err)

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io/fs"
+	"net/http"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -33,11 +34,15 @@ func cliLeadExport(sections string) string {
 // sections is not empty, a cache pulled at cliPulledAt; cfgFile points at it.
 func newFollowerCLIConfig(t *testing.T, sections, local string) string {
 	t.Helper()
+	return newFollowerCLIConfigIn(t, t.TempDir(), sections, local)
+}
+
+func newFollowerCLIConfigIn(t *testing.T, home, sections, local string) string {
+	t.Helper()
 	t.Cleanup(config.SetFollowProbes(config.FollowProbes{
 		LookPath: func(n string) (string, error) { return "/bin/" + n, nil },
 		Stat:     func(string) (fs.FileInfo, error) { return nil, nil },
 	}))
-	home := t.TempDir()
 	if sections != "" {
 		export := cliLeadExport(sections)
 		exp, err := config.ParseFollowExport([]byte(export))
@@ -234,6 +239,50 @@ func TestSyncWithoutDaemonPullsInProcess(t *testing.T) {
 	}
 	if !strings.Contains(out, "sha256:leadrev") {
 		t.Fatalf("output:\n%s", out)
+	}
+}
+
+func TestSyncFallsBackOnlyWhenTheDaemonCannotSync(t *testing.T) {
+	cases := []struct {
+		name     string
+		status   int
+		body     string
+		wantPull bool
+	}{
+		{"daemon without a follow loop", http.StatusServiceUnavailable, `{"ok":false,"code":"follow_unavailable","error":"no loop"}`, true},
+		{"daemon pull failed", http.StatusBadGateway, `{"ok":false,"code":"unreachable","error":"ssh failed"}`, false},
+		{"daemon answer unreadable", http.StatusOK, `not json`, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			// A short home keeps the socket path under the sun_path limit.
+			home, err := os.MkdirTemp("", "leo-sy-*")
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { os.RemoveAll(home) })
+			newFollowerCLIConfigIn(t, home, "", "")
+			runner := &cliFakeRunner{stdout: cliLeadExport(`"templates":{"lt":{}}`)}
+			old := syncRunner
+			syncRunner = runner
+			t.Cleanup(func() { syncRunner = old })
+			startStubDaemonSocket(t, home, func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path == "/health" {
+					w.WriteHeader(http.StatusOK)
+					return
+				}
+				w.WriteHeader(tc.status)
+				_, _ = w.Write([]byte(tc.body))
+			})
+
+			out, err := runCLI(t, "sync")
+			if pulled := len(runner.args) > 0; pulled != tc.wantPull {
+				t.Fatalf("in-process pull = %v, want %v (err %v)\n%s", pulled, tc.wantPull, err, out)
+			}
+			if !tc.wantPull && err == nil {
+				t.Fatalf("want the daemon's failure reported\n%s", out)
+			}
+		})
 	}
 }
 

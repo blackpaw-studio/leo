@@ -83,6 +83,7 @@ func (s *Server) overrideAndRedirect(w http.ResponseWriter, override func() erro
 // handleFollowSync is the Settings page's Sync now: pull the lead through
 // the daemon's follow loop, then refresh so the status card shows it.
 func (s *Server) handleFollowSync(w http.ResponseWriter, r *http.Request) {
+	allowSlowSync(w)
 	if _, err := s.SyncFollow(r.Context()); err != nil {
 		s.renderFlash(w, "error", err.Error())
 		return

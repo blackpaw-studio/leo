@@ -77,13 +77,22 @@ and the last error. See docs/configuration/follow-lead.md.`,
 	return cmd
 }
 
+// syncDaemonTimeout bounds `leo sync` through the daemon: above the
+// daemon's own 30s pull bound plus the reload a changed pull triggers, so
+// the CLI never gives up on a pull the daemon is still finishing.
+const syncDaemonTimeout = 60 * time.Second
+
 // syncFollow pulls through the running daemon, whose follow loop also
-// reloads it. With no daemon, or one without a follow loop (an older leo),
-// it pulls in process and asks a running daemon to reload.
+// reloads it. Only with no daemon to take the request, or one without a
+// follow loop (an older leo), does it pull in process and ask a running
+// daemon to reload; any other daemon failure is reported, since the daemon
+// may still be pulling.
 func syncFollow(cmd *cobra.Command, cfg *config.Config) (syncResult, error) {
 	if daemon.IsRunning(cfg.HomePath) {
-		resp, err := daemon.Send(cmd.Context(), cfg.HomePath, "POST", "/config/follow/sync", nil)
+		resp, err := daemon.SendTimeout(cmd.Context(), cfg.HomePath, syncDaemonTimeout, "POST", "/config/follow/sync", nil)
 		switch {
+		case err != nil && !daemon.IsUnreachable(err):
+			return syncResult{}, fmt.Errorf("syncing through the daemon: %w", err)
 		case err == nil && resp.OK:
 			var res syncResult
 			if err := json.Unmarshal(resp.Data, &res); err != nil {

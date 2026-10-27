@@ -15,6 +15,7 @@ leo sync --status --json    # the same report as GET /config/follow
 
 - With the daemon running, `leo sync` asks its follow loop to pull; a pull that changed the lead layer reloads the daemon's config. Running agents keep running, and changes apply on their next start.
 - With no daemon (or one whose leo predates follow), `leo sync` pulls directly over ssh, writes the cache, and asks a running daemon to reload.
+- Any other daemon failure, such as a timeout, is reported rather than retried in process, since the daemon may still be pulling. `leo sync` waits up to 60 seconds for the daemon.
 - On a host without `follow`, `leo sync` fails, and `leo sync --status` says the host does not follow a lead.
 
 `--status` prints the lead host and ssh target, the interval, the last successful pull and its age (marked `[stale]` past 3 × interval), the lead's revision and Leo version, the last attempt, and any warnings: a missing cache, the last pull's error, a lead on a newer Leo, and lead entries invalid on this host.
