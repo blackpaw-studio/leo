@@ -12,6 +12,7 @@ leo template show <name> --resolved     # show the effective config with default
 leo template show <name> --json         # emit the config as JSON (combine with --resolved)
 leo template add [flags]                # add a new template (minimal fields via flags; web UI for the full form)
 leo template remove <name>              # remove a template from the config (prompts for confirmation)
+leo template override <name>            # follower: copy a lead template into leo.yaml to edit it
 ```
 
 Template names support shell tab-completion for `show` and `remove`.
@@ -27,6 +28,8 @@ Shows a compact table of configured templates:
   coding               sonnet     coding-agent         ~/agents
   research             opus       -                    (default)
 ```
+
+With a `templates_file` or a [`follow`](../configuration/follow-lead.md) block, a SOURCE column shows where each template comes from: `local`, `shared`, `local · overrides shared`, `lead`, `local · overrides lead`, `shared · overrides lead`, or `lead · invalid` for a lead template unusable on this host. `--json` adds `source` (`local`, `shared`, `local-override`, `lead`, `local-override-lead`, `shared-override-lead`) and, for an invalid lead template, `invalid` with the reason.
 
 ### `leo template show <name>`
 
@@ -76,6 +79,12 @@ Add a template with the minimum set of fields via flags. Templates have many fie
 Removes the named template. Running agents spawned from the template are unaffected — only future spawn requests will fail with "template not found".
 
 Prompts for confirmation by default. Pass `-y / --yes` to skip the prompt (required when stdin is not a TTY).
+
+On a follower, removing (or otherwise editing) a template mirrored from the lead is refused with `owned_by_lead`; the error names the override command.
+
+### `leo template override <name>`
+
+On a [follower](../configuration/follow-lead.md), copies a template mirrored from the lead into this host's `leo.yaml` as a local override, which replaces the lead's template until it is deleted. Edit it afterwards with `leo config edit` or the web UI. A lead template that is invalid on this host cannot be overridden; fix it on the lead. `leo delegation override <profile>` does the same for a delegation profile, and [`leo config override`](config.md#leo-config-override) for any kind.
 
 ## See Also
 

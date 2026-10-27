@@ -50,6 +50,7 @@ internal/session/         → Session ID persistence (JSON key-value store)
 internal/history/         → Task execution history tracking
 internal/update/          → Self-update (binary download from GitHub releases)
 internal/env/             → Shared environment capture for daemon/cron processes
+internal/follow/          → Follow-lead: pulls a lead host's shared config over ssh for a follower (Puller), on a schedule in the daemon (Loop); status report for CLI/API/UI (docs/configuration/follow-lead.md)
 internal/chat/            → Leo Chat: SQLite message store, delivery framing, reply capture, voice transcription, ask/permission prompts (docs/configuration/chat.md)
 ```
 

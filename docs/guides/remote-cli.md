@@ -87,8 +87,8 @@ Precedence when resolving which host to talk to:
 1. `--host NAME` flag
 2. `LEO_HOST` environment variable
 3. `client.default_host` in `leo.yaml`
-4. First entry in `client.hosts` (sorted by key)
-5. Localhost — only if no hosts are configured
+4. First entry in `client.hosts` (sorted by key) — skipped on a host with a `follow:` block
+5. Localhost — only if no hosts are configured, or the host follows a lead
 
 If any hosts are configured, Leo treats the machine as a client. To bypass and dispatch through the local daemon socket, pass `--host localhost` explicitly.
 
@@ -97,6 +97,15 @@ leo agent list --host dev        # talk to dev
 LEO_HOST=dev leo agent list      # same thing via env
 leo agent list --host localhost  # force the local daemon
 ```
+
+## Following a lead vs `--host`
+
+Two ways to use another machine's config, for different jobs:
+
+- **`--host`** (this guide) makes the local CLI a thin client: the agents run on the remote, under the remote's config.
+- **[`follow`](../configuration/follow-lead.md)** makes this machine a full Leo host of its own that mirrors the lead's `templates`, `environments`, `delegation` and `defaults`. Agents run locally, from the lead's templates, and keep working from a cached copy when the lead is unreachable.
+
+Both use the same `client.hosts` entry and ssh transport. A follower runs agents locally, so with `follow` set and no `default_host` the CLI targets localhost; `--host <lead>` still reaches the lead's agents.
 
 ## Web UI and channel-plugin parity
 

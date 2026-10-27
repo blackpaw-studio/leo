@@ -41,6 +41,8 @@ Leo provides commands for setup, agent supervision, task scheduling, template ma
 | [`leo config show`](config.md#leo-config-show) | Display effective config with defaults applied |
 | [`leo config edit`](config.md#leo-config-edit) | Edit `leo.yaml` interactively |
 | [`leo config path`](config.md#leo-config-path) | Print the resolved `leo.yaml` path |
+| [`leo config override`](config.md#leo-config-override) | Follower: copy a lead entry into `leo.yaml` to edit it |
+| [`leo sync`](sync.md) | Follower: pull the lead's shared config now, or show the follow status |
 
 ### Integrations
 
