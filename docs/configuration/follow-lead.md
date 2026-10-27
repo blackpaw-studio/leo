@@ -129,6 +129,12 @@ rules, two host checks apply to lead entries:
 - an environment's `CLAUDE_CONFIG_DIR` or `CODEX_HOME`, when it is an absolute
   path, must exist.
 
+Only the daemon enforces the binary check, because only its `PATH` is the one
+harnesses launch under. Other `leo` commands, such as one run over a
+non-interactive ssh shell with a minimal `PATH`, report a missing binary as a
+follow warning and still list the template; the daemon's verdict is what a
+spawn or task gets.
+
 A lead `defaults` key that fails falls back to the built-in default and is
 reported as ignored. A task or agent that references an invalid entry fails
 with that entry's reason (the spawn API answers `400 invalid_lead_entry`).

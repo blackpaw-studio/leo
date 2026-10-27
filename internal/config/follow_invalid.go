@@ -42,9 +42,21 @@ func (e *UnknownEntryError) Error() string { return fmt.Sprintf("unknown %s %q",
 type FollowProbes struct {
 	LookPath func(string) (string, error)
 	Stat     func(string) (fs.FileInfo, error)
+	// BinaryAdvisory turns a missing harness binary into a warning instead
+	// of an invalid template. PATH only decides in the daemon, which
+	// launches the harness; another process, such as a CLI run from a
+	// non-interactive ssh shell, can have a different PATH.
+	BinaryAdvisory bool
 }
 
-var followProbes = FollowProbes{LookPath: exec.LookPath, Stat: os.Stat}
+// followProbes outside the daemon; the daemon installs DaemonFollowProbes.
+var followProbes = FollowProbes{LookPath: exec.LookPath, Stat: os.Stat, BinaryAdvisory: true}
+
+// DaemonFollowProbes are the probes for the daemon process, where PATH is
+// the one harnesses launch under, so the binary probe is strict.
+func DaemonFollowProbes() FollowProbes {
+	return FollowProbes{LookPath: exec.LookPath, Stat: os.Stat}
+}
 
 // SetFollowProbes replaces the D4 probes and returns a func restoring the
 // previous ones. A test seam: Load runs at every config call site, so the
@@ -85,7 +97,7 @@ func (c *Config) isolateInvalidLeadEntries() {
 		errs := c.validateTemplate(name, tmpl, hr)
 		errs = append(errs, c.validateEnvironmentList("templates."+name+".environments", tmpl.Environments)...)
 		if len(errs) == 0 {
-			errs = probeHarnessBinary(name, c.TemplateHarness(tmpl))
+			errs = fl.probeHarnessBinary(name, c.TemplateHarness(tmpl))
 		}
 		if len(errs) > 0 {
 			delete(c.Templates, name)
@@ -119,15 +131,22 @@ func (c *Config) leadNames(kind EntryKind) []string {
 	return names
 }
 
-func probeHarnessBinary(name, harnessName string) []string {
+// probeHarnessBinary checks a lead template's harness binary is on PATH:
+// a failure invalidates the template, or only warns when the probe is
+// advisory (outside the daemon).
+func (fl *followLayer) probeHarnessBinary(name, harnessName string) []string {
 	h, err := harness.Get(harnessName)
 	if err != nil {
 		return nil // validateTemplate reports it
 	}
-	if _, err := followProbes.LookPath(h.Binary()); err != nil {
-		return []string{fmt.Sprintf("templates.%s.harness: the %s binary %q is not on this host's PATH", name, h.Name(), h.Binary())}
+	if _, err := followProbes.LookPath(h.Binary()); err == nil {
+		return nil
 	}
-	return nil
+	if followProbes.BinaryAdvisory {
+		fl.warn("lead template %q: the %s binary %q is not on this process's PATH; the daemon checks its own PATH when it loads the config", name, h.Name(), h.Binary())
+		return nil
+	}
+	return []string{fmt.Sprintf("templates.%s.harness: the %s binary %q is not on this host's PATH", name, h.Name(), h.Binary())}
 }
 
 // probeConfigDirs checks each harness config dir an environment names. Only

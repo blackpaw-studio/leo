@@ -132,6 +132,30 @@ func TestD4ProbesMarkLeadEntriesInvalid(t *testing.T) {
 	}
 }
 
+func TestAdvisoryBinaryProbeWarnsInsteadOfInvalidating(t *testing.T) {
+	t.Cleanup(SetFollowProbes(FollowProbes{
+		LookPath: func(name string) (string, error) { return "", errors.New("not found") },
+		Stat:     os.Stat,
+		// A process other than the daemon: its PATH says nothing about the
+		// daemon's.
+		BinaryAdvisory: true,
+	}))
+	cfg, err := loadRawFollower(t, `"templates":{"cx":{"harness":"codex","model":"gpt-5"}}`, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := cfg.LookupTemplate("cx"); err != nil {
+		t.Fatalf("cx: %v, want usable (the daemon decides)", err)
+	}
+	warned := false
+	for _, w := range cfg.FollowWarnings() {
+		warned = warned || strings.Contains(w, "cx") && strings.Contains(w, "codex") && strings.Contains(w, "PATH")
+	}
+	if !warned {
+		t.Fatalf("warnings = %q, want one naming cx, codex and PATH", cfg.FollowWarnings())
+	}
+}
+
 func TestReferencesToInvalidLeadEntriesFailWithReason(t *testing.T) {
 	allowProbes(t)
 	sections := `"templates":{"bad":{"harness":"nope"}},"environments":{"badenv":{"1X":"y"}}`
