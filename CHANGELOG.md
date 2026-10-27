@@ -6,6 +6,24 @@ All notable user-visible changes to Leo are documented here.
 
 ### Added
 
+- **Agent appearance (`agent_appearance`).** Agents can carry an optional emoji
+  and a palette color (`red`, `orange`, `yellow`, `green`, `teal`, `blue`,
+  `indigo`, `purple`, `pink`, `gray`), set by hand per agent (stored on its
+  record in `state/agents.json`; a rename carries it, a delete drops it) or by
+  ordered `appearance_rules` in `leo.yaml` that match on `name`,
+  `environments`, `template` or `harness` with `is`, `contains`,
+  `starts_with` or `glob`. Each value resolves independently: manual, else the
+  first matching rule, else unset. Agents on `/state`, `/api/v1/state` and
+  `agent_spawned` carry `appearance: {emoji?, color?, emoji_source?,
+  color_source?}` (absent when nothing is set), and the new
+  `agent_appearance_changed` event announces changes. New routes, on the
+  socket and under `/api/v1` (operator or paired device):
+  `GET`/`PUT /appearance/rules` (If-Match required; a bad rule is 400
+  `invalid_appearance_rule` with its index and reason) and
+  `PUT /agents/{name}/appearance` (`null` clears, absent is unchanged). A
+  malformed rule never fails loading `leo.yaml`; a bad rule is reported like an
+  undefined environment (`leo validate`, startup, config writes).
+  See [Agent Appearance](docs/configuration/appearance.md).
 - **`restoring` agent status on `/api/v1` (`agent_status_restoring`).** While the
   daemon is still restoring agents at boot, a stored agent that is neither live nor
   stopped now reports `status: "restoring"` (state snapshot, agent detail, and
