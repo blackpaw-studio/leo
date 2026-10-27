@@ -3,6 +3,7 @@ package agentmove
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -97,7 +98,12 @@ type SourceManager interface {
 	RuntimeEnv(rec agentstore.Record) (map[string]string, error)
 	BeginMove(name string, mode agent.MoveMode) (release func(), err error)
 	Stop(name string, opts agent.StopOptions) error
+	// MarkMoved marks the agent moved and lifts its fence.
 	MarkMoved(name, to, peer string, at time.Time) error
+	// FenceMove and ClearMoveFence set and lift the durable fence a move
+	// holds from its commit until the outcome is known.
+	FenceMove(name string, p agentstore.MovePending) error
+	ClearMoveFence(name, runID string) error
 }
 
 // BusyProber reports whether an agent is mid-turn.
@@ -231,6 +237,8 @@ func (t *transfer) validate(ctx context.Context) error {
 		return problemf(CodeBadRequest, "agent %q not found", t.req.Agent)
 	case rec.Moved():
 		return problemf(CodeAgentMoved, "%v", movedText(rec))
+	case rec.MovePending != nil:
+		return problemf(CodeMovePending, "%v", &agent.MovePendingError{Name: rec.Name, Pending: *rec.MovePending})
 	case rec.Workspace == "":
 		return problemf(CodeBadRequest, "agent %q has no workspace", rec.Name)
 	}
@@ -742,6 +750,9 @@ func (t *transfer) run(ctx context.Context, c Cmd) error {
 // still start there, so the source is not offered back.
 func (t *transfer) commit(ctx context.Context) error {
 	t.p.Stage(StageCommit)
+	if err := t.fence(); err != nil {
+		return err
+	}
 	out, err := t.ep.Run(ctx, VerbCommit, t.body())
 	if err == nil {
 		var res CommitResult
@@ -753,27 +764,52 @@ func (t *transfer) commit(ctx context.Context) error {
 		return nil
 	}
 	if t.ep.Local() || Definite(err) {
-		return t.recoverable(err)
+		return t.unfence(t.recoverable(err))
 	}
 	st, serr := t.status(ctx)
 	switch {
 	case serr != nil:
 		return problemf(CodeOutcomeUnknown,
-			"the commit on %s did not answer (%v) and its status cannot be read (%v); %s may be live there: check `leo --host %s agent list` before starting it here",
-			t.ep.Name(), err, serr, t.rec.Name, t.ep.Name())
+			"the commit on %s did not answer (%v) and its status cannot be read (%v); %s may be live there, so it stays fenced here: check `leo --host %s agent list`, then settle it with `leo agent move %s --reconcile`",
+			t.ep.Name(), err, serr, t.rec.Name, t.ep.Name(), t.rec.Name)
 	case st.Live:
 		t.note(Problem{Code: NoteCommitAnswerLost, Message: fmt.Sprintf("the commit's answer was lost (%v), but %s is running on %s", err, t.rec.Name, t.ep.Name())})
 		return nil
 	case st.Phase == PhaseFailed:
-		return t.recoverable(fmt.Errorf("the commit on %s failed (%w); %s is not running there", t.ep.Name(), err, t.rec.Name))
+		return t.unfence(t.recoverable(fmt.Errorf("the commit on %s failed (%w); %s is not running there", t.ep.Name(), err, t.rec.Name)))
 	}
 	phase := st.Phase
 	if phase == "" {
 		phase = "unknown"
 	}
 	return problemf(CodeOutcomeUnknown,
-		"the commit on %s did not answer (%v) and has not settled there (phase %s); %s may still start there: check `leo --host %s agent list` before starting it here",
-		t.ep.Name(), err, phase, t.rec.Name, t.ep.Name())
+		"the commit on %s did not answer (%v) and has not settled there (phase %s); %s may still start there, so it stays fenced here: check `leo --host %s agent list`, then settle it with `leo agent move %s --reconcile`",
+		t.ep.Name(), err, phase, t.rec.Name, t.ep.Name(), t.rec.Name)
+}
+
+// fence persists the source's move fence before the commit starts: until
+// the outcome is known nothing here starts the agent, across daemon
+// restarts. A copy leaves its source running and needs none.
+func (t *transfer) fence() error {
+	if t.isCopy() {
+		return nil
+	}
+	p := agentstore.MovePending{To: t.ep.Name(), Peer: t.resp.Host.Hostname, RunID: t.m.Transfer, Since: t.mv.Clock.Now()}
+	if err := t.mv.Agents.FenceMove(t.rec.Name, p); err != nil {
+		return t.recoverable(fmt.Errorf("fencing %s before the commit: %w", t.rec.Name, err))
+	}
+	return nil
+}
+
+// unfence lifts the fence after a settled failure and returns err.
+func (t *transfer) unfence(err error) error {
+	if t.isCopy() {
+		return err
+	}
+	if uerr := t.mv.Agents.ClearMoveFence(t.rec.Name, t.m.Transfer); uerr != nil {
+		return errors.Join(err, fmt.Errorf("lifting %s's move fence: %w; `leo agent move %s --reconcile` lifts it", t.rec.Name, uerr, t.rec.Name))
+	}
+	return err
 }
 
 func (t *transfer) status(ctx context.Context) (StatusResult, error) {
@@ -797,5 +833,5 @@ func (t *transfer) mark() error {
 			return nil
 		}
 	}
-	return fmt.Errorf("%s is live on %s, but marking it moved here failed: %w; do not start it here", t.rec.Name, t.ep.Name(), err)
+	return fmt.Errorf("%s is live on %s, but marking it moved here failed: %w; do not start it here: it stays fenced until `leo agent move %s --reconcile` marks it", t.rec.Name, t.ep.Name(), err, t.rec.Name)
 }

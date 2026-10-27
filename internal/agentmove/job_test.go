@@ -50,6 +50,9 @@ func (l *eventLog) has(prefix string) bool {
 }
 
 type fakeSource struct {
+	// home holds the agentstore the fence is kept in, as agent.Manager
+	// keeps it.
+	home    string
 	envs    *configEnvs
 	log     *eventLog
 	mu      sync.Mutex
@@ -102,8 +105,48 @@ func (f *fakeSource) MarkMoved(name, to, peer string, _ time.Time) error {
 		f.markFails--
 		return errors.New("store busy")
 	}
-	return nil
+	return f.setFence(name, nil)
 }
+
+func (f *fakeSource) FenceMove(name string, p agentstore.MovePending) error {
+	f.log.add("fence %s %s", name, p.To)
+	return f.setFence(name, &p)
+}
+
+func (f *fakeSource) ClearMoveFence(name, runID string) error {
+	f.log.add("unfence %s", name)
+	recs, err := agentstore.Load(agentstore.FilePath(f.home))
+	if err != nil {
+		return err
+	}
+	if p := recs[name].MovePending; p == nil || p.RunID != runID {
+		return nil
+	}
+	return f.setFence(name, nil)
+}
+
+func (f *fakeSource) setFence(name string, p *agentstore.MovePending) error {
+	return agentstore.Update(f.home, name, func(r agentstore.Record) agentstore.Record {
+		r.MovePending = p
+		return r
+	})
+}
+
+// fence is name's stored fence, nil when none.
+func (f *fakeSource) fence(t *testing.T, name string) *agentstore.MovePending {
+	t.Helper()
+	recs, err := agentstore.Load(agentstore.FilePath(f.home))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return recs[name].MovePending
+}
+
+// idleSupervisor is an agent.Supervisor with nothing live, for a real
+// agent.Manager whose launches must be refused before they reach it.
+type idleSupervisor struct{ agent.Supervisor }
+
+func (idleSupervisor) EphemeralAgents() map[string]agent.ProcessState { return nil }
 
 // fakeEndpoint is a remote destination whose verbs answer from a script.
 type fakeEndpoint struct {
@@ -207,6 +250,7 @@ func newMoveFixture(t *testing.T) *moveFixture {
 		log: log, src: &fakeSource{log: log, envs: &configEnvs{}}, hooks: &loggingHooks{log: log}, prober: &fakeProber{probe: drain.Probe{Exists: true}},
 		home: t.TempDir(), claude: t.TempDir(), ws: filepath.Join(t.TempDir(), "web"),
 	}
+	f.src.home = f.home
 	f.runner = &fakeRunner{answer: func(c Cmd) ([]byte, error) {
 		log.add("run %s", runLine(c))
 		return nil, nil
@@ -275,6 +319,7 @@ func TestMoveHappyPathOrder(t *testing.T) {
 		"run rsync -a --delete --itemize-changes --stats -e ssh -o BatchMode=yes --exclude=node_modules/ --exclude=/.worktrees/ " + f.ws + "/ u@laptop:" + f.ws + "/",
 		"run rsync -a -R -u --itemize-changes -e ssh -o BatchMode=yes projects/" + session.ProjectSlug(f.ws) + "/ u@laptop:/Users/me/.claude-work/ (in " + f.claude + ")",
 		"run rsync -a --delete -e ssh -o BatchMode=yes " + stage + "/ u@laptop:" + destStage + "/",
+		"fence web laptop",
 		"verb commit",
 		"mark web laptop laptop",
 		"unlock web",
@@ -466,6 +511,9 @@ func TestMoveMarkRetries(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "do not start it here") {
 		t.Fatalf("move = %v, want the live-elsewhere warning", err)
 	}
+	if f.src.fence(t, "web") == nil {
+		t.Fatal("a live destination left unmarked lost its fence here")
+	}
 }
 
 func TestMoveRefusals(t *testing.T) {
@@ -656,5 +704,58 @@ func TestMoveProtectsDestinationNestedPaths(t *testing.T) {
 	}
 	if len(kept) != 1 || !strings.Contains(kept[0], "services/api") {
 		t.Fatalf("notes = %+v, want one kept-path note for services/api", res.Notes)
+	}
+}
+
+// Until a commit's outcome is known the source is fenced on disk: a start
+// (by any daemon, restarted or not) and a second move are refused.
+func TestMoveUnknownOutcomeFencesSource(t *testing.T) {
+	f := newMoveFixture(t)
+	f.ep.answer[VerbCommit] = func(Manifest) ([]byte, error) { return nil, errors.New("ssh: exit status 255") }
+	f.ep.answer[VerbStatus] = jsonAnswer(StatusResult{Present: true, Status: "stopped", Phase: PhaseHooks})
+	if _, err := f.move(t, false); !HasCode(err, CodeOutcomeUnknown) {
+		t.Fatalf("move = %v, want outcome_unknown", err)
+	}
+	p := f.src.fence(t, "web")
+	if p == nil || p.To != "laptop" || p.Peer != "laptop" || p.RunID != f.ep.manifests[1].Transfer || !p.Since.Equal(receiveTime) {
+		t.Fatalf("fence = %+v, want laptop, run %s", p, f.ep.manifests[1].Transfer)
+	}
+	mgr := agent.New(func() (*config.Config, error) { return f.cfg, nil }, idleSupervisor{}, "", "")
+	if err := mgr.Start("web"); !errors.Is(err, agent.ErrMovePending) {
+		t.Fatalf("Start of the fenced source = %v, want ErrMovePending", err)
+	}
+	f.ep.answer[VerbStatus] = jsonAnswer(StatusResult{Present: true, Status: "running", Live: true})
+	if _, err := f.move(t, false); !HasCode(err, CodeMovePending) || strings.Count(strings.Join(f.log.all(), "\n"), "verb preflight") != 1 {
+		t.Fatalf("second move = %v (events %v), want move_pending before any preflight", err, f.log.all())
+	}
+}
+
+// A settled outcome lifts the fence: a refusal or a failure there leaves
+// the source startable, and a live destination marks it moved.
+func TestMoveSettledOutcomeLiftsFence(t *testing.T) {
+	lost := func(Manifest) ([]byte, error) { return nil, errors.New("ssh: exit status 255") }
+	cases := map[string]func(f *moveFixture){
+		"refused": func(f *moveFixture) {
+			f.ep.answer[VerbCommit] = func(Manifest) ([]byte, error) { return nil, &VerbError{Code: CodeMoveFailed, Message: "start failed"} }
+		},
+		"failed": func(f *moveFixture) {
+			f.ep.answer[VerbCommit] = lost
+			f.ep.answer[VerbStatus] = jsonAnswer(StatusResult{Present: true, MovedTo: "studio", Status: "stopped", Phase: PhaseFailed})
+		},
+		"live":    func(f *moveFixture) { f.ep.answer[VerbCommit] = lost },
+		"success": func(*moveFixture) {},
+	}
+	for name, setup := range cases {
+		t.Run(name, func(t *testing.T) {
+			f := newMoveFixture(t)
+			setup(f)
+			_, _ = f.move(t, false)
+			if !f.log.has("fence web laptop") {
+				t.Fatalf("events = %v, want the fence set before the commit", f.log.all())
+			}
+			if p := f.src.fence(t, "web"); p != nil {
+				t.Fatalf("fence after a settled outcome = %+v", p)
+			}
+		})
 	}
 }

@@ -66,6 +66,7 @@ func TestMoveWorktreeHappyPathOrder(t *testing.T) {
 		"run rsync -a --delete --itemize-changes --stats -e ssh -o BatchMode=yes --exclude=node_modules/ --exclude=/.worktrees/ --exclude=/.git " + f.ws + "/ u@laptop:" + f.ws + "/",
 		"run rsync -a -R -u --itemize-changes -e ssh -o BatchMode=yes projects/" + session.ProjectSlug(f.ws) + "/ u@laptop:/Users/me/.claude-work/ (in " + f.claude + ")",
 		"run rsync -a --delete -e ssh -o BatchMode=yes " + stage + "/ u@laptop:" + destStage + "/",
+		"fence web laptop",
 		"verb commit",
 		"mark web laptop laptop",
 		"unlock web",
@@ -158,8 +159,8 @@ func TestMoveSubmodulesModulesRsync(t *testing.T) {
 		}
 		want := "run rsync -a --delete --itemize-changes -e ssh -o BatchMode=yes " + src + "/ u@laptop:" + f.ws + "/.git/modules/"
 		events := f.log.all()
-		if i := indexOf(events, want); i < 0 || events[i+1] != "verb commit" {
-			t.Fatalf("events:\n%s\nwant %q just before the commit", strings.Join(events, "\n"), want)
+		if i := indexOf(events, want); i < 0 || events[i+1] != "fence web laptop" || events[i+2] != "verb commit" {
+			t.Fatalf("events:\n%s\nwant %q just before the fence and commit", strings.Join(events, "\n"), want)
 		}
 		if !f.log.has("run rsync -a --delete --itemize-changes --stats -e ssh -o BatchMode=yes --exclude=node_modules/ --exclude=/.worktrees/ --exclude=/.git --exclude=/libs/a/deep/.git --exclude=/libs/a/.git ") {
 			t.Fatalf("workspace rsync lacks the absorbed submodules' .git excludes:\n%s", strings.Join(events, "\n"))

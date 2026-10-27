@@ -32,6 +32,7 @@ const (
 	CodeGitOpInProgress      = "git_op_in_progress"
 	CodeSubmoduleTorn        = "submodule_torn"
 	CodeAgentMoved           = "agent_moved"
+	CodeMovePending          = "move_pending"
 	CodeAgentBusy            = "agent_busy"
 	CodeSameHost             = "same_host"
 )

@@ -77,7 +77,7 @@ func newPairMover(t *testing.T, src, dst string, srcCfg, dstCfg *config.Config) 
 	}
 	log := &eventLog{}
 	mv := &Mover{
-		Config: func() (*config.Config, error) { return srcCfg, nil }, Agents: &fakeSource{log: log, envs: &configEnvs{cfg: srcCfg}},
+		Config: func() (*config.Config, error) { return srcCfg, nil }, Agents: &fakeSource{home: srcCfg.HomePath, log: log, envs: &configEnvs{cfg: srcCfg}},
 		Endpoint: func(*config.Config, string) (Endpoint, error) {
 			return &pairEndpoint{recv: recv, from: src, to: dst}, nil
 		},
