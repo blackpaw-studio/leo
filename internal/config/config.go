@@ -106,6 +106,9 @@ type Config struct {
 	// `environments:`; see environments.go for the merge and cascade rules.
 	Environments map[string]map[string]string `yaml:"environments,omitempty"`
 	Delegation   *DelegationConfig            `yaml:"delegation,omitempty"`
+	// AppearanceRules are the ordered rules that give agents a color and/or
+	// an emoji; see appearance.go.
+	AppearanceRules AppearanceRuleList `yaml:"appearance_rules,omitempty"`
 	// Chat configures Leo Chat (see chat.go).
 	Chat ChatConfig `yaml:"chat,omitempty"`
 	// Providers was removed with the harness abstraction. The field survives
@@ -794,6 +797,7 @@ func (c *Config) Validate() error {
 
 	errs = append(errs, c.validateDelegation()...)
 	errs = append(errs, c.validateEnvironments()...)
+	errs = append(errs, c.validateAppearanceRules()...)
 
 	if len(errs) > 0 {
 		return &ValidationErrors{Messages: errs}
