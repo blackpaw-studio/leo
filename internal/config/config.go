@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"maps"
 	"net"
 	"net/netip"
 	"net/url"
@@ -642,8 +643,23 @@ func (r harnessResolver) resolve(scope, explicit string) (h harness.Harness, msg
 	return h, ""
 }
 
-// knownTemplates is the template map existence checks run against.
-func (c *Config) knownTemplates() map[string]TemplateConfig { return c.Templates }
+// knownTemplates is the template map existence checks run against: the
+// effective templates plus any invalid lead template, which counts as known
+// so it does not cascade into the entries that name it.
+func (c *Config) knownTemplates() map[string]TemplateConfig {
+	invalid := c.InvalidEntries(KindTemplate)
+	if len(invalid) == 0 {
+		return c.Templates
+	}
+	known := maps.Clone(c.Templates)
+	if known == nil {
+		known = map[string]TemplateConfig{}
+	}
+	for name := range invalid {
+		known[name] = TemplateConfig{}
+	}
+	return known
+}
 
 // validateTemplate checks one template; messages start with "templates.<name>".
 func (c *Config) validateTemplate(name string, tmpl TemplateConfig, hr harnessResolver) []string {
@@ -830,9 +846,13 @@ func (c *Config) Validate() error {
 		}
 		if task.Runtime == "persistent" && task.Template != "" {
 			_, tmpl, _, err := c.ResolveTaskTarget(name)
-			if err != nil {
+			var invalid *InvalidEntryError
+			switch {
+			case errors.As(err, &invalid):
+				// An isolated lead template: the task fails with its reason at run time.
+			case err != nil:
 				errs = append(errs, err.Error())
-			} else {
+			default:
 				if missing, ok := channelSubset(task.Channels, tmpl.Channels); !ok {
 					errs = append(errs, fmt.Sprintf("tasks.%s: channel %q is not in templates.%s.channels (task.channels must be a subset)", name, missing, task.Template))
 				}

@@ -34,6 +34,9 @@ func (c *Config) ResolveTaskTarget(taskName string) (string, TemplateConfig, boo
 
 	tmpl, ok := c.Templates[task.Template]
 	if !ok {
+		if err := c.invalidEntry(KindTemplate, task.Template); err != nil {
+			return "", TemplateConfig{}, false, fmt.Errorf("task %q: %w", taskName, err)
+		}
 		return "", TemplateConfig{}, false, fmt.Errorf("task %q references templates.%s which is not defined", taskName, task.Template)
 	}
 	return task.Template, tmpl, false, nil

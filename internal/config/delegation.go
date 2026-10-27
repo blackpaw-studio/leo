@@ -191,6 +191,9 @@ func (c *Config) ResolveRole(role string) (Resolution, error) {
 	d := c.Delegation
 	p, ok := d.Profiles[d.ActiveProfile]
 	if !ok {
+		if err := c.invalidEntry(KindProfile, d.ActiveProfile); err != nil {
+			return Resolution{}, err
+		}
 		return Resolution{}, fmt.Errorf("active delegation profile %q does not exist", d.ActiveProfile)
 	}
 	target, ok := p.Roles[role]
@@ -244,7 +247,7 @@ func (c *Config) validateDelegation() []string {
 	if len(d.Profiles) == 0 {
 		errs = append(errs, "delegation.profiles must not be empty")
 	}
-	if d.ActiveProfile != "" {
+	if d.ActiveProfile != "" && !c.isInvalidLead(KindProfile, d.ActiveProfile) {
 		if _, ok := d.Profiles[d.ActiveProfile]; !ok {
 			errs = append(errs, fmt.Sprintf("delegation.active_profile %q does not exist", d.ActiveProfile))
 		}
@@ -296,7 +299,9 @@ func (c *Config) validateProfile(profileName string, profile Profile) []string {
 		}
 		tmpl, ok := c.Templates[target.Template]
 		if !ok {
-			errs = append(errs, fmt.Sprintf("%s.template %q does not exist", prefix, target.Template))
+			if !c.isInvalidLead(KindTemplate, target.Template) {
+				errs = append(errs, fmt.Sprintf("%s.template %q does not exist", prefix, target.Template))
+			}
 			continue
 		}
 		h, err := harness.Get(c.TemplateHarness(tmpl))

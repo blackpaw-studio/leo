@@ -46,6 +46,7 @@ func writeLeadCache(t testing.TB, followerDir, leadYAML string) FollowExport {
 // cache of leadYAML and loads it.
 func loadFollower(t *testing.T, leadYAML, local string) *Config {
 	t.Helper()
+	allowProbes(t)
 	dir := t.TempDir()
 	writeLeadCache(t, dir, leadYAML)
 	path := writeFile(t, dir, "leo.yaml", followerHeader+local)
@@ -110,6 +111,7 @@ func TestFollowLayerProfilesReplaceByName(t *testing.T) {
 }
 
 func TestFollowLayerSharedSitsBetweenLeadAndLocal(t *testing.T) {
+	allowProbes(t)
 	lead := "templates:\n  x: {model: opus}\n  y: {model: opus}\n  z: {model: opus}\n  w: {model: opus}\n"
 	dir := t.TempDir()
 	writeLeadCache(t, dir, lead)
@@ -198,6 +200,7 @@ func TestFollowLayerLocalActiveProfileUsesLeadProfiles(t *testing.T) {
 }
 
 func TestFollowLayerNoCacheIsLocalOnly(t *testing.T) {
+	allowProbes(t)
 	dir := t.TempDir()
 	path := writeFile(t, dir, "leo.yaml", followerHeader+"templates:\n  mine: {model: haiku}\n")
 	cfg, err := Load(path)
@@ -213,6 +216,7 @@ func TestFollowLayerNoCacheIsLocalOnly(t *testing.T) {
 }
 
 func TestFollowLayerIgnoresCacheForOtherHost(t *testing.T) {
+	allowProbes(t)
 	dir := t.TempDir()
 	writeLeadCache(t, dir, "templates:\n  x: {}\n")
 	header := strings.Replace(followerHeader, "lead: {ssh", "other: {ssh: evan@10.0.2.11}\n    lead: {ssh", 1)
@@ -258,6 +262,7 @@ func TestNoFollowLoadIsUnchanged(t *testing.T) {
 // BenchmarkLoadFollower measures the lead layer's cost on Load, which runs
 // at every config.Load call site.
 func BenchmarkLoadFollower(b *testing.B) {
+	allowProbes(b)
 	lead := "templates:\n"
 	for i := range 40 {
 		lead += "  t" + string(rune('a'+i%26)) + string(rune('a'+i/26)) + ": {model: opus, workspace: ~/w, env: {A: b}}\n"

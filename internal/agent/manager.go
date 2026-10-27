@@ -487,9 +487,9 @@ func (m *Manager) Spawn(ctx context.Context, spec SpawnSpec) (Record, error) {
 		}
 		return m.spawnFromAgent(ctx, cfg, spec)
 	}
-	tmpl, ok := cfg.Templates[spec.Template]
-	if !ok {
-		return Record{}, &UnknownTemplateError{Name: spec.Template}
+	tmpl, err := lookupTemplate(cfg, spec.Template)
+	if err != nil {
+		return Record{}, err
 	}
 	return m.spawnResolved(ctx, cfg, tmpl, spec)
 }
@@ -810,9 +810,13 @@ func (m *Manager) spawnFromAgent(ctx context.Context, cfg *config.Config, spec S
 	if !ok {
 		return Record{}, fmt.Errorf("%w: %q (run 'leo agent list')", ErrSourceAgentNotFound, spec.FromAgent)
 	}
-	srcTmpl, ok := cfg.Templates[src.Template]
-	if !ok {
-		return Record{}, fmt.Errorf("template %q (from agent %q) not found", src.Template, src.Name)
+	srcTmpl, err := cfg.LookupTemplate(src.Template)
+	if err != nil {
+		var unknown *config.UnknownEntryError
+		if errors.As(err, &unknown) {
+			return Record{}, fmt.Errorf("template %q (from agent %q) not found", src.Template, src.Name)
+		}
+		return Record{}, fmt.Errorf("agent %q: %w", src.Name, err)
 	}
 	canonical := src.CanonicalPath
 	if canonical == "" {
@@ -840,9 +844,9 @@ func (m *Manager) spawnFromAgent(ctx context.Context, cfg *config.Config, spec S
 		spec.Environments = src.Environments
 	}
 	if spec.Template != "" {
-		t, ok := cfg.Templates[spec.Template]
-		if !ok {
-			return Record{}, fmt.Errorf("template %q not found", spec.Template)
+		t, err := lookupTemplate(cfg, spec.Template)
+		if err != nil {
+			return Record{}, err
 		}
 		runTmpl = t
 		runTmplName = spec.Template
@@ -2228,6 +2232,18 @@ func sanitizeConfigErrors(load ConfigLoader) ConfigLoader {
 		}
 		return cfg, nil
 	}
+}
+
+// lookupTemplate resolves a spawn's template: an unknown name is an
+// *UnknownTemplateError, an invalid lead template its
+// *config.InvalidEntryError.
+func lookupTemplate(cfg *config.Config, name string) (config.TemplateConfig, error) {
+	tmpl, err := cfg.LookupTemplate(name)
+	var unknown *config.UnknownEntryError
+	if errors.As(err, &unknown) {
+		return config.TemplateConfig{}, &UnknownTemplateError{Name: name}
+	}
+	return tmpl, err
 }
 
 // UnknownTemplateError reports a spawn that names no template, or one config

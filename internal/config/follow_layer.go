@@ -52,6 +52,11 @@ type followLayer struct {
 	// leoBytes is leo.yaml as loaded, the baseline for "did leo.yaml change".
 	leoBytes []byte
 	warnings []string
+	// invalid maps kind → name → reason for lead entries isolated as
+	// unusable here; invalidKeys maps a dropped lead defaults key to its
+	// reason (D3).
+	invalid     map[EntryKind]map[string]string
+	invalidKeys map[string]string
 }
 
 func (fl *followLayer) warn(format string, args ...any) {
@@ -175,6 +180,7 @@ func (c *Config) applyFollowLayer(leoBytes []byte) {
 	if err := c.layerDelegation(effective.delegation, leadDelegation, localDelegation); err != nil {
 		fl.warn("lead delegation is unusable (%v); using local delegation only", err)
 	}
+	c.isolateInvalidLeadEntries()
 }
 
 // layerTemplates puts lead templates under the shared+local merge.

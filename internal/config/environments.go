@@ -41,9 +41,9 @@ func (c *Config) MergeEnvironments(names []string) (map[string]string, error) {
 	}
 	merged := map[string]string{}
 	for _, name := range names {
-		env, ok := c.Environments[name]
-		if !ok {
-			return nil, &UnknownEnvironmentError{Name: name}
+		env, err := c.LookupEnvironment(name)
+		if err != nil {
+			return nil, err
 		}
 		maps.Copy(merged, env)
 	}
@@ -60,9 +60,9 @@ func (c *Config) ResolveNamed(names []string, x Expander) (map[string]string, er
 	}
 	merged := map[string]string{}
 	for _, name := range names {
-		env, ok := c.Environments[name]
-		if !ok {
-			return nil, &UnknownEnvironmentError{Name: name}
+		env, err := c.LookupEnvironment(name)
+		if err != nil {
+			return nil, err
 		}
 		expanded, err := x.expandMap("environments."+name, env)
 		if err != nil {
@@ -144,7 +144,7 @@ func (c *Config) validateEnvironmentList(path string, names []string) []string {
 	var errs []string
 	seen := map[string]bool{}
 	for _, n := range names {
-		if _, ok := c.Environments[n]; !ok {
+		if _, ok := c.Environments[n]; !ok && !c.isInvalidLead(KindEnvironment, n) {
 			errs = append(errs, fmt.Sprintf("%s: unknown environment %q", path, n))
 		}
 		if seen[n] {
