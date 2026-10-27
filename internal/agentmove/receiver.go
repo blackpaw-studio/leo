@@ -349,12 +349,16 @@ func (r *Receiver) Commit(ctx context.Context, m Manifest) (CommitResult, error)
 		return CommitResult{}, err
 	}
 	spec := receiveSpec(m, r.Clock.Now())
+	phase := func(p string) { recordPhase(cfg.HomePath, m, p, r.Clock.Now()) }
+	phase(PhaseCommitting)
 	// Resolved before anything is placed: an env that cannot resolve here
 	// refuses the commit with nothing to undo.
 	env, err := r.Agents.ArrivalEnv(spec)
 	if err != nil {
+		phase(PhaseFailed)
 		return CommitResult{}, err
 	}
+	// fail settles a failure; one it cannot settle keeps the last phase.
 	fail := func(err error) (CommitResult, error) {
 		if m.IsCopy() && !r.hasRecord(spec.Record.Name) {
 			// No record owns the placed copy: hand it back to its partial,
@@ -362,11 +366,13 @@ func (r *Receiver) Commit(ctx context.Context, m Manifest) (CommitResult, error)
 			if uerr := r.unplace(ctx, m); uerr != nil {
 				return CommitResult{}, errors.Join(err, fmt.Errorf("returning the copy's workspace to %s: %w", m.TargetWorkspace()+PartialSuffix, uerr))
 			}
+			phase(PhaseFailed)
 			return CommitResult{}, err
 		}
 		if serr := r.Agents.ShadowReceive(spec, err); serr != nil {
 			return CommitResult{}, errors.Join(err, fmt.Errorf("leaving it dormant: %w", serr))
 		}
+		phase(PhaseFailed)
 		return CommitResult{}, err
 	}
 	notes, err := r.place(ctx, m)
@@ -377,18 +383,23 @@ func (r *Receiver) Commit(ctx context.Context, m Manifest) (CommitResult, error)
 		return fail(err)
 	}
 	mv := cfg.ResolveMove(m.Agent.Template)
+	phase(PhaseHooks)
 	if err := r.Hooks.RunHooks(ctx, "post_receive", mv.PostReceive, mv.HookTimeout, r.hookEnv(cfg, host, m, env)); err != nil {
 		return fail(err)
 	}
+	phase(PhaseStarting)
 	if err := r.Agents.Receive(ctx, spec); err != nil {
 		if m.IsCopy() {
 			return fail(err)
 		}
+		// Receive leaves a failed start dormant itself.
+		phase(PhaseFailed)
 		return CommitResult{}, err
 	}
 	if err := r.confirm(ctx, spec.Record.Name); err != nil {
 		return fail(err)
 	}
+	phase(PhaseLive)
 	return CommitResult{Name: spec.Record.Name, Status: "running", Notes: notes}, nil
 }
 
@@ -505,15 +516,23 @@ type StatusResult struct {
 	MovedTo string `json:"moved_to,omitempty"`
 	Status  string `json:"status,omitempty"`
 	Live    bool   `json:"live"`
+	// Phase is how far the manifest's transfer got committing here, ""
+	// when it never started (or an older leo answered).
+	Phase string `json:"phase,omitempty"`
 }
 
-// Status reports the target agent's state, for a source whose commit
-// outcome is unknown.
+// Status reports the target agent's state and its commit's phase, for a
+// source whose commit outcome is unknown.
 func (r *Receiver) Status(m Manifest) (StatusResult, error) {
+	cfg, err := r.Config()
+	if err != nil {
+		return StatusResult{}, fmt.Errorf("loading config: %w", err)
+	}
+	st := StatusResult{Phase: commitPhase(cfg.HomePath, m)}
 	for _, a := range r.Agents.List() {
 		if a.Name == m.TargetName() {
-			return StatusResult{Present: true, MovedTo: a.MovedTo, Status: a.Status, Live: a.Status == "running"}, nil
+			st.Present, st.MovedTo, st.Status, st.Live = true, a.MovedTo, a.Status, a.Status == "running"
 		}
 	}
-	return StatusResult{}, nil
+	return st, nil
 }

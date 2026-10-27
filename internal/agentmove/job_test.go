@@ -401,15 +401,38 @@ func TestMoveUnknownCommitQueriesStatus(t *testing.T) {
 			t.Fatal("no note that the commit's answer was lost")
 		}
 	})
-	t.Run("notlive", func(t *testing.T) {
+	t.Run("failed", func(t *testing.T) {
 		f := newMoveFixture(t)
 		f.ep.answer[VerbCommit] = lost
-		f.ep.answer[VerbStatus] = jsonAnswer(StatusResult{Present: true, MovedTo: "studio", Status: "stopped"})
+		f.ep.answer[VerbStatus] = jsonAnswer(StatusResult{Present: true, MovedTo: "studio", Status: "stopped", Phase: PhaseFailed})
 		_, err := f.move(t, false)
 		if err == nil || f.log.has("mark ") || !strings.Contains(err.Error(), "leo agent start web") {
 			t.Fatalf("move = %v (events %v), want a recoverable failure", err, f.log.all())
 		}
+		commit, status := f.ep.manifests[1], f.ep.manifests[2]
+		if commit.Transfer == "" || status.Transfer != commit.Transfer {
+			t.Fatalf("transfer ids: commit %q, status %q, want one shared id", commit.Transfer, status.Transfer)
+		}
 	})
+	// Not live yet is not failed: the commit may still be running hooks or
+	// starting the agent there.
+	for name, st := range map[string]StatusResult{
+		"inflight": {Present: true, Status: "stopped", Phase: PhaseHooks},
+		"nophase":  {Present: true, MovedTo: "studio", Status: "stopped"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := newMoveFixture(t)
+			f.ep.answer[VerbCommit] = lost
+			f.ep.answer[VerbStatus] = jsonAnswer(st)
+			_, err := f.move(t, false)
+			if !HasCode(err, CodeOutcomeUnknown) || f.log.has("mark ") || !strings.Contains(fmt.Sprint(err), "leo --host laptop agent list") {
+				t.Fatalf("move = %v (events %v), want outcome_unknown naming the check", err, f.log.all())
+			}
+			if strings.Contains(err.Error(), "leo agent start web") {
+				t.Fatalf("move = %v: must not advise starting here while the destination may still start it", err)
+			}
+		})
+	}
 	t.Run("unreachable", func(t *testing.T) {
 		f := newMoveFixture(t)
 		f.ep.answer[VerbCommit] = lost

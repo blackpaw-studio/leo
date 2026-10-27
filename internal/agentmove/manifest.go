@@ -89,6 +89,9 @@ type Manifest struct {
 	// Agent is the source record, Portable.
 	Agent           agentstore.Record `json:"agent"`
 	SourceSessionID string            `json:"source_session_id,omitempty"`
+	// Transfer identifies one run, so a status answers about this run's
+	// commit and not an earlier one's.
+	Transfer string `json:"transfer,omitempty"`
 	// LastMove is the previous move between this pair of hosts.
 	LastMove *time.Time   `json:"last_move,omitempty"`
 	Copy     *CopySpec    `json:"copy,omitempty"`

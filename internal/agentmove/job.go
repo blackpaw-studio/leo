@@ -16,6 +16,7 @@ import (
 	"github.com/blackpaw-studio/leo/internal/drain"
 	"github.com/blackpaw-studio/leo/internal/git"
 	"github.com/blackpaw-studio/leo/internal/harness"
+	"github.com/blackpaw-studio/leo/internal/session"
 )
 
 // Job stages, in the order a move reaches them. A job reports each as it
@@ -256,7 +257,7 @@ func (t *transfer) validate(ctx context.Context) error {
 		return err
 	}
 	t.moveCfg = t.cfg.ResolveMove(rec.Template)
-	t.m = Manifest{Protocol: Protocol, Mode: t.req.Mode, From: t.host, Agent: rec.Portable(), SourceSessionID: agent.ResumeIDFor(rec)}
+	t.m = Manifest{Protocol: Protocol, Mode: t.req.Mode, From: t.host, Agent: rec.Portable(), SourceSessionID: agent.ResumeIDFor(rec), Transfer: session.NewID()}
 	if t.m.Git, err = t.git.Manifest(ctx, rec.Workspace, rec.Repo); err != nil {
 		return err
 	}
@@ -736,7 +737,9 @@ func (t *transfer) run(ctx context.Context, c Cmd) error {
 }
 
 // commit is S6. A refusal leaves the source recoverable; an answer lost on
-// the way back is settled by asking the destination what it holds.
+// the way back is settled by asking the destination what it holds. Only a
+// live agent there or a settled failure is an outcome: anything else may
+// still start there, so the source is not offered back.
 func (t *transfer) commit(ctx context.Context) error {
 	t.p.Stage(StageCommit)
 	out, err := t.ep.Run(ctx, VerbCommit, t.body())
@@ -758,11 +761,19 @@ func (t *transfer) commit(ctx context.Context) error {
 		return problemf(CodeOutcomeUnknown,
 			"the commit on %s did not answer (%v) and its status cannot be read (%v); %s may be live there: check `leo --host %s agent list` before starting it here",
 			t.ep.Name(), err, serr, t.rec.Name, t.ep.Name())
-	case !st.Live:
+	case st.Live:
+		t.note(Problem{Code: NoteCommitAnswerLost, Message: fmt.Sprintf("the commit's answer was lost (%v), but %s is running on %s", err, t.rec.Name, t.ep.Name())})
+		return nil
+	case st.Phase == PhaseFailed:
 		return t.recoverable(fmt.Errorf("the commit on %s failed (%w); %s is not running there", t.ep.Name(), err, t.rec.Name))
 	}
-	t.note(Problem{Code: NoteCommitAnswerLost, Message: fmt.Sprintf("the commit's answer was lost (%v), but %s is running on %s", err, t.rec.Name, t.ep.Name())})
-	return nil
+	phase := st.Phase
+	if phase == "" {
+		phase = "unknown"
+	}
+	return problemf(CodeOutcomeUnknown,
+		"the commit on %s did not answer (%v) and has not settled there (phase %s); %s may still start there: check `leo --host %s agent list` before starting it here",
+		t.ep.Name(), err, phase, t.rec.Name, t.ep.Name())
 }
 
 func (t *transfer) status(ctx context.Context) (StatusResult, error) {

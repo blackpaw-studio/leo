@@ -22,6 +22,7 @@ type fakeAgents struct {
 	list, afterReceive []agent.Record
 	received, shadows  []agent.ReceiveSpec
 	receiveErr         error
+	shadowErr          error
 	envs               *configEnvs
 }
 
@@ -56,7 +57,7 @@ func (f *fakeAgents) Receive(_ context.Context, spec agent.ReceiveSpec) error {
 }
 func (f *fakeAgents) ShadowReceive(spec agent.ReceiveSpec, _ error) error {
 	f.shadows = append(f.shadows, spec)
-	return nil
+	return f.shadowErr
 }
 
 type hookCall struct {
@@ -68,10 +69,15 @@ type hookCall struct {
 type fakeHooks struct {
 	calls []hookCall
 	err   error
+	// during runs inside each hook call.
+	during func()
 }
 
 func (f *fakeHooks) RunHooks(_ context.Context, phase string, paths []string, _ time.Duration, env HookEnv) error {
 	f.calls = append(f.calls, hookCall{phase, paths, env})
+	if f.during != nil {
+		f.during()
+	}
 	return f.err
 }
 
@@ -414,5 +420,55 @@ func TestPreflightReportsDestinationNestedPaths(t *testing.T) {
 	}
 	if !slices.Equal(resp.Nested, want) {
 		t.Fatalf("nested = %+v\nwant %+v", resp.Nested, want)
+	}
+}
+
+// Status reports how far this transfer's commit got, read from a file a
+// restarted daemon still sees. Only a failure left dormant is "failed".
+func TestReceiverStatusReportsCommitPhase(t *testing.T) {
+	f := newReceiverFixture(t)
+	m := f.manifest()
+	m.Transfer = "t-1"
+	var during StatusResult
+	f.hooks.during = func() {
+		var err error
+		if during, err = f.r.Status(m); err != nil {
+			t.Error(err)
+		}
+	}
+	if err := f.call(t, VerbCommit, m, nil); err != nil {
+		t.Fatalf("commit: %v", err)
+	}
+	if during.Phase != PhaseHooks || during.Live {
+		t.Fatalf("status during post_receive = %+v, want phase hooks", during)
+	}
+	if st, err := f.r.Status(m); err != nil || st.Phase != PhaseLive {
+		t.Fatalf("status after the commit = %+v, %v", st, err)
+	}
+	other := m
+	other.Transfer = "t-2"
+	if st, err := f.r.Status(other); err != nil || st.Phase != "" {
+		t.Fatalf("another transfer's status = %+v, %v, want no phase", st, err)
+	}
+
+	g := newReceiverFixture(t)
+	g.hooks.err = errors.New("post_receive hook /bin/import exited with status 1")
+	if err := g.call(t, VerbCommit, m, nil); err == nil {
+		t.Fatal("commit succeeded despite the hook")
+	}
+	restarted := newReceiverFixture(t)
+	restarted.r.Config = g.r.Config
+	if st, err := restarted.r.Status(m); err != nil || st.Phase != PhaseFailed {
+		t.Fatalf("status after a failed commit, from a fresh receiver = %+v, %v", st, err)
+	}
+
+	h := newReceiverFixture(t)
+	h.hooks.err = errors.New("post_receive hook /bin/import exited with status 1")
+	h.agents.shadowErr = errors.New("stopping web: tmux gone")
+	if err := h.call(t, VerbCommit, m, nil); err == nil {
+		t.Fatal("commit succeeded despite the hook")
+	}
+	if st, err := h.r.Status(m); err != nil || st.Phase != PhaseHooks {
+		t.Fatalf("status after a failure not left dormant = %+v, %v, want the last phase reached", st, err)
 	}
 }

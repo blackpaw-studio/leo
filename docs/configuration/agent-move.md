@@ -191,7 +191,7 @@ After the agent stops:
 
 - **Anything that fails before the destination is running** leaves the source stopped but not marked moved. The error says so. `leo agent start <name>` brings it back here, and re-running the move is safe because every transfer is incremental.
 - **A failure after the destination has placed the agent** leaves a dormant shadow there, marked as moved back to the source. The source stays unmarked.
-- **If the destination does not answer the final start,** Leo asks it what it holds. If the agent is running there, the move completes with a note (`commit_answer_lost`). If Leo can't tell (`outcome_unknown`), the error says to check `leo --host <to> agent list` before starting the agent here.
+- **If the destination does not answer the final start,** Leo asks it what it holds and how far that transfer's commit got (the destination records each phase in `state/moves/<name>/commit.json`). If the agent is running there, the move completes with a note (`commit_answer_lost`). If the commit failed there and left the agent dormant, the agent here can be started again. Otherwise the commit may still be running hooks or starting the agent (`outcome_unknown`), and the error says to check `leo --host <to> agent list` before starting the agent here.
 - **If marking the source moved fails** after the destination is live, the error says not to start the agent here.
 
 A failed copy leaves `<workspace>-<name>.leo-partial` behind. The next run with the same name reuses it.
