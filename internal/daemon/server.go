@@ -573,6 +573,9 @@ func (s *Server) StartWeb(cfg *config.Config, agentSvc web.AgentService) error {
 	if s.clientTools != nil {
 		observeOpts = append(observeOpts, web.WithClientTools(s.clientTools))
 	}
+	if h := s.moveJobs.Load(); h != nil {
+		observeOpts = append(observeOpts, web.WithMoveJobs(h.j))
+	}
 	stop := s.startup.Step("web.New")
 	s.webServer = web.New(s.configPath, &processAdapter{inner: s.processes}, s.scheduler, s, agentSvc, web.Options{
 		Config:         s.configSvc,

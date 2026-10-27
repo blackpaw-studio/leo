@@ -1,0 +1,228 @@
+package cli
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"strings"
+	"time"
+
+	"github.com/blackpaw-studio/leo/internal/agentmove"
+	"github.com/blackpaw-studio/leo/internal/daemon"
+	"github.com/spf13/cobra"
+)
+
+// movePollInterval paces polls of a running move or copy job.
+const movePollInterval = 500 * time.Millisecond
+
+// Testability seams.
+var (
+	moveStartFn  = daemon.StartMove
+	moveJobFn    = daemon.MoveJob
+	movePollTick = func() <-chan time.Time { return time.After(movePollInterval) }
+)
+
+func newAgentMoveCmd() *cobra.Command {
+	var host, to string
+	var force, asJSON bool
+	cmd := &cobra.Command{
+		Use:   "move <name> --to <host>",
+		Short: "Hand an agent off to another leo host",
+		Long: `Move an agent to another leo host (a client.hosts entry): its workspace,
+conversation and git state follow it, it resumes there, and this host keeps a
+dormant record pointing at the new home.
+
+The destination must have the agent's template and environments and the same
+home path. A busy agent is refused unless --force, which cuts its turn off.
+A failure before the destination starts leaves the agent stopped here and not
+marked moved; ` + "`leo agent start <name>`" + ` recovers it, and re-running the move is
+safe. The move runs in the daemon, so it finishes even if this command is
+interrupted. See docs/configuration/agent-move.md.`,
+		Example:           `  leo agent move web --to laptop`,
+		Args:              cobra.ExactArgs(1),
+		ValidArgsFunction: completeAgentNames,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if err := gateCommand(cmd, "leo_agent_move"); err != nil {
+				return err
+			}
+			if to == "" {
+				return errors.New("name the destination with --to <host> (a client.hosts entry)")
+			}
+			cfg, res, err := dispatch(host)
+			if err != nil {
+				return err
+			}
+			if !res.Localhost {
+				return runRemote(res, forwardFlags([]string{"move", args[0], "--to", to}, map[string]bool{"--force": force, "--json": asJSON}))
+			}
+			resolved, err := daemon.AgentResolve(cmd.Context(), cfg.HomePath, args[0])
+			if err != nil {
+				return fmt.Errorf("resolving agent: %w", err)
+			}
+			req := agentmove.Request{Mode: agentmove.ModeMove, To: to, Force: force}
+			return runMoveJob(cmd.Context(), cfg.HomePath, resolved.Name, req, asJSON)
+		},
+	}
+	addHostFlag(cmd, &host)
+	cmd.Flags().StringVar(&to, "to", "", "destination host (a client.hosts entry)")
+	cmd.Flags().BoolVar(&force, "force", false, "move a busy agent anyway, cutting its turn off")
+	cmd.Flags().BoolVar(&asJSON, "json", false, "print the finished job as JSON instead of progress")
+	return cmd
+}
+
+func newAgentCopyCmd() *cobra.Command {
+	var host, to, name, branch string
+	var asJSON bool
+	cmd := &cobra.Command{
+		Use:   "copy <name>",
+		Short: "Fork an agent into an independent copy, here or on another host",
+		Long: `Copy an agent: a new agent starts from the same conversation and
+workspace state, and from then on the two diverge. The source keeps running.
+
+The copy is named <name>-copy (or -copy-2, ...) unless --name, and works in
+<workspace>-<copy name>. In git it gets its own branch, <branch>-<copy name>
+unless --branch (needed when HEAD is detached). Without --to the copy lands on
+this host. A claude agent can be copied mid-turn (the copy ends at the last
+completed turn); codex and opencode agents only between turns. A copy of an
+agent backing a persistent task is not wired to the task.`,
+		Example:           "  leo agent copy web\n  leo agent copy web --to laptop --name web-laptop",
+		Args:              cobra.ExactArgs(1),
+		ValidArgsFunction: completeAgentNames,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if err := gateCommand(cmd, "leo_agent_copy"); err != nil {
+				return err
+			}
+			cfg, res, err := dispatch(host)
+			if err != nil {
+				return err
+			}
+			if !res.Localhost {
+				fwd := []string{"copy", args[0]}
+				for _, f := range [][2]string{{"--to", to}, {"--name", name}, {"--branch", branch}} {
+					if f[1] != "" {
+						fwd = append(fwd, f[0], f[1])
+					}
+				}
+				return runRemote(res, forwardFlags(fwd, map[string]bool{"--json": asJSON}))
+			}
+			resolved, err := daemon.AgentResolve(cmd.Context(), cfg.HomePath, args[0])
+			if err != nil {
+				return fmt.Errorf("resolving agent: %w", err)
+			}
+			if err := gateSpawnTemplate(cmd, resolved.Template); err != nil {
+				return err
+			}
+			req := agentmove.Request{Mode: agentmove.ModeCopy, To: to, Name: name, Branch: branch}
+			return runMoveJob(cmd.Context(), cfg.HomePath, resolved.Name, req, asJSON)
+		},
+	}
+	addHostFlag(cmd, &host)
+	cmd.Flags().StringVar(&to, "to", "", "destination host (a client.hosts entry); default this host")
+	cmd.Flags().StringVar(&name, "name", "", "the copy's name (default <name>-copy)")
+	cmd.Flags().StringVar(&branch, "branch", "", "the copy's git branch (default <branch>-<copy name>)")
+	cmd.Flags().BoolVar(&asJSON, "json", false, "print the finished job as JSON instead of progress")
+	return cmd
+}
+
+// forwardFlags appends each set boolean flag, in a fixed order.
+func forwardFlags(args []string, flags map[string]bool) []string {
+	for _, f := range []string{"--force", "--json"} {
+		if flags[f] {
+			args = append(args, f)
+		}
+	}
+	return args
+}
+
+// runMoveJob starts the job and follows it to the end, printing each stage
+// and note as it appears (or, with asJSON, only the finished job).
+func runMoveJob(ctx context.Context, home, agentName string, req agentmove.Request, asJSON bool) error {
+	st, err := moveStartFn(ctx, home, agentName, req)
+	if err != nil {
+		return err
+	}
+	var seen progressSeen
+	for {
+		if !asJSON {
+			seen.print(st)
+		}
+		if st.State != agentmove.JobRunning {
+			break
+		}
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("stopped following job %s, which carries on in the daemon: %w", st.ID, ctx.Err())
+		case <-movePollTick():
+		}
+		id := st.ID
+		if st, err = moveJobFn(ctx, home, id); err != nil {
+			return fmt.Errorf("polling job %s: %w", id, err)
+		}
+	}
+	if asJSON {
+		enc := json.NewEncoder(agentStdout)
+		enc.SetIndent("", "  ")
+		if err := enc.Encode(st); err != nil {
+			return err
+		}
+	}
+	if st.State == agentmove.JobFailed {
+		return jobError(st)
+	}
+	if !asJSON {
+		printJobDone(st)
+	}
+	return nil
+}
+
+// progressSeen is how much of a job has been printed.
+type progressSeen struct{ stages, notes int }
+
+func (p *progressSeen) print(st agentmove.JobStatus) {
+	for ; p.stages < len(st.Stages); p.stages++ {
+		fmt.Fprintf(agentStdout, "  · %s\n", st.Stages[p.stages].Name)
+	}
+	for ; p.notes < len(st.Notes); p.notes++ {
+		fmt.Fprintf(agentStdout, "  note: %s\n", st.Notes[p.notes].Message)
+	}
+}
+
+func jobError(st agentmove.JobStatus) error {
+	if len(st.Problems) > 0 {
+		lines := make([]string, len(st.Problems))
+		for i, p := range st.Problems {
+			lines[i] = fmt.Sprintf("  - %s: %s", p.Code, p.Message)
+		}
+		return fmt.Errorf("%s refused:\n%s", st.Request.Mode, strings.Join(lines, "\n"))
+	}
+	if st.Error != nil {
+		return errors.New(st.Error.Message)
+	}
+	return fmt.Errorf("job %s failed", st.ID)
+}
+
+func printJobDone(st agentmove.JobStatus) {
+	r := st.Result
+	if r == nil {
+		return
+	}
+	hostFlag := ""
+	if r.To != "" {
+		hostFlag = "--host " + r.To + " "
+	}
+	if st.Request.Mode == agentmove.ModeCopy {
+		where := "here"
+		if r.To != "" {
+			where = "on " + r.To
+		}
+		fmt.Fprintf(agentStdout, "copied to %s %s (workspace %s", r.Name, where, r.Workspace)
+		if r.Branch != "" {
+			fmt.Fprintf(agentStdout, ", branch %s", r.Branch)
+		}
+		fmt.Fprintln(agentStdout, ")")
+	} else {
+		fmt.Fprintf(agentStdout, "moved %s to %s (%s)\n", r.Name, r.To, r.Host)
+	}
+	fmt.Fprintf(agentStdout, "attach with: leo %sagent attach %s\n", hostFlag, r.Name)
+}

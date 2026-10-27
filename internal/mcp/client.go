@@ -208,6 +208,12 @@ func (c *daemonClient) setAgentEnvironments(name string, environments []string) 
 	return c.do(http.MethodPost, "/api/agent/"+url.PathEscape(name)+"/environments", map[string]any{"environments": environments})
 }
 
+// moveAgent starts a move or copy job (body is an agentmove.Request without
+// the agent) and returns the job as soon as it starts.
+func (c *daemonClient) moveAgent(name string, body map[string]any) (json.RawMessage, error) {
+	return c.do(http.MethodPost, "/api/agent/"+url.PathEscape(name)+"/move", body)
+}
+
 func (c *daemonClient) listAgents() (json.RawMessage, error) {
 	return c.do(http.MethodGet, "/api/agent/list", nil)
 }

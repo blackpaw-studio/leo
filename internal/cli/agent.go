@@ -75,6 +75,8 @@ so remote calls use your existing SSH setup.`,
 		newAgentRenameCmd(),
 		newAgentLogsCmd(),
 		newAgentSessionNameCmd(),
+		newAgentMoveCmd(),
+		newAgentCopyCmd(),
 		newAgentMoveReceiveCmd(),
 	)
 	return cmd

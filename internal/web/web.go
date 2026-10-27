@@ -104,6 +104,8 @@ type Server struct {
 	processes ProcessStateProvider
 	scheduler SchedulerProvider
 	agentSvc  AgentService
+	// moveJobs starts agent moves and copies; nil until WithMoveJobs.
+	moveJobs MoveJobs
 	// tmuxBin is the daemon-resolved tmux binary; see tmuxPath.
 	tmuxBin    string
 	templates  *template.Template
@@ -668,6 +670,7 @@ func New(configPath string, processes ProcessStateProvider, scheduler SchedulerP
 	apiMux.HandleFunc("POST /api/agent/start", s.handleAPIAgentStart)
 	apiMux.HandleFunc("POST /api/agent/{name}/rename", s.handleAPIAgentRename)
 	apiMux.HandleFunc("POST /api/agent/{name}/environments", s.handleAPIAgentSetEnvironments)
+	apiMux.HandleFunc("POST /api/agent/{name}/move", s.handleAPIAgentMove)
 	apiMux.HandleFunc("POST /api/agent/hook", s.handleAPIAgentHook)
 	apiMux.HandleFunc("POST /api/agent/context", s.handleAPIAgentContext)
 	apiMux.HandleFunc("POST /api/agent/permission", s.handleAPIPermission)
