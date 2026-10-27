@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"errors"
 	"testing"
 
 	"github.com/blackpaw-studio/leo/internal/agentstore"
@@ -161,5 +162,67 @@ func TestRenameLiveAgentPublishesAppearance(t *testing.T) {
 	}
 	if got := lastAppearanceEvent(t, pub, "leo-renamed-agent").Appearance; got == nil || got.Color != "orange" {
 		t.Fatalf("appearance after a live rename = %+v, want orange", got)
+	}
+}
+
+func TestManagerSetAppearance(t *testing.T) {
+	home := t.TempDir()
+	cfg := &config.Config{
+		HomePath:        home,
+		AppearanceRules: config.AppearanceRuleList{colorRule("name", "is", "leo-x", "teal")},
+	}
+	_ = agentstore.Save(home, agentstore.Record{Name: "leo-x", Stopped: true})
+	pub := &recordingObservePublisher{}
+	m := New(func() (*config.Config, error) { return cfg, nil }, &capturingSupervisor{}, "", "tok")
+	m.SetPublisher(pub)
+
+	got, err := m.SetAppearance("leo-x", agentstore.AppearancePatch{Emoji: strRef("🏛️")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := &observe.Appearance{Emoji: "🏛️", EmojiSource: "manual", Color: "teal", ColorSource: "rule:0"}
+	if *got != *want {
+		t.Fatalf("SetAppearance = %+v, want %+v", got, want)
+	}
+	if ev := lastAppearanceEvent(t, pub, "leo-x").Appearance; ev == nil || *ev != *want {
+		t.Fatalf("published %+v, want %+v", ev, want)
+	}
+	if stored := loadRec(t, home, "leo-x").Appearance; stored == nil || stored.Emoji != "🏛️" || stored.Color != "" {
+		t.Fatalf("stored manual appearance = %+v", stored)
+	}
+
+	// Reset to rules: both cleared, the rule's color remains.
+	got, err = m.SetAppearance("leo-x", agentstore.AppearancePatch{Emoji: strRef(""), Color: strRef("")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got == nil || got.Emoji != "" || got.Color != "teal" || loadRec(t, home, "leo-x").Appearance != nil {
+		t.Fatalf("after reset = %+v, stored %+v", got, loadRec(t, home, "leo-x").Appearance)
+	}
+}
+
+func TestManagerSetAppearanceRejectsBadValuesAndUnknownAgents(t *testing.T) {
+	home := t.TempDir()
+	cfg := &config.Config{HomePath: home}
+	_ = agentstore.Save(home, agentstore.Record{Name: "leo-x"})
+	pub := &recordingObservePublisher{}
+	m := New(func() (*config.Config, error) { return cfg, nil }, &capturingSupervisor{}, "", "tok")
+	m.SetPublisher(pub)
+
+	for _, patch := range []agentstore.AppearancePatch{{Color: strRef("magenta")}, {Emoji: strRef("🎩🎩")}} {
+		_, err := m.SetAppearance("leo-x", patch)
+		var invalid *InvalidAppearanceError
+		if !errors.As(err, &invalid) || invalid.Reason == "" {
+			t.Fatalf("SetAppearance(%+v) = %v, want InvalidAppearanceError", patch, err)
+		}
+	}
+	if loadRec(t, home, "leo-x").Appearance != nil || len(appearanceEvents(pub)) != 0 {
+		t.Fatal("a rejected appearance was stored or published")
+	}
+
+	_, err := m.SetAppearance("leo-ghost", agentstore.AppearancePatch{Color: strRef("red")})
+	var nf *ErrNotFound
+	if !errors.As(err, &nf) {
+		t.Fatalf("unknown agent = %v, want ErrNotFound", err)
 	}
 }

@@ -666,3 +666,12 @@ func (s *Server) handleAttachPlacement(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, http.StatusOK, Response{OK: true})
 }
+
+// appearanceService is the attached agent manager as the core of PUT
+// /agents/{name}/appearance, nil when none is attached.
+func (s *Server) appearanceService() web.AppearanceService {
+	if s.agentMgr == nil {
+		return nil
+	}
+	return s.agentMgr
+}

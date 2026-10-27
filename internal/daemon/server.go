@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/blackpaw-studio/leo/internal/agent"
+	"github.com/blackpaw-studio/leo/internal/agentstore"
 	"github.com/blackpaw-studio/leo/internal/bridge"
 	"github.com/blackpaw-studio/leo/internal/chat"
 	"github.com/blackpaw-studio/leo/internal/clienttools"
@@ -81,6 +82,9 @@ type AgentManager interface {
 	// RepublishAppearance publishes every agent's resolved appearance
 	// against current config (agent_appearance_changed).
 	RepublishAppearance()
+	// SetAppearance patches an agent's manual emoji and color and returns
+	// its resolved appearance.
+	SetAppearance(name string, patch agentstore.AppearancePatch) (*observe.Appearance, error)
 }
 
 // Server is an HTTP server listening on a Unix socket for daemon IPC.
@@ -347,6 +351,8 @@ func New(sockPath, configPath string, processes ProcessStateProvider, opts ...Op
 	mux.HandleFunc("POST /agents/{name}/set-environment", s.handleAgentSetEnvironment)
 	// Socket twin of POST /api/v1/agents/{name}/environments (Leo Term's path).
 	mux.HandleFunc("POST /agents/{name}/environments", s.handleAgentSetEnvironment)
+	// The same handler serves /api/v1, so both answer with the same bytes.
+	mux.HandleFunc("PUT /agents/{name}/appearance", web.AgentAppearanceHandler(s.appearanceService))
 	mux.HandleFunc("DELETE /agents/{name}", s.handleAgentDelete)
 	mux.HandleFunc("GET /agents/{name}/delete-plan", s.handleAgentDeletePlan)
 	mux.HandleFunc("POST /agents/{name}/rename", s.handleAgentRename)

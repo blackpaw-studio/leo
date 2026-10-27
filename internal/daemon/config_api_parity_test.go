@@ -11,7 +11,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/blackpaw-studio/leo/internal/agent"
 	"github.com/blackpaw-studio/leo/internal/config"
+	"github.com/blackpaw-studio/leo/internal/web"
 )
 
 // parityServer is a real daemon with its web server started: the socket's
@@ -26,6 +28,14 @@ type parityServer struct {
 }
 
 func newParityServer(t *testing.T) *parityServer {
+	t.Helper()
+	return newParityServerWithAgents(t, nil)
+}
+
+// newParityServerWithAgents is newParityServer with the agent manager newMgr
+// builds over its leo.yaml attached to both the socket and the web server
+// (nil attaches none).
+func newParityServerWithAgents(t *testing.T, newMgr func(cfgPath string) *agent.Manager) *parityServer {
 	t.Helper()
 	dir := t.TempDir()
 	cfgPath := filepath.Join(dir, "leo.yaml")
@@ -42,7 +52,13 @@ func newParityServer(t *testing.T) *parityServer {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := s.StartWeb(cfg, nil); err != nil {
+	var agentSvc web.AgentService
+	if newMgr != nil {
+		mgr := newMgr(cfgPath)
+		s.SetAgentManager(mgr)
+		agentSvc = mgr
+	}
+	if err := s.StartWeb(cfg, agentSvc); err != nil {
 		t.Fatalf("StartWeb: %v", err)
 	}
 	t.Cleanup(func() { _ = s.webServer.Shutdown() })

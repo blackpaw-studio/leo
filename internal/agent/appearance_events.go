@@ -1,6 +1,8 @@
 package agent
 
 import (
+	"errors"
+	"fmt"
 	"log"
 
 	"github.com/blackpaw-studio/leo/internal/agentstore"
@@ -41,4 +43,60 @@ func (m *Manager) publishAppearance(cfg *config.Config, name, template string, o
 // publishRecordAppearance is publishAppearance for a stored record.
 func (m *Manager) publishRecordAppearance(cfg *config.Config, rec agentstore.Record) {
 	m.publishAppearance(cfg, rec.Name, rec.Template, rec.Environments, rec.Appearance)
+}
+
+// InvalidAppearanceError is a manual emoji or color that fails validation.
+// It is the caller's mistake, so API layers map it to 400.
+type InvalidAppearanceError struct {
+	Field  string // "emoji" or "color"
+	Reason string
+}
+
+func (e *InvalidAppearanceError) Error() string { return e.Reason }
+
+// SetAppearance patches name's manual emoji and color (see
+// agentstore.AppearancePatch), publishes agent_appearance_changed, and
+// returns the agent's resolved appearance (nil when nothing is set). name is
+// the agent's exact name; an agent with no record is an *ErrNotFound.
+func (m *Manager) SetAppearance(name string, patch agentstore.AppearancePatch) (*observe.Appearance, error) {
+	if err := validateAppearancePatch(patch); err != nil {
+		return nil, err
+	}
+	cfg, err := m.cfgLoader()
+	if err != nil {
+		return nil, fmt.Errorf("loading config: %w", err)
+	}
+	if _, err := agentstore.SetAppearance(cfg.HomePath, name, patch); err != nil {
+		if errors.Is(err, agentstore.ErrNotFound) {
+			return nil, &ErrNotFound{Query: name}
+		}
+		return nil, fmt.Errorf("saving appearance: %w", err)
+	}
+	records, err := agentstore.Load(agentstore.FilePath(cfg.HomePath))
+	if err != nil {
+		return nil, fmt.Errorf("loading agent records: %w", err)
+	}
+	rec := records[name]
+	resolved := AgentAppearance(cfg, rec.Name, rec.Template, rec.Environments, rec.Appearance)
+	m.publish(observe.Event{
+		Type:    observe.EventAgentAppearanceChanged,
+		Payload: &observe.AgentAppearanceChangedPayload{Agent: name, Appearance: resolved},
+	})
+	return resolved, nil
+}
+
+// validateAppearancePatch checks every value the patch sets; "" clears and
+// needs no check.
+func validateAppearancePatch(patch agentstore.AppearancePatch) error {
+	if patch.Emoji != nil && *patch.Emoji != "" {
+		if err := config.ValidateAppearanceEmoji(*patch.Emoji); err != nil {
+			return &InvalidAppearanceError{Field: "emoji", Reason: err.Error()}
+		}
+	}
+	if patch.Color != nil && *patch.Color != "" {
+		if err := config.ValidateAppearanceColor(*patch.Color); err != nil {
+			return &InvalidAppearanceError{Field: "color", Reason: err.Error()}
+		}
+	}
+	return nil
 }

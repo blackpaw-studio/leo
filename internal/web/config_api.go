@@ -42,6 +42,8 @@ func ConfigRoutePatterns(prefix string) []string {
 // configRoutes declares the routes (everything but reload) against route.
 func (c *ConfigService) configRoutes(route func(pattern string, h http.HandlerFunc)) {
 	route("GET /config/schema", c.handleConfigSchema)
+	route("GET /appearance/rules", c.handleAppearanceRulesGet)
+	route("PUT /appearance/rules", c.handleAppearanceRulesPut)
 	c.registerDelegationRoutes(route)
 	c.registerOpsRoutes(route)
 
