@@ -3,6 +3,7 @@ package agentmove
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -44,8 +45,9 @@ func (f *moveFixture) localCopy(t *testing.T) *fakeAgents {
 		afterReceive: []agent.Record{{Name: "web", Status: "running"}, {Name: "web-copy", Status: "running"}},
 	}
 	var waited []time.Duration
+	f.destHooks = &fakeHooks{}
 	recv := &Receiver{
-		Config: func() (*config.Config, error) { return f.cfg, nil }, Agents: dest, Hooks: &fakeHooks{},
+		Config: func() (*config.Config, error) { return f.cfg, nil }, Agents: dest, Hooks: f.destHooks,
 		Runner: ExecRunner{}, Clock: instantClock{&waited}, Locks: &KeyedLocks{},
 		Host: func() (Host, error) { return studio(), nil }, Version: "v1", StartConfirm: DefaultStartConfirm,
 		LookPath: func(name string) (string, error) {
@@ -405,5 +407,54 @@ func TestCopyWorktreeForksInlineSubmodules(t *testing.T) {
 		if got := gittest.Run(t, filepath.Join(f.ws, dir), "symbolic-ref", "HEAD"); got != "refs/heads/"+want {
 			t.Errorf("source's %s HEAD = %s, want it untouched", dir, got)
 		}
+	}
+}
+
+func TestLocalCopyWorktreeFailureReturnsToPartial(t *testing.T) {
+	f, repo := newWorktreeFixture(t)
+	f.midTurnTranscript(t)
+	f.localCopy(t)
+	f.destHooks.err = errors.New("import failed")
+	req := Request{Agent: "web", Mode: ModeCopy, Name: "web-copy"}
+	if _, err := f.copy(t, req); err == nil || !strings.Contains(err.Error(), "import failed") {
+		t.Fatalf("copy = %v, want the hook failure", err)
+	}
+	newWS := f.ws + "-web-copy"
+	if _, err := os.Stat(newWS); !os.IsNotExist(err) {
+		t.Fatalf("the failed copy's workspace is still placed: %v", err)
+	}
+	if list := gittest.Run(t, repo, "worktree", "list"); !strings.Contains(list, newWS+PartialSuffix+" ") {
+		t.Fatalf("partial not registered:\n%s", list)
+	}
+	f.destHooks.err = nil
+	if _, err := f.copy(t, req); err != nil {
+		t.Fatalf("re-run: %v", err)
+	}
+	if got := gittest.Run(t, newWS, "symbolic-ref", "HEAD"); got != "refs/heads/feat-web-copy" {
+		t.Fatalf("copy HEAD = %s", got)
+	}
+}
+
+// With submodules the partial must give back its modules dir and index,
+// or git refuses to move the worktree on the re-run.
+func TestCopyWorktreeWithSubmodulesFailureReruns(t *testing.T) {
+	f := newMoveFixture(t)
+	super := gittest.SuperWithSubmodules(t)
+	gittest.Run(t, super, "worktree", "add", "-q", "-b", "side", filepath.Join(filepath.Dir(super), "side"))
+	gittest.Run(t, filepath.Join(super, "libs/a"), "checkout", "-q", "-b", "work")
+	f.useWorkspace(t, super, "", "")
+	f.midTurnTranscript(t)
+	f.localCopy(t)
+	f.destHooks.err = errors.New("import failed")
+	req := Request{Agent: "web", Mode: ModeCopy, Name: "web-copy"}
+	if _, err := f.copy(t, req); err == nil || !strings.Contains(err.Error(), "import failed") {
+		t.Fatalf("copy = %v, want the hook failure", err)
+	}
+	f.destHooks.err = nil
+	if _, err := f.copy(t, req); err != nil {
+		t.Fatalf("re-run: %v", err)
+	}
+	if got := gittest.Run(t, filepath.Join(super+"-web-copy", "libs/a"), "symbolic-ref", "HEAD"); got != "refs/heads/work-web-copy" {
+		t.Fatalf("copied submodule HEAD = %s", got)
 	}
 }

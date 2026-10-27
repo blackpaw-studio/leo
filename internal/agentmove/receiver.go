@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"os/user"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -353,6 +354,14 @@ func (r *Receiver) Commit(ctx context.Context, m Manifest) (CommitResult, error)
 		return CommitResult{}, err
 	}
 	fail := func(err error) (CommitResult, error) {
+		if m.IsCopy() && !r.hasRecord(spec.Record.Name) {
+			// No record owns the placed copy: hand it back to its partial,
+			// which the re-run resumes.
+			if uerr := r.unplace(ctx, m); uerr != nil {
+				return CommitResult{}, errors.Join(err, fmt.Errorf("returning the copy's workspace to %s: %w", m.TargetWorkspace()+PartialSuffix, uerr))
+			}
+			return CommitResult{}, err
+		}
 		if serr := r.Agents.ShadowReceive(spec, err); serr != nil {
 			return CommitResult{}, errors.Join(err, fmt.Errorf("leaving it dormant: %w", serr))
 		}
@@ -370,12 +379,32 @@ func (r *Receiver) Commit(ctx context.Context, m Manifest) (CommitResult, error)
 		return fail(err)
 	}
 	if err := r.Agents.Receive(ctx, spec); err != nil {
+		if m.IsCopy() {
+			return fail(err)
+		}
 		return CommitResult{}, err
 	}
 	if err := r.confirm(ctx, spec.Record.Name); err != nil {
 		return fail(err)
 	}
 	return CommitResult{Name: spec.Record.Name, Status: "running", Notes: notes}, nil
+}
+
+// hasRecord reports whether an agent named name exists here, dormant or not.
+func (r *Receiver) hasRecord(name string) bool {
+	return slices.ContainsFunc(r.Agents.List(), func(a agent.Record) bool { return a.Name == name })
+}
+
+// unplace undoes place for a copy that failed before it had a record.
+func (r *Receiver) unplace(ctx context.Context, m Manifest) error {
+	if m.gitMode() {
+		return UnplaceCopy(ctx, m, r.Locks)
+	}
+	ws := m.TargetWorkspace()
+	if _, err := os.Stat(ws); errors.Is(err, fs.ErrNotExist) {
+		return nil
+	}
+	return os.Rename(ws, ws+PartialSuffix)
 }
 
 // place finishes the workspace: G4 in git mode, a plain copy's rename and

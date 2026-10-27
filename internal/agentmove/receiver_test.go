@@ -295,6 +295,40 @@ func TestReceiverPlainCopyPlacesPartial(t *testing.T) {
 	}
 }
 
+// A copy that fails before it has a record goes back to its partial, so
+// the re-run (the error's advice) finds its own work instead of a foreign
+// workspace, and nothing is left that no record owns.
+func TestReceiverPlainCopyFailureReturnsToPartial(t *testing.T) {
+	f := newReceiverFixture(t)
+	src := gittest.NewRepo(t)
+	copyWS := filepath.Join(filepath.Dir(f.ws), "ws-copy")
+	if err := os.Rename(src, copyWS+PartialSuffix); err != nil {
+		t.Fatal(err)
+	}
+	gittest.Write(t, filepath.Join(StagingDir(f.home, "web-copy"), "harness/claude/final-sid.jsonl"), `{"type":"assistant","message":{"stop_reason":"end_turn"}}`+"\n")
+	m := f.manifest()
+	m.Mode, m.Copy = ModeCopy, &CopySpec{Name: "web-copy", Workspace: copyWS, Branch: "main-web-copy", SessionID: "fork-sid"}
+	f.hooks.err = errors.New("import failed")
+	if err := f.call(t, VerbCommit, m, nil); err == nil || !strings.Contains(err.Error(), "import failed") {
+		t.Fatalf("commit = %v, want the hook failure", err)
+	}
+	if _, err := os.Stat(copyWS); !os.IsNotExist(err) || !isDir(copyWS+PartialSuffix) {
+		t.Fatalf("after the failure: final %v, partial present %v; want it back in its partial", err, isDir(copyWS+PartialSuffix))
+	}
+	var resp PreflightResponse
+	if err := f.call(t, VerbPreflight, m, &resp); err != nil || !resp.OK {
+		t.Fatalf("re-run preflight = %+v, %v", resp, err)
+	}
+	f.hooks.err = nil
+	f.agents.afterReceive = []agent.Record{{Name: "web-copy", Status: "running"}}
+	if err := f.call(t, VerbCommit, m, nil); err != nil {
+		t.Fatalf("re-run commit: %v", err)
+	}
+	if got := gittest.Run(t, copyWS, "symbolic-ref", "HEAD"); got != "refs/heads/main-web-copy" {
+		t.Errorf("copy HEAD = %s", got)
+	}
+}
+
 // GNU rsync creates only a target's last path component, so an accepted
 // preflight makes the staging dir and the workspace's parent; a refused one
 // touches nothing.

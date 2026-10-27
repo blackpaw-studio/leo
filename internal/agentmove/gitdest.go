@@ -258,6 +258,33 @@ func placeCopy(ctx context.Context, canonical, partial, final string) (string, e
 	return final, nil
 }
 
+// UnplaceCopy undoes placeCopy for a copy that failed before it had a
+// record: its modules go back to their staging name, its index back to
+// empty (as `worktree add --no-checkout` left it; git will not move a
+// worktree holding submodules) and the worktree back to its partial path,
+// so the re-run finds its own partial. A copy never placed is left alone.
+func UnplaceCopy(ctx context.Context, m Manifest, locks *KeyedLocks) error {
+	canonical, partial, _ := gitTarget(m)
+	final := m.TargetWorkspace()
+	defer locks.Lock(canonical)()
+	if _, err := os.Stat(final); errors.Is(err, fs.ErrNotExist) {
+		return nil
+	}
+	gitDir, err := git.AbsoluteGitDir(ctx, final)
+	if err != nil {
+		return err
+	}
+	if modules := filepath.Join(gitDir, "modules"); isDir(modules) {
+		if err := os.Rename(modules, filepath.Join(gitDir, ModulesPartial)); err != nil {
+			return fmt.Errorf("unstaging the copy's submodules: %w", err)
+		}
+	}
+	if out, err := git.ExecGit(ctx, final, "read-tree", "--empty"); err != nil {
+		return fmt.Errorf("emptying the copy's index: %w: %s", err, strings.TrimSpace(string(out)))
+	}
+	return git.WorktreeMove(ctx, canonical, final, partial)
+}
+
 // relinkSubmodules repoints each absorbed submodule (children first) at its
 // gitdir under this workspace's modules dir and verifies it.
 func relinkSubmodules(ctx context.Context, ws string, m Manifest) error {

@@ -177,18 +177,20 @@ func (p *fakeProber) Probe(_ context.Context, name string) (drain.Probe, error) 
 }
 
 type moveFixture struct {
-	mv     *Mover
-	log    *eventLog
-	src    *fakeSource
-	ep     *fakeEndpoint
-	runner *fakeRunner
-	hooks  *loggingHooks
-	prober *fakeProber
-	cfg    *config.Config
-	home   string
-	ws     string
-	claude string
-	rec    agentstore.Record
+	// destHooks are a local copy's destination hooks (localCopy).
+	destHooks *fakeHooks
+	mv        *Mover
+	log       *eventLog
+	src       *fakeSource
+	ep        *fakeEndpoint
+	runner    *fakeRunner
+	hooks     *loggingHooks
+	prober    *fakeProber
+	cfg       *config.Config
+	home      string
+	ws        string
+	claude    string
+	rec       agentstore.Record
 }
 
 const destStage = "/Users/me/.leo/state/moves/web/staging"
