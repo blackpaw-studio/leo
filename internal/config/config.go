@@ -937,16 +937,32 @@ func loadData(path string, data []byte, expand bool) (*Config, string, error) {
 		return nil, "", err
 	}
 	rev := RevisionOf(data)
+	var sharedBytes []byte
 	if cfg.TemplatesFile != "" {
 		if err := cfg.loadSharedTemplates(data, expand); err != nil {
 			return nil, "", err
 		}
-		rev = revisionOfFiles(data, cfg.shared.sharedBytes)
+		sharedBytes = cfg.shared.sharedBytes
+		rev = revisionOfFiles(data, sharedBytes)
 	}
 	if expand && cfg.Follow != nil {
 		cfg.applyFollowLayer(data)
+		if fc := cfg.follow.cache; fc != nil {
+			rev = revisionWithFollow(data, sharedBytes, fc.Digest)
+		}
 	}
 	return cfg, rev, nil
+}
+
+// revisionWithFollow is a follower's revision: "sha256:" plus the digest of
+// leo.yaml's digest, the shared file's (empty when none) and the lead
+// sections' digest, so a pull that changes what the follower uses changes
+// it, while a status write or a re-stamped cache does not.
+func revisionWithFollow(leo, shared []byte, leadDigest string) string {
+	l, s := sha256.Sum256(leo), sha256.Sum256(shared)
+	buf := append(append(l[:], s[:]...), leadDigest...)
+	sum := sha256.Sum256(buf)
+	return "sha256:" + hex.EncodeToString(sum[:])
 }
 
 func parse(path string, data []byte) (*Config, error) {
