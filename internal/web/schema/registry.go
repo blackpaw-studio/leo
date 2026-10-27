@@ -43,7 +43,11 @@ var Excluded = map[Section][]string{
 	SectionTemplate: {"harness_options", "provider",
 		"permission_mode", "remote_control", "agent",
 		"allowed_tools", "disallowed_tools", "append_system_prompt",
-		"permissions", "push"},
+		"permissions", "push",
+		// move (excludes and hooks for leo agent move/copy) is yaml-only:
+		// nested lists the flat form can't render. A form save keeps it,
+		// since the form edits a copy of the stored template.
+		"move"},
 }
 
 // --- Shared field builders -------------------------------------------------

@@ -112,6 +112,9 @@ type Config struct {
 	AppearanceRules AppearanceRuleList `yaml:"appearance_rules,omitempty"`
 	// Chat configures Leo Chat (see chat.go).
 	Chat ChatConfig `yaml:"chat,omitempty"`
+	// Move configures `leo agent move` / `leo agent copy` for every
+	// template (see move.go); templates.<t>.move adds to it.
+	Move MoveConfig `yaml:"move,omitempty"`
 	// Providers was removed with the harness abstraction. The field survives
 	// only so Validate() can emit a precise removal error (yaml.v3 silently
 	// ignores unknown keys).
@@ -446,6 +449,9 @@ type TemplateConfig struct {
 	// Push overrides defaults.push per state for agents spawned from this
 	// template; an unset state inherits.
 	Push PushConfig `yaml:"push,omitempty"`
+	// Move adds this template's excludes and hooks to the global move block
+	// (see move.go).
+	Move MoveConfig `yaml:"move,omitempty"`
 }
 
 // IsClientOnly reports whether the config is a client-only install: one
@@ -727,6 +733,7 @@ func (c *Config) Validate() error {
 	hr := newHarnessResolver(c.DefaultsHarness())
 	errs := c.validateDefaults(hr)
 	errs = append(errs, c.validateChat()...)
+	errs = append(errs, c.validateMove()...)
 	resolveHarness := func(scope, explicit string) (harness.Harness, bool) {
 		h, msg := hr.resolve(scope, explicit)
 		if msg != "" {
