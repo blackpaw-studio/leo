@@ -79,3 +79,23 @@ func (s envSnapshot) apply() {
 		}
 	}
 }
+
+// Git points git at no global or system config, sets a commit identity, and
+// allows file:// transport (submodule fixtures clone local bare repos), for
+// tests that run real git in t.TempDir().
+func Git(t testing.TB) {
+	t.Helper()
+	for k, v := range map[string]string{
+		"GIT_CONFIG_GLOBAL":   "/dev/null",
+		"GIT_CONFIG_NOSYSTEM": "1",
+		"GIT_AUTHOR_NAME":     "Leo Test",
+		"GIT_AUTHOR_EMAIL":    "test@example.com",
+		"GIT_COMMITTER_NAME":  "Leo Test",
+		"GIT_COMMITTER_EMAIL": "test@example.com",
+		"GIT_CONFIG_COUNT":    "1",
+		"GIT_CONFIG_KEY_0":    "protocol.file.allow",
+		"GIT_CONFIG_VALUE_0":  "always",
+	} {
+		t.Setenv(k, v)
+	}
+}
