@@ -214,6 +214,13 @@ type Record struct {
 	OpeningQueuedID     string `json:"opening_queued_id,omitempty"`
 }
 
+// Appearance is an agent's manual emoji and color; an empty field is unset
+// and falls back to the appearance rules.
+type Appearance struct {
+	Emoji string `json:"emoji,omitempty"`
+	Color string `json:"color,omitempty"`
+}
+
 // IsFailedRestore reports whether this record was stopped by the system after
 // a failed restore, not by the user: StoppedReason non-empty means
 // system-marked (auto-retried at boot, recoverable via restart, removable via
