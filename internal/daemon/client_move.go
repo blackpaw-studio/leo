@@ -53,3 +53,30 @@ func moveJobCall(ctx context.Context, workDir, method, path string, body []byte,
 	}
 	return st, nil
 }
+
+// ReconcileMove asks the daemon at workDir to settle agent name's pending
+// move. It waits for the destination's answer.
+func ReconcileMove(ctx context.Context, workDir, name string) (agentmove.SettleResult, error) {
+	return settleCall(ctx, workDir, "/agents/"+url.PathEscape(name)+"/move/reconcile")
+}
+
+// settleCall decodes a settled move, or the daemon's refusal as an
+// *agentmove.VerbError.
+func settleCall(ctx context.Context, workDir, path string) (agentmove.SettleResult, error) {
+	status, out, err := sendRaw(ctx, newUnixClientNoTimeout(SockPath(workDir)), http.MethodPost, "http://daemon"+path, []byte("{}"))
+	if err != nil {
+		return agentmove.SettleResult{}, err
+	}
+	if status != http.StatusOK {
+		var ve agentmove.VerbError
+		if json.Unmarshal(out, &ve) == nil && ve.Code != "" {
+			return agentmove.SettleResult{}, &ve
+		}
+		return agentmove.SettleResult{}, fmt.Errorf("daemon answered HTTP %d: %s", status, strings.TrimSpace(string(out)))
+	}
+	var res agentmove.SettleResult
+	if err := json.Unmarshal(out, &res); err != nil {
+		return agentmove.SettleResult{}, fmt.Errorf("decoding the settled move: %w", err)
+	}
+	return res, nil
+}

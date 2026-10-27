@@ -199,6 +199,16 @@ A failed copy leaves `<workspace>-<name>.leo-partial` behind. The next run with 
 
 Only one move or copy of an agent runs at a time (`agent_moving`).
 
+### Settling a pending move
+
+`leo agent move <name> --reconcile` asks the destination how the fenced run's commit ended:
+
+- **Running there, or delivered and since stopped:** the agent is marked moved here.
+- **Failed there and left dormant:** the fence lifts, and `leo agent start <name>` recovers the agent here.
+- **Still in progress, no record of the run, or no answer:** the agent stays fenced (`outcome_unknown`). Retry later.
+
+The daemon runs the same reconcile for every fenced agent when it starts, in the background, and logs each outcome.
+
 ### Preflight codes
 
 | Code | Meaning |
@@ -215,5 +225,6 @@ Only one move or copy of an agent runs at a time (`agent_moving`).
 | `branch_checked_out`, `branch_diverged`, `branch_exists` | Git branch conflicts (see Git). |
 | `git_missing`, `git_unsupported`, `git_op_in_progress`, `submodule_torn` | Git state Leo will not move. |
 | `agent_moved` | The agent already lives elsewhere. Move it from there. |
+| `move_pending` | An earlier move of the agent has not settled. Run `leo agent move <name> --reconcile` first. |
 | `agent_busy` | Mid-turn. Retry, or pass `--force` (move only). |
 | `same_host` | A move's `--to` reaches this host. |

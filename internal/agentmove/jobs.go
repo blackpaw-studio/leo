@@ -187,6 +187,11 @@ func (js *Jobs) Wait(ctx context.Context, id string) (JobStatus, error) {
 	}
 }
 
+// Reconcile settles name's pending move (see Mover.Reconcile).
+func (js *Jobs) Reconcile(ctx context.Context, name string) (SettleResult, error) {
+	return js.mover.Reconcile(ctx, name)
+}
+
 func newJobID() (string, error) {
 	b := make([]byte, 8)
 	if _, err := rand.Read(b); err != nil {

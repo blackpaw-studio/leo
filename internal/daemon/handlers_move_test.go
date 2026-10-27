@@ -63,8 +63,17 @@ func TestMoveRouteVerbs(t *testing.T) {
 }
 
 type fakeMoveJobs struct {
-	reqs []agentmove.Request
-	err  error
+	reqs    []agentmove.Request
+	err     error
+	settled []string
+}
+
+func (f *fakeMoveJobs) Reconcile(_ context.Context, name string) (agentmove.SettleResult, error) {
+	f.settled = append(f.settled, "reconcile "+name)
+	if f.err != nil {
+		return agentmove.SettleResult{}, f.err
+	}
+	return agentmove.SettleResult{Name: name, To: "laptop", RunID: "run-1", Outcome: agentmove.SettleMoved}, nil
 }
 
 func (f *fakeMoveJobs) Start(_ context.Context, req agentmove.Request) (agentmove.JobStatus, error) {
@@ -113,5 +122,25 @@ func TestMoveJobRoutes(t *testing.T) {
 	}
 	if w := get("/moves/nope"); w.Code != http.StatusNotFound {
 		t.Fatalf("unknown job = %d", w.Code)
+	}
+}
+
+func TestMoveReconcileRoute(t *testing.T) {
+	s := New(tmpSockPath(t, "r.sock"), "/nonexistent/leo.yaml", nil)
+	if w := moveRequest(s, "/agents/web/move/reconcile", `{}`); w.Code != http.StatusServiceUnavailable {
+		t.Fatalf("no jobs = %d, want 503", w.Code)
+	}
+	jobs := &fakeMoveJobs{}
+	s.SetMoveJobs(jobs)
+	w := moveRequest(s, "/agents/web/move/reconcile", `{}`)
+	var res agentmove.SettleResult
+	if err := json.Unmarshal(w.Body.Bytes(), &res); err != nil || w.Code != http.StatusOK || res.Outcome != agentmove.SettleMoved || jobs.settled[0] != "reconcile web" {
+		t.Fatalf("reconcile = %d %s (%v), settled %v", w.Code, w.Body, err, jobs.settled)
+	}
+	jobs.err = agentmove.Problems{{Code: agentmove.CodeOutcomeUnknown, Message: "phase hooks"}}
+	w = moveRequest(s, "/agents/web/move/reconcile", `{}`)
+	var env agentmove.VerbError
+	if err := json.Unmarshal(w.Body.Bytes(), &env); err != nil || w.Code != http.StatusConflict || env.Code != agentmove.CodeOutcomeUnknown {
+		t.Fatalf("unsettled reconcile = %d %s", w.Code, w.Body)
 	}
 }

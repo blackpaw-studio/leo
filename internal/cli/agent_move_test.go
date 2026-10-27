@@ -22,6 +22,10 @@ type moveDaemon struct {
 	req   agentmove.Request
 	polls []agentmove.JobStatus
 	start func() (int, any)
+	// settle answers /agents/leo-x/move/{reconcile,abandon}; settled
+	// records which was asked.
+	settle  func() (int, any)
+	settled []string
 }
 
 func startMoveDaemon(t *testing.T, home string, d *moveDaemon) {
@@ -43,6 +47,11 @@ func startMoveDaemon(t *testing.T, home string, d *moveDaemon) {
 			if d.start != nil {
 				status, body = d.start()
 			}
+			w.WriteHeader(status)
+			json.NewEncoder(w).Encode(body) //nolint:errcheck
+		case r.Method == http.MethodPost && strings.HasPrefix(r.URL.Path, "/agents/leo-x/move/"):
+			d.settled = append(d.settled, strings.TrimPrefix(r.URL.Path, "/agents/leo-x/move/"))
+			status, body := d.settle()
 			w.WriteHeader(status)
 			json.NewEncoder(w).Encode(body) //nolint:errcheck
 		case r.URL.Path == "/moves/mv-1":
@@ -292,5 +301,42 @@ func TestAgentSessionNameJSON(t *testing.T) {
 	var got daemon.AgentResolveResponse
 	if err := json.Unmarshal(out.Bytes(), &got); err != nil || got.Name != "leo-x" || got.Template != "coding" {
 		t.Fatalf("session-name --json = %s (%v)", out, err)
+	}
+}
+
+func TestAgentMoveReconcile(t *testing.T) {
+	path, home := newAgentWorktreeTestConfig(t)
+	out, _ := withStubStdio(t)
+	d := &moveDaemon{settle: func() (int, any) {
+		return http.StatusOK, agentmove.SettleResult{Name: "leo-x", To: "laptop", RunID: "run-1", Outcome: agentmove.SettleFailed}
+	}}
+	startMoveDaemon(t, home, d)
+	root := newRootCmd()
+	root.SetArgs([]string{"--config", path, "agent", "move", "x", "--reconcile"})
+	if err := root.Execute(); err != nil {
+		t.Fatalf("execute: %v", err)
+	}
+	if !slices.Equal(d.settled, []string{"reconcile"}) {
+		t.Fatalf("settled = %v", d.settled)
+	}
+	if got := out.String(); !strings.Contains(got, "failed on laptop") || !strings.Contains(got, "leo agent start leo-x") {
+		t.Fatalf("output = %q", got)
+	}
+
+	d.settle = func() (int, any) {
+		return http.StatusConflict, agentmove.VerbError{Code: agentmove.CodeOutcomeUnknown, Message: "the move of leo-x to laptop has not settled there"}
+	}
+	root = newRootCmd()
+	root.SetArgs([]string{"--config", path, "agent", "move", "x", "--reconcile"})
+	root.SilenceErrors, root.SilenceUsage = true, true
+	if err := root.Execute(); err == nil || !strings.Contains(err.Error(), "has not settled") {
+		t.Fatalf("unsettled reconcile = %v", err)
+	}
+
+	root = newRootCmd()
+	root.SetArgs([]string{"--config", path, "agent", "move", "x", "--reconcile", "--to", "laptop"})
+	root.SilenceErrors, root.SilenceUsage = true, true
+	if err := root.Execute(); err == nil || !strings.Contains(err.Error(), "--reconcile") {
+		t.Fatalf("--reconcile with --to = %v, want a refusal", err)
 	}
 }

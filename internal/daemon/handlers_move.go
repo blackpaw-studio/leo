@@ -68,6 +68,8 @@ func (s *Server) handleMoveVerb(verb string) http.HandlerFunc {
 type MoveJobs interface {
 	Start(ctx context.Context, req agentmove.Request) (agentmove.JobStatus, error)
 	Get(id string) (agentmove.JobStatus, bool)
+	// Reconcile settles a fenced agent's pending move.
+	Reconcile(ctx context.Context, name string) (agentmove.SettleResult, error)
 }
 
 type moveJobsHolder struct{ j MoveJobs }
@@ -95,11 +97,7 @@ func (s *Server) handleMoveStart(w http.ResponseWriter, r *http.Request) {
 	req.Agent = r.PathValue("name")
 	st, err := h.j.Start(r.Context(), req)
 	if err != nil {
-		status := http.StatusConflict
-		if agentmove.CodeOf(err) == agentmove.CodeBadRequest {
-			status = http.StatusBadRequest
-		}
-		writeJSON(w, status, agentmove.VerbError{Code: agentmove.CodeOf(err), Message: err.Error()})
+		writeMoveError(w, err)
 		return
 	}
 	writeJSON(w, http.StatusAccepted, st)
@@ -117,4 +115,30 @@ func (s *Server) handleMoveJob(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, st)
+}
+
+// handleMoveReconcile settles the path's agent's pending move by asking its
+// destination, and answers with the outcome.
+func (s *Server) handleMoveReconcile(w http.ResponseWriter, r *http.Request) {
+	h := s.moveJobs.Load()
+	if h == nil {
+		writeJSON(w, http.StatusServiceUnavailable, agentmove.VerbError{Code: "unavailable", Message: "this daemon cannot move agents yet"})
+		return
+	}
+	res, err := h.j.Reconcile(r.Context(), r.PathValue("name"))
+	if err != nil {
+		writeMoveError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, res)
+}
+
+// writeMoveError answers a refused move request: 400 for a bad request,
+// 409 otherwise, with the error's code.
+func writeMoveError(w http.ResponseWriter, err error) {
+	status := http.StatusConflict
+	if agentmove.CodeOf(err) == agentmove.CodeBadRequest {
+		status = http.StatusBadRequest
+	}
+	writeJSON(w, status, agentmove.VerbError{Code: agentmove.CodeOf(err), Message: err.Error()})
 }

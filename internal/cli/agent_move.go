@@ -19,14 +19,15 @@ const movePollInterval = 500 * time.Millisecond
 
 // Testability seams.
 var (
-	moveStartFn  = daemon.StartMove
-	moveJobFn    = daemon.MoveJob
-	movePollTick = func() <-chan time.Time { return time.After(movePollInterval) }
+	moveStartFn     = daemon.StartMove
+	moveJobFn       = daemon.MoveJob
+	moveReconcileFn = daemon.ReconcileMove
+	movePollTick    = func() <-chan time.Time { return time.After(movePollInterval) }
 )
 
 func newAgentMoveCmd() *cobra.Command {
 	var host, to string
-	var force, asJSON bool
+	var force, asJSON, reconcile bool
 	cmd := &cobra.Command{
 		Use:   "move <name> --to <host>",
 		Short: "Hand an agent off to another leo host",
@@ -39,13 +40,26 @@ home path. A busy agent is refused unless --force, which cuts its turn off.
 A failure before the destination starts leaves the agent stopped here and not
 marked moved; ` + "`leo agent start <name>`" + ` recovers it, and re-running the move is
 safe. The move runs in the daemon, so it finishes even if this command is
-interrupted. See docs/configuration/agent-move.md.`,
-		Example:           `  leo agent move web --to laptop`,
+interrupted.
+
+If the destination's answer to the final start is lost and its status does
+not settle it, the agent stays fenced here (move_pending): nothing starts or
+moves it until --reconcile asks the destination how that move ended. The
+daemon also reconciles fenced agents when it starts. See
+docs/configuration/agent-move.md.`,
+		Example: `  leo agent move web --to laptop
+  leo agent move web --reconcile`,
 		Args:              cobra.ExactArgs(1),
 		ValidArgsFunction: completeAgentNames,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if err := gateCommand(cmd, "leo_agent_move"); err != nil {
 				return err
+			}
+			if reconcile {
+				if to != "" || force {
+					return errors.New("--reconcile asks the host the pending move went to; it takes no --to or --force")
+				}
+				return runMoveSettle(cmd.Context(), host, args[0], "--reconcile", asJSON, moveReconcileFn)
 			}
 			if to == "" {
 				return errors.New("name the destination with --to <host> (a client.hosts entry)")
@@ -69,7 +83,49 @@ interrupted. See docs/configuration/agent-move.md.`,
 	cmd.Flags().StringVar(&to, "to", "", "destination host (a client.hosts entry)")
 	cmd.Flags().BoolVar(&force, "force", false, "move a busy agent anyway, cutting its turn off")
 	cmd.Flags().BoolVar(&asJSON, "json", false, "print the finished job as JSON instead of progress")
+	cmd.Flags().BoolVar(&reconcile, "reconcile", false, "settle a pending move (move_pending) by asking its destination how it ended")
 	return cmd
+}
+
+// settleFn settles a pending move through the daemon at home.
+type settleFn func(ctx context.Context, home, name string) (agentmove.SettleResult, error)
+
+// runMoveSettle settles query's pending move with settle, here or on host
+// (forwarding flag).
+func runMoveSettle(ctx context.Context, host, query, flag string, asJSON bool, settle settleFn) error {
+	cfg, res, err := dispatch(host)
+	if err != nil {
+		return err
+	}
+	if !res.Localhost {
+		return runRemote(res, forwardFlags([]string{"move", query, flag}, map[string]bool{"--json": asJSON}))
+	}
+	resolved, err := daemon.AgentResolve(ctx, cfg.HomePath, query)
+	if err != nil {
+		return fmt.Errorf("resolving agent: %w", err)
+	}
+	r, err := settle(ctx, cfg.HomePath, resolved.Name)
+	if err != nil {
+		return err
+	}
+	if asJSON {
+		enc := json.NewEncoder(agentStdout)
+		enc.SetIndent("", "  ")
+		return enc.Encode(r)
+	}
+	printSettled(r)
+	return nil
+}
+
+func printSettled(r agentmove.SettleResult) {
+	switch r.Outcome {
+	case agentmove.SettleMoved:
+		fmt.Fprintf(agentStdout, "%s is on %s: marked moved here\nattach with: leo --host %s agent attach %s\n", r.Name, r.To, r.To, r.Name)
+	case agentmove.SettleFailed:
+		fmt.Fprintf(agentStdout, "%s's move failed on %s: the fence is lifted; `leo agent start %s` recovers it here\n", r.Name, r.To, r.Name)
+	default:
+		fmt.Fprintf(agentStdout, "%s's move to %s: %s\n", r.Name, r.To, r.Outcome)
+	}
 }
 
 func newAgentCopyCmd() *cobra.Command {
