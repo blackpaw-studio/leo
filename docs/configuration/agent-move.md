@@ -119,6 +119,8 @@ If the destination has no canonical clone and the agent's repo is an `owner/repo
 
 **Other worktrees of the same repo nested inside the workspace** are skipped with a note (`nested_worktree_skipped`). Each one stays with its own agent, if it has one.
 
+**What the destination already holds inside the workspace** is never deleted: another agent's workspace, a worktree of its repo, or a nested repository the source doesn't have. The workspace rsync excludes them. If the source has files at one of those paths, they are not sent, and a note (`dest_nested_kept`) names the path.
+
 **Refused outright:**
 
 - Shallow or sparse superprojects.

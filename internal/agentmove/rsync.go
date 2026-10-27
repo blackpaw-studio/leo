@@ -108,10 +108,14 @@ type WorkspaceSpec struct {
 	// NestedWorktrees are foreign linked worktrees inside the workspace,
 	// relative to it, skipped with a note.
 	NestedWorktrees []string
+	// DestNested are the destination's own paths inside the workspace,
+	// relative to it, kept from --delete.
+	DestNested []string
 }
 
 // Excludes returns the workspace rsync's exclude rules, in order: the user's,
-// /.worktrees/, nested agent workspaces, then the git-mode rules.
+// /.worktrees/, nested agent workspaces, the destination's nested paths,
+// then the git-mode rules.
 func (w WorkspaceSpec) Excludes() []string {
 	out := append([]string{}, w.UserExcludes...)
 	out = append(out, "/.worktrees/")
@@ -121,6 +125,9 @@ func (w WorkspaceSpec) Excludes() []string {
 			continue
 		}
 		out = append(out, "/"+rel+"/")
+	}
+	for _, p := range w.DestNested {
+		out = append(out, "/"+p+"/")
 	}
 	if !w.GitMode {
 		return out

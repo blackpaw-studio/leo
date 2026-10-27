@@ -58,6 +58,35 @@ func pairHost(t *testing.T, root string) *config.Config {
 	}
 }
 
+// newPairMover moves agents from src to dst, both on this host, with a
+// real Receiver, rsync and git on the far side.
+func newPairMover(t *testing.T, src, dst string, srcCfg, dstCfg *config.Config) (*Mover, *fakeAgents, *eventLog) {
+	t.Helper()
+	dest := &fakeAgents{envs: &configEnvs{cfg: dstCfg}, afterReceive: []agent.Record{{Name: "web", Status: "running"}}}
+	var waited []time.Duration
+	recv := &Receiver{
+		Config: func() (*config.Config, error) { return dstCfg, nil }, Agents: dest, Hooks: &fakeHooks{},
+		Runner: ExecRunner{}, Clock: instantClock{&waited}, Locks: &KeyedLocks{},
+		Host: func() (Host, error) { return laptopHost(), nil }, Version: "v1", StartConfirm: DefaultStartConfirm,
+		LookPath: func(name string) (string, error) {
+			if name == "git" {
+				return exec.LookPath(name)
+			}
+			return "/bin/" + name, nil
+		},
+	}
+	log := &eventLog{}
+	mv := &Mover{
+		Config: func() (*config.Config, error) { return srcCfg, nil }, Agents: &fakeSource{log: log, envs: &configEnvs{cfg: srcCfg}},
+		Endpoint: func(*config.Config, string) (Endpoint, error) {
+			return &pairEndpoint{recv: recv, from: src, to: dst}, nil
+		},
+		Runner: ExecRunner{}, Hooks: &fakeHooks{}, Prober: &fakeProber{probe: drain.Probe{Exists: true}},
+		Clock: instantClock{&waited}, Host: func() (Host, error) { return studio(), nil },
+	}
+	return mv, dest, log
+}
+
 // A linked worktree moves between two real repositories: the destination
 // ends up with the same branch, index and files; the source keeps its
 // worktree and is marked moved.
@@ -86,28 +115,7 @@ func TestMoveWorktreeEndToEndLocalPair(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	dest := &fakeAgents{envs: &configEnvs{cfg: dstCfg}, afterReceive: []agent.Record{{Name: "web", Status: "running"}}}
-	var waited []time.Duration
-	recv := &Receiver{
-		Config: func() (*config.Config, error) { return dstCfg, nil }, Agents: dest, Hooks: &fakeHooks{},
-		Runner: ExecRunner{}, Clock: instantClock{&waited}, Locks: &KeyedLocks{},
-		Host: func() (Host, error) { return laptopHost(), nil }, Version: "v1", StartConfirm: DefaultStartConfirm,
-		LookPath: func(name string) (string, error) {
-			if name == "git" {
-				return exec.LookPath(name)
-			}
-			return "/bin/" + name, nil
-		},
-	}
-	log := &eventLog{}
-	mv := &Mover{
-		Config: func() (*config.Config, error) { return srcCfg, nil }, Agents: &fakeSource{log: log, envs: &configEnvs{cfg: srcCfg}},
-		Endpoint: func(*config.Config, string) (Endpoint, error) {
-			return &pairEndpoint{recv: recv, from: src, to: dst}, nil
-		},
-		Runner: ExecRunner{}, Hooks: &fakeHooks{}, Prober: &fakeProber{probe: drain.Probe{Exists: true}},
-		Clock: instantClock{&waited}, Host: func() (Host, error) { return studio(), nil },
-	}
+	mv, dest, log := newPairMover(t, src, dst, srcCfg, dstCfg)
 	res, err := mv.Run(context.Background(), Request{Agent: "web", Mode: ModeMove, To: "pair"}, nil)
 	if err != nil {
 		t.Fatalf("move: %v", err)
@@ -135,5 +143,41 @@ func TestMoveWorktreeEndToEndLocalPair(t *testing.T) {
 	}
 	if len(dest.received) != 1 || dest.received[0].Record.Name != "web" || dest.received[0].Record.SessionID != "sid-1" {
 		t.Fatalf("received = %+v", dest.received)
+	}
+}
+
+// --delete must not reach what only the destination has under the
+// workspace: here a worktree nested in the destination's canonical, with
+// uncommitted work, while the agent moving works in the canonical itself.
+func TestMoveCanonicalKeepsDestinationOnlyNestedWorktree(t *testing.T) {
+	testRoot := t.TempDir()
+	src, dst := filepath.Join(testRoot, "a"), filepath.Join(testRoot, "b")
+	canon, dstCanon := filepath.Join(src, "canon"), filepath.Join(dst, "canon")
+	gittest.Run(t, testRoot, "init", "-q", "-b", "main", canon)
+	commitFile(t, canon, "a.txt", "a\n")
+	gittest.Run(t, testRoot, "clone", "-q", canon, dstCanon)
+	gittest.Run(t, dstCanon, "remote", "remove", "origin")
+	sibling := filepath.Join(dstCanon, ".claude", "worktrees", "sibling")
+	gittest.Run(t, dstCanon, "worktree", "add", "-q", "-b", "sib", sibling)
+	gittest.Write(t, filepath.Join(sibling, "wip.txt"), "uncommitted\n")
+	gittest.Write(t, filepath.Join(canon, "a.txt"), "edited\n")
+
+	srcCfg, dstCfg := pairHost(t, src), pairHost(t, dst)
+	rec := agentstore.Record{Name: "web", Template: "coder", Harness: "claude", Workspace: canon, SessionID: "sid-1", Environments: []string{"work"}}
+	if err := agentstore.Save(srcCfg.HomePath, rec); err != nil {
+		t.Fatal(err)
+	}
+	mv, _, _ := newPairMover(t, src, dst, srcCfg, dstCfg)
+	if _, err := mv.Run(context.Background(), Request{Agent: "web", Mode: ModeMove, To: "pair"}, nil); err != nil {
+		t.Fatalf("move: %v", err)
+	}
+	if data, err := os.ReadFile(filepath.Join(sibling, "wip.txt")); err != nil || string(data) != "uncommitted\n" {
+		t.Fatalf("the destination's nested worktree lost its work: %q, %v", data, err)
+	}
+	if got := gittest.Run(t, sibling, "symbolic-ref", "HEAD"); got != "refs/heads/sib" {
+		t.Fatalf("nested worktree HEAD = %s", got)
+	}
+	if data, err := os.ReadFile(filepath.Join(dstCanon, "a.txt")); err != nil || string(data) != "edited\n" {
+		t.Fatalf("the workspace itself did not arrive: %q, %v", data, err)
 	}
 }

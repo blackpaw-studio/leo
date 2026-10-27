@@ -175,6 +175,8 @@ type DestFacts struct {
 	WSState        string
 	StagingDir     string
 	Git            *GitPreflight
+	// Nested are what lies inside the target workspace here.
+	Nested []NestedPath
 }
 
 // PreflightResponse answers a preflight: the facts plus the verdict.
@@ -189,4 +191,7 @@ type PreflightResponse struct {
 	Existing    Existing      `json:"existing"`
 	WSState     string        `json:"ws_state"`
 	Git         *GitPreflight `json:"git,omitempty"`
+	// Nested are the destination's paths inside the target workspace that
+	// the workspace rsync must not delete (an older leo sends none).
+	Nested []NestedPath `json:"nested,omitempty"`
 }

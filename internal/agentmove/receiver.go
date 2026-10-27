@@ -207,6 +207,7 @@ func (r *Receiver) Preflight(ctx context.Context, m Manifest) (PreflightResponse
 	return PreflightResponse{
 		Protocol: Protocol, Host: host, LeoVersion: r.Version, OK: len(problems) == 0, Problems: problems,
 		SessionRoot: d.SessionRoot, StagingDir: d.StagingDir, Existing: d.Existing, WSState: d.WSState, Git: d.Git,
+		Nested: d.Nested,
 	}, nil
 }
 
@@ -239,6 +240,7 @@ func (r *Receiver) facts(ctx context.Context, cfg *config.Config, host Host, m M
 	d.Existing, d.WorkspaceUsers = r.existing(m)
 	d.Git = r.gitFacts(ctx, m)
 	d.WSState = wsState(ctx, m, d.Existing)
+	d.Nested = nestedPaths(ctx, m.TargetWorkspace(), m.TargetName(), r.Agents.List())
 	return d
 }
 

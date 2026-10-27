@@ -647,11 +647,30 @@ func (t *transfer) snapshot(ctx context.Context, ref string) error {
 	return nil
 }
 
+// protectDestNested adds the destination's nested paths to spec, with a
+// note for each one holding back files of this host's; a path the source
+// already excludes is left as it is.
+func (t *transfer) protectDestNested(spec *WorkspaceSpec) {
+	already := spec.Excludes()
+	protect, kept := protectedNested(spec.Workspace, t.resp.Nested, t.git.Submodules)
+	for _, p := range protect {
+		if !slices.Contains(already, "/"+p+"/") {
+			spec.DestNested = append(spec.DestNested, p)
+		}
+	}
+	for _, n := range kept {
+		if slices.Contains(spec.DestNested, n.Path) {
+			t.note(keptNote(n, t.resp.Host.Hostname))
+		}
+	}
+}
+
 // rsyncAll is S5 and S5m: workspace, session files, staging, then the
 // private submodule git dirs.
 func (t *transfer) rsyncAll(ctx context.Context, stage string, ids []string) error {
 	ws, shell := t.rec.Workspace, t.ep.RsyncShell()
 	spec := t.git.WorkspaceSpec(ws, t.moveCfg.Exclude, t.others)
+	t.protectDestNested(&spec)
 	target := t.m.TargetWorkspace()
 	if t.isCopy() {
 		target += PartialSuffix

@@ -391,3 +391,28 @@ func TestCommitFailsOnUnresolvableEnv(t *testing.T) {
 		t.Fatalf("commit went on: received %v, hooks %v", f.agents.received, f.hooks.calls)
 	}
 }
+
+// Preflight reports what lies inside the target workspace that only this
+// host has: another agent's workspace, the repo's linked worktrees, and
+// nested repositories, each relative to the workspace.
+func TestPreflightReportsDestinationNestedPaths(t *testing.T) {
+	f := newReceiverFixture(t)
+	gittest.Run(t, filepath.Dir(f.ws), "init", "-q", "-b", "main", f.ws)
+	commitFile(t, f.ws, "a.txt", "a\n")
+	gittest.Run(t, f.ws, "worktree", "add", "-q", "-b", "sib", filepath.Join(f.ws, ".claude/worktrees/sib"))
+	gittest.Run(t, f.ws, "init", "-q", "vendor/lib")
+	gittest.Write(t, filepath.Join(f.ws, "services/api/x.txt"), "x\n")
+	f.agents.list = []agent.Record{{Name: "api", Workspace: filepath.Join(f.ws, "services/api")}, {Name: "far", Workspace: t.TempDir()}}
+	var resp PreflightResponse
+	if err := f.call(t, VerbPreflight, f.manifest(), &resp); err != nil {
+		t.Fatal(err)
+	}
+	want := []NestedPath{
+		{Path: ".claude/worktrees/sib", Kind: NestedWorktree},
+		{Path: "services/api", Kind: NestedAgent},
+		{Path: "vendor/lib", Kind: NestedRepo},
+	}
+	if !slices.Equal(resp.Nested, want) {
+		t.Fatalf("nested = %+v\nwant %+v", resp.Nested, want)
+	}
+}

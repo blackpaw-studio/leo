@@ -41,6 +41,7 @@ const (
 	NoteSubmoduleURLDiffers  = "submodule_url_differs"
 	NoteSubmoduleURLLocal    = "submodule_url_local"
 	NoteNestedWorktreeSkip   = "nested_worktree_skipped"
+	NoteDestNestedKept       = "dest_nested_kept"
 	NotePersistentTaskWarned = "persistent_task"
 )
 

@@ -18,6 +18,7 @@ import (
 	"github.com/blackpaw-studio/leo/internal/agentstore"
 	"github.com/blackpaw-studio/leo/internal/config"
 	"github.com/blackpaw-studio/leo/internal/drain"
+	"github.com/blackpaw-studio/leo/internal/git/gittest"
 	"github.com/blackpaw-studio/leo/internal/session"
 )
 
@@ -597,5 +598,40 @@ func TestMoveRefusesUnresolvableEnv(t *testing.T) {
 	f.src.envs.err = errors.New(`$ACCT_DIR is not set`)
 	if _, err := f.move(t, false); err == nil || !strings.Contains(err.Error(), "ACCT_DIR") || f.log.has("stop ") {
 		t.Fatalf("move = %v (events %v), want the env error before any stop", err, f.log.all())
+	}
+}
+
+// The workspace rsync leaves the destination's nested paths alone, except a
+// repository this host also has there, which it sends as usual. Where this
+// host has files under a kept path, a note says they were not sent.
+func TestMoveProtectsDestinationNestedPaths(t *testing.T) {
+	f := newMoveFixture(t)
+	gittest.Write(t, filepath.Join(f.ws, "services/api/x.txt"), "x\n")
+	if err := os.MkdirAll(filepath.Join(f.ws, "vendor/shared/.git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	f.ep.answer[VerbPreflight] = jsonAnswer(PreflightResponse{Protocol: Protocol, Host: laptopHost(), OK: true,
+		SessionRoot: "/Users/me/.claude-work", StagingDir: destStage, WSState: WSOurs, Nested: []NestedPath{
+			{Path: ".claude/worktrees/sib", Kind: NestedWorktree},
+			{Path: "services/api", Kind: NestedAgent},
+			{Path: "vendor/lib", Kind: NestedRepo},
+			{Path: "vendor/shared", Kind: NestedRepo},
+		}})
+	res, err := f.move(t, false)
+	if err != nil {
+		t.Fatalf("move: %v", err)
+	}
+	if want := "run rsync -a --delete --itemize-changes --stats -e ssh -o BatchMode=yes --exclude=node_modules/ --exclude=/.worktrees/ " +
+		"--exclude=/.claude/worktrees/sib/ --exclude=/services/api/ --exclude=/vendor/lib/ " + f.ws + "/ u@laptop:" + f.ws + "/"; !f.log.has(want) {
+		t.Fatalf("events:\n%s\nwant %s", strings.Join(f.log.all(), "\n"), want)
+	}
+	var kept []string
+	for _, n := range res.Notes {
+		if n.Code == NoteDestNestedKept {
+			kept = append(kept, n.Message)
+		}
+	}
+	if len(kept) != 1 || !strings.Contains(kept[0], "services/api") {
+		t.Fatalf("notes = %+v, want one kept-path note for services/api", res.Notes)
 	}
 }
