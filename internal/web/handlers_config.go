@@ -29,6 +29,11 @@ type formData struct {
 	Harness     *harnessFormData // nil = section has no harness sub-form
 	SubmitLabel string
 	DeleteURL   string // optional; renders a delete button
+	// ReadOnly disables every field: the entry is mirrored from Lead, and
+	// OverrideURL (hx-post) copies it into leo.yaml to make it editable.
+	ReadOnly    bool
+	OverrideURL string
+	Lead        string
 }
 
 // harnessFormData feeds components/harness_options.html: the harness_options

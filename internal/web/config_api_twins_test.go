@@ -27,6 +27,10 @@ var routeTwins = map[string]string{
 	"POST /web/template/add":                 "POST /config/templates",
 	"DELETE /web/template/{name}":            "DELETE /config/templates/{name}",
 	"POST /web/template/{name}/rename":       "POST /config/templates/{name}/rename",
+	"POST /web/template/{name}/override":     "POST /config/templates/{name}/override",
+	"POST /web/environment/{name}/override":  "POST /config/environments/{name}/override",
+	"POST /web/delegation/profile/override":  "POST /config/delegation/profiles/{p}/override",
+	"POST /web/follow/sync":                  "POST /config/follow/sync",
 	"POST /web/config/web":                   "PUT /config/web",
 	"POST /web/config/client":                "PUT /config/client",
 	"POST /web/config/host/{name}":           "PUT /config/hosts/{name}",
@@ -64,7 +68,7 @@ var routeTwins = map[string]string{
 var configHTMLPrefixes = []string{
 	"/web/config/", "/web/task", "/web/template", "/web/environment", "/web/host",
 	"/web/delegation/", "/web/service/", "/web/agents/restart", "/web/cron/",
-	"/web/partials/", "/partials/",
+	"/web/partials/", "/partials/", "/web/follow/",
 }
 
 var htmlRoutePattern = regexp.MustCompile(`mux\.HandleFunc\("((?:GET|POST|PUT|DELETE) [^"]+)"`)

@@ -404,3 +404,12 @@ body.login { display: flex; align-items: center; justify-content: center; min-he
   .form-row label { min-width: 0; }
 }
 @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+
+/* Follow lead: a read-only form for an entry mirrored from the lead, and the
+   Settings status card. */
+.form-fieldset { border: 0; padding: 0; margin: 0; min-width: 0; }
+.form-fieldset[disabled] { opacity: 0.7; }
+.kv { display: grid; grid-template-columns: max-content 1fr; gap: var(--sp-1) var(--sp-4); margin: var(--sp-3) 0; }
+.kv dt { color: var(--dim); }
+.kv dd { margin: 0; overflow-wrap: anywhere; }
+.err-text { color: var(--bad); }

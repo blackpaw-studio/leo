@@ -145,10 +145,15 @@ type templateRow struct {
 	Agent            string
 	Harness          string
 	HarnessInherited bool
-	// Source is the templates_file source badge ("shared", "local",
-	// "local · overrides shared"); empty when no shared file is configured.
+	// Source is the source badge ("shared", "local", "local · overrides
+	// shared", "lead", "local · overrides lead", ...); empty without a
+	// shared file or a lead.
 	Source    string
 	SourceKey string // machine value, drives the badge colour
+	// Lead marks an entry mirrored from the lead (override, not edit);
+	// Invalid is why a lead template cannot be used on this host.
+	Lead    bool
+	Invalid string
 }
 
 // templatesPageData feeds page_config_templates.
@@ -156,16 +161,8 @@ type templatesPageData struct {
 	Rows []templateRow
 	// HasTemplatesFile gates the "shared" option on the create form.
 	HasTemplatesFile bool
-}
-
-// templateSourceLabels returns the badge text and machine key for a template,
-// both empty when the config has no shared templates file.
-func templateSourceLabels(cfg *config.Config, name string) (label, key string) {
-	if !cfg.HasTemplatesFile() {
-		return "", ""
-	}
-	src := cfg.TemplateSource(name)
-	return src.Label(), string(src)
+	// ShowSource adds the source column: a templates_file or a lead.
+	ShowSource bool
 }
 
 // buildTemplatesData assembles the templates list: a name-sorted table of
@@ -180,10 +177,11 @@ func (s *Server) buildTemplatesData(r *http.Request) (any, error) {
 
 	rows := make([]templateRow, 0, len(cfg.Templates))
 	for name, tmpl := range cfg.Templates {
-		label, key := templateSourceLabels(cfg, name)
+		label, key := entrySourceLabels(cfg, config.KindTemplate, name)
 		rows = append(rows, templateRow{
 			Source:           label,
 			SourceKey:        key,
+			Lead:             cfg.IsLeadEntry(config.KindTemplate, name),
 			Name:             name,
 			Workspace:        tmpl.Workspace,
 			Model:            tmpl.Model,
@@ -192,9 +190,12 @@ func (s *Server) buildTemplatesData(r *http.Request) (any, error) {
 			HarnessInherited: tmpl.Harness == "",
 		})
 	}
+	for _, e := range sortedInvalid(cfg, config.KindTemplate) {
+		rows = append(rows, templateRow{Name: e.Name, Source: invalidLeadLabel, SourceKey: "invalid", Invalid: e.Reason})
+	}
 	sort.Slice(rows, func(i, j int) bool { return rows[i].Name < rows[j].Name })
 
-	return templatesPageData{Rows: rows, HasTemplatesFile: cfg.HasTemplatesFile()}, nil
+	return templatesPageData{Rows: rows, HasTemplatesFile: cfg.HasTemplatesFile(), ShowSource: cfg.HasTemplatesFile() || cfg.IsFollower()}, nil
 }
 
 // buildDefaultsData feeds page_config_defaults with a schema-driven form
@@ -223,6 +224,8 @@ type settingsPageData struct {
 	WebForm    formData
 	ClientForm formData
 	Hosts      []hostCard
+	// Follow is the follow-lead status card; nil when not following.
+	Follow *followCard
 }
 
 // buildSettingsData assembles the schema-driven Settings page: Web UI config
@@ -254,6 +257,7 @@ func (s *Server) buildSettingsData(r *http.Request) (any, error) {
 		WebForm:    s.buildForm(schema.SectionWeb, &cfg.Web, cfg, "/web/config/web"),
 		ClientForm: s.buildForm(schema.SectionClient, &cfg.Client, cfg, "/web/config/client"),
 		Hosts:      hosts,
+		Follow:     buildFollowCard(cfg, time.Now(), s.leoVersion()),
 	}, nil
 }
 
@@ -443,8 +447,9 @@ func (s *Server) buildServiceData(r *http.Request) (any, error) {
 // template's config.
 type templateEditData struct {
 	Name      string
-	Source    string // templates_file badge text; empty without a shared file
+	Source    string // source badge text; empty without a shared file or lead
 	SourceKey string
+	Invalid   string // never set: an invalid lead template has no edit page
 	Form      formData
 }
 
@@ -475,8 +480,9 @@ func (s *Server) handleTemplateEditPage(w http.ResponseWriter, r *http.Request) 
 	// can parse the same submitted form independently on save.
 	form.Fields = append(form.Fields, s.permissionFields(&tmpl.Permissions, cfg, name)...)
 	form.Fields = append(form.Fields, s.pushFields(schema.SectionPushTemplate, &tmpl.Push, cfg, scopeSuffix(schema.SectionTemplate, name), name)...)
+	lockToLead(&form, cfg, config.KindTemplate, name, "/web/template/"+url.PathEscape(name)+"/override")
 
-	srcLabel, srcKey := templateSourceLabels(cfg, name)
+	srcLabel, srcKey := entrySourceLabels(cfg, config.KindTemplate, name)
 	pd := pageData{
 		Page:  "template_edit",
 		Title: "Template: " + name,

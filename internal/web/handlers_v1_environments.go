@@ -31,8 +31,12 @@ func ListEnvironments(cfg *config.Config) []observe.Environment {
 	names := environmentNames(cfg)
 	out := make([]observe.Environment, 0, len(names))
 	for _, name := range names {
-		out = append(out, observe.Environment{Name: name})
+		out = append(out, observe.Environment{Name: name, Source: itemSource(cfg, config.KindEnvironment, name)})
 	}
+	for _, e := range sortedInvalid(cfg, config.KindEnvironment) {
+		out = append(out, observe.Environment{Name: e.Name, Source: string(config.SourceLead), Invalid: e.Reason})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
 	return out
 }
 
@@ -55,7 +59,11 @@ func (s *Server) handleAPITemplatesV1(w http.ResponseWriter, r *http.Request) {
 			Harness:      cfg.TemplateHarness(tmpl),
 			Model:        cfg.TemplateModel(tmpl),
 			Environments: envs,
+			Source:       itemSource(cfg, config.KindTemplate, name),
 		})
+	}
+	for _, e := range sortedInvalid(cfg, config.KindTemplate) {
+		out = append(out, observe.Template{Name: e.Name, Environments: []string{}, Source: string(config.SourceLead), Invalid: e.Reason})
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
 	writeJSON(w, http.StatusOK, apiResponse{OK: true, Data: out})

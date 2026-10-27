@@ -9,6 +9,7 @@ import (
 	"sort"
 
 	"github.com/blackpaw-studio/leo/internal/agentstore"
+	"github.com/blackpaw-studio/leo/internal/config"
 	"github.com/blackpaw-studio/leo/internal/web/schema"
 )
 
@@ -18,6 +19,11 @@ type environmentCard struct {
 	Name      string
 	RenameURL string
 	Form      formData
+	// Source and SourceKey badge a follower's environments; Invalid is why
+	// a lead environment cannot be used on this host (no form then).
+	Source    string
+	SourceKey string
+	Invalid   string
 }
 
 // environmentsPageData feeds page_config_environments.
@@ -42,11 +48,18 @@ func (s *Server) buildEnvironmentsData(r *http.Request) (any, error) {
 		entry := schema.EnvironmentEntry{Env: cfg.Environments[name]}
 		form := s.buildForm(schema.SectionEnvironment, &entry, cfg, "/web/config/environment/"+url.PathEscape(name))
 		form.DeleteURL = "/web/environment/" + url.PathEscape(name)
+		lockToLead(&form, cfg, config.KindEnvironment, name, "/web/environment/"+url.PathEscape(name)+"/override")
+		label, key := entrySourceLabels(cfg, config.KindEnvironment, name)
 		cards = append(cards, environmentCard{
 			Name:      name,
 			RenameURL: "/web/environment/" + url.PathEscape(name) + "/rename",
 			Form:      form,
+			Source:    label,
+			SourceKey: key,
 		})
+	}
+	for _, e := range sortedInvalid(cfg, config.KindEnvironment) {
+		cards = append(cards, environmentCard{Name: e.Name, Source: invalidLeadLabel, SourceKey: "invalid", Invalid: e.Reason})
 	}
 	return environmentsPageData{Environments: cards}, nil
 }

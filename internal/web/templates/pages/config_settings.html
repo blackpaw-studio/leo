@@ -1,5 +1,22 @@
 {{define "page_config_settings"}}
 <h1 class="page-title">Settings</h1>
+{{with .Data.Follow}}
+<div class="card">
+  <div class="card-head"><b>Follow lead</b>{{if .Stale}} <span class="pill warn">stale</span>{{end}}</div>
+  <p class="dim">Templates, environments, delegation and defaults are mirrored from <b>{{.Host}}</b> (<code>{{.SSH}}</code>) every {{.Interval}}. Entries set in this host's leo.yaml replace the lead's.</p>
+  <dl class="kv">
+    <dt>last pull</dt><dd>{{if .PulledAt}}{{.PulledAt}} ({{.Age}} ago){{else}}never{{end}}</dd>
+    {{if .LeadRevision}}<dt>lead revision</dt><dd><code>{{.LeadRevision}}</code></dd>{{end}}
+    {{if .LeadVersion}}<dt>lead version</dt><dd>{{.LeadVersion}}</dd>{{end}}
+    {{if .LastAttempt}}<dt>last attempt</dt><dd>{{.LastAttempt}}</dd>{{end}}
+    {{if .LastError}}<dt>last error</dt><dd class="err-text">{{.LastError}}</dd>{{end}}
+  </dl>
+  {{range .Messages}}<div class="flash flash-warning">{{.}}</div>{{end}}
+  <div class="config-actions">
+    <button class="btn btn-accent" hx-post="/web/follow/sync" hx-target="#flash-container" hx-swap="innerHTML">Sync now</button>
+  </div>
+</div>
+{{end}}
 
 <div class="card">
   <div class="card-head"><b>Web UI</b></div>

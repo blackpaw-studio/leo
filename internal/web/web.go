@@ -606,6 +606,7 @@ func New(configPath string, processes ProcessStateProvider, scheduler SchedulerP
 	mux.HandleFunc("POST /web/template/add", s.handleTemplateAdd)
 	mux.HandleFunc("DELETE /web/template/{name}", s.handleTemplateDelete)
 	mux.HandleFunc("POST /web/template/{name}/rename", s.handleTemplateRename)
+	mux.HandleFunc("POST /web/template/{name}/override", s.handleTemplateOverride)
 	mux.HandleFunc("POST /web/delegation/cell", s.handleDelegationCell)
 	mux.HandleFunc("POST /web/delegation/use-for", s.handleDelegationUseFor)
 	mux.HandleFunc("POST /web/delegation/active", s.handleDelegationActive)
@@ -619,6 +620,7 @@ func New(configPath string, processes ProcessStateProvider, scheduler SchedulerP
 	mux.HandleFunc("POST /web/delegation/profile/rename", s.handleDelegationProfileRename)
 	mux.HandleFunc("POST /web/delegation/profile/delete", s.handleDelegationProfileDelete)
 	mux.HandleFunc("POST /web/delegation/profile/duplicate", s.handleDelegationProfileDuplicate)
+	mux.HandleFunc("POST /web/delegation/profile/override", s.handleDelegationProfileOverride)
 
 	// Settings page: Web UI + Remote client config, and remote-host CRUD —
 	// full CRUD lives on one page (no separate edit page).
@@ -628,6 +630,8 @@ func New(configPath string, processes ProcessStateProvider, scheduler SchedulerP
 	mux.HandleFunc("POST /web/config/environment/{name}", s.handleConfigEnvironmentSave)
 	mux.HandleFunc("POST /web/environment/add", s.handleEnvironmentAdd)
 	mux.HandleFunc("POST /web/environment/{name}/rename", s.handleEnvironmentRename)
+	mux.HandleFunc("POST /web/environment/{name}/override", s.handleEnvironmentOverride)
+	mux.HandleFunc("POST /web/follow/sync", s.handleFollowSync)
 	mux.HandleFunc("DELETE /web/environment/{name}", s.handleEnvironmentDelete)
 	mux.HandleFunc("POST /web/host/add", s.handleHostAdd)
 	mux.HandleFunc("DELETE /web/host/{name}", s.handleHostDelete)
@@ -707,6 +711,10 @@ func New(configPath string, processes ProcessStateProvider, scheduler SchedulerP
 	s.registerControlRoutes(apiMux, "/api/v1/agents", s.requireOperatorToken)
 	apiMux.HandleFunc("GET /api/v1/environments", s.handleAPIEnvironments)
 	apiMux.HandleFunc("GET /api/v1/templates", s.handleAPITemplatesV1)
+	// Follow-lead status (docs/configuration/follow-lead.md): the report GET
+	// /api/v1/config/follow serves, under the observability paths. It names
+	// the lead's ssh target, so it is operator only.
+	apiMux.HandleFunc("GET /api/v1/follow", s.requireOperatorToken(s.handleFollowStatusAPI))
 	apiMux.HandleFunc("POST /api/v1/agents/spawn", s.requireOperatorToken(s.handleAPIAgentSpawn))
 	apiMux.HandleFunc("POST /api/v1/agents/{name}/environments", s.requireOperatorToken(s.handleAPIAgentSetEnvironments))
 	apiMux.HandleFunc("PUT /api/v1/agents/{name}/appearance", s.requireOperatorToken(AgentAppearanceHandler(s.appearanceService)))
