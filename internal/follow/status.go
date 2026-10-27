@@ -1,9 +1,13 @@
 package follow
 
 import (
+	"fmt"
+	"maps"
+	"slices"
 	"time"
 
 	"github.com/blackpaw-studio/leo/internal/config"
+	"github.com/blackpaw-studio/leo/internal/update"
 )
 
 // Report is a follower's sync state, shared by `leo sync --status`, the
@@ -68,4 +72,44 @@ func BuildReport(cfg *config.Config, now time.Time) Report {
 	}
 	add("defaults", cfg.InvalidLeadDefaults())
 	return r
+}
+
+// Messages lists the report's problems as one-line warnings for `leo
+// validate` and service start: why the lead layer is missing, a stale cache,
+// the last pull's error, a lead running a newer leo than localVersion, and
+// every lead entry ignored on this host.
+func (r Report) Messages(localVersion string) []string {
+	if !r.Following {
+		return nil
+	}
+	msgs := slices.Clone(r.Warnings)
+	if r.Stale && r.PulledAt != nil {
+		age := time.Duration(r.AgeSeconds) * time.Second
+		msgs = append(msgs, fmt.Sprintf("the cache of lead %q is stale: last pulled %s ago (interval %s)", r.Host, age, r.Interval))
+	}
+	if r.LastError != "" {
+		msgs = append(msgs, fmt.Sprintf("the last pull from %q failed: %s", r.Host, r.LastError))
+	}
+	if leadIsNewer(localVersion, r.LeadVersion) {
+		msgs = append(msgs, fmt.Sprintf("lead %q runs leo %s, newer than this host's %s: settings only it knows are ignored here", r.Host, r.LeadVersion, localVersion))
+	}
+	for _, key := range slices.Sorted(maps.Keys(r.Invalid["defaults"])) {
+		msgs = append(msgs, fmt.Sprintf("defaults key %s from lead %q is ignored on this host: %s", key, r.Host, r.Invalid["defaults"][key]))
+	}
+	for _, kind := range []config.EntryKind{config.KindTemplate, config.KindEnvironment, config.KindProfile} {
+		entries := r.Invalid[string(kind)]
+		for _, name := range slices.Sorted(maps.Keys(entries)) {
+			msgs = append(msgs, fmt.Sprintf("%s %q from lead %q is invalid on this host: %s", kind, name, r.Host, entries[name]))
+		}
+	}
+	return msgs
+}
+
+// leadIsNewer reports whether lead is a newer release than local; a dev or
+// unknown build on either side never warns.
+func leadIsNewer(local, lead string) bool {
+	if local == "" || local == "dev" || lead == "" || lead == "dev" {
+		return false
+	}
+	return update.IsNewer(local, lead)
 }

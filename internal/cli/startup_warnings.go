@@ -4,8 +4,10 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/blackpaw-studio/leo/internal/config"
+	"github.com/blackpaw-studio/leo/internal/follow"
 )
 
 // startupWarnings returns a slice of non-fatal warnings about the current
@@ -38,6 +40,12 @@ func startupWarnings(cfg *config.Config) []string {
 		if _, err := os.Stat(promptPath); err != nil {
 			warnings = append(warnings, fmt.Sprintf("task %q: prompt file %s not found", name, promptPath))
 		}
+	}
+
+	// A follower's lead layer: missing or stale cache, failed pulls, and lead
+	// entries invalid on this host.
+	for _, msg := range follow.BuildReport(cfg, time.Now()).Messages(Version) {
+		warnings = append(warnings, "follow: "+msg)
 	}
 
 	return warnings

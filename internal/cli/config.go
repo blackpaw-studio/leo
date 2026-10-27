@@ -18,7 +18,7 @@ func newConfigCmd() *cobra.Command {
 		Short: "Manage leo configuration",
 	}
 
-	cmd.AddCommand(newConfigShowCmd(), newConfigEditCmd(), newConfigPathCmd(), newConfigExportCmd())
+	cmd.AddCommand(newConfigShowCmd(), newConfigEditCmd(), newConfigPathCmd(), newConfigExportCmd(), newConfigOverrideCmd())
 
 	return cmd
 }

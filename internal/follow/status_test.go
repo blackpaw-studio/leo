@@ -4,6 +4,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -53,5 +54,41 @@ func TestBuildReport(t *testing.T) {
 	cfg, _ = config.Load(path)
 	if r := BuildReport(cfg, time.Now()); r.Following || r.Host != "" {
 		t.Fatalf("non-follower report = %+v", r)
+	}
+}
+
+func TestReportMessages(t *testing.T) {
+	pulled := time.Unix(1000, 0).UTC()
+	r := Report{
+		Following: true, Host: "lead", Interval: "1m0s", PulledAt: &pulled, AgeSeconds: 600, Stale: true,
+		LeadVersion: "v0.70.0", LastError: "unreachable: refused", LastErrorCode: "unreachable",
+		Warnings: []string{"no cache yet"},
+		Invalid: map[string]map[string]string{
+			"template": {"b": "no binary", "a": "bad harness"},
+			"defaults": {"model": "unknown model"},
+		},
+	}
+	want := []string{
+		"no cache yet",
+		`the cache of lead "lead" is stale: last pulled 10m0s ago (interval 1m0s)`,
+		`the last pull from "lead" failed: unreachable: refused`,
+		`lead "lead" runs leo v0.70.0, newer than this host's v0.64.0: settings only it knows are ignored here`,
+		`defaults key model from lead "lead" is ignored on this host: unknown model`,
+		`template "a" from lead "lead" is invalid on this host: bad harness`,
+		`template "b" from lead "lead" is invalid on this host: no binary`,
+	}
+	got := r.Messages("v0.64.0")
+	if strings.Join(got, "\n") != strings.Join(want, "\n") {
+		t.Fatalf("Messages =\n%s\nwant\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
+	}
+	for _, local := range []string{"dev", "", "v0.70.0", "v0.71.0"} {
+		for _, m := range r.Messages(local) {
+			if strings.Contains(m, "newer than") {
+				t.Errorf("local %q: unexpected version warning %q", local, m)
+			}
+		}
+	}
+	if m := (Report{}).Messages("v1.0.0"); len(m) != 0 {
+		t.Fatalf("non-follower messages = %v", m)
 	}
 }

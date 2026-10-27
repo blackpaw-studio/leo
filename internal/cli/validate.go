@@ -7,9 +7,11 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"time"
 
 	"github.com/blackpaw-studio/leo/internal/config"
 	"github.com/blackpaw-studio/leo/internal/daemon"
+	"github.com/blackpaw-studio/leo/internal/follow"
 	"github.com/blackpaw-studio/leo/internal/harness"
 	"github.com/blackpaw-studio/leo/internal/prereq"
 	"github.com/blackpaw-studio/leo/internal/service"
@@ -204,6 +206,7 @@ func configWarningFindings(cfg *config.Config) []Finding {
 	add("delegation", cfg.DelegationWarnings())
 	add("environments", cfg.EnvironmentWarnings(config.Expander{}))
 	add("appearance", cfg.AppearanceRuleWarnings())
+	add("follow", follow.BuildReport(cfg, time.Now()).Messages(Version))
 	return findings
 }
 
