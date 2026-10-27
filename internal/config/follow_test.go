@@ -71,8 +71,7 @@ func TestValidateFollow(t *testing.T) {
 
 func TestFollowAbsentRoundTrips(t *testing.T) {
 	dir := t.TempDir()
-	var path string
-	path = writeFile(t, dir, "leo.yaml", "defaults:\n  model: sonnet\ntasks: {}\n")
+	path := writeFile(t, dir, "leo.yaml", "defaults:\n  model: sonnet\ntasks: {}\n")
 	cfg, err := Load(path)
 	if err != nil {
 		t.Fatal(err)

@@ -61,10 +61,10 @@ func (c *Config) validateFollow() []string {
 	if _, err := parseFollowInterval(f.Interval); err != nil {
 		errs = append(errs, fmt.Sprintf("follow.interval %q %v", f.Interval, err))
 	}
-	switch {
-	case f.Host == "":
+	switch f.Host {
+	case "":
 		errs = append(errs, "follow.host is required (a client.hosts name)")
-	case f.Host == LocalhostSentinel:
+	case LocalhostSentinel:
 		errs = append(errs, fmt.Sprintf("follow.host %q names this host; a host cannot follow itself", f.Host))
 	default:
 		host, ok := c.Client.Hosts[f.Host]

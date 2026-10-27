@@ -113,7 +113,7 @@ func TestSettingsFollowCardAndSyncNow(t *testing.T) {
 	}
 
 	syncer := &fakeSyncer{out: follow.Outcome{Changed: true}}
-	s.ConfigService.follower = func() FollowSyncer { return syncer }
+	s.follower = func() FollowSyncer { return syncer }
 	w := postForm(t, s, "/web/follow/sync", nil)
 	if syncer.calls != 1 || w.Header().Get("HX-Refresh") != "true" {
 		t.Fatalf("sync now = %d %s (calls %d)", w.Code, w.Body.String(), syncer.calls)
