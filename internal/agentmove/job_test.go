@@ -378,7 +378,7 @@ func TestMoveFailureLeavesSourceRecoverable(t *testing.T) {
 				return nil, nil
 			}
 		}, CodeMoveFailed, true},
-		{"commit", func(f *moveFixture) { f.ep.answer[VerbCommit] = refuse(CodeHarnessBinaryMissing) }, CodeHarnessBinaryMissing, true},
+		{"commit", func(f *moveFixture) { rolledBack(f, refuse(CodeHarnessBinaryMissing)) }, CodeHarnessBinaryMissing, true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -490,13 +490,32 @@ func TestMoveUnknownCommitQueriesStatus(t *testing.T) {
 			t.Fatalf("move = %v: must not advise starting here while the destination may be live", err)
 		}
 	})
-	t.Run("refused", func(t *testing.T) {
+	// A refusal is settled only by the destination confirming it rolled
+	// back: one that left the agent live there is no outcome.
+	refused := func(Manifest) ([]byte, error) { return nil, &VerbError{Code: CodeMoveFailed, Message: "start failed"} }
+	t.Run("refused-rolledback", func(t *testing.T) {
 		f := newMoveFixture(t)
-		f.ep.answer[VerbCommit] = func(Manifest) ([]byte, error) { return nil, &VerbError{Code: CodeMoveFailed, Message: "start failed"} }
-		if _, err := f.move(t, false); err == nil || f.log.has("verb status") {
-			t.Fatalf("a definite refusal = %v (events %v), want no status query", err, f.log.all())
+		rolledBack(f, refused)
+		if _, err := f.move(t, false); !HasCode(err, CodeMoveFailed) || !strings.Contains(err.Error(), "leo agent start web") {
+			t.Fatalf("a rolled-back refusal = %v, want a recoverable move_failed", err)
 		}
 	})
+	t.Run("refused-live", func(t *testing.T) {
+		f := newMoveFixture(t)
+		f.ep.answer[VerbCommit] = refused
+		_, err := f.move(t, false)
+		if !HasCode(err, CodeOutcomeUnknown) || f.log.has("mark ") || strings.Contains(err.Error(), "leo agent start web") {
+			t.Fatalf("a refusal with the agent live there = %v (events %v), want outcome_unknown", err, f.log.all())
+		}
+	})
+}
+
+// rolledBack has the destination refuse the commit with refusal and report
+// the failure rolled back (phase failed), as a receiver whose cleanup
+// succeeded does.
+func rolledBack(f *moveFixture, refusal func(Manifest) ([]byte, error)) {
+	f.ep.answer[VerbCommit] = refusal
+	f.ep.answer[VerbStatus] = jsonAnswer(StatusResult{Present: true, MovedTo: "studio", Status: "stopped", Phase: PhaseFailed})
 }
 
 func TestMoveMarkRetries(t *testing.T) {
@@ -736,7 +755,7 @@ func TestMoveSettledOutcomeLiftsFence(t *testing.T) {
 	lost := func(Manifest) ([]byte, error) { return nil, errors.New("ssh: exit status 255") }
 	cases := map[string]func(f *moveFixture){
 		"refused": func(f *moveFixture) {
-			f.ep.answer[VerbCommit] = func(Manifest) ([]byte, error) { return nil, &VerbError{Code: CodeMoveFailed, Message: "start failed"} }
+			rolledBack(f, func(Manifest) ([]byte, error) { return nil, &VerbError{Code: CodeMoveFailed, Message: "start failed"} })
 		},
 		"failed": func(f *moveFixture) {
 			f.ep.answer[VerbCommit] = lost

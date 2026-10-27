@@ -3,9 +3,12 @@ package agentmove
 import (
 	"bytes"
 	"context"
+	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -34,7 +37,11 @@ func (p *pairEndpoint) mapBack(b []byte) []byte {
 
 func (p *pairEndpoint) Run(ctx context.Context, verb string, stdin []byte) ([]byte, error) {
 	out, err := p.recv.Handle(ctx, verb, p.mapTo(stdin))
-	return p.mapBack(out), err
+	if err != nil {
+		// As the daemon answers a refusal over the wire.
+		return nil, &VerbError{Code: CodeOf(err), Message: err.Error()}
+	}
+	return p.mapBack(out), nil
 }
 func (p *pairEndpoint) Local() bool               { return false }
 func (p *pairEndpoint) RsyncShell() string        { return "" }
@@ -179,5 +186,33 @@ func TestMoveCanonicalKeepsDestinationOnlyNestedWorktree(t *testing.T) {
 	}
 	if data, err := os.ReadFile(filepath.Join(dstCanon, "a.txt")); err != nil || string(data) != "edited\n" {
 		t.Fatalf("the workspace itself did not arrive: %q, %v", data, err)
+	}
+}
+
+// A start that fails its confirmation and whose rollback then fails (here
+// the destination cannot read its config) leaves the agent live there. The
+// refusal is definite, but nothing settled, so the source stays fenced.
+func TestMoveFailedRollbackKeepsSourceFenced(t *testing.T) {
+	testRoot := t.TempDir()
+	src, dst := filepath.Join(testRoot, "a"), filepath.Join(testRoot, "b")
+	ws := filepath.Join(src, "web")
+	gittest.Write(t, filepath.Join(ws, "notes.txt"), "wip\n")
+	srcCfg, dstCfg := pairHost(t, src), pairHost(t, dst)
+	if err := agentstore.Save(srcCfg.HomePath, agentstore.Record{Name: "web", Template: "coder", Harness: "claude", Workspace: ws, SessionID: "sid-1", Environments: []string{"work"}}); err != nil {
+		t.Fatal(err)
+	}
+	mv, dest, log := newPairMover(t, src, dst, srcCfg, dstCfg)
+	dest.afterReceive = []agent.Record{{Name: "web", Status: "running", Restarts: 1}}
+	dest.shadowErr = errors.New("loading config: open leo.yaml: permission denied")
+	_, err := mv.Run(context.Background(), Request{Agent: "web", Mode: ModeMove, To: "pair"}, nil)
+	if !HasCode(err, CodeOutcomeUnknown) || strings.Contains(fmt.Sprint(err), "leo agent start web") {
+		t.Fatalf("move = %v, want outcome_unknown with no start advice", err)
+	}
+	recs, lerr := agentstore.Load(agentstore.FilePath(srcCfg.HomePath))
+	if lerr != nil {
+		t.Fatal(lerr)
+	}
+	if recs["web"].MovePending == nil || log.has("mark ") {
+		t.Fatalf("source fence = %+v (events %v), want it kept and the agent unmarked", recs["web"].MovePending, log.all())
 	}
 }

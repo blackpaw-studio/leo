@@ -113,7 +113,7 @@ func TestMoveWorktreeFailures(t *testing.T) {
 			}
 		}, CodeMoveFailed},
 		{"prepare", func(f *moveFixture) { f.ep.answer[VerbGitPrepare] = refuse(CodeBranchDiverged) }, CodeBranchDiverged},
-		{"finalize", func(f *moveFixture) { f.ep.answer[VerbCommit] = refuse(CodeSubmoduleTorn) }, CodeSubmoduleTorn},
+		{"finalize", func(f *moveFixture) { rolledBack(f, refuse(CodeSubmoduleTorn)) }, CodeSubmoduleTorn},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

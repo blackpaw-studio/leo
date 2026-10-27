@@ -744,10 +744,12 @@ func (t *transfer) run(ctx context.Context, c Cmd) error {
 	return nil
 }
 
-// commit is S6. A refusal leaves the source recoverable; an answer lost on
-// the way back is settled by asking the destination what it holds. Only a
-// live agent there or a settled failure is an outcome: anything else may
-// still start there, so the source is not offered back.
+// commit is S6. Its answer settles a success. Any failure, refused or with
+// the answer lost, is settled by asking the destination what it holds:
+// only a failure it confirms it rolled back (phase failed, the agent not
+// live) offers the source back, and only a lost answer with the agent live
+// there finishes the move. Anything else keeps the source fenced. A copy
+// leaves its source running, so its refusal is final.
 func (t *transfer) commit(ctx context.Context) error {
 	t.p.Stage(StageCommit)
 	if err := t.fence(); err != nil {
@@ -763,28 +765,29 @@ func (t *transfer) commit(ctx context.Context) error {
 		}
 		return nil
 	}
-	if t.ep.Local() || Definite(err) {
-		return t.unfence(t.recoverable(err))
+	refused := t.ep.Local() || Definite(err)
+	if refused && t.isCopy() {
+		return t.recoverable(err)
 	}
 	st, serr := t.status(ctx)
 	switch {
 	case serr != nil:
 		return problemf(CodeOutcomeUnknown,
-			"the commit on %s did not answer (%v) and its status cannot be read (%v); %s may be live there, so it stays fenced here: check `leo --host %s agent list`, then settle it with `leo agent move %s --reconcile`",
+			"the commit on %s ended without an outcome (%v) and its status cannot be read (%v); %s may be live there, so it stays fenced here: check `leo --host %s agent list`, then settle it with `leo agent move %s --reconcile`",
 			t.ep.Name(), err, serr, t.rec.Name, t.ep.Name(), t.rec.Name)
-	case st.Live:
+	case st.Phase == PhaseFailed && !st.Live:
+		return t.unfence(t.recoverable(fmt.Errorf("the commit on %s failed (%w); %s is not running there", t.ep.Name(), err, t.rec.Name)))
+	case st.Live && !refused:
 		t.note(Problem{Code: NoteCommitAnswerLost, Message: fmt.Sprintf("the commit's answer was lost (%v), but %s is running on %s", err, t.rec.Name, t.ep.Name())})
 		return nil
-	case st.Phase == PhaseFailed:
-		return t.unfence(t.recoverable(fmt.Errorf("the commit on %s failed (%w); %s is not running there", t.ep.Name(), err, t.rec.Name)))
 	}
 	phase := st.Phase
 	if phase == "" {
 		phase = "unknown"
 	}
 	return problemf(CodeOutcomeUnknown,
-		"the commit on %s did not answer (%v) and has not settled there (phase %s); %s may still start there, so it stays fenced here: check `leo --host %s agent list`, then settle it with `leo agent move %s --reconcile`",
-		t.ep.Name(), err, phase, t.rec.Name, t.ep.Name(), t.rec.Name)
+		"the commit on %s ended without an outcome (%v) and has not settled there (phase %s, live %v); %s may still be live there, so it stays fenced here: check `leo --host %s agent list`, then settle it with `leo agent move %s --reconcile`",
+		t.ep.Name(), err, phase, st.Live, t.rec.Name, t.ep.Name(), t.rec.Name)
 }
 
 // fence persists the source's move fence before the commit starts: until
