@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"errors"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
@@ -174,5 +175,40 @@ func TestReceiveNameRules(t *testing.T) {
 	}
 	if rec := loadRec(t, home, "leo-x"); rec.MovedTo != "" || rec.Stopped {
 		t.Fatalf("shadow not replaced: %+v", rec)
+	}
+}
+
+// ArrivalEnv is exactly the env Receive starts the agent with, inherited
+// layer included.
+func TestArrivalEnvIsReceiveSpawnEnv(t *testing.T) {
+	m, sup, _, _ := receiveManager(t)
+	rec := arriving(t.TempDir())
+	rec.InheritedEnv = map[string]string{"CLAUDE_CONFIG_DIR": "/inherited/claude"}
+	spec := ReceiveSpec{Record: rec, From: "studio", At: receiveAt}
+	env, err := m.ArrivalEnv(spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := m.Receive(context.Background(), spec); err != nil {
+		t.Fatal(err)
+	}
+	if env["CLAUDE_CONFIG_DIR"] != "/inherited/claude" || !maps.Equal(env, sup.spawnCall.Env) {
+		t.Fatalf("ArrivalEnv = %v\nspawn env  = %v", env, sup.spawnCall.Env)
+	}
+}
+
+// RuntimeEnv is what a restart of the stored agent runs with: its inherited
+// layer, or a legacy record's stored env when its template is gone.
+func TestRuntimeEnvIsRestartEnv(t *testing.T) {
+	m, _, _, _ := receiveManager(t)
+	rec := arriving(t.TempDir())
+	rec.InheritedEnv = map[string]string{"CLAUDE_CONFIG_DIR": "/inherited/claude"}
+	env, err := m.RuntimeEnv(rec)
+	if err != nil || env["CLAUDE_CONFIG_DIR"] != "/inherited/claude" {
+		t.Fatalf("RuntimeEnv = %v, %v", env, err)
+	}
+	legacy := agentstore.Record{Name: "old", Template: "gone", Harness: "claude", Env: map[string]string{"CLAUDE_CONFIG_DIR": "/stored"}}
+	if env, err := m.RuntimeEnv(legacy); err != nil || env["CLAUDE_CONFIG_DIR"] != "/stored" {
+		t.Fatalf("RuntimeEnv(legacy) = %v, %v", env, err)
 	}
 }

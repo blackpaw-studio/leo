@@ -92,6 +92,8 @@ func (nopProgress) Note(Problem) {}
 
 // SourceManager is the part of agent.Manager a source job needs.
 type SourceManager interface {
+	// RuntimeEnv is the env the stored agent runs with on this host.
+	RuntimeEnv(rec agentstore.Record) (map[string]string, error)
 	BeginMove(name string, mode agent.MoveMode) (release func(), err error)
 	Stop(name string, opts agent.StopOptions) error
 	MarkMoved(name, to, peer string, at time.Time) error
@@ -258,7 +260,9 @@ func (t *transfer) validate(ctx context.Context) error {
 	if t.m.Git, err = t.git.Manifest(ctx, rec.Workspace, rec.Repo); err != nil {
 		return err
 	}
-	t.env = agentEnv(t.cfg, t.cfg.Templates[rec.Template], t.m)
+	if t.env, err = t.mv.Agents.RuntimeEnv(rec); err != nil {
+		return problemf(CodeEnvironmentMissing, "%s's env cannot be resolved here: %v", rec.Name, err)
+	}
 	t.notePersistentTask()
 	if t.isCopy() {
 		return t.validateCopy(ctx, records)

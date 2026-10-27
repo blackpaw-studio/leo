@@ -48,6 +48,8 @@ func StagingDir(homePath, name string) string {
 // ReceiveManager is the part of agent.Manager a destination needs.
 type ReceiveManager interface {
 	List() []agent.Record
+	// ArrivalEnv is the env Receive will start spec's agent with.
+	ArrivalEnv(spec agent.ReceiveSpec) (map[string]string, error)
 	Receive(ctx context.Context, spec agent.ReceiveSpec) error
 	ShadowReceive(spec agent.ReceiveSpec, cause error) error
 }
@@ -224,8 +226,11 @@ func (r *Receiver) facts(ctx context.Context, cfg *config.Config, host Host, m M
 		if p, err := r.LookPath(h.Binary()); err == nil {
 			d.HarnessBinary = p
 		}
-		if mover, ok := h.(harness.SessionMover); ok && len(d.MissingEnvironments) == 0 {
-			if root := mover.SessionRoot(agentEnv(cfg, tmpl, m)); root != "" {
+		if mover, ok := h.(harness.SessionMover); ok && found && len(d.MissingEnvironments) == 0 {
+			env, err := r.Agents.ArrivalEnv(receiveSpec(m, r.Clock.Now()))
+			if err != nil {
+				d.EnvError = err.Error()
+			} else if root := mover.SessionRoot(env); root != "" {
 				d.SessionRoot, d.SessionRootPresent = root, isDir(root)
 			}
 		}
@@ -234,15 +239,6 @@ func (r *Receiver) facts(ctx context.Context, cfg *config.Config, host Host, m M
 	d.Git = r.gitFacts(ctx, m)
 	d.WSState = wsState(ctx, m, d.Existing)
 	return d
-}
-
-// agentEnv is the env the agent will run with here, as far as config says.
-func agentEnv(cfg *config.Config, tmpl config.TemplateConfig, m Manifest) map[string]string {
-	env, err := cfg.ResolveEnv(cfg.EnvironmentNames(m.Agent.Environments, tmpl.Environments), tmpl.Env, m.Agent.SpawnEnv, config.Expander{})
-	if err != nil {
-		return nil
-	}
-	return env
 }
 
 func isDir(p string) bool {
@@ -350,6 +346,12 @@ func (r *Receiver) Commit(ctx context.Context, m Manifest) (CommitResult, error)
 		return CommitResult{}, err
 	}
 	spec := receiveSpec(m, r.Clock.Now())
+	// Resolved before anything is placed: an env that cannot resolve here
+	// refuses the commit with nothing to undo.
+	env, err := r.Agents.ArrivalEnv(spec)
+	if err != nil {
+		return CommitResult{}, err
+	}
 	fail := func(err error) (CommitResult, error) {
 		if serr := r.Agents.ShadowReceive(spec, err); serr != nil {
 			return CommitResult{}, errors.Join(err, fmt.Errorf("leaving it dormant: %w", serr))
@@ -360,8 +362,6 @@ func (r *Receiver) Commit(ctx context.Context, m Manifest) (CommitResult, error)
 	if err != nil {
 		return fail(err)
 	}
-	tmpl := cfg.Templates[m.Agent.Template]
-	env := agentEnv(cfg, tmpl, m)
 	if err := r.finishHarness(ctx, cfg, host, m, env); err != nil {
 		return fail(err)
 	}

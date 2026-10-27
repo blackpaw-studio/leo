@@ -47,6 +47,9 @@ func checkAgentConfig(m Manifest, d DestFacts) *Problem {
 	if len(d.MissingEnvironments) > 0 {
 		return problemf(CodeEnvironmentMissing, "environment(s) %s are not defined on %s", strings.Join(d.MissingEnvironments, ", "), d.Host.Hostname)
 	}
+	if d.EnvError != "" {
+		return problemf(CodeEnvironmentMissing, "the agent's env cannot be resolved on %s: %s", d.Host.Hostname, d.EnvError)
+	}
 	return nil
 }
 

@@ -39,6 +39,7 @@ func (e execLogger) Run(ctx context.Context, c Cmd) ([]byte, error) {
 func (f *moveFixture) localCopy(t *testing.T) *fakeAgents {
 	t.Helper()
 	dest := &fakeAgents{
+		envs:         &configEnvs{cfg: f.cfg},
 		list:         []agent.Record{{Name: "web", Status: "running", Workspace: f.ws}},
 		afterReceive: []agent.Record{{Name: "web", Status: "running"}, {Name: "web-copy", Status: "running"}},
 	}

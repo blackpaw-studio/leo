@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -21,6 +22,27 @@ type fakeAgents struct {
 	list, afterReceive []agent.Record
 	received, shadows  []agent.ReceiveSpec
 	receiveErr         error
+	envs               *configEnvs
+}
+
+func (f *fakeAgents) ArrivalEnv(spec agent.ReceiveSpec) (map[string]string, error) {
+	return f.envs.of(spec.Record)
+}
+
+// configEnvs stands in for agent.Manager's runtime env resolver: an
+// agent's env from config alone, unless a test sets env or err.
+type configEnvs struct {
+	cfg *config.Config
+	env map[string]string
+	err error
+}
+
+func (c *configEnvs) of(rec agentstore.Record) (map[string]string, error) {
+	if c.err != nil || c.env != nil {
+		return c.env, c.err
+	}
+	tmpl := c.cfg.Templates[rec.Template]
+	return c.cfg.ResolveEnv(c.cfg.EnvironmentNames(rec.Environments, tmpl.Environments), tmpl.Env, rec.SpawnEnv, config.Expander{})
 }
 
 func (f *fakeAgents) List() []agent.Record { return f.list }
@@ -77,7 +99,7 @@ type receiverFixture struct {
 
 func newReceiverFixture(t *testing.T) *receiverFixture {
 	t.Helper()
-	f := &receiverFixture{home: t.TempDir(), claude: t.TempDir(), agents: &fakeAgents{}, hooks: &fakeHooks{}}
+	f := &receiverFixture{home: t.TempDir(), claude: t.TempDir(), agents: &fakeAgents{envs: &configEnvs{}}, hooks: &fakeHooks{}}
 	f.ws = filepath.Join(t.TempDir(), "ws")
 	cfg := &config.Config{
 		HomePath:     f.home,
@@ -87,6 +109,7 @@ func newReceiverFixture(t *testing.T) *receiverFixture {
 			Move:         config.MoveConfig{Hooks: config.MoveHooksConfig{PostReceive: []string{"/bin/import"}}},
 		}},
 	}
+	f.agents.envs.cfg = cfg
 	f.agents.afterReceive = []agent.Record{{Name: "web", Status: "running"}}
 	f.r = &Receiver{
 		Config: func() (*config.Config, error) { return cfg, nil }, Agents: f.agents, Hooks: f.hooks,
@@ -294,5 +317,43 @@ func TestReceiverPreflightMakesTargetParents(t *testing.T) {
 	}
 	if !isDir(stage) || !isDir(filepath.Dir(m.Agent.Workspace)) || isDir(m.Agent.Workspace) {
 		t.Fatal("accepted preflight did not make the staging dir and the workspace parent (only)")
+	}
+}
+
+// The session store is the one the agent runs with here, inherited env
+// included, not the template's.
+func TestPreflightSessionRootFollowsAgentEnv(t *testing.T) {
+	f := newReceiverFixture(t)
+	inherited := t.TempDir()
+	f.agents.envs.env = map[string]string{"CLAUDE_CONFIG_DIR": inherited}
+	var resp PreflightResponse
+	if err := f.call(t, VerbPreflight, f.manifest(), &resp); err != nil {
+		t.Fatal(err)
+	}
+	if resp.SessionRoot != inherited || !resp.OK {
+		t.Fatalf("session root = %q (ok %v), want the agent's %s", resp.SessionRoot, resp.OK, inherited)
+	}
+}
+
+func TestPreflightRefusesUnresolvableEnv(t *testing.T) {
+	f := newReceiverFixture(t)
+	f.agents.envs.err = errors.New(`$ACCT_DIR is not set`)
+	var resp PreflightResponse
+	if err := f.call(t, VerbPreflight, f.manifest(), &resp); err != nil {
+		t.Fatal(err)
+	}
+	if resp.OK || !slices.ContainsFunc(resp.Problems, func(p Problem) bool { return strings.Contains(p.Message, "ACCT_DIR") }) {
+		t.Fatalf("preflight = %+v, want a refusal naming the env error", resp)
+	}
+}
+
+func TestCommitFailsOnUnresolvableEnv(t *testing.T) {
+	f := newReceiverFixture(t)
+	f.agents.envs.err = errors.New(`$ACCT_DIR is not set`)
+	if err := f.call(t, VerbCommit, f.manifest(), nil); err == nil || !strings.Contains(err.Error(), "ACCT_DIR") {
+		t.Fatalf("commit = %v, want the env error", err)
+	}
+	if len(f.agents.received) != 0 || len(f.hooks.calls) != 0 {
+		t.Fatalf("commit went on: received %v, hooks %v", f.agents.received, f.hooks.calls)
 	}
 }

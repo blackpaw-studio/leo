@@ -86,7 +86,7 @@ func TestMoveWorktreeEndToEndLocalPair(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	dest := &fakeAgents{afterReceive: []agent.Record{{Name: "web", Status: "running"}}}
+	dest := &fakeAgents{envs: &configEnvs{cfg: dstCfg}, afterReceive: []agent.Record{{Name: "web", Status: "running"}}}
 	var waited []time.Duration
 	recv := &Receiver{
 		Config: func() (*config.Config, error) { return dstCfg, nil }, Agents: dest, Hooks: &fakeHooks{},
@@ -101,7 +101,7 @@ func TestMoveWorktreeEndToEndLocalPair(t *testing.T) {
 	}
 	log := &eventLog{}
 	mv := &Mover{
-		Config: func() (*config.Config, error) { return srcCfg, nil }, Agents: &fakeSource{log: log},
+		Config: func() (*config.Config, error) { return srcCfg, nil }, Agents: &fakeSource{log: log, envs: &configEnvs{cfg: srcCfg}},
 		Endpoint: func(*config.Config, string) (Endpoint, error) {
 			return &pairEndpoint{recv: recv, from: src, to: dst}, nil
 		},

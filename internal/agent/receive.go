@@ -32,6 +32,40 @@ type ReceiveSpec struct {
 	ForkFrom string
 }
 
+// ArrivalEnv is the env Receive starts spec's agent with here: the same
+// resolver, so a move reads and writes the session store the agent will
+// actually use (an inherited CLAUDE_CONFIG_DIR included).
+func (m *Manager) ArrivalEnv(spec ReceiveSpec) (map[string]string, error) {
+	cfg, err := m.cfgLoader()
+	if err != nil {
+		return nil, fmt.Errorf("loading config: %w", err)
+	}
+	rec := arrivedRecord(spec)
+	tmpl, ok := templateOf(cfg, rec)
+	if !ok {
+		return nil, &UnknownTemplateError{Name: rec.Template}
+	}
+	_, env, err := resolveTemplateWiring(cfg, rec, tmpl, m.webToken, m.leoMCP, rebuildEnvFromTemplate, m.env)
+	if err != nil {
+		return nil, fmt.Errorf("resolving %q's env: %w", rec.Name, err)
+	}
+	return env, nil
+}
+
+// RuntimeEnv is the env rec runs with when it next starts here, from the
+// resolver a restart uses: the agent's session store as it really is.
+func (m *Manager) RuntimeEnv(rec agentstore.Record) (map[string]string, error) {
+	cfg, err := m.cfgLoader()
+	if err != nil {
+		return nil, fmt.Errorf("loading config: %w", err)
+	}
+	_, env, err := resolveRestartArgs(cfg, rec, m.webToken, m.leoMCP, m.env)
+	if err != nil {
+		return nil, fmt.Errorf("resolving %q's env: %w", rec.Name, err)
+	}
+	return env, nil
+}
+
 // Receive saves an arriving agent and starts it. Launch args and env are
 // rebuilt from this host's config; the conversation is pinned so the sent
 // session wins over any older transcript in the workspace. A move may land

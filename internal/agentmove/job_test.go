@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -48,12 +49,17 @@ func (l *eventLog) has(prefix string) bool {
 }
 
 type fakeSource struct {
+	envs    *configEnvs
 	log     *eventLog
 	mu      sync.Mutex
 	held    map[string]agent.MoveMode
 	stopErr error
 	// markFails fails that many MarkMoved calls before one succeeds.
 	markFails int
+}
+
+func (f *fakeSource) RuntimeEnv(rec agentstore.Record) (map[string]string, error) {
+	return f.envs.of(rec)
 }
 
 func (f *fakeSource) BeginMove(name string, mode agent.MoveMode) (func(), error) {
@@ -195,7 +201,7 @@ func newMoveFixture(t *testing.T) *moveFixture {
 	t.Helper()
 	log := &eventLog{}
 	f := &moveFixture{
-		log: log, src: &fakeSource{log: log}, hooks: &loggingHooks{log: log}, prober: &fakeProber{probe: drain.Probe{Exists: true}},
+		log: log, src: &fakeSource{log: log, envs: &configEnvs{}}, hooks: &loggingHooks{log: log}, prober: &fakeProber{probe: drain.Probe{Exists: true}},
 		home: t.TempDir(), claude: t.TempDir(), ws: filepath.Join(t.TempDir(), "web"),
 	}
 	f.runner = &fakeRunner{answer: func(c Cmd) ([]byte, error) {
@@ -223,6 +229,7 @@ func newMoveFixture(t *testing.T) *moveFixture {
 			Move:         config.MoveConfig{Exclude: []string{"node_modules/"}, Hooks: config.MoveHooksConfig{PreSend: []string{"/bin/export"}}},
 		}},
 	}
+	f.src.envs.cfg = f.cfg
 	f.rec = agentstore.Record{Name: "web", Template: "coder", Harness: "claude", Workspace: f.ws, SessionID: "sid-1", Environments: []string{"work"},
 		MoveLog: map[string]time.Time{"laptop": receiveTime.Add(-time.Hour)}}
 	if err := agentstore.Save(f.home, f.rec); err != nil {
@@ -557,4 +564,36 @@ func waitJob(t *testing.T, jobs *Jobs, id string) JobStatus {
 		t.Fatalf("waiting for job %s: %v", id, err)
 	}
 	return st
+}
+
+// The source reads the session store the agent runs with (an inherited
+// CLAUDE_CONFIG_DIR, say), not the one its template names.
+func TestMoveSessionsFromAgentEnv(t *testing.T) {
+	f := newMoveFixture(t)
+	inherited := t.TempDir()
+	proj := filepath.Join(inherited, "projects", session.ProjectSlug(f.ws))
+	if err := os.MkdirAll(proj, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	f.src.envs.env = map[string]string{"CLAUDE_CONFIG_DIR": inherited}
+	if _, err := f.move(t, false); err != nil {
+		t.Fatal(err)
+	}
+	sentFrom := func(root string) bool {
+		return slices.ContainsFunc(f.log.all(), func(e string) bool { return strings.HasSuffix(e, "(in "+root+")") })
+	}
+	if !sentFrom(inherited) || sentFrom(f.claude) {
+		t.Fatalf("sessions not sent from the agent's store %s:\n%v", inherited, f.log.all())
+	}
+	if he := f.hooks.env[0]; he.AgentEnv["CLAUDE_CONFIG_DIR"] != inherited {
+		t.Fatalf("pre_send env = %v", he.AgentEnv)
+	}
+}
+
+func TestMoveRefusesUnresolvableEnv(t *testing.T) {
+	f := newMoveFixture(t)
+	f.src.envs.err = errors.New(`$ACCT_DIR is not set`)
+	if _, err := f.move(t, false); err == nil || !strings.Contains(err.Error(), "ACCT_DIR") || f.log.has("stop ") {
+		t.Fatalf("move = %v (events %v), want the env error before any stop", err, f.log.all())
+	}
 }

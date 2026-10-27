@@ -161,6 +161,8 @@ type DestFacts struct {
 	TemplateFound       bool
 	TemplateHarness     string
 	MissingEnvironments []string
+	// EnvError is why the agent's env cannot be resolved here, "" when it can.
+	EnvError string
 	// HarnessBinary is the resolved harness executable, "" when missing.
 	HarnessBinary string
 	// SessionRoot is the harness session store for the agent's env here,
