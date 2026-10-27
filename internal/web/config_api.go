@@ -47,6 +47,7 @@ func (c *ConfigService) configRoutes(route func(pattern string, h http.HandlerFu
 	c.registerDelegationRoutes(route)
 	c.registerOpsRoutes(route)
 	c.registerFollowRoutes(route)
+	c.registerOverrideRoutes(route)
 
 	route("GET /config/{resource}", c.handleConfigGet)
 	route("GET /config/{resource}/{name}", c.handleConfigGet)

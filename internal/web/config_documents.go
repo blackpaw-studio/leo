@@ -97,6 +97,11 @@ type itemDocument struct {
 	Values           map[string]any `json:"values"`
 	Inherited        any            `json:"inherited,omitempty"`
 	EffectiveHarness string         `json:"effective_harness,omitempty"`
+	// Source and Invalid are set on a follower only: where the entry comes
+	// from (lead, local, local-override-lead, ...) and, for a lead entry
+	// unusable on this host, why.
+	Source  string `json:"source,omitempty"`
+	Invalid string `json:"invalid,omitempty"`
 }
 
 // buildItemDocument reads target (a pointer to the resource's struct) in JSON
@@ -105,6 +110,9 @@ type itemDocument struct {
 // placeholders for resources that inherit.
 func buildItemDocument(cfg *config.Config, res *configResource, name string, target any) itemDocument {
 	doc := itemDocument{Name: name, Values: schema.ValuesJSON(target, res.Section, nil)}
+	if kind, ok := followKindOf(res); ok {
+		doc.Source = itemSource(cfg, kind, name)
+	}
 	for _, sub := range res.Subs {
 		doc.Values[sub.Key] = schema.ValuesJSON(sub.of(target), sub.Section, nil)
 	}
@@ -162,11 +170,17 @@ func buildResourceDoc(cfg *config.Config, rev string, res *configResource, name 
 			target, _ := res.locate(cfg, n)
 			items = append(items, buildItemDocument(cfg, res, n, target))
 		}
+		items = append(items, invalidItemDocuments(cfg, res)...)
 		sort.Slice(items, func(i, j int) bool { return items[i].Name < items[j].Name })
 		return collectionDocument{Revision: rev, Items: items}, nil
 	}
 	target, ok := res.locate(cfg, name)
 	if !ok {
+		if kind, isFollowKind := followKindOf(res); isFollowKind {
+			if reason, invalid := cfg.InvalidEntries(kind)[name]; invalid {
+				return resourceDocument{Revision: rev, itemDocument: invalidItemDocument(name, reason)}, nil
+			}
+		}
 		return nil, errNotFound("%s %q not found", res.Noun, name)
 	}
 	return resourceDocument{Revision: rev, itemDocument: buildItemDocument(cfg, res, name, target)}, nil

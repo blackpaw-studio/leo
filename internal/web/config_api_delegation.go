@@ -1,7 +1,9 @@
 package web
 
 import (
+	"maps"
 	"net/http"
+	"slices"
 
 	"github.com/blackpaw-studio/leo/internal/config"
 )
@@ -35,6 +37,9 @@ type delegationProfileDoc struct {
 	Description string                       `json:"description"`
 	Active      bool                         `json:"active"`
 	Roles       map[string]delegationCellDoc `json:"roles"`
+	// Source and Invalid: see itemDocument.
+	Source  string `json:"source,omitempty"`
+	Invalid string `json:"invalid,omitempty"`
 }
 
 // DelegationDocument is the whole delegation block as the JSON API reads it.
@@ -78,7 +83,8 @@ func (c *ConfigService) buildDelegationDocument(cfg *config.Config, revision str
 	}
 	for _, row := range delegationProfileRows(d) {
 		p := d.Profiles[row.Name]
-		pd := delegationProfileDoc{Name: row.Name, Description: row.Description, Active: row.Active, Roles: map[string]delegationCellDoc{}}
+		pd := delegationProfileDoc{Name: row.Name, Description: row.Description, Active: row.Active, Roles: map[string]delegationCellDoc{},
+			Source: itemSource(cfg, config.KindProfile, row.Name)}
 		for role, target := range p.Roles {
 			cell := delegationCellDoc{Template: target.Template, Model: target.Model, Effort: target.Effort}
 			if _, ok := cfg.Templates[target.Template]; ok {
@@ -87,6 +93,10 @@ func (c *ConfigService) buildDelegationDocument(cfg *config.Config, revision str
 			pd.Roles[role] = cell
 		}
 		doc.Profiles = append(doc.Profiles, pd)
+	}
+	for _, name := range slices.Sorted(maps.Keys(cfg.InvalidEntries(config.KindProfile))) {
+		doc.Profiles = append(doc.Profiles, delegationProfileDoc{Name: name, Roles: map[string]delegationCellDoc{},
+			Source: string(config.SourceLead), Invalid: cfg.InvalidEntries(config.KindProfile)[name]})
 	}
 	if w := cfg.DelegationWarnings(); w != nil {
 		doc.Warnings = w

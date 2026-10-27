@@ -18,7 +18,7 @@ const followerHeaderYAML = "client:\n  default_host: localhost\n  hosts:\n    le
 // followerLeadSections is the cached lead config the follower tests use.
 const followerLeadSections = `"templates":{"lt":{"model":"opus"},"bad":{"harness":"nope"}},` +
 	`"environments":{"le":{"A":"lead"}},` +
-	`"delegation":{"active_profile":"day","profiles":{"day":{"roles":{"implement":"lt"}}}},` +
+	`"delegation":{"active_profile":"day","profiles":{"day":{"roles":{"implement":"lt"}},"night":{"roles":{}}}},` +
 	`"defaults":{"max_turns":9}`
 
 // writeFollowerHome writes a follower leo.yaml (header + local) over a cached
@@ -66,4 +66,15 @@ type fakeSyncer struct {
 func (f *fakeSyncer) SyncNow(context.Context) (follow.Outcome, error) {
 	f.calls++
 	return f.out, f.err
+}
+
+// liveRevision is the config revision as Load computes it, the lead cache
+// included (revisionOnDisk hashes leo.yaml alone).
+func (h *apiHarness) liveRevision() string {
+	h.t.Helper()
+	_, rev, err := config.LoadWithRevision(h.path)
+	if err != nil {
+		h.t.Fatal(err)
+	}
+	return rev
 }
