@@ -83,3 +83,32 @@ func HasCode(err error, code string) bool {
 	}
 	return false
 }
+
+// CodeMoveFailed classifies a failure with no problem code of its own.
+const CodeMoveFailed = "move_failed"
+
+// CodeOf is err's problem code (the first, for several), CodeMoveFailed
+// when it has none.
+func CodeOf(err error) string {
+	var p *Problem
+	if errors.As(err, &p) {
+		return p.Code
+	}
+	var ps Problems
+	if errors.As(err, &ps) && len(ps) > 0 {
+		return ps[0].Code
+	}
+	return CodeMoveFailed
+}
+
+// VerbError is a refused destination verb on the wire: the daemon's error
+// body and `leo agent move-receive`'s stdout before its nonzero exit.
+type VerbError struct {
+	Code    string `json:"error"`
+	Message string `json:"message"`
+}
+
+func (e *VerbError) Error() string { return e.Code + ": " + e.Message }
+
+// AsProblem is e as a Problem, so HasCode sees its code.
+func (e *VerbError) AsProblem() *Problem { return &Problem{Code: e.Code, Message: e.Message} }

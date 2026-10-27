@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/blackpaw-studio/leo/internal/agent"
+	"github.com/blackpaw-studio/leo/internal/agentmove"
 	"github.com/blackpaw-studio/leo/internal/agentstore"
 	"github.com/blackpaw-studio/leo/internal/bridge"
 	"github.com/blackpaw-studio/leo/internal/chat"
@@ -172,6 +173,8 @@ type Server struct {
 	// through, set by StartWeb.
 	drain         atomic.Pointer[drain.Manager]
 	drainNotifier atomic.Pointer[drainNotifierHolder]
+	// moveReceiver serves `leo agent move-receive` (see SetMoveReceiver).
+	moveReceiver atomic.Pointer[moveReceiverHolder]
 	// runningDispatches lists the web server's running dispatches for the
 	// drain (see RunningDispatches); set by StartWeb.
 	runningDispatches atomic.Pointer[func() []drain.Probe]
@@ -364,6 +367,11 @@ func New(sockPath, configPath string, processes ProcessStateProvider, opts ...Op
 	mux.HandleFunc("POST /attach/placement", s.handleAttachPlacement)
 	for _, verb := range controlVerbs {
 		mux.HandleFunc("POST /agents/{name}/"+verb, s.handleAgentControl)
+	}
+	// Destination side of `leo agent move` / `copy`, reached over ssh
+	// through the hidden `leo agent move-receive` command.
+	for _, verb := range agentmove.Verbs {
+		mux.HandleFunc("POST /agents/move/"+verb, s.handleMoveVerb(verb))
 	}
 
 	// Claude mod bridge: the mod's `leo bridge` process holds the command

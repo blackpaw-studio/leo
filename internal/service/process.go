@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/blackpaw-studio/leo/internal/agent"
+	"github.com/blackpaw-studio/leo/internal/agentmove"
 	"github.com/blackpaw-studio/leo/internal/agentstore"
 	"github.com/blackpaw-studio/leo/internal/chat"
 	"github.com/blackpaw-studio/leo/internal/clienttools"
@@ -1125,6 +1126,8 @@ func defaultSupervisedExec(opts RunSupervisedOptions) error {
 		// reports "restoring" rather than "stopped".
 		agentMgr.SetReadiness(srv.Ready)
 		srv.SetAgentManager(agentMgr)
+		// Destination side of `leo agent move` / `copy` (move-receive).
+		srv.SetMoveReceiver(agentmove.NewReceiver(cfgLoader, agentMgr, opts.Version))
 		// The ensure-exists task-delivery path (config.ResolveTaskTarget +
 		// runPersistent) needs the same agent.Manager to spawn/resume targets
 		// before injection. agentMgr already satisfies daemon.EnsureAgentManager

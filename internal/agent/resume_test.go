@@ -22,3 +22,14 @@ func TestResumeArgsEmptySessionStripsOnly(t *testing.T) {
 		t.Fatalf("got %v, want %v", got, want)
 	}
 }
+
+// A copy's first launch stores fork flags; any later resume built from the
+// stored args must rejoin the fork, never fork again.
+func TestResumeArgsStripsForkSession(t *testing.T) {
+	in := []string{"--model", "opus", "--resume", "src", "--fork-session", "--session-id", "fork"}
+	got := ResumeArgs(in, "fork")
+	want := []string{"--model", "opus", "--resume", "fork"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("ResumeArgs = %v, want %v", got, want)
+	}
+}
