@@ -18,8 +18,39 @@ func newConfigCmd() *cobra.Command {
 		Short: "Manage leo configuration",
 	}
 
-	cmd.AddCommand(newConfigShowCmd(), newConfigEditCmd(), newConfigPathCmd())
+	cmd.AddCommand(newConfigShowCmd(), newConfigEditCmd(), newConfigPathCmd(), newConfigExportCmd())
 
+	return cmd
+}
+
+// newConfigExportCmd prints this host's shared config as a follow export.
+// A follower's daemon runs it on the lead over ssh, so it always describes
+// this machine: it never resolves client.default_host or LEO_HOST.
+func newConfigExportCmd() *cobra.Command {
+	var follow bool
+	cmd := &cobra.Command{
+		Use:   "export --follow",
+		Short: "Print this host's shared config for a follower (JSON)",
+		Long: `Print the templates, environments, delegation and defaults a follower
+mirrors, as one JSON document on stdout. Followers run this on their lead
+over ssh; see docs/configuration/follow-lead.md.`,
+		Args: cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if !follow {
+				return fmt.Errorf("nothing to export: pass --follow")
+			}
+			path, err := configPath()
+			if err != nil {
+				return err
+			}
+			exp, err := config.BuildFollowExport(path, Version)
+			if err != nil {
+				return err
+			}
+			return json.NewEncoder(cmd.OutOrStdout()).Encode(exp)
+		},
+	}
+	cmd.Flags().BoolVar(&follow, "follow", false, "emit the follow export")
 	return cmd
 }
 

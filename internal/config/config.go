@@ -851,12 +851,29 @@ func LoadWithRevision(path string) (*Config, string, error) {
 	if err != nil {
 		return nil, "", fmt.Errorf("reading config: %w", err)
 	}
-	cfg, err := parse(path, data)
+	return loadData(path, data, true)
+}
+
+// loadUnexpanded loads path like LoadWithRevision but leaves every ~ as
+// written, for the follow export, which must copy values verbatim.
+func loadUnexpanded(path string) (*Config, error) {
+	data, err := os.ReadFile(path) //nolint:gosec // the operator's own leo.yaml
+	if err != nil {
+		return nil, fmt.Errorf("reading config: %w", err)
+	}
+	cfg, _, err := loadData(path, data, false)
+	return cfg, err
+}
+
+// loadData parses leo.yaml content and merges its templates_file; expand
+// says whether ~ in path fields is expanded.
+func loadData(path string, data []byte, expand bool) (*Config, string, error) {
+	cfg, err := parseWith(path, data, expand)
 	if err != nil {
 		return nil, "", err
 	}
 	if cfg.TemplatesFile != "" {
-		if err := cfg.loadSharedTemplates(data); err != nil {
+		if err := cfg.loadSharedTemplates(data, expand); err != nil {
 			return nil, "", err
 		}
 		return cfg, revisionOfFiles(data, cfg.shared.sharedBytes), nil
@@ -865,6 +882,10 @@ func LoadWithRevision(path string) (*Config, string, error) {
 }
 
 func parse(path string, data []byte) (*Config, error) {
+	return parseWith(path, data, true)
+}
+
+func parseWith(path string, data []byte, expand bool) (*Config, error) {
 	var cfg Config
 	if err := yaml.Unmarshal(data, &cfg); err != nil {
 		return nil, fmt.Errorf("parsing config: %w", err)
@@ -878,7 +899,9 @@ func parse(path string, data []byte) (*Config, error) {
 	cfg.HomePath = filepath.Dir(absPath)
 
 	// Expand ~ in all workspace and path fields
-	cfg.expandPaths()
+	if expand {
+		cfg.expandPaths()
+	}
 
 	return &cfg, nil
 }

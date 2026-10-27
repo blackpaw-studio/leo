@@ -158,8 +158,9 @@ func decodeTemplates(node yaml.Node) (map[string]TemplateConfig, error) {
 
 // loadSharedTemplates reads cfg.TemplatesFile and merges its templates under
 // cfg's local ones: a local template replaces a shared one of the same name
-// whole. leoBytes is leo.yaml as parsed.
-func (c *Config) loadSharedTemplates(leoBytes []byte) error {
+// whole. leoBytes is leo.yaml as parsed; expand says whether ~ in path fields
+// is expanded (the follow export loads unexpanded).
+func (c *Config) loadSharedTemplates(leoBytes []byte, expand bool) error {
 	path := resolveTemplatesFile(c.HomePath, c.TemplatesFile)
 	data, err := os.ReadFile(path) //nolint:gosec // path comes from the operator's own leo.yaml
 	if err != nil {
@@ -177,8 +178,10 @@ func (c *Config) loadSharedTemplates(leoBytes []byte) error {
 	if err != nil {
 		return fmt.Errorf("templates_file %s: %w", path, err)
 	}
-	expandTemplates(baseline)
-	expandTemplates(effective)
+	if expand {
+		expandTemplates(baseline)
+		expandTemplates(effective)
+	}
 
 	sources := make(map[string]TemplateSource, len(baseline)+len(c.Templates))
 	merged := make(map[string]TemplateConfig, len(baseline)+len(c.Templates))
