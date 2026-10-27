@@ -283,3 +283,42 @@ func TestSaveWithoutFollowIsUnchanged(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestClearedLeadDefaultsKeysSurviveReload(t *testing.T) {
+	lead := saveLeadYAML
+	lead = strings.Replace(lead, "  max_turns: 9\n", "  max_turns: 9\n  environments: [le]\n  idle_suspend_after: 2h\n", 1)
+	path := followerOnDisk(t, lead, saveLocalYAML)
+	cfg := mustLoad(t, path)
+	zero := 0
+	cfg.Defaults.Dispatch.MaxConcurrent = &zero
+	cfg.Defaults.Environments = nil
+	cfg.Defaults.IdleSuspendAfter = ""
+	if err := Save(path, cfg); err != nil {
+		t.Fatal(err)
+	}
+	check := func(stage string) *Config {
+		t.Helper()
+		re := mustLoad(t, path)
+		d := re.Defaults
+		if re.DispatchMaxConcurrent() != 0 || len(d.Environments) != 0 || d.IdleSuspendAfter != "" {
+			t.Fatalf("%s: reload = max_concurrent %d, environments %v, idle %q; want the cleared values\n%s",
+				stage, re.DispatchMaxConcurrent(), d.Environments, d.IdleSuspendAfter, readFile(t, path))
+		}
+		return re
+	}
+	re := check("after the edit")
+
+	before := readFile(t, path)
+	if err := Save(path, re); err != nil {
+		t.Fatal(err)
+	}
+	if after := readFile(t, path); after != before {
+		t.Fatalf("no-op save rewrote leo.yaml:\n%s", after)
+	}
+
+	re.Templates["mine"] = TemplateConfig{Model: "sonnet"}
+	if err := Save(path, re); err != nil {
+		t.Fatal(err)
+	}
+	check("after an unrelated edit")
+}

@@ -16,7 +16,12 @@ import (
 
 func newFollowerWebServer(t *testing.T) (*Server, string) {
 	t.Helper()
-	path := writeFollowerHome(t, followerLeadSections, "templates:\n  mine: {model: haiku}\n")
+	return newFollowerWebServerOver(t, followerLeadSections, "templates:\n  mine: {model: haiku}\n")
+}
+
+func newFollowerWebServerOver(t *testing.T, sections, local string) (*Server, string) {
+	t.Helper()
+	path := writeFollowerHome(t, sections, local)
 	s := New(path, &mockProcesses{states: map[string]ProcessStateInfo{}},
 		&mockScheduler{entries: []cron.EntryInfo{}}, &mockReloader{}, nil,
 		Options{Port: testPort, APIToken: testAPIToken})
@@ -162,5 +167,25 @@ func TestClassifyInvalidLeadEntry(t *testing.T) {
 	err := fmt.Errorf("spawning agent: %w", &config.InvalidEntryError{Kind: config.KindTemplate, Name: "bad", Lead: "lead", Reason: "no binary"})
 	if status, code := ClassifyEnvironmentError(err); status != http.StatusBadRequest || code != "invalid_lead_entry" {
 		t.Fatalf("classify = %d %q", status, code)
+	}
+}
+
+func TestFollowerDefaultsClearedOnTheWebSurvivesReload(t *testing.T) {
+	sections := strings.Replace(followerLeadSections, `"defaults":{"max_turns":9}`,
+		`"defaults":{"max_turns":9,"environments":["le"],"idle_suspend_after":"2h"}`, 1)
+	s, path := newFollowerWebServerOver(t, sections, "")
+	form := url.Values{}
+	form.Set("max_turns", "9")
+	form.Set("environments", "")
+	form.Set("idle_suspend_after", "")
+	if w := postForm(t, s, "/web/config/defaults", form); w.Code != http.StatusOK || strings.Contains(readBody(t, w), "flash-error") {
+		t.Fatalf("save: %d", w.Code)
+	}
+	cfg, err := config.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if d := cfg.Defaults; len(d.Environments) != 0 || d.IdleSuspendAfter != "" || d.MaxTurns != 9 {
+		t.Fatalf("reload defaults = %+v, want the cleared keys to stay cleared\n%s", d, readFile(t, path))
 	}
 }

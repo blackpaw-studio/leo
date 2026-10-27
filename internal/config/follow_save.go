@@ -159,14 +159,17 @@ func (c *Config) localView() (*Config, error) {
 	v := *c
 	v.Templates = withoutLead(c.Templates, fl.sources[KindTemplate])
 	v.Environments = withoutLead(c.Environments, fl.sources[KindEnvironment])
-	defaults, err := fl.localDefaults(c.Defaults)
+	defaults, defaultEmpties, err := fl.localDefaults(c.Defaults)
 	if err != nil {
 		return nil, err
 	}
 	v.Defaults = defaults
-	if v.Delegation, err = fl.localDelegation(c.Delegation); err != nil {
+	delegation, delegationEmpties, err := fl.localDelegation(c.Delegation)
+	if err != nil {
 		return nil, err
 	}
+	v.Delegation = delegation
+	v.localEmpties = newLocalEmpties(defaultEmpties, delegationEmpties)
 	return &v, nil
 }
 
@@ -184,51 +187,59 @@ func withoutLead[T any](m map[string]T, sources map[string]TemplateSource) map[s
 	return out
 }
 
-func (fl *followLayer) localDefaults(cur DefaultsConfig) (DefaultsConfig, error) {
+// localDefaults returns the defaults keys leo.yaml keeps, and those of them
+// that are empty.
+func (fl *followLayer) localDefaults(cur DefaultsConfig) (DefaultsConfig, *yaml.Node, error) {
 	var n yaml.Node
 	if err := n.Encode(cur); err != nil {
-		return DefaultsConfig{}, err
+		return DefaultsConfig{}, nil, err
 	}
 	kept, err := keptKeys(&n, fl.loadedDefaults, fl.localDefaultKeys, followDeepKeys, "")
 	if err != nil {
-		return DefaultsConfig{}, err
+		return DefaultsConfig{}, nil, err
 	}
 	var out DefaultsConfig
-	err = kept.Decode(&out)
-	return out, err
+	if err := kept.Decode(&out); err != nil {
+		return DefaultsConfig{}, nil, err
+	}
+	return out, presentEmpties(kept, followDeepKeys), nil
 }
 
-func (fl *followLayer) localDelegation(cur *DelegationConfig) (*DelegationConfig, error) {
+// localDelegation returns the delegation leo.yaml keeps, and its scalar
+// keys that are empty.
+func (fl *followLayer) localDelegation(cur *DelegationConfig) (*DelegationConfig, *yaml.Node, error) {
 	if fl.leadDelegation == nil || cur == nil {
-		return cur, nil
+		return cur, nil, nil
 	}
 	var n yaml.Node
 	if err := n.Encode(cur); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	kept, err := keptKeys(withoutKey(&n, "profiles"), fl.loadedDelegation, fl.localDelegationKeys, nil, "")
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	profiles := withoutLead(cur.Profiles, fl.sources[KindProfile])
 	if len(kept.Content) == 0 && len(profiles) == 0 {
-		return nil, nil
+		return nil, nil, nil
 	}
 	var out DelegationConfig
 	if err := kept.Decode(&out); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	out.Profiles = profiles
-	return &out, nil
+	return &out, presentEmpties(kept, nil), nil
 }
 
 // keptKeys returns cur's keys that were set locally at load, or whose value
 // differs from loaded (the effective value at load). A key in deep with a
-// mapping value is filtered one level deeper.
+// mapping value is filtered one level deeper. A key loaded has and cur
+// lacks was cleared, and omitempty dropped it: it is kept as an explicit
+// empty value, so the lead's value does not come back.
 func keptKeys(cur, loaded *yaml.Node, local map[string]bool, deep map[string]bool, prefix string) (*yaml.Node, error) {
 	out := &yaml.Node{Kind: yaml.MappingNode, Tag: "!!map"}
 	if cur = resolveAlias(cur); cur == nil || cur.Kind != yaml.MappingNode {
-		return out, nil
+		cur = &yaml.Node{Kind: yaml.MappingNode, Tag: "!!map"}
 	}
 	for i := 0; i+1 < len(cur.Content); i += 2 {
 		key, val := cur.Content[i], cur.Content[i+1]
@@ -255,6 +266,34 @@ func keptKeys(cur, loaded *yaml.Node, local map[string]bool, deep map[string]boo
 			out.Content = append(out.Content, key, val)
 		}
 	}
+	return clearedKeys(out, cur, loaded, local, deep, prefix)
+}
+
+// clearedKeys adds to out each key of loaded that cur lacks, as an empty
+// value of the loaded value's shape.
+func clearedKeys(out, cur, loaded *yaml.Node, local, deep map[string]bool, prefix string) (*yaml.Node, error) {
+	if loaded = resolveAlias(loaded); loaded == nil || loaded.Kind != yaml.MappingNode {
+		return out, nil
+	}
+	for i := 0; i+1 < len(loaded.Content); i += 2 {
+		key, was := loaded.Content[i], resolveAlias(loaded.Content[i+1])
+		if mappingValue(cur, key.Value) != nil {
+			continue
+		}
+		if deep[key.Value] && was.Kind == yaml.MappingNode {
+			sub, err := keptKeys(nil, was, local, nil, prefix+key.Value+".")
+			if err != nil {
+				return nil, err
+			}
+			if len(sub.Content) > 0 {
+				out.Content = append(out.Content, key, sub)
+			}
+			continue
+		}
+		if e := emptyLike(was); e != nil {
+			out.Content = append(out.Content, key, e)
+		}
+	}
 	return out, nil
 }
 
@@ -272,16 +311,24 @@ func mappingValue(n *yaml.Node, key string) *yaml.Node {
 }
 
 // snapshotLoaded records the effective defaults and delegation scalars at
-// load, the baseline localView compares against to find edits.
+// load, the baseline localView compares against to find edits. The empty
+// keys leo.yaml sets are added back, since encoding drops them.
 func (fl *followLayer) snapshotLoaded(c *Config) {
+	empties := fileEmpties(fl.leoBytes)
 	var d yaml.Node
 	if d.Encode(c.Defaults) == nil {
 		fl.loadedDefaults = &d
+		if empties != nil {
+			addAbsent(fl.loadedDefaults, empties.defaults)
+		}
 	}
 	if c.Delegation != nil {
 		var g yaml.Node
 		if g.Encode(c.Delegation) == nil {
 			fl.loadedDelegation = withoutKey(&g, "profiles")
+			if empties != nil {
+				addAbsent(fl.loadedDelegation, empties.delegation)
+			}
 		}
 	}
 }
@@ -291,15 +338,11 @@ func (fl *followLayer) snapshotLoaded(c *Config) {
 // no-op save leaves leo.yaml byte-identical.
 func saveFollower(path string, view *Config) error {
 	fl := view.follow
-	data, err := yaml.Marshal(view)
+	data, err := marshalLocal(view)
 	if err != nil {
 		return fmt.Errorf("marshaling config: %w", err)
 	}
-	loaded, err := parse(path, fl.leoBytes)
-	if err != nil {
-		return err
-	}
-	if same, err := sameYAML(loaded, view); err != nil {
+	if same, err := sameAsLoaded(path, fl.leoBytes, view, data); err != nil {
 		return err
 	} else if same {
 		return nil
@@ -309,6 +352,25 @@ func saveFollower(path string, view *Config) error {
 	}
 	fl.leoBytes = slices.Clone(data)
 	return nil
+}
+
+// sameAsLoaded reports whether data, the marshaled view, holds the same
+// config as leoBytes, the leo.yaml it was loaded from. A follower's empty
+// local keys count on both sides.
+func sameAsLoaded(path string, leoBytes []byte, view *Config, data []byte) (bool, error) {
+	loaded, err := parse(path, leoBytes)
+	if err != nil {
+		return false, err
+	}
+	if view.follow == nil || view.follow.cache == nil {
+		return sameYAML(loaded, view)
+	}
+	loaded.localEmpties = fileEmpties(leoBytes)
+	was, err := marshalLocal(loaded)
+	if err != nil {
+		return false, fmt.Errorf("marshaling for comparison: %w", err)
+	}
+	return sameDocument(was, data)
 }
 
 // isSharedSource reports whether a template source lives in the

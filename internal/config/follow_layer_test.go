@@ -286,3 +286,55 @@ func BenchmarkLoadFollower(b *testing.B) {
 		}
 	})
 }
+
+func TestFollowLayerLocalEmptyValuesWin(t *testing.T) {
+	lead := `environments:
+  le: {A: lead}
+defaults:
+  model: opus
+  max_turns: 9
+  idle_suspend_after: 2h
+  environments: [le]
+  harness_options: {permission_mode: plan}
+  dispatch: {max_concurrent: 4}
+  push: {finished: true}
+delegation:
+  active_profile: day
+  hide_native_agents: [Explore]
+  profiles:
+    day: {roles: {}}
+`
+	local := `defaults:
+  model: ""
+  max_turns: 0
+  idle_suspend_after: ""
+  environments: []
+  harness_options: {}
+  dispatch: {max_concurrent: 0}
+  push: {finished: false}
+delegation:
+  active_profile: ""
+  hide_native_agents: []
+`
+	cfg := loadFollower(t, lead, local)
+	d := cfg.Defaults
+	if d.Model != "opus" || d.MaxTurns != 9 {
+		t.Errorf("model/max_turns = %q/%d, want the lead's (Save always writes these, so empty means unset)", d.Model, d.MaxTurns)
+	}
+	if d.IdleSuspendAfter != "" || len(d.Environments) != 0 || len(d.HarnessOptions) != 0 {
+		t.Errorf("idle/environments/harness_options = %q/%v/%v, want the local empties", d.IdleSuspendAfter, d.Environments, d.HarnessOptions)
+	}
+	if cfg.DispatchMaxConcurrent() != 0 {
+		t.Errorf("dispatch.max_concurrent = %d, want local 0", cfg.DispatchMaxConcurrent())
+	}
+	if d.Push.Finished == nil || *d.Push.Finished {
+		t.Errorf("push.finished = %v, want local false", d.Push.Finished)
+	}
+	g := cfg.Delegation
+	if g.ActiveProfile != "day" {
+		t.Errorf("active_profile = %q, want the lead's", g.ActiveProfile)
+	}
+	if g.HideNativeAgents == nil || len(*g.HideNativeAgents) != 0 {
+		t.Errorf("hide_native_agents = %v, want local []", g.HideNativeAgents)
+	}
+}

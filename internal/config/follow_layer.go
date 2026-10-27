@@ -47,7 +47,7 @@ type followLayer struct {
 	// (lead, *-override-lead); other entries keep their usual source.
 	sources map[EntryKind]map[string]TemplateSource
 	// localDefaultKeys and localDelegationKeys are the dotted keys set
-	// locally at load (present and not empty).
+	// locally at load (present and not null).
 	localDefaultKeys, localDelegationKeys map[string]bool
 	// leoBytes is leo.yaml as loaded, the baseline for "did leo.yaml change".
 	leoBytes []byte
@@ -253,7 +253,7 @@ func (c *Config) layerDelegation(lead *DelegationConfig, leadNode, localNode *ya
 		}
 		return nil
 	}
-	merged, keys := overlayKeys(withoutKey(leadNode, "profiles"), withoutKey(localNode, "profiles"), nil, "")
+	merged, keys := overlayKeys(withoutKey(leadNode, "profiles"), withoutKey(localNode, "profiles"), nil, delegationUnsetWhenEmpty, "")
 	var d DelegationConfig
 	if err := merged.Decode(&d); err != nil {
 		return err
@@ -267,7 +267,7 @@ func (c *Config) layerDelegation(lead *DelegationConfig, leadNode, localNode *ya
 // overlayDefaults merges the lead's defaults node with the local one (D2
 // depth) and decodes the result.
 func overlayDefaults(lead, local *yaml.Node) (DefaultsConfig, map[string]bool, error) {
-	merged, keys := overlayKeys(lead, local, followDeepKeys, "")
+	merged, keys := overlayKeys(lead, local, followDeepKeys, defaultsUnsetWhenEmpty, "")
 	var d DefaultsConfig
 	if err := merged.Decode(&d); err != nil {
 		return DefaultsConfig{}, nil, err
@@ -275,11 +275,12 @@ func overlayDefaults(lead, local *yaml.Node) (DefaultsConfig, map[string]bool, e
 	return d, keys, nil
 }
 
-// overlayKeys returns a mapping holding lead's keys with each local key that
-// is present and not empty replacing lead's value. For a key in deep whose
-// values are both mappings, the overlay goes one level deeper. keys records
-// the dotted local keys that won.
-func overlayKeys(lead, local *yaml.Node, deep map[string]bool, prefix string) (*yaml.Node, map[string]bool) {
+// overlayKeys returns a mapping holding lead's keys with each local key
+// that is present replacing lead's value, even when empty. A null local
+// value is unset, and so is an empty one for a key in unsetWhenEmpty. For a
+// key in deep whose values are both mappings, the overlay goes one level
+// deeper. keys records the dotted local keys that won.
+func overlayKeys(lead, local *yaml.Node, deep, unsetWhenEmpty map[string]bool, prefix string) (*yaml.Node, map[string]bool) {
 	keys := map[string]bool{}
 	out := &yaml.Node{Kind: yaml.MappingNode, Tag: "!!map"}
 	index := map[string]int{}
@@ -294,12 +295,12 @@ func overlayKeys(lead, local *yaml.Node, deep map[string]bool, prefix string) (*
 	}
 	for i := 0; i+1 < len(local.Content); i += 2 {
 		key, val := local.Content[i].Value, resolveAlias(local.Content[i+1])
-		if isEmptyNode(val) {
+		if isNullNode(val) || unsetWhenEmpty[prefix+key] && isEmptyNode(val) {
 			continue
 		}
 		at, inLead := index[key]
 		if inLead && deep[key] && val.Kind == yaml.MappingNode && resolveAlias(out.Content[at]).Kind == yaml.MappingNode {
-			sub, subKeys := overlayKeys(out.Content[at], val, nil, prefix+key+".")
+			sub, subKeys := overlayKeys(out.Content[at], val, nil, nil, prefix+key+".")
 			out.Content[at] = sub
 			maps.Copy(keys, subKeys)
 			continue
@@ -314,9 +315,12 @@ func overlayKeys(lead, local *yaml.Node, deep map[string]bool, prefix string) (*
 	return out, keys
 }
 
-// isEmptyNode reports whether a local value counts as unset: null, "", 0,
-// {} or []. Save writes `model: ""` and `max_turns: 0` unconditionally, so
-// those must not hide the lead's values.
+// isNullNode reports whether n is missing or an explicit null.
+func isNullNode(n *yaml.Node) bool {
+	return n == nil || n.Kind == yaml.ScalarNode && n.ShortTag() == "!!null"
+}
+
+// isEmptyNode reports whether n is null, "", 0, {} or [].
 func isEmptyNode(n *yaml.Node) bool {
 	if n == nil {
 		return true

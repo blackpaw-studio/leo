@@ -133,6 +133,9 @@ type Config struct {
 	shared *sharedTemplates
 	// follow records the lead layer; nil when follow is unset.
 	follow *followLayer
+	// localEmpties holds, on a follower's local view only, the empty
+	// defaults and delegation keys that marshaling would drop.
+	localEmpties *localEmpties
 }
 
 // ClientConfig holds remote-host definitions used when leo is invoked as a

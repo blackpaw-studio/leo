@@ -522,15 +522,11 @@ func (sh *sharedTemplates) marshalLeo(path string, cfg *Config) ([]byte, bool, e
 			local.Templates[name] = tmpl
 		}
 	}
-	data, err := yaml.Marshal(&local)
+	data, err := marshalLocal(&local)
 	if err != nil {
 		return nil, false, fmt.Errorf("marshaling config: %w", err)
 	}
-	loaded, err := parse(path, sh.leoBytes)
-	if err != nil {
-		return nil, false, err
-	}
-	same, err := sameYAML(loaded, &local)
+	same, err := sameAsLoaded(path, sh.leoBytes, &local, data)
 	if err != nil {
 		return nil, false, err
 	}

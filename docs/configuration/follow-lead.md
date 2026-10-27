@@ -109,7 +109,12 @@ Per section, lowest to highest: the lead, then the follower's `templates_file`
   `enabled`, ...): a key set locally replaces the lead's value for that key.
   Keys are top-level, except `defaults.dispatch.*` and `defaults.push.*`,
   which are one level deeper. `harness_options` is replaced whole. A local key
-  set to an empty value (`""`, `0`, `[]`, `{}`) does not override the lead.
+  overrides the lead even when its value is empty (`""`, `0`, `false`, `[]`,
+  `{}`), so clearing a lead value on the follower sticks. A null value counts
+  as unset. The exceptions are `defaults.model: ""`, `defaults.max_turns: 0`
+  and `delegation.active_profile: ""`: Leo writes these even when they are
+  unset, so they count as unset too, and a follower cannot override a lead's
+  value for them with an empty one.
 - **Values are copied verbatim.** `~` and `$VAR` expand on the follower, as
   they do for local values. Usernames and paths are not rewritten.
 
