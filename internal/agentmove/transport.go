@@ -131,7 +131,7 @@ var refBad = regexp.MustCompile("[\\x00-\\x20\\x7f~^:?*\\[\\\\$`;|&<>'\"(){}!#]"
 // git's check-ref-format rules plus no leading '-' and no shell
 // metacharacters. A failure is unsafe_ref.
 func ValidateRef(name string) error {
-	bad := func(why string) error { return fmt.Errorf("unsafe ref %q: %s", name, why) }
+	bad := func(why string) error { return problemf(CodeUnsafeRef, "unsafe ref %q: %s", name, why) }
 	switch {
 	case name == "" || name == "@":
 		return bad("empty or @")

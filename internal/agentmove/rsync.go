@@ -1,7 +1,6 @@
 package agentmove
 
 import (
-	"fmt"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -17,11 +16,11 @@ var safePath = regexp.MustCompile(`^/[A-Za-z0-9._@%+=,/-]+$`)
 // holds anything outside the safe charset. A failure is unsafe_path.
 func ValidatePath(p string) error {
 	if !safePath.MatchString(p) {
-		return fmt.Errorf("unsafe path %q: moves need absolute paths of [A-Za-z0-9._@%%+=,/-] only", p)
+		return problemf(CodeUnsafePath, "unsafe path %q: moves need absolute paths of [A-Za-z0-9._@%%+=,/-] only", p)
 	}
 	for _, c := range strings.Split(p, "/") {
 		if c == ".." {
-			return fmt.Errorf("unsafe path %q: .. component", p)
+			return problemf(CodeUnsafePath, "unsafe path %q: .. component", p)
 		}
 	}
 	return nil
