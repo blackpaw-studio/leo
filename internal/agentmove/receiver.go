@@ -86,11 +86,19 @@ func NewReceiver(cfg func() (*config.Config, error), agents ReceiveManager, vers
 	}
 }
 
+// HostnameEnv overrides os.Hostname() as this daemon's move identity. It
+// exists so two daemons on one machine (the e2e suite) can move agents
+// between them; real hosts leave it unset.
+const HostnameEnv = "LEO_MOVE_HOSTNAME"
+
 // LocalHost identifies this host: hostname, home and user.
 func LocalHost() (Host, error) {
-	name, err := os.Hostname()
-	if err != nil {
-		return Host{}, err
+	name := os.Getenv(HostnameEnv)
+	if name == "" {
+		var err error
+		if name, err = os.Hostname(); err != nil {
+			return Host{}, err
+		}
 	}
 	home, err := os.UserHomeDir()
 	if err != nil {
