@@ -270,3 +270,36 @@ func (g GitInfo) WorkspaceSpec(ws string, userExcludes, nested []string) Workspa
 		NestedWorktrees: g.NestedWorktrees,
 	}
 }
+
+// Manifest is the git block a transfer sends for this state: submodule
+// gitdirs relative to the modules dir, and the branch's upstream. repo is
+// owner/repo when the destination may clone a missing canonical with gh.
+// IndexCommit is filled by G1.
+func (g GitInfo) Manifest(ctx context.Context, ws, repo string) (*GitManifest, error) {
+	if !g.IsRepo {
+		return nil, nil
+	}
+	m := &GitManifest{
+		Mode: g.Mode, Canonical: g.Canonical, HeadRef: g.HeadRef, HeadSHA: g.HeadSHA,
+		RootSHAs: g.RootSHAs, Repo: repo, ModulesDir: g.ModulesDir,
+	}
+	if m.Canonical == "" {
+		m.Canonical = ws
+	}
+	for _, s := range g.Submodules {
+		if s.GitDir != "" {
+			rel, ok := under(realPath(g.ModulesDir), realPath(s.GitDir))
+			if !ok {
+				return nil, problemf(CodeGitUnsupported, "submodule %s keeps its git dir %s outside %s", s.Path, s.GitDir, g.ModulesDir)
+			}
+			s.GitDir = rel
+		}
+		m.Submodules = append(m.Submodules, s)
+	}
+	if b := strings.TrimPrefix(g.HeadRef, "refs/heads/"); b != "" {
+		if remote := git.ConfigGet(ctx, ws, "branch."+b+".remote"); remote != "" {
+			m.Upstream = &Upstream{Remote: remote, Merge: git.ConfigGet(ctx, ws, "branch."+b+".merge")}
+		}
+	}
+	return m, nil
+}
