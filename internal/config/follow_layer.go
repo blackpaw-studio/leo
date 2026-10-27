@@ -57,6 +57,9 @@ type followLayer struct {
 	// reason (D3).
 	invalid     map[EntryKind]map[string]string
 	invalidKeys map[string]string
+	// loadedDefaults and loadedDelegation are the effective defaults and
+	// delegation scalars at load, to find the keys edited since (D1).
+	loadedDefaults, loadedDelegation *yaml.Node
 }
 
 func (fl *followLayer) warn(format string, args ...any) {
@@ -181,6 +184,7 @@ func (c *Config) applyFollowLayer(leoBytes []byte) {
 		fl.warn("lead delegation is unusable (%v); using local delegation only", err)
 	}
 	c.isolateInvalidLeadEntries()
+	fl.snapshotLoaded(c)
 }
 
 // layerTemplates puts lead templates under the shared+local merge.

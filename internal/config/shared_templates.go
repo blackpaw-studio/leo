@@ -518,7 +518,7 @@ func (sh *sharedTemplates) marshalLeo(path string, cfg *Config) ([]byte, bool, e
 	local := *cfg
 	local.Templates = make(map[string]TemplateConfig, len(cfg.Templates))
 	for name, tmpl := range cfg.Templates {
-		if cfg.TemplateSource(name) != SourceShared {
+		if !isSharedSource(cfg.TemplateSource(name)) {
 			local.Templates[name] = tmpl
 		}
 	}

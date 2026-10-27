@@ -75,7 +75,7 @@ func (c *Config) isolateInvalidLeadEntries() {
 		errs = append(errs, probeConfigDirs(name, c.Environments[name])...)
 		if len(errs) > 0 {
 			delete(c.Environments, name)
-			fl.invalid[KindEnvironment][name] = strings.Join(errs, "; ")
+			fl.markInvalid(KindEnvironment, name, errs)
 		}
 	}
 	c.dropInvalidLeadDefaults()
@@ -89,15 +89,22 @@ func (c *Config) isolateInvalidLeadEntries() {
 		}
 		if len(errs) > 0 {
 			delete(c.Templates, name)
-			fl.invalid[KindTemplate][name] = strings.Join(errs, "; ")
+			fl.markInvalid(KindTemplate, name, errs)
 		}
 	}
 	for _, name := range c.leadNames(KindProfile) {
 		if errs := c.validateProfile(name, c.Delegation.Profiles[name]); len(errs) > 0 {
 			delete(c.Delegation.Profiles, name)
-			fl.invalid[KindProfile][name] = strings.Join(errs, "; ")
+			fl.markInvalid(KindProfile, name, errs)
 		}
 	}
+}
+
+// markInvalid records a lead entry as invalid and drops its source: it is
+// no longer an effective entry, so ownership checks and saves skip it.
+func (fl *followLayer) markInvalid(kind EntryKind, name string, errs []string) {
+	fl.invalid[kind][name] = strings.Join(errs, "; ")
+	delete(fl.sources[kind], name)
 }
 
 // leadNames lists, sorted, the entries of kind whose source is the lead.

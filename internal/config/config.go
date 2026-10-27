@@ -989,8 +989,18 @@ func (c *Config) expandPaths() {
 // symlink, Save writes through it: the link survives and its target is
 // replaced (see resolveWriteTarget).
 func Save(path string, cfg *Config) error {
+	if err := cfg.CheckLeadOwnership(); err != nil {
+		return err
+	}
+	cfg, err := cfg.localView()
+	if err != nil {
+		return err
+	}
 	if cfg.shared != nil {
 		return saveSplit(path, cfg)
+	}
+	if cfg.follow != nil {
+		return saveFollower(path, cfg)
 	}
 	data, err := yaml.Marshal(cfg)
 	if err != nil {

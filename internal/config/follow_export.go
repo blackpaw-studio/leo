@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 )
 
 // FollowExportSchema is the export format this build reads and writes.
@@ -166,7 +167,14 @@ func (e FollowExport) decodeSections() (leadSections, error) {
 			out.templates[name] = tmpl
 		}
 	}
-	out.environments = e.Environments
+	if e.Environments != nil {
+		// A fresh copy per decode: the effective config and the ownership
+		// baseline must not share maps.
+		out.environments = make(map[string]map[string]string, len(e.Environments))
+		for name, env := range e.Environments {
+			out.environments[name] = maps.Clone(env)
+		}
+	}
 	if e.Delegation != nil {
 		out.delegation = &DelegationConfig{}
 		if err := decodeJSONValue(e.Delegation, out.delegation); err != nil {
