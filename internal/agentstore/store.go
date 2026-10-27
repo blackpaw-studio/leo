@@ -222,7 +222,26 @@ type Record struct {
 	// SetAppearance is its only writer: Save always keeps the stored value,
 	// so a respawn that builds a fresh record never wipes it.
 	Appearance *Appearance `json:"appearance,omitempty"`
+
+	// MovedTo marks a record whose agent now lives on another host: the
+	// client.hosts key it was moved to, or, on a destination whose receive
+	// failed, the source's hostname. A moved record is always Stopped with
+	// WakeOnMessage false, and nothing starts, wakes or delivers to it here.
+	// Save writes it as given, so a move back clears it.
+	MovedTo string `json:"moved_to,omitempty"`
+	// MovedAt is when MovedTo was set.
+	MovedAt *time.Time `json:"moved_at,omitempty"`
+	// MoveLog is the time of this agent's last move to or from each peer,
+	// keyed by the peer's hostname. It travels with the agent and feeds a
+	// move hook's LEO_MOVE_LAST.
+	MoveLog map[string]time.Time `json:"move_log,omitempty"`
+	// ForkFromSession is set on a copy until its first launch: the source
+	// session the copy's harness forks from.
+	ForkFromSession string `json:"fork_from_session,omitempty"`
 }
+
+// Moved reports whether r's agent has been moved to another host.
+func (r Record) Moved() bool { return r.MovedTo != "" }
 
 // Appearance is an agent's manual emoji and color; an empty field is unset
 // and falls back to the appearance rules.
