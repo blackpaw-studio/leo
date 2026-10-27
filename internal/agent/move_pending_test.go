@@ -97,7 +97,7 @@ func TestMovePendingSurvivesRestart(t *testing.T) {
 
 // Only the fence's own run lifts it; MarkMoved settles it as moved.
 func TestMoveFenceLifts(t *testing.T) {
-	m, _, home := fencedTestManager(t)
+	m, _, _ := fencedTestManager(t)
 	if err := m.ClearMoveFence("leo-x", "run-0"); err != nil {
 		t.Fatalf("ClearMoveFence(another run): %v", err)
 	}
@@ -111,7 +111,7 @@ func TestMoveFenceLifts(t *testing.T) {
 		t.Fatalf("Start after the fence lifted: %v", err)
 	}
 
-	m, _, home = fencedTestManager(t)
+	m, _, home := fencedTestManager(t)
 	if err := m.MarkMoved("leo-x", "laptop", "laptop.local", fenceSince); err != nil {
 		t.Fatalf("MarkMoved: %v", err)
 	}
