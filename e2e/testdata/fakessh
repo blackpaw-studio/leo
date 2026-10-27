@@ -1,0 +1,28 @@
+#!/bin/sh
+# fakessh stands in for ssh in the e2e tests. It appends its argv to
+# $FAKESSH_LOG (one argument per line, then a "--" line), fails like an
+# unreachable host (exit 255) while the file named by $FAKESSH_FAIL exists,
+# and otherwise runs the remote command with sh -c from $FAKESSH_HOME, the
+# remote leo home. Options are skipped before and after the destination, as
+# OpenSSH parses them.
+if [ -n "$FAKESSH_LOG" ]; then
+  { for arg in "$@"; do printf '%s\n' "$arg"; done; printf -- '--\n'; } >> "$FAKESSH_LOG"
+fi
+dest=
+while [ $# -gt 0 ]; do
+  case "$1" in
+    -[BbcDEeFIiJLlmOopQRSWw]) shift 2 ;;
+    -*) shift ;;
+    *)
+      if [ -n "$dest" ]; then break; fi
+      dest=$1
+      shift
+      ;;
+  esac
+done
+if [ -n "$FAKESSH_FAIL" ] && [ -e "$FAKESSH_FAIL" ]; then
+  echo "ssh: connect to host $dest port 22: Connection refused" >&2
+  exit 255
+fi
+cd "${FAKESSH_HOME:?FAKESSH_HOME is not set}" || exit 255
+exec sh -c "$*"
