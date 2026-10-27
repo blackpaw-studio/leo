@@ -1,6 +1,6 @@
 # Config follow-lead: one host is the source of truth for shared config
 
-Status: draft, for Evan's review (brainstormed 2026-10-27).
+Status: approved by Evan 2026-10-27.
 Related:
 - `2026-10-27-leo-agent-move.md`: move/copy refuses when the destination lacks a template or environment. This spec is how the destination normally has them.
 - `2026-10-26-shared-templates-file.md` (`templates_file`).
