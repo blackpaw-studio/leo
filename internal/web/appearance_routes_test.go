@@ -30,8 +30,16 @@ var twoRules = []map[string]any{
 // observe package's golden wire fixture.
 func assertRulesWire(t *testing.T, fixture string, res apiResult) {
 	t.Helper()
+	assertWireFixture(t, fixture, res.Status, res.Raw)
+}
+
+// assertWireFixture compares a response with a {status, body} golden from
+// the observe package's wire fixtures, which LeoKit decodes too. A revision
+// in the body is masked.
+func assertWireFixture(t *testing.T, fixture string, status int, raw []byte) {
+	t.Helper()
 	var body map[string]any
-	if err := json.Unmarshal(res.Raw, &body); err != nil {
+	if err := json.Unmarshal(raw, &body); err != nil {
 		t.Fatal(err)
 	}
 	if d, ok := body["data"].(map[string]any); ok {
@@ -39,18 +47,18 @@ func assertRulesWire(t *testing.T, fixture string, res apiResult) {
 			d["revision"] = "sha256:" + strings.Repeat("0", 64)
 		}
 	}
-	raw, err := os.ReadFile("../observe/testdata/wire/" + fixture)
+	golden, err := os.ReadFile("../observe/testdata/wire/" + fixture)
 	if err != nil {
 		t.Fatal(err)
 	}
 	var want map[string]any
-	if err := json.Unmarshal(raw, &want); err != nil {
+	if err := json.Unmarshal(golden, &want); err != nil {
 		t.Fatal(err)
 	}
-	got := map[string]any{"status": float64(res.Status), "body": body}
+	got := map[string]any{"status": float64(status), "body": body}
 	if !reflect.DeepEqual(got, want) {
 		gotJSON, _ := json.MarshalIndent(got, "", "  ")
-		t.Fatalf("%s mismatch\n--- want\n%s\n--- got\n%s", fixture, raw, gotJSON)
+		t.Fatalf("%s mismatch\n--- want\n%s\n--- got\n%s", fixture, golden, gotJSON)
 	}
 }
 
@@ -190,24 +198,18 @@ func putAppearance(t *testing.T, svc AppearanceService, name, body string) *http
 
 func TestAgentAppearanceRoute(t *testing.T) {
 	svc := &fakeAppearanceService{
-		records: map[string]agent.Record{"leo-x": {Name: "leo-x"}},
+		records: map[string]agent.Record{"olympus": {Name: "olympus"}},
 		result:  &observe.Appearance{Emoji: "🏛️", EmojiSource: "manual", Color: "teal", ColorSource: "rule:0"},
 	}
 
-	w := putAppearance(t, svc, "leo-x", `{"emoji": "🏛️", "color": null}`)
-	if w.Code != http.StatusOK {
-		t.Fatalf("status = %d, body %s", w.Code, w.Body)
-	}
-	if svc.lastName != "leo-x" || svc.lastPatch.Emoji == nil || *svc.lastPatch.Emoji != "🏛️" || svc.lastPatch.Color == nil || *svc.lastPatch.Color != "" {
+	w := putAppearance(t, svc, "olympus", `{"emoji": "🏛️", "color": null}`)
+	assertWireFixture(t, "appearance-agent-put.json", w.Code, w.Body.Bytes())
+	if svc.lastName != "olympus" || svc.lastPatch.Emoji == nil || *svc.lastPatch.Emoji != "🏛️" || svc.lastPatch.Color == nil || *svc.lastPatch.Color != "" {
 		t.Fatalf("patch = %+v (emoji %v, color %v), want emoji set and color cleared", svc.lastPatch, svc.lastPatch.Emoji, svc.lastPatch.Color)
-	}
-	want := `{"ok":true,"data":{"agent":"leo-x","appearance":{"emoji":"🏛️","color":"teal","emoji_source":"manual","color_source":"rule:0"}}}`
-	if got := strings.TrimSpace(w.Body.String()); got != want {
-		t.Fatalf("body = %s\nwant   %s", got, want)
 	}
 
 	t.Run("absent keys are left unchanged", func(t *testing.T) {
-		if w := putAppearance(t, svc, "leo-x", `{}`); w.Code != http.StatusOK {
+		if w := putAppearance(t, svc, "olympus", `{}`); w.Code != http.StatusOK {
 			t.Fatalf("status = %d", w.Code)
 		}
 		if svc.lastPatch.Emoji != nil || svc.lastPatch.Color != nil {
@@ -216,10 +218,8 @@ func TestAgentAppearanceRoute(t *testing.T) {
 	})
 	t.Run("nothing set answers appearance null", func(t *testing.T) {
 		svc.result = nil
-		w := putAppearance(t, svc, "leo-x", `{"emoji": null, "color": null}`)
-		if !strings.Contains(w.Body.String(), `"appearance":null`) {
-			t.Fatalf("body = %s, want appearance null", w.Body)
-		}
+		w := putAppearance(t, svc, "olympus", `{"emoji": null, "color": null}`)
+		assertWireFixture(t, "appearance-agent-put-null.json", w.Code, w.Body.Bytes())
 	})
 	t.Run("404 for an unknown agent", func(t *testing.T) {
 		w := putAppearance(t, svc, "ghost", `{"color": "red"}`)
@@ -230,27 +230,27 @@ func TestAgentAppearanceRoute(t *testing.T) {
 	t.Run("400 invalid_appearance carries the reason", func(t *testing.T) {
 		svc.err = &agent.InvalidAppearanceError{Field: "color", Reason: `color "magenta" is not in the palette`}
 		defer func() { svc.err = nil }()
-		w := putAppearance(t, svc, "leo-x", `{"color": "magenta"}`)
+		w := putAppearance(t, svc, "olympus", `{"color": "magenta"}`)
 		if w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), `"code":"invalid_appearance"`) || !strings.Contains(w.Body.String(), "magenta") {
 			t.Fatalf("status = %d body %s", w.Code, w.Body)
 		}
 	})
 	t.Run("400 on a malformed body", func(t *testing.T) {
 		for _, body := range []string{`{"color": 3}`, `{"colour": "red"}`, `not json`} {
-			if w := putAppearance(t, svc, "leo-x", body); w.Code != http.StatusBadRequest {
+			if w := putAppearance(t, svc, "olympus", body); w.Code != http.StatusBadRequest {
 				t.Errorf("%s: status = %d, want 400", body, w.Code)
 			}
 		}
 	})
 	t.Run("503 without an agent service", func(t *testing.T) {
-		if w := putAppearance(t, nil, "leo-x", `{}`); w.Code != http.StatusServiceUnavailable {
+		if w := putAppearance(t, nil, "olympus", `{}`); w.Code != http.StatusServiceUnavailable {
 			t.Fatalf("status = %d", w.Code)
 		}
 	})
 	t.Run("an unexpected failure is a 500", func(t *testing.T) {
 		svc.err = errors.New("disk full")
 		defer func() { svc.err = nil }()
-		if w := putAppearance(t, svc, "leo-x", `{"color": "red"}`); w.Code != http.StatusInternalServerError {
+		if w := putAppearance(t, svc, "olympus", `{"color": "red"}`); w.Code != http.StatusInternalServerError {
 			t.Fatalf("status = %d", w.Code)
 		}
 	})

@@ -1,0 +1,15 @@
+{
+  "body": {
+    "data": {
+      "agent": "olympus",
+      "appearance": {
+        "emoji": "🏛️",
+        "color": "teal",
+        "emoji_source": "manual",
+        "color_source": "rule:0"
+      }
+    },
+    "ok": true
+  },
+  "status": 200
+}
