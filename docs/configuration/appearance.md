@@ -57,9 +57,9 @@ The daemon re-resolves on every config reload (every rules write and every confi
 
 ## Validation
 
-A bad rule is reported as `appearance_rules[i]: reason`, through the same error path as an undefined environment: `leo validate` fails, `leo service start` and `leo run` refuse to start until it is fixed, and config API writes are refused while it is on disk (`PUT /appearance/rules` can always replace it). A running daemon is unaffected: a reload loads the bad rule, skips it when resolving, and lists it in `GET /appearance/rules`.
+A bad rule is a warning, never an error: `leo validate` prints it as `appearance_rules[i]: reason` (a warning alone still exits 0), and `GET /appearance/rules` lists it under `errors`. It never stops `leo service start`, `leo run`, a reload or a config API write; the daemon skips it when resolving. Only `PUT /appearance/rules` refuses one, with a 400.
 
-Even a rule that does not parse (a string where the `when` map belongs, say), or an `appearance_rules` value that is not a list, never fails loading `leo.yaml`. It loads as an invalid entry, is reported the same way, and any save writes it back unchanged.
+Even a rule that does not parse (a string where the `when` map belongs, say), or an `appearance_rules` value that is not a list, never fails loading `leo.yaml`. It loads as an invalid entry, is warned about the same way, and any save writes it back unchanged.
 
 ## API
 

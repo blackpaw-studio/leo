@@ -58,22 +58,21 @@ func TestValidateAppearanceRules(t *testing.T) {
 	}
 }
 
-func TestValidateReportsAppearanceRulesByIndex(t *testing.T) {
+// A bad rule is a warning, never a Validate error: it must not stop
+// `leo service start`, `leo run` or config API writes.
+func TestAppearanceRuleWarningsByIndex(t *testing.T) {
 	cfg := minimalValidConfig()
 	cfg.AppearanceRules = AppearanceRuleList{
 		appearanceRule("name", "is", "ok", "red", ""),
 		appearanceRule("name", "is", "x", "magenta", ""),
 	}
-	err := cfg.Validate()
-	if err == nil {
-		t.Fatal("Validate() = nil, want an appearance_rules error")
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("Validate() = %v, want a bad appearance rule to be a warning only", err)
 	}
+	warnings := cfg.AppearanceRuleWarnings()
 	want := `appearance_rules[1]: color "magenta" is not in the palette`
-	if !strings.Contains(err.Error(), want) {
-		t.Fatalf("Validate() = %v, want it to contain %q", err, want)
-	}
-	if strings.Contains(err.Error(), "appearance_rules[0]") {
-		t.Fatalf("Validate() flagged the valid rule: %v", err)
+	if len(warnings) != 1 || !strings.HasPrefix(warnings[0], want) {
+		t.Fatalf("AppearanceRuleWarnings() = %q, want one warning starting %q", warnings, want)
 	}
 }
 
@@ -137,8 +136,11 @@ func TestAppearanceRulesLenientLoad(t *testing.T) {
 	if p := cfg.AppearanceRules[0].Problem(); p != "" {
 		t.Fatalf("rule 0 Problem() = %q, want valid", p)
 	}
-	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "appearance_rules[1]: rule is malformed") {
-		t.Fatalf("Validate() = %v, want appearance_rules[1] malformed", err)
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("Validate() = %v, want a malformed rule to be a warning only", err)
+	}
+	if w := cfg.AppearanceRuleWarnings(); len(w) != 1 || !strings.HasPrefix(w[0], "appearance_rules[1]: rule is malformed") {
+		t.Fatalf("AppearanceRuleWarnings() = %q, want appearance_rules[1] malformed", w)
 	}
 
 	if err := Save(path, cfg); err != nil {

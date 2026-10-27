@@ -20,9 +20,9 @@ All notable user-visible changes to Leo are documented here.
   socket and under `/api/v1` (operator or paired device):
   `GET`/`PUT /appearance/rules` (If-Match required; a bad rule is 400
   `invalid_appearance_rule` with its index and reason) and
-  `PUT /agents/{name}/appearance` (`null` clears, absent is unchanged). A
-  malformed rule never fails loading `leo.yaml`; a bad rule is reported like an
-  undefined environment (`leo validate`, startup, config writes).
+  `PUT /agents/{name}/appearance` (`null` clears, absent is unchanged). A bad
+  or malformed rule is a `leo validate` warning that never blocks startup,
+  `leo run` or config writes; resolution skips it.
   See [Agent Appearance](docs/configuration/appearance.md).
 - **`restoring` agent status on `/api/v1` (`agent_status_restoring`).** While the
   daemon is still restoring agents at boot, a stored agent that is neither live nor

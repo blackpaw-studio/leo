@@ -797,7 +797,6 @@ func (c *Config) Validate() error {
 
 	errs = append(errs, c.validateDelegation()...)
 	errs = append(errs, c.validateEnvironments()...)
-	errs = append(errs, c.validateAppearanceRules()...)
 
 	if len(errs) > 0 {
 		return &ValidationErrors{Messages: errs}

@@ -125,6 +125,25 @@ func TestAppearanceRulesRoutes(t *testing.T) {
 	}
 }
 
+// A rule hand-edited invalid on disk is a warning: it must not block config
+// API writes to unrelated keys.
+func TestConfigWriteSucceedsWithBadAppearanceRuleOnDisk(t *testing.T) {
+	svc, path := newConfigService(t, &countingReloader{})
+	h := newAPIHarnessOver(t, svc, path, "")
+	cfg := h.loadConfig()
+	cfg.AppearanceRules = config.AppearanceRuleList{{
+		When: config.AppearanceCondition{Field: "name", Op: "is", Value: "x"}, Color: "magenta",
+	}}
+	if err := config.Save(path, cfg); err != nil {
+		t.Fatal(err)
+	}
+	res := h.do(http.MethodPut, "/config/defaults", h.revision(), map[string]any{"values": map[string]any{"model": "opus"}})
+	wantStatus(t, res, http.StatusOK)
+	if got := h.loadConfig().AppearanceRules; len(got) != 1 || got[0].Color != "magenta" {
+		t.Fatalf("rules after an unrelated write = %+v, want the bad rule kept", got)
+	}
+}
+
 func TestAppearanceRulesRoutesAreOperatorOnly(t *testing.T) {
 	s := newTokenSplitServer(t)
 	for _, route := range []struct{ method, path string }{

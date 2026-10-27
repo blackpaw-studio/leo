@@ -188,14 +188,16 @@ func (l AppearanceRuleList) Errors() []AppearanceRuleError {
 	return out
 }
 
-// validateAppearanceRules reports every invalid rule as
-// "appearance_rules[i]: reason", Validate's dotted-path convention.
-func (c *Config) validateAppearanceRules() []string {
-	var errs []string
+// AppearanceRuleWarnings reports every invalid rule as
+// "appearance_rules[i]: reason". It is a warning, not a Validate error: a bad
+// rule is only skipped when resolving, so it must not stop `leo service
+// start`, `leo run` or a config API write. PUT /appearance/rules refuses one.
+func (c *Config) AppearanceRuleWarnings() []string {
+	var warnings []string
 	for _, e := range c.AppearanceRules.Errors() {
-		errs = append(errs, fmt.Sprintf("appearance_rules[%d]: %s", e.Index, e.Reason))
+		warnings = append(warnings, fmt.Sprintf("appearance_rules[%d]: %s", e.Index, e.Reason))
 	}
-	return errs
+	return warnings
 }
 
 // ValidateAppearanceColor checks that color is a palette name.
