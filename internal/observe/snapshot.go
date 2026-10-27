@@ -98,6 +98,9 @@ type Agent struct {
 	// field. Set only via AgentDormancy, which enforces this pairing —
 	// never assign Status and WakeOnMessage independently.
 	WakeOnMessage bool `json:"wake_on_message"`
+	// MovedTo is the host a stopped agent was moved to; its Status stays
+	// StatusStopped. Absent for an agent that lives here.
+	MovedTo string `json:"moved_to,omitempty"`
 
 	StartedAt      time.Time  `json:"started_at"`
 	LastActivityAt *time.Time `json:"last_activity_at,omitempty"`

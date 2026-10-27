@@ -178,7 +178,7 @@ func newAgentListCmd() *cobra.Command {
 			for _, r := range records {
 				fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%d\t%s\n",
 					r.Name, dashIfEmpty(r.Template), dashIfEmpty(r.Branch),
-					dashIfEmpty(r.Workspace), dashIfEmpty(r.Status), r.Restarts, dashIfEmpty(r.BridgeSummary()))
+					dashIfEmpty(r.Workspace), dashIfEmpty(listStatus(r)), r.Restarts, dashIfEmpty(r.BridgeSummary()))
 			}
 			return tw.Flush()
 		},
@@ -186,6 +186,15 @@ func newAgentListCmd() *cobra.Command {
 	addHostFlag(cmd, &host)
 	cmd.Flags().BoolVar(&asJSON, "json", false, "output as JSON")
 	return cmd
+}
+
+// listStatus is r's STATUS cell: moved→<host> for an agent whose live home is
+// now another host, else its status.
+func listStatus(r agent.Record) string {
+	if r.MovedTo != "" {
+		return "moved→" + r.MovedTo
+	}
+	return r.Status
 }
 
 // --- spawn ---

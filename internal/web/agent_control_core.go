@@ -36,6 +36,9 @@ type controlOutcome struct {
 	// "queued"; the wake-then-deliver 202 predates it and says nothing).
 	bridgeQueued bool
 	err          string
+	// code is the stable error class, set only where one is documented
+	// (agent_moved).
+	code string
 }
 
 func controlOK(transport string) controlOutcome {
@@ -171,6 +174,11 @@ func (s *Server) messageAgentAs(ctx context.Context, name, from, text, cmdID str
 	// path 500; the sender retries and auto-wakes again.
 	states := s.processStates()
 	if _, ok := states[name]; !ok {
+		if err := s.movedErr(name); err != nil {
+			out := controlFailed(http.StatusConflict, transportLegacy, "%v", err)
+			out.code = codeAgentMoved
+			return out
+		}
 		if s.agentSvc != nil && s.agentSvc.Wakeable(name) {
 			return s.wakeAndDeliver(ctx, name, from, text)
 		}

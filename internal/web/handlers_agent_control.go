@@ -106,7 +106,7 @@ func (s *Server) handleWebAgentClear(w http.ResponseWriter, r *http.Request) {
 // holding the command.
 func writeWebControl(w http.ResponseWriter, out controlOutcome) {
 	if out.err != "" {
-		writeJSON(w, out.status, apiResponse{Error: out.err})
+		writeJSON(w, out.status, apiResponse{Error: out.err, Code: out.code})
 		return
 	}
 	resp := apiResponse{OK: true}

@@ -31,6 +31,8 @@ const (
 	ErrorCodeAgentNotStopped     = "agent_not_stopped"
 	ErrorCodeAgentAlreadyRunning = "agent_already_running"
 	ErrorCodeAgentNotRunning     = "agent_not_running"
+	ErrorCodeAgentMoved          = "agent_moved"
+	ErrorCodeAgentMoving         = "agent_moving"
 	ErrorCodeDaemonRestoring     = "daemon_restoring"
 	ErrorCodeDrainUnavailable    = "drain_unavailable"
 	ErrorCodeDrainInProgress     = "drain_in_progress"

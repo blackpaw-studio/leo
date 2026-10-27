@@ -290,6 +290,7 @@ func (s *Server) buildAgentsData(r *http.Request) (any, error) {
 				Bridge:    a.BridgeSummary(),
 
 				Environments: strings.Join(a.Environments, ","),
+				MovedTo:      a.MovedTo,
 			})
 		}
 	}

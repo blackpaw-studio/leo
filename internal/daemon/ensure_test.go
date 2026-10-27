@@ -3,6 +3,7 @@ package daemon
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/blackpaw-studio/leo/internal/agent"
@@ -23,7 +24,11 @@ type fakeEnsureMgr struct {
 	// the requested name — simulating a reservation collision that suffixed
 	// the name (e.g. "foo" -> "foo-2").
 	spawnName string
+	// moved holds the refusal MovedErr reports for an agent moved away.
+	moved map[string]error
 }
+
+func (f *fakeEnsureMgr) MovedErr(name string) error { return f.moved[name] }
 
 func (f *fakeEnsureMgr) Live(name string) bool     { return f.live[name] }
 func (f *fakeEnsureMgr) Wakeable(name string) bool { return f.wakeable[name] }
@@ -149,5 +154,25 @@ func TestEnsureStartFailurePropagates(t *testing.T) {
 	}
 	if !errors.Is(err, wantErr) {
 		t.Fatalf("expected wrapped %v, got %v", wantErr, err)
+	}
+}
+
+// TestEnsureRefusesMovedAgent: a persistent task never wakes or respawns an
+// agent that moved to another host, even if its record still reads wakeable.
+func TestEnsureRefusesMovedAgent(t *testing.T) {
+	f := &fakeEnsureMgr{
+		wakeable: map[string]bool{"foo": true},
+		stopped:  map[string]bool{"foo": true},
+		moved:    map[string]error{"foo": &agent.MovedError{Name: "foo", To: "laptop"}},
+	}
+	err := NewAgentEnsurer(f).Ensure(context.Background(), EnsureSpec{Name: "foo"})
+	if !errors.Is(err, agent.ErrAgentMoved) {
+		t.Fatalf("Ensure = %v, want ErrAgentMoved", err)
+	}
+	if !strings.Contains(err.Error(), "moved to laptop; task delivery refused on this host") {
+		t.Fatalf("Ensure error = %q", err)
+	}
+	if len(f.started) != 0 || len(f.spawned) != 0 {
+		t.Fatalf("started=%v spawned=%v for a moved agent", f.started, f.spawned)
 	}
 }

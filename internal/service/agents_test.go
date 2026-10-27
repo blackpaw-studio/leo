@@ -1410,3 +1410,50 @@ func TestRestoreAgentsSpawnsFreshWhenEnvironmentsExist(t *testing.T) {
 		t.Fatalf("spawn env = %v", spawner.calls[0].Env)
 	}
 }
+
+// TestRestoreSkipsMovedFailedRestore: a record marked moved_to is never
+// respawned at boot, even if it also carries a failed-restore marker that
+// would otherwise be retried.
+func TestRestoreSkipsMovedFailedRestore(t *testing.T) {
+	home := t.TempDir()
+	rec := agentstore.Record{
+		Name: "leo-moved", Template: "coding", Workspace: t.TempDir(),
+		ClaudeArgs: []string{"--model", "sonnet"}, SessionID: "sid", WebPort: "8370", SpawnedAt: time.Now(),
+		Stopped: true, StoppedReason: "restore failed", MovedTo: "laptop",
+	}
+	if err := agentstore.Save(home, rec); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	spawner := &fakeAgentSpawner{}
+	if restored := RestoreAgents(home, "", "", spawner, leomcp.Server{}); restored != 0 || len(spawner.calls) != 0 {
+		t.Fatalf("restored=%d calls=%d for a moved record", restored, len(spawner.calls))
+	}
+	stored, _ := agentstore.Load(agentstore.FilePath(home))
+	if got := stored[rec.Name]; got.MovedTo != "laptop" || got.StoppedReason != "restore failed" {
+		t.Fatalf("moved record changed by restore: %+v", got)
+	}
+}
+
+// TestRestoreKeepsMovedWorktreeRecordWithMissingWorkspace: a worktree agent
+// moved to another host keeps its record (the moved_to pointer) even when
+// its worktree directory is gone here.
+func TestRestoreKeepsMovedWorktreeRecordWithMissingWorkspace(t *testing.T) {
+	home := t.TempDir()
+	rec := agentstore.Record{
+		Name: "leo-moved-wt", Template: "coding", Repo: "owner/repo",
+		Workspace: filepath.Join(t.TempDir(), "gone"), Branch: "feat/x", CanonicalPath: t.TempDir(),
+		WebPort: "8370", SpawnedAt: time.Now(), Stopped: true, MovedTo: "laptop",
+	}
+	if err := agentstore.Save(home, rec); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	spawner := &mailDroppingSpawner{}
+	RestoreAgents(home, "", "", spawner, leomcp.Server{})
+	stored, _ := agentstore.Load(agentstore.FilePath(home))
+	if _, ok := stored[rec.Name]; !ok {
+		t.Fatal("moved worktree record dropped for its missing workspace")
+	}
+	if len(spawner.calls) != 0 || len(spawner.dropped) != 0 {
+		t.Fatalf("calls=%d dropped=%v for a moved record", len(spawner.calls), spawner.dropped)
+	}
+}

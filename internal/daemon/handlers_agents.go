@@ -637,6 +637,10 @@ func writeAgentError(w http.ResponseWriter, err error) {
 		writeJSON(w, http.StatusNotFound, Response{OK: false, Error: err.Error(), Code: ErrorCodeSourceAgentNotFound})
 	case errors.Is(err, agent.ErrSourceNotGitRepo):
 		writeJSON(w, http.StatusBadRequest, Response{OK: false, Error: err.Error(), Code: ErrorCodeSourceNotGitRepo})
+	case errors.Is(err, agent.ErrAgentMoved):
+		writeJSON(w, http.StatusConflict, Response{OK: false, Error: err.Error(), Code: ErrorCodeAgentMoved})
+	case errors.Is(err, agent.ErrAgentMoving):
+		writeJSON(w, http.StatusConflict, Response{OK: false, Error: err.Error(), Code: ErrorCodeAgentMoving})
 	case errors.Is(err, agent.ErrAgentStopped):
 		writeJSON(w, http.StatusConflict, Response{OK: false, Error: err.Error(), Code: ErrorCodeAgentStopped})
 	case errors.Is(err, agent.ErrAgentNotStopped):

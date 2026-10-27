@@ -112,6 +112,13 @@ func RestoreAgents(homePath, tmuxPath, webToken string, sv agentSpawner, mcp leo
 			canonicals[rec.CanonicalPath] = struct{}{}
 		}
 
+		if rec.Moved() {
+			// Its live home is another host. The record is the pointer
+			// there, so it stays put whatever state its workspace is in
+			// here, and it never restarts.
+			continue
+		}
+
 		if isWorktree && workspaceMissing(name, rec.Workspace) {
 			// Worktree directory gone — nothing to reattach to.
 			// Drop the record; git's own metadata is cleaned up by
