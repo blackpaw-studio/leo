@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+
+	"github.com/blackpaw-studio/leo/internal/git"
 )
 
 // safePath is the only shape a path on rsync's or git's command line may
@@ -80,9 +82,9 @@ func ModulesTarget(isCopy bool, destModulesDir, destGitDir string) string {
 
 // Submodule states (see git.Submodules).
 const (
-	SubmoduleAbsorbed = "absorbed"
-	SubmoduleInline   = "inline"
-	SubmoduleUninit   = "uninit"
+	SubmoduleAbsorbed = git.SubmoduleAbsorbed
+	SubmoduleInline   = git.SubmoduleInline
+	SubmoduleUninit   = git.SubmoduleUninit
 )
 
 // Submodule is one submodule as the workspace transfer sees it.
