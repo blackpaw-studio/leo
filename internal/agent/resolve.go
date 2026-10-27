@@ -223,5 +223,6 @@ func mergeStored(r *Record, stored map[string]agentstore.Record) {
 	r.CanonicalPath = s.CanonicalPath
 	r.Environments = s.Environments
 	r.WakeOnMessage = s.WakeOnMessage
+	r.MovedTo = s.MovedTo
 	r.ManualAppearance = s.Appearance
 }

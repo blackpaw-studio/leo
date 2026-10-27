@@ -84,6 +84,9 @@ func (m *Manager) SwitchTemplate(name, template string) (SwitchResult, error) {
 	if !ok {
 		return SwitchResult{}, fmt.Errorf("no agentstore record for %q (cannot switch the template of an unpersisted agent)", name)
 	}
+	if err := m.checkMovable(rec); err != nil {
+		return SwitchResult{}, err
+	}
 
 	_, live := m.sup.EphemeralAgents()[name]
 	status := "running"
