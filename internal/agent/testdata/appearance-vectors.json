@@ -1,0 +1,276 @@
+{
+  "version": 1,
+  "notes": "Shared resolution vectors for agent appearance. The daemon (internal/agent TestResolveAppearance) and LeoKit (LeoAppearanceResolverTests) both run every case; keep the copies byte-identical. An empty harness means claude. A rule that fails validation is skipped, but later rules keep their original index in the source.",
+  "cases": [
+    {
+      "name": "nothing set resolves to null",
+      "agent": { "name": "olympus", "template": "ops", "harness": "claude", "environments": ["homelab"] },
+      "manual": null,
+      "rules": [],
+      "expected": null
+    },
+    {
+      "name": "no rule matches resolves to null",
+      "agent": { "name": "olympus", "template": "ops", "harness": "claude", "environments": ["homelab"] },
+      "manual": null,
+      "rules": [
+        { "when": { "field": "name", "op": "is", "value": "zeus" }, "color": "red", "emoji": "⚡" }
+      ],
+      "expected": null
+    },
+    {
+      "name": "manual values with no rules",
+      "agent": { "name": "olympus", "template": "ops", "harness": "claude", "environments": [] },
+      "manual": { "emoji": "🏛️", "color": "teal" },
+      "rules": [],
+      "expected": { "emoji": "🏛️", "color": "teal", "emoji_source": "manual", "color_source": "manual" }
+    },
+    {
+      "name": "manual color beats a matching rule while the rule still supplies the emoji",
+      "agent": { "name": "olympus", "template": "ops", "harness": "claude", "environments": ["homelab"] },
+      "manual": { "color": "blue" },
+      "rules": [
+        { "when": { "field": "environments", "op": "contains", "value": "homelab" }, "color": "teal", "emoji": "🏠" }
+      ],
+      "expected": { "emoji": "🏠", "color": "blue", "emoji_source": "rule:0", "color_source": "manual" }
+    },
+    {
+      "name": "manual emoji beats a matching rule while the rule still supplies the color",
+      "agent": { "name": "olympus", "template": "ops", "harness": "claude", "environments": ["homelab"] },
+      "manual": { "emoji": "🏛️" },
+      "rules": [
+        { "when": { "field": "environments", "op": "contains", "value": "homelab" }, "color": "teal", "emoji": "🏠" }
+      ],
+      "expected": { "emoji": "🏛️", "color": "teal", "emoji_source": "manual", "color_source": "rule:0" }
+    },
+    {
+      "name": "first matching rule wins",
+      "agent": { "name": "olympus", "template": "ops", "harness": "claude", "environments": ["homelab", "prod"] },
+      "manual": null,
+      "rules": [
+        { "when": { "field": "name", "op": "is", "value": "zeus" }, "color": "yellow" },
+        { "when": { "field": "environments", "op": "contains", "value": "prod" }, "color": "red" },
+        { "when": { "field": "environments", "op": "contains", "value": "homelab" }, "color": "teal" }
+      ],
+      "expected": { "color": "red", "color_source": "rule:1" }
+    },
+    {
+      "name": "color and emoji resolve independently across rules",
+      "agent": { "name": "alfred-itunes-dj", "template": "assistant", "harness": "claude", "environments": ["homelab"] },
+      "manual": null,
+      "rules": [
+        { "when": { "field": "environments", "op": "contains", "value": "homelab" }, "color": "teal" },
+        { "when": { "field": "name", "op": "glob", "value": "alfred-*" }, "color": "pink", "emoji": "🎩" }
+      ],
+      "expected": { "emoji": "🎩", "color": "teal", "emoji_source": "rule:1", "color_source": "rule:0" }
+    },
+    {
+      "name": "environments contains tests membership, not substring",
+      "agent": { "name": "olympus", "template": "ops", "harness": "claude", "environments": ["homelab-dev"] },
+      "manual": null,
+      "rules": [
+        { "when": { "field": "environments", "op": "contains", "value": "homelab" }, "color": "teal" }
+      ],
+      "expected": null
+    },
+    {
+      "name": "environments is tests membership",
+      "agent": { "name": "olympus", "template": "ops", "harness": "claude", "environments": ["staging", "homelab"] },
+      "manual": null,
+      "rules": [
+        { "when": { "field": "environments", "op": "is", "value": "homelab" }, "color": "teal" }
+      ],
+      "expected": { "color": "teal", "color_source": "rule:0" }
+    },
+    {
+      "name": "environments starts_with matches when any element does",
+      "agent": { "name": "olympus", "template": "ops", "harness": "claude", "environments": ["staging", "homelab-dev"] },
+      "manual": null,
+      "rules": [
+        { "when": { "field": "environments", "op": "starts_with", "value": "homelab" }, "color": "green" }
+      ],
+      "expected": { "color": "green", "color_source": "rule:0" }
+    },
+    {
+      "name": "environments glob matches when any element does",
+      "agent": { "name": "olympus", "template": "ops", "harness": "claude", "environments": ["staging", "prod-eu"] },
+      "manual": null,
+      "rules": [
+        { "when": { "field": "environments", "op": "glob", "value": "prod-??" }, "color": "red" }
+      ],
+      "expected": { "color": "red", "color_source": "rule:0" }
+    },
+    {
+      "name": "an empty environments list matches no environments rule",
+      "agent": { "name": "olympus", "template": "ops", "harness": "claude", "environments": [] },
+      "manual": null,
+      "rules": [
+        { "when": { "field": "environments", "op": "glob", "value": "*" }, "color": "gray" }
+      ],
+      "expected": null
+    },
+    {
+      "name": "name glob star matches any run of characters",
+      "agent": { "name": "alfred-itunes-dj", "template": "assistant", "harness": "claude", "environments": [] },
+      "manual": null,
+      "rules": [
+        { "when": { "field": "name", "op": "glob", "value": "alfred-*-dj" }, "emoji": "🎩" }
+      ],
+      "expected": { "emoji": "🎩", "emoji_source": "rule:0" }
+    },
+    {
+      "name": "name glob question mark matches exactly one character",
+      "agent": { "name": "worker-12", "template": "coder", "harness": "claude", "environments": [] },
+      "manual": null,
+      "rules": [
+        { "when": { "field": "name", "op": "glob", "value": "worker-?" }, "color": "orange" },
+        { "when": { "field": "name", "op": "glob", "value": "worker-??" }, "color": "purple" }
+      ],
+      "expected": { "color": "purple", "color_source": "rule:1" }
+    },
+    {
+      "name": "name glob must match the whole name",
+      "agent": { "name": "my-alfred-bot", "template": "assistant", "harness": "claude", "environments": [] },
+      "manual": null,
+      "rules": [
+        { "when": { "field": "name", "op": "glob", "value": "alfred-*" }, "color": "pink" }
+      ],
+      "expected": null
+    },
+    {
+      "name": "name contains is a substring test",
+      "agent": { "name": "leoterm-ios", "template": "coder", "harness": "claude", "environments": [] },
+      "manual": null,
+      "rules": [
+        { "when": { "field": "name", "op": "contains", "value": "term" }, "color": "indigo" }
+      ],
+      "expected": { "color": "indigo", "color_source": "rule:0" }
+    },
+    {
+      "name": "name starts_with is a prefix test",
+      "agent": { "name": "tar-voks-island-r3", "template": "coder", "harness": "claude", "environments": [] },
+      "manual": null,
+      "rules": [
+        { "when": { "field": "name", "op": "starts_with", "value": "island" }, "color": "green" },
+        { "when": { "field": "name", "op": "starts_with", "value": "tar-voks" }, "color": "yellow" }
+      ],
+      "expected": { "color": "yellow", "color_source": "rule:1" }
+    },
+    {
+      "name": "matching is case-sensitive",
+      "agent": { "name": "olympus", "template": "ops", "harness": "claude", "environments": ["homelab"] },
+      "manual": null,
+      "rules": [
+        { "when": { "field": "name", "op": "is", "value": "Olympus" }, "color": "red" },
+        { "when": { "field": "environments", "op": "contains", "value": "HomeLab" }, "color": "teal" }
+      ],
+      "expected": null
+    },
+    {
+      "name": "template is matches the template name",
+      "agent": { "name": "worker-1", "template": "coder", "harness": "codex", "environments": [] },
+      "manual": null,
+      "rules": [
+        { "when": { "field": "template", "op": "is", "value": "coder" }, "emoji": "🛠️" }
+      ],
+      "expected": { "emoji": "🛠️", "emoji_source": "rule:0" }
+    },
+    {
+      "name": "an empty harness is claude",
+      "agent": { "name": "olympus", "template": "ops", "harness": "", "environments": [] },
+      "manual": null,
+      "rules": [
+        { "when": { "field": "harness", "op": "is", "value": "claude" }, "color": "orange" }
+      ],
+      "expected": { "color": "orange", "color_source": "rule:0" }
+    },
+    {
+      "name": "harness is matches a non-default harness",
+      "agent": { "name": "worker-1", "template": "coder", "harness": "codex", "environments": [] },
+      "manual": null,
+      "rules": [
+        { "when": { "field": "harness", "op": "is", "value": "claude" }, "color": "orange" },
+        { "when": { "field": "harness", "op": "is", "value": "codex" }, "color": "gray" }
+      ],
+      "expected": { "color": "gray", "color_source": "rule:1" }
+    },
+    {
+      "name": "a rule with a color outside the palette is skipped and later indices are kept",
+      "agent": { "name": "olympus", "template": "ops", "harness": "claude", "environments": ["homelab"] },
+      "manual": null,
+      "rules": [
+        { "when": { "field": "name", "op": "is", "value": "olympus" }, "color": "magenta", "emoji": "🌀" },
+        { "when": { "field": "name", "op": "is", "value": "olympus" }, "color": "teal" }
+      ],
+      "expected": { "color": "teal", "color_source": "rule:1" }
+    },
+    {
+      "name": "a rule whose emoji is two graphemes is skipped whole, color included",
+      "agent": { "name": "olympus", "template": "ops", "harness": "claude", "environments": [] },
+      "manual": null,
+      "rules": [
+        { "when": { "field": "name", "op": "is", "value": "olympus" }, "color": "red", "emoji": "🎩🎩" },
+        { "when": { "field": "name", "op": "is", "value": "olympus" }, "emoji": "🏛️" }
+      ],
+      "expected": { "emoji": "🏛️", "emoji_source": "rule:1" }
+    },
+    {
+      "name": "rules with an unknown field, an unknown op, or an empty value are skipped",
+      "agent": { "name": "olympus", "template": "ops", "harness": "claude", "environments": ["homelab"] },
+      "manual": null,
+      "rules": [
+        { "when": { "field": "machine", "op": "is", "value": "hestia" }, "color": "red" },
+        { "when": { "field": "name", "op": "matches", "value": "olympus" }, "color": "orange" },
+        { "when": { "field": "name", "op": "contains", "value": "" }, "color": "yellow" },
+        { "when": { "field": "name", "op": "is", "value": "olympus" }, "color": "green" }
+      ],
+      "expected": { "color": "green", "color_source": "rule:3" }
+    },
+    {
+      "name": "a glob using characters beyond star and question mark is skipped",
+      "agent": { "name": "worker-1", "template": "coder", "harness": "claude", "environments": [] },
+      "manual": null,
+      "rules": [
+        { "when": { "field": "name", "op": "glob", "value": "worker-[0-9]" }, "color": "red" },
+        { "when": { "field": "name", "op": "glob", "value": "worker-*" }, "color": "blue" }
+      ],
+      "expected": { "color": "blue", "color_source": "rule:1" }
+    },
+    {
+      "name": "a ZWJ family emoji is a single grapheme",
+      "agent": { "name": "olympus", "template": "ops", "harness": "claude", "environments": [] },
+      "manual": null,
+      "rules": [
+        { "when": { "field": "name", "op": "is", "value": "olympus" }, "emoji": "👨‍👩‍👧‍👦" }
+      ],
+      "expected": { "emoji": "👨‍👩‍👧‍👦", "emoji_source": "rule:0" }
+    },
+    {
+      "name": "a flag emoji is a single grapheme",
+      "agent": { "name": "olympus", "template": "ops", "harness": "claude", "environments": [] },
+      "manual": null,
+      "rules": [
+        { "when": { "field": "name", "op": "is", "value": "olympus" }, "emoji": "🇺🇸" }
+      ],
+      "expected": { "emoji": "🇺🇸", "emoji_source": "rule:0" }
+    },
+    {
+      "name": "a skin-tone emoji is a single grapheme",
+      "agent": { "name": "olympus", "template": "ops", "harness": "claude", "environments": [] },
+      "manual": null,
+      "rules": [
+        { "when": { "field": "name", "op": "is", "value": "olympus" }, "emoji": "👋🏽" }
+      ],
+      "expected": { "emoji": "👋🏽", "emoji_source": "rule:0" }
+    },
+    {
+      "name": "a keycap emoji is a single grapheme",
+      "agent": { "name": "olympus", "template": "ops", "harness": "claude", "environments": [] },
+      "manual": null,
+      "rules": [
+        { "when": { "field": "name", "op": "is", "value": "olympus" }, "emoji": "1️⃣" }
+      ],
+      "expected": { "emoji": "1️⃣", "emoji_source": "rule:0" }
+    }
+  ]
+}

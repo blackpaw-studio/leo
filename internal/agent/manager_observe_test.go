@@ -232,7 +232,14 @@ func TestRenameRunningAgentDoesNotDoublePublish(t *testing.T) {
 		t.Fatalf("Rename: %v", err)
 	}
 
-	if len(pub.events) != 0 {
-		t.Fatalf("expected no Manager-level publish on the live rename path, got %+v", pub.events)
+	// The supervisor announces a live rename's stopped/spawned pair; the
+	// Manager adds only the appearance its partial spawned view lacks.
+	for _, ev := range pub.events {
+		if ev.Type != observe.EventAgentAppearanceChanged {
+			t.Fatalf("expected no Manager-level lifecycle publish on the live rename path, got %+v", pub.events)
+		}
+	}
+	if n := len(appearanceEvents(pub)); n != 1 {
+		t.Fatalf("expected one appearance event for the renamed agent, got %d", n)
 	}
 }

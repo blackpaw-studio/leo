@@ -106,6 +106,9 @@ envelope.
 - `model` / `harness` — resolved values after the defaults→template→agent cascade.
 - `environments`, `environments_source`, `environment_error` — advertised by the
   `agent_environments` feature; see [Named environments](#named-environments) below.
+- `appearance` — `{emoji?, color?, emoji_source?, color_source?}`, absent when neither is
+  set; advertised by the `agent_appearance` feature. See
+  [Agent appearance](#agent-appearance) below.
 
 `agent_spawned`'s embedded `Agent` (see the event table below) is populated the same way,
 sourced from the agentstore record and the same model cascade — `template`, `repo`, and
@@ -265,6 +268,7 @@ Event types:
 | `agent_state_changed` | `agent`, `status`, `restarts`, `wake_on_message`; plus `environments`, `environments_source`, `environment_error` when the agent's environments just changed |
 | `agent_activity` | `agent`, `activity`, `current_action` |
 | `agent_stopped` | `agent`, `wake_on_message` |
+| `agent_appearance_changed` | `agent`, `appearance` (`null` when nothing is set) |
 | `task_run_started` | `TaskRun` |
 | `task_run_succeeded` | `TaskRun` |
 | `task_run_failed` | `TaskRun` (with `error`) |
@@ -305,6 +309,9 @@ them in isn't worth the extra I/O on this already-degraded, best-effort payload.
 consumer that needs any of `template`/`repo`/`branch`/`model`/`workspace`/`harness`
 reliably should treat every field on a rename's `agent_spawned` as a hint and fall back to
 `GET /api/v1/state` — the same fallback the spawn note above already establishes.
+
+A live rename's `agent_spawned` carries no `appearance` either; an
+`agent_appearance_changed` for the new name follows it once the record has moved.
 
 Renaming a *stopped* agent publishes the same `agent_stopped`/`agent_spawned` pair, but
 sourced from the agentstore record directly (rather than the supervisor's in-memory
@@ -363,6 +370,24 @@ agent token is refused with 403). Failures are `{"ok":false,"error":"...","code"
 | `harness_mismatch` | 409 | the agent's harness differs from its template's current harness |
 
 `config_unavailable` (500) means the config would not load; the cause is in the daemon log only. Other failures (unknown agent 404, malformed body 400) carry no `code`.
+
+## Agent appearance
+
+Advertised on the SSE `hello` as the `agent_appearance` feature. An agent's optional emoji
+and palette color, set by hand or by ordered `appearance_rules`, are resolved by the
+daemon; see [Agent Appearance](../configuration/appearance.md) for the rules, the
+resolution order and the routes.
+
+- **Agent field** (every `Agent`, in `/state` and `agent_spawned`): `appearance` —
+  `{emoji?, color?, emoji_source?, color_source?}`, a source being `"manual"` or
+  `"rule:<i>"`. Unset values are omitted, and the key is absent when nothing is set.
+- **`agent_appearance_changed`** — `agent`, `appearance` (an explicit `null` when nothing
+  is set). Published after a manual set, for every agent after each config reload (no
+  diffing: apply it as-is), after set-environment and set-template, and after a live
+  rename.
+- `GET`/`PUT /api/v1/appearance/rules` (operator or paired device token) read and replace
+  the rules; `PUT /api/v1/agents/{name}/appearance` `{"emoji"?, "color"?}` sets an agent's
+  manual values (`null` clears, absent is unchanged).
 
 ## Access
 

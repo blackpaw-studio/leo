@@ -400,6 +400,10 @@ type Record struct {
 	// wait for its mod to connect, and keep the idle sweep from suspending
 	// the agent (that would drop them). Zero while connected.
 	BridgePending int `json:"bridge_pending,omitempty"`
+	// ManualAppearance mirrors agentstore.Record.Appearance, the agent's
+	// hand-set emoji and color. It stays off this JSON: observers read the
+	// resolved appearance on the observability wire instead.
+	ManualAppearance *agentstore.Appearance `json:"-"`
 }
 
 // Bridge statuses reported in Record.Bridge.
@@ -1117,6 +1121,8 @@ func (m *Manager) List() []Record {
 			StartedAt:     rec.SpawnedAt,
 			StoppedReason: rec.StoppedReason,
 			WakeOnMessage: rec.WakeOnMessage,
+
+			ManualAppearance: rec.Appearance,
 		})
 	}
 	// Sort by name for a stable order: `out` is assembled by ranging over the
@@ -2057,6 +2063,10 @@ func (m *Manager) Rename(query, rawNewName string) (Record, error) {
 			return Record{}, fmt.Errorf("persisting rename: %w", err)
 		}
 		m.attention.Move(oldName, newName)
+		// The supervisor announced the new name before the record moved, so
+		// its view carries no appearance; the record (manual values
+		// included) is filed under newName now.
+		m.publishAppearance(cfg, newName, rec.Template, rec.Environments, rec.ManualAppearance)
 	} else {
 		// Not live: sup.RenameAgent (and its announce) never runs, so this
 		// path announces on its own — but only AFTER persistRename succeeds.
@@ -2125,6 +2135,7 @@ func (m *Manager) announceRename(cfg *config.Config, rec Record, oldName, newNam
 	}
 	agent.Status, agent.WakeOnMessage = observe.AgentDormancy("stopped", rec.WakeOnMessage)
 	agent.Environments, agent.EnvironmentsSource, agent.EnvironmentError = EnvironmentsView(cfg, newName, rec.Template, rec.Environments)
+	agent.Appearance = AgentAppearance(cfg, newName, rec.Template, rec.Environments, rec.ManualAppearance)
 	if cfg != nil && rec.Template != "" {
 		if tmpl, ok := cfg.Templates[rec.Template]; ok {
 			agent.Model = cfg.TemplateModel(tmpl)

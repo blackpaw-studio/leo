@@ -174,12 +174,14 @@ func (s *Supervisor) spawnedAgentView(spec daemon.AgentSpawnSpec, spawnedAt time
 	}
 
 	var override []string
+	var manual *agentstore.Appearance
 	if records, err := agentstore.Load(agentstore.FilePath(s.homePath)); err == nil {
 		if rec, ok := records[spec.Name]; ok {
 			a.Template = rec.Template
 			a.Repo = rec.Repo
 			a.Branch = rec.Branch
 			override = rec.Environments
+			manual = rec.Appearance
 		}
 	}
 
@@ -195,6 +197,7 @@ func (s *Supervisor) spawnedAgentView(spec daemon.AgentSpawnSpec, spawnedAt time
 		}
 	}
 	a.Environments, a.EnvironmentsSource, a.EnvironmentError = agent.EnvironmentsView(cfg, spec.Name, a.Template, override)
+	a.Appearance = agent.AgentAppearance(cfg, spec.Name, a.Template, override, manual)
 
 	return a
 }

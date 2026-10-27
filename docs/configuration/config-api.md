@@ -181,6 +181,21 @@ block, reads answer `configured: false` and writes are 404
 
 A cell's validation errors land on `template`, `model` or `effort`.
 
+## Appearance rules
+
+`appearance_rules` has its own routes, outside `/config/{resource}`, with the
+same auth, revision and envelope rules as the rest of this API. See
+[Agent Appearance](appearance.md#rules) for the bodies.
+
+| Request | Result |
+|---------|--------|
+| `GET /appearance/rules` | `{revision, rules, errors: [{index, reason}]}`; `errors` lists rules invalid on disk (warnings only: they never block other config writes) |
+| `PUT /appearance/rules` | `{rules}` replaces the list; `If-Match` required; the first invalid rule is 400 `invalid_appearance_rule` with `data: {index, reason}` (not a 422); 200 answers the new document |
+
+An agent's own emoji and color are not config: they live on its agent record
+and are set with `PUT /agents/{name}/appearance` (see
+[Agent Appearance](appearance.md#manual-values)).
+
 ## Operations
 
 | Request | Result |

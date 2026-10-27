@@ -7,7 +7,10 @@
 // to; the JSON tags here are that contract and must evolve additively.
 package observe
 
-import "time"
+import (
+	"strconv"
+	"time"
+)
 
 // SnapshotVersion is the contract version carried in every snapshot. Consumers use it to
 // reject a payload shaped by an incompatible future Leo. Additive field changes keep the
@@ -125,7 +128,27 @@ type Agent struct {
 	// from current config (a named environment was deleted), else null. It is
 	// the check restart, start and the stale-agent report share.
 	EnvironmentError *string `json:"environment_error"`
+
+	// Appearance is the agent's resolved emoji and color; absent when
+	// neither is set (FeatureAgentAppearance).
+	Appearance *Appearance `json:"appearance,omitempty"`
 }
+
+// Appearance is an agent's resolved emoji and color, each with where it came
+// from: AppearanceSourceManual or AppearanceRuleSource(i). An unset value and
+// its source are both omitted.
+type Appearance struct {
+	Emoji       string `json:"emoji,omitempty"`
+	Color       string `json:"color,omitempty"`
+	EmojiSource string `json:"emoji_source,omitempty"`
+	ColorSource string `json:"color_source,omitempty"`
+}
+
+// AppearanceSourceManual marks a value set by hand on the agent.
+const AppearanceSourceManual = "manual"
+
+// AppearanceRuleSource marks a value from appearance_rules[i] (0-based).
+func AppearanceRuleSource(i int) string { return "rule:" + strconv.Itoa(i) }
 
 // Environment names have no harness: an environment is a bare env map.
 

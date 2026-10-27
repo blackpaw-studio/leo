@@ -1,0 +1,42 @@
+{
+  "body": {
+    "data": {
+      "errors": [
+        {
+          "index": 2,
+          "reason": "color \"magenta\" is not in the palette (red, orange, yellow, green, teal, blue, indigo, purple, pink, gray)"
+        }
+      ],
+      "revision": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+      "rules": [
+        {
+          "color": "red",
+          "when": {
+            "field": "environments",
+            "op": "contains",
+            "value": "prod"
+          }
+        },
+        {
+          "color": "pink",
+          "emoji": "🎩",
+          "when": {
+            "field": "name",
+            "op": "glob",
+            "value": "alfred-*"
+          }
+        },
+        {
+          "color": "magenta",
+          "when": {
+            "field": "template",
+            "op": "is",
+            "value": "coder"
+          }
+        }
+      ]
+    },
+    "ok": true
+  },
+  "status": 200
+}

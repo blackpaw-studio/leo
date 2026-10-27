@@ -88,12 +88,7 @@ func collectValidateFindings(ctx context.Context) ([]Finding, *config.Config) {
 		return sortFindings(findings), nil
 	}
 	add(SeverityInfo, "config", "valid")
-	for _, message := range cfg.DelegationWarnings() {
-		add(SeverityWarn, "delegation", message)
-	}
-	for _, message := range cfg.EnvironmentWarnings(config.Expander{}) {
-		add(SeverityWarn, "environments", message)
-	}
+	findings = append(findings, configWarningFindings(cfg)...)
 
 	// 2. Check prerequisites — one line per harness referenced by the config.
 	for _, name := range referencedHarnesses(cfg) {
@@ -195,6 +190,21 @@ func collectValidateFindings(ctx context.Context) ([]Finding, *config.Config) {
 	}
 
 	return sortFindings(findings), cfg
+}
+
+// configWarningFindings is the config's own non-fatal problems: settings
+// that load and validate but will not work as written.
+func configWarningFindings(cfg *config.Config) []Finding {
+	var findings []Finding
+	add := func(check string, messages []string) {
+		for _, message := range messages {
+			findings = append(findings, Finding{Severity: SeverityWarn, Check: check, Message: message})
+		}
+	}
+	add("delegation", cfg.DelegationWarnings())
+	add("environments", cfg.EnvironmentWarnings(config.Expander{}))
+	add("appearance", cfg.AppearanceRuleWarnings())
+	return findings
 }
 
 // referencedHarnesses returns the sorted, de-duplicated set of harness names

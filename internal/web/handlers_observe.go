@@ -524,6 +524,9 @@ func (s *Server) handleAPIEvents(w http.ResponseWriter, r *http.Request) {
 // setAgentEnvironments fills a's environment view from current config: the
 // effective ordered names (never values), whether they are the agent's own
 // override, and the same unknown-environment check restart and stale run.
+// The resolved appearance rides along, since environments are among the
+// facts its rules test.
 func setAgentEnvironments(a *observe.Agent, rec agent.Record, cfg *config.Config) {
 	a.Environments, a.EnvironmentsSource, a.EnvironmentError = agent.EnvironmentsView(cfg, rec.Name, rec.Template, rec.Environments)
+	a.Appearance = agent.AgentAppearance(cfg, rec.Name, rec.Template, rec.Environments, rec.ManualAppearance)
 }

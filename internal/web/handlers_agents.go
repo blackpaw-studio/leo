@@ -20,7 +20,9 @@ import (
 // exactly like live ones, so no separate fallback is needed here. Returns a
 // classified HTTP status so callers can respond consistently (404 not found,
 // 409 ambiguous, 500 other).
-func resolveAgentQuery(svc AgentService, query string) (agent.Record, int, error) {
+func resolveAgentQuery(svc interface {
+	Resolve(query string) (agent.Record, error)
+}, query string) (agent.Record, int, error) {
 	rec, err := svc.Resolve(query)
 	if err == nil {
 		return rec, http.StatusOK, nil

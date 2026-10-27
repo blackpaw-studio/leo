@@ -43,6 +43,10 @@ const (
 	// EventDispatchRemoved announces that a finished dispatch has left
 	// Snapshot.Dispatches: its DispatchLinger expired (or its record is gone).
 	EventDispatchRemoved EventType = "dispatch_removed"
+	// EventAgentAppearanceChanged carries an agent's newly resolved
+	// appearance (null when nothing is set) after a manual set, a rules or
+	// config change, an environments or template change, or a rename.
+	EventAgentAppearanceChanged EventType = "agent_appearance_changed"
 )
 
 // Features are the optional capabilities this daemon's API offers,
@@ -89,11 +93,16 @@ const (
 	// the client-tools relay (`?client_tools=1` provider streams and
 	// /api/v1/client-tools; docs/configuration/client-tools.md).
 	FeatureClientTools = "client_tools"
+	// FeatureAgentAppearance: agents may carry appearance (an emoji and a
+	// palette color with their sources), agent_appearance_changed is
+	// published, and the appearance routes exist
+	// (docs/configuration/appearance.md).
+	FeatureAgentAppearance = "agent_appearance"
 )
 
 // Features returns the hello's features list, a fresh copy each call.
 func Features() []string {
-	return []string{FeatureBridgeTurns, FeatureAttentionReason, FeatureDispatchTree, FeatureAgentUsage, FeatureAgentControl, FeatureDispatchAttach, FeatureDispatchRemoved, FeatureStateSeq, FeatureAttachDispatchPlacement, FeatureDispatchPlacementLive, FeatureAgentEnvironments, FeatureChatQuestions, FeatureMachineStats, FeatureConfigAPI, FeatureAgentStatusRestoring, FeatureClientTools}
+	return []string{FeatureBridgeTurns, FeatureAttentionReason, FeatureDispatchTree, FeatureAgentUsage, FeatureAgentControl, FeatureDispatchAttach, FeatureDispatchRemoved, FeatureStateSeq, FeatureAttachDispatchPlacement, FeatureDispatchPlacementLive, FeatureAgentEnvironments, FeatureChatQuestions, FeatureMachineStats, FeatureConfigAPI, FeatureAgentStatusRestoring, FeatureClientTools, FeatureAgentAppearance}
 }
 
 // ActivityMinInterval is the most often agent_activity is published per
@@ -187,6 +196,14 @@ type AgentEnvironmentsChangedPayload struct {
 	EnvironmentsSource string `json:"environments_source"`
 	// EnvironmentError is non-nil when a name no longer resolves.
 	EnvironmentError *string `json:"environment_error"`
+}
+
+// AgentAppearanceChangedPayload carries one agent's resolved appearance;
+// Appearance is null (never absent) when neither value is set.
+type AgentAppearanceChangedPayload struct {
+	Meta
+	Agent      string      `json:"agent"`
+	Appearance *Appearance `json:"appearance"`
 }
 
 // AgentActivityPayload reports the tracker's latest reading for one agent.

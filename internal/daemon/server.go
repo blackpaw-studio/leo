@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/blackpaw-studio/leo/internal/agent"
+	"github.com/blackpaw-studio/leo/internal/agentstore"
 	"github.com/blackpaw-studio/leo/internal/bridge"
 	"github.com/blackpaw-studio/leo/internal/chat"
 	"github.com/blackpaw-studio/leo/internal/clienttools"
@@ -78,6 +79,12 @@ type AgentManager interface {
 	// SessionHandle a SessionDriver needs to act on it. ok=false means "not
 	// an ephemeral agent" — callers fall back to the tmux/claude path.
 	ResolveHandle(name string) (harnessName string, h harness.SessionHandle, ok bool)
+	// RepublishAppearance publishes every agent's resolved appearance
+	// against current config (agent_appearance_changed).
+	RepublishAppearance()
+	// SetAppearance patches an agent's manual emoji and color and returns
+	// its resolved appearance.
+	SetAppearance(name string, patch agentstore.AppearancePatch) (*observe.Appearance, error)
 }
 
 // Server is an HTTP server listening on a Unix socket for daemon IPC.
@@ -344,6 +351,8 @@ func New(sockPath, configPath string, processes ProcessStateProvider, opts ...Op
 	mux.HandleFunc("POST /agents/{name}/set-environment", s.handleAgentSetEnvironment)
 	// Socket twin of POST /api/v1/agents/{name}/environments (Leo Term's path).
 	mux.HandleFunc("POST /agents/{name}/environments", s.handleAgentSetEnvironment)
+	// The same handler serves /api/v1, so both answer with the same bytes.
+	mux.HandleFunc("PUT /agents/{name}/appearance", web.AgentAppearanceHandler(s.appearanceService))
 	mux.HandleFunc("DELETE /agents/{name}", s.handleAgentDelete)
 	mux.HandleFunc("GET /agents/{name}/delete-plan", s.handleAgentDeletePlan)
 	mux.HandleFunc("POST /agents/{name}/rename", s.handleAgentRename)
@@ -645,7 +654,8 @@ func clientPolicies(cfg *config.Config) []web.ClientPolicy {
 }
 
 // ReloadConfig reloads config from disk, swaps the web server's API client
-// policies, and re-syncs the scheduler. Implements web.ConfigReloader.
+// policies, republishes agent appearance, and re-syncs the scheduler.
+// Implements web.ConfigReloader.
 //
 // The client swap comes first, so an unrelated reload failure below cannot
 // leave a removed client with access. A config that will not load leaves the
@@ -657,6 +667,11 @@ func (s *Server) ReloadConfig() error {
 	}
 	if sink := s.clientSink.Load(); sink != nil {
 		sink.c.SetClients(clientPolicies(cfg))
+	}
+	// Appearance resolves from config and the agent records alone, so it is
+	// republished even when a later step of the reload fails.
+	if s.agentMgr != nil {
+		s.agentMgr.RepublishAppearance()
 	}
 	if cfg.UsesHarness("opencode") {
 		if err := leomcp.EnsureOpenCodeContext(cfg); err != nil {

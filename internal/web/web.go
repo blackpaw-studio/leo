@@ -709,6 +709,7 @@ func New(configPath string, processes ProcessStateProvider, scheduler SchedulerP
 	apiMux.HandleFunc("GET /api/v1/templates", s.handleAPITemplatesV1)
 	apiMux.HandleFunc("POST /api/v1/agents/spawn", s.requireOperatorToken(s.handleAPIAgentSpawn))
 	apiMux.HandleFunc("POST /api/v1/agents/{name}/environments", s.requireOperatorToken(s.handleAPIAgentSetEnvironments))
+	apiMux.HandleFunc("PUT /api/v1/agents/{name}/appearance", s.requireOperatorToken(AgentAppearanceHandler(s.appearanceService)))
 	// JSON config API (docs/configuration/config-api.md): the same service the
 	// daemon serves on its socket, operator token only. The agent token passes
 	// the bearer check above, so each route refuses it itself.

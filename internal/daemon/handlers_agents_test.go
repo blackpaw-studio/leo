@@ -13,8 +13,10 @@ import (
 	"testing"
 
 	"github.com/blackpaw-studio/leo/internal/agent"
+	"github.com/blackpaw-studio/leo/internal/agentstore"
 	"github.com/blackpaw-studio/leo/internal/config"
 	"github.com/blackpaw-studio/leo/internal/harness"
+	"github.com/blackpaw-studio/leo/internal/observe"
 )
 
 // fakeAgentManager is a minimal AgentManager for daemon endpoint tests.
@@ -65,6 +67,7 @@ type fakeAgentManager struct {
 		query   string
 		newName string
 	}
+	republished int
 
 	// handles backs ResolveHandle for attach-spec tests: keyed by agent name,
 	// maps to (harnessName, SessionHandle). A missing key means ok=false.
@@ -136,6 +139,12 @@ func (f *fakeAgentManager) SetEnvironments(name string, names []string) (agent.S
 		return agent.SetEnvironmentsResult{}, f.setEnvErr
 	}
 	return agent.SetEnvironmentsResult{Name: name, To: names, Effective: names, Status: "running"}, nil
+}
+
+func (f *fakeAgentManager) RepublishAppearance() { f.republished++ }
+
+func (f *fakeAgentManager) SetAppearance(string, agentstore.AppearancePatch) (*observe.Appearance, error) {
+	return nil, nil
 }
 
 func (f *fakeAgentManager) RestartAll() agent.RestartResult {

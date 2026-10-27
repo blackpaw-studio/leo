@@ -1,0 +1,12 @@
+{
+  "body": {
+    "code": "invalid_appearance_rule",
+    "data": {
+      "index": 1,
+      "reason": "color \"magenta\" is not in the palette (red, orange, yellow, green, teal, blue, indigo, purple, pink, gray)"
+    },
+    "error": "appearance_rules[1]: color \"magenta\" is not in the palette (red, orange, yellow, green, teal, blue, indigo, purple, pink, gray)",
+    "ok": false
+  },
+  "status": 400
+}

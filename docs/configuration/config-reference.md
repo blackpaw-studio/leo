@@ -257,6 +257,10 @@ Claude Code displays a confirmation prompt before loading development channels. 
 
 Top-level map of named env maps (`environments.<name>.<KEY>: value`), referenced by name from `defaults`, `templates`, `tasks` and `leo agent spawn --environment`. See [Environments](environments.md).
 
+## `appearance_rules`
+
+Ordered list of rules that give agents a palette color and/or an emoji, e.g. `- when: { field: environments, op: contains, value: prod }` with `color: red`. Fields are `name`, `environments`, `template` and `harness`; ops are `is`, `contains`, `starts_with` and `glob`. A value set by hand on an agent wins over every rule. See [Agent Appearance](appearance.md).
+
 ## `tasks`
 
 Each task is a named entry under the `tasks` map. Tasks are invoked by the in-process cron scheduler or manually via `leo run <task>`.
