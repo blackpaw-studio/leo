@@ -101,6 +101,12 @@ func UpdateRefCAS(ctx context.Context, dir, ref, newSHA, oldSHA string) error {
 	return err
 }
 
+// UpdateRef points ref at sha unconditionally.
+func UpdateRef(ctx context.Context, dir, ref, sha string) error {
+	_, err := gitOut(ctx, dir, "update-ref", ref, sha)
+	return err
+}
+
 // WorktreeAddNoCheckout adds a worktree at path without touching its files:
 // on branch when set, else detached at detachSHA.
 func WorktreeAddNoCheckout(ctx context.Context, repo, path, branch, detachSHA string) error {

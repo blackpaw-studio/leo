@@ -1,7 +1,9 @@
 package agentmove
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"regexp"
 	"strings"
@@ -24,6 +26,9 @@ type Endpoint interface {
 	Target(path string) string
 	// Name is the client.hosts key ("" for local).
 	Name() string
+	// Push is G2's push of the move refs into the destination canonical;
+	// ok is false when the destination shares this repository (local).
+	Push(ws, canonical, gitPath string, refspecs []string) (c Cmd, ok bool, err error)
 }
 
 // Handler serves move-receive verbs in-process, for the local endpoint.
@@ -43,6 +48,9 @@ func (l *LocalEndpoint) Local() bool               { return true }
 func (l *LocalEndpoint) RsyncShell() string        { return "" }
 func (l *LocalEndpoint) Target(path string) string { return path }
 func (l *LocalEndpoint) Name() string              { return "" }
+func (l *LocalEndpoint) Push(string, string, string, []string) (Cmd, bool, error) {
+	return Cmd{}, false, nil
+}
 
 // SSHEndpoint reaches a client.hosts entry over ssh.
 type SSHEndpoint struct {
@@ -62,15 +70,30 @@ func NewSSHEndpoint(res config.HostResolution, runner Runner) (*SSHEndpoint, err
 	return &SSHEndpoint{res: res, runner: runner, shell: shell}, nil
 }
 
+// Run returns the destination's refusal as a *VerbError, decoded from the
+// stdout `move-receive` prints before exiting nonzero; any other failure
+// (ssh itself, a dropped connection) is returned as is.
 func (s *SSHEndpoint) Run(ctx context.Context, verb string, stdin []byte) ([]byte, error) {
 	// leo_path stays unquoted so the remote shell expands its $HOME.
 	argv := remote.SSHArgv(s.res, true, s.res.Host.RemoteLeoPath(), "agent", "move-receive", verb)
-	return s.runner.Run(ctx, Cmd{Name: "ssh", Args: argv, Stdin: stdin})
+	out, err := s.runner.Run(ctx, Cmd{Name: "ssh", Args: argv, Stdin: stdin})
+	if err == nil {
+		return out, nil
+	}
+	var ve VerbError
+	if json.Unmarshal(bytes.TrimSpace(out), &ve) == nil && ve.Code != "" {
+		return nil, fmt.Errorf("%s on %s: %w", verb, s.res.Name, &ve)
+	}
+	return nil, fmt.Errorf("%s on %s: %w", verb, s.res.Name, err)
 }
 func (s *SSHEndpoint) Local() bool               { return false }
 func (s *SSHEndpoint) RsyncShell() string        { return s.shell }
 func (s *SSHEndpoint) Target(path string) string { return s.res.Host.SSH + ":" + path }
 func (s *SSHEndpoint) Name() string              { return s.res.Name }
+func (s *SSHEndpoint) Push(ws, canonical, gitPath string, refspecs []string) (Cmd, bool, error) {
+	c, err := PushCmd(s.res, ws, canonical, gitPath, refspecs)
+	return c, err == nil, err
+}
 
 // Resolution is the host the endpoint reaches.
 func (s *SSHEndpoint) Resolution() config.HostResolution { return s.res }

@@ -115,6 +115,17 @@ func scanGitMode(ctx context.Context, ws string, g GitInfo) (GitInfo, error) {
 	return g, nil
 }
 
+// PromoteMain turns a plain repository's GitInfo into main mode, for a
+// destination whose repository at the workspace has linked worktrees: the
+// workspace is its own canonical.
+func PromoteMain(ctx context.Context, ws string, g GitInfo) (GitInfo, error) {
+	if !g.IsRepo {
+		return GitInfo{}, fmt.Errorf("%s is not a git repository", ws)
+	}
+	g.Mode, g.Canonical = GitModeMain, ws
+	return scanGitMode(ctx, ws, g)
+}
+
 // nestedWorktrees lists the entries of list strictly inside ws, relative.
 func nestedWorktrees(ws string, list []git.Worktree) []string {
 	root := realPath(ws)

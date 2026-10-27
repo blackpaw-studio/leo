@@ -184,6 +184,15 @@ func (r *Receiver) Preflight(ctx context.Context, m Manifest) (PreflightResponse
 	}
 	d := r.facts(ctx, cfg, host, m)
 	problems := CheckDestination(m, d)
+	if len(problems) == 0 {
+		// rsync creates only a target's last component (GNU; openrsync
+		// makes them all), so the parents the transfer writes into exist.
+		for _, dir := range []string{d.StagingDir, filepath.Dir(m.TargetWorkspace())} {
+			if err := os.MkdirAll(dir, 0o750); err != nil {
+				return PreflightResponse{}, fmt.Errorf("preparing %s: %w", dir, err)
+			}
+		}
+	}
 	return PreflightResponse{
 		Protocol: Protocol, Host: host, LeoVersion: r.Version, OK: len(problems) == 0, Problems: problems,
 		SessionRoot: d.SessionRoot, StagingDir: d.StagingDir, Existing: d.Existing, WSState: d.WSState, Git: d.Git,

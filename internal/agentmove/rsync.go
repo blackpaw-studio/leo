@@ -45,15 +45,15 @@ func WorkspaceRsyncArgv(shell, ws, target string, excludes []string) []string {
 	return append(args, ws+"/", target+"/")
 }
 
-// SessionRsyncArgv sends session files by path relative to root (-R with a
-// /./ anchor maps between differing roots), --update so a newer file on the
-// destination is never overwritten, and never deletes.
-func SessionRsyncArgv(shell, root string, rels []string, target string) []string {
+// SessionRsyncCmd sends session files by path relative to root: run from
+// root, -R recreates each relative path under target, so differing roots
+// map onto each other. (A /./ anchor would do the same in GNU rsync, but
+// openrsync ignores it and recreates the full source path.) --update never
+// overwrites a newer destination file, and nothing is deleted.
+func SessionRsyncCmd(shell, root string, rels []string, target string) Cmd {
 	args := withShell([]string{"-a", "-R", "-u", "--itemize-changes"}, shell)
-	for _, rel := range rels {
-		args = append(args, root+"/./"+rel)
-	}
-	return append(args, target+"/")
+	args = append(args, rels...)
+	return Cmd{Name: "rsync", Dir: root, Args: append(args, target+"/")}
 }
 
 // StagingRsyncArgv mirrors the staging dir (hook output, harness exports).

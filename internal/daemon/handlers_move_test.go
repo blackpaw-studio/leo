@@ -61,3 +61,57 @@ func TestMoveRouteVerbs(t *testing.T) {
 		t.Fatalf("oversized body = %d", w.Code)
 	}
 }
+
+type fakeMoveJobs struct {
+	reqs []agentmove.Request
+	err  error
+}
+
+func (f *fakeMoveJobs) Start(_ context.Context, req agentmove.Request) (agentmove.JobStatus, error) {
+	f.reqs = append(f.reqs, req)
+	if f.err != nil {
+		return agentmove.JobStatus{}, f.err
+	}
+	return agentmove.JobStatus{ID: "mv-1", Request: req, State: agentmove.JobRunning}, nil
+}
+
+func (f *fakeMoveJobs) Get(id string) (agentmove.JobStatus, bool) {
+	return agentmove.JobStatus{ID: id, State: agentmove.JobDone}, id == "mv-1"
+}
+
+func TestMoveJobRoutes(t *testing.T) {
+	s := New(tmpSockPath(t, "j.sock"), "/nonexistent/leo.yaml", nil)
+	if w := moveRequest(s, "/agents/web/move", `{}`); w.Code != http.StatusServiceUnavailable {
+		t.Fatalf("no jobs = %d, want 503", w.Code)
+	}
+	jobs := &fakeMoveJobs{}
+	s.SetMoveJobs(jobs)
+	w := moveRequest(s, "/agents/web/move", `{"agent":"other","mode":"move","to":"laptop","force":true}`)
+	var st agentmove.JobStatus
+	if err := json.Unmarshal(w.Body.Bytes(), &st); err != nil || w.Code != http.StatusAccepted || st.ID != "mv-1" {
+		t.Fatalf("start = %d %s (%v)", w.Code, w.Body, err)
+	}
+	if want := (agentmove.Request{Agent: "web", Mode: "move", To: "laptop", Force: true}); jobs.reqs[0] != want {
+		t.Fatalf("request = %+v, want %+v (the path names the agent)", jobs.reqs[0], want)
+	}
+	jobs.err = agentmove.Problems{{Code: agentmove.CodeAgentMoving, Message: "busy"}}
+	w = moveRequest(s, "/agents/web/move", `{"mode":"move"}`)
+	var env agentmove.VerbError
+	if err := json.Unmarshal(w.Body.Bytes(), &env); err != nil || w.Code != http.StatusConflict || env.Code != agentmove.CodeAgentMoving {
+		t.Fatalf("refused start = %d %s", w.Code, w.Body)
+	}
+	if w := moveRequest(s, "/agents/web/move", `{`); w.Code != http.StatusBadRequest {
+		t.Fatalf("bad body = %d", w.Code)
+	}
+	get := func(path string) *httptest.ResponseRecorder {
+		w := httptest.NewRecorder()
+		s.Handler().ServeHTTP(w, httptest.NewRequest(http.MethodGet, path, nil))
+		return w
+	}
+	if w := get("/moves/mv-1"); w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"state":"done"`) {
+		t.Fatalf("get = %d %s", w.Code, w.Body)
+	}
+	if w := get("/moves/nope"); w.Code != http.StatusNotFound {
+		t.Fatalf("unknown job = %d", w.Code)
+	}
+}

@@ -51,7 +51,7 @@ func newAgentMoveReceiveCmd() *cobra.Command {
 			}
 			status, out, err := moveVerbFn(cmd.Context(), cfg.HomePath, verb, body)
 			if err != nil {
-				out, _ = json.Marshal(agentmove.VerbError{Code: "daemon_unreachable", Message: err.Error()})
+				out, _ = json.Marshal(agentmove.VerbError{Code: agentmove.CodeDaemonUnreachable, Message: err.Error()})
 				fmt.Fprintln(agentStdout, string(out))
 				return err
 			}

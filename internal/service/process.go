@@ -1126,8 +1126,12 @@ func defaultSupervisedExec(opts RunSupervisedOptions) error {
 		// reports "restoring" rather than "stopped".
 		agentMgr.SetReadiness(srv.Ready)
 		srv.SetAgentManager(agentMgr)
-		// Destination side of `leo agent move` / `copy` (move-receive).
-		srv.SetMoveReceiver(agentmove.NewReceiver(cfgLoader, agentMgr, opts.Version))
+		// `leo agent move` / `copy`: the destination verbs (move-receive)
+		// and the source jobs, which serve a local copy's verbs in-process.
+		moveReceiver := agentmove.NewReceiver(cfgLoader, agentMgr, opts.Version)
+		srv.SetMoveReceiver(moveReceiver)
+		moveProber := newDrainProber(supervisor, tmuxPath, nil, drainLogf)
+		srv.SetMoveJobs(agentmove.NewJobs(agentmove.NewMover(cfgLoader, agentMgr, moveProber, moveReceiver.Handle)))
 		// The ensure-exists task-delivery path (config.ResolveTaskTarget +
 		// runPersistent) needs the same agent.Manager to spawn/resume targets
 		// before injection. agentMgr already satisfies daemon.EnsureAgentManager

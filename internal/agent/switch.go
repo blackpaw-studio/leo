@@ -303,6 +303,12 @@ func switchResult(from, to agentstore.Record, status string) SwitchResult {
 	}
 }
 
+// PersistentTaskFor reports the first `runtime: persistent` task whose
+// target agent is name.
+func PersistentTaskFor(cfg *config.Config, name string) (string, bool) {
+	return persistentTaskFor(cfg, name)
+}
+
 // persistentTaskFor reports the first `runtime: persistent` task whose target
 // agent is name. Those tasks bind to their agent by name (config.ResolveTaskTarget),
 // so switching that agent's template would silently redirect a scheduled task's

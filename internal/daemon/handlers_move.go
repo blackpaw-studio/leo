@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"context"
+	"encoding/json"
 	"io"
 	"net/http"
 	"slices"
@@ -61,4 +62,59 @@ func (s *Server) handleMoveVerb(verb string) http.HandlerFunc {
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write(out)
 	}
+}
+
+// MoveJobs runs source-side transfers (see agentmove.Jobs).
+type MoveJobs interface {
+	Start(ctx context.Context, req agentmove.Request) (agentmove.JobStatus, error)
+	Get(id string) (agentmove.JobStatus, bool)
+}
+
+type moveJobsHolder struct{ j MoveJobs }
+
+// SetMoveJobs wires `leo agent move` and `copy` on this host (the source
+// side). Until it is called the routes answer 503.
+func (s *Server) SetMoveJobs(j MoveJobs) { s.moveJobs.Store(&moveJobsHolder{j}) }
+
+// maxMoveRequest bounds a move request body.
+const maxMoveRequest = 64 << 10
+
+// handleMoveStart starts a move or copy of the path's agent and answers 202
+// with the job, which callers poll at GET /moves/{id}.
+func (s *Server) handleMoveStart(w http.ResponseWriter, r *http.Request) {
+	h := s.moveJobs.Load()
+	if h == nil {
+		writeJSON(w, http.StatusServiceUnavailable, agentmove.VerbError{Code: "unavailable", Message: "this daemon cannot move agents yet"})
+		return
+	}
+	var req agentmove.Request
+	if err := json.NewDecoder(io.LimitReader(r.Body, maxMoveRequest)).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, agentmove.VerbError{Code: agentmove.CodeBadRequest, Message: err.Error()})
+		return
+	}
+	req.Agent = r.PathValue("name")
+	st, err := h.j.Start(r.Context(), req)
+	if err != nil {
+		status := http.StatusConflict
+		if agentmove.CodeOf(err) == agentmove.CodeBadRequest {
+			status = http.StatusBadRequest
+		}
+		writeJSON(w, status, agentmove.VerbError{Code: agentmove.CodeOf(err), Message: err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusAccepted, st)
+}
+
+func (s *Server) handleMoveJob(w http.ResponseWriter, r *http.Request) {
+	h := s.moveJobs.Load()
+	if h == nil {
+		writeJSON(w, http.StatusServiceUnavailable, agentmove.VerbError{Code: "unavailable", Message: "this daemon cannot move agents yet"})
+		return
+	}
+	st, ok := h.j.Get(r.PathValue("id"))
+	if !ok {
+		writeJSON(w, http.StatusNotFound, agentmove.VerbError{Code: agentmove.CodeBadRequest, Message: "no such move job"})
+		return
+	}
+	writeJSON(w, http.StatusOK, st)
 }

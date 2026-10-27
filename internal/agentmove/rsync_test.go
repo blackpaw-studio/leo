@@ -1,6 +1,9 @@
 package agentmove
 
 import (
+	"context"
+	"os"
+	"path/filepath"
 	"reflect"
 	"testing"
 )
@@ -22,14 +25,30 @@ func TestRsyncWorkspaceArgv(t *testing.T) {
 	}
 }
 
+// Session paths travel relative to the session root, run from it: openrsync
+// (macOS) ignores a /./ anchor and would recreate the full source path.
 func TestRsyncSessionArgvRelative(t *testing.T) {
-	got := SessionRsyncArgv(testShell, "/Users/me/.claude", []string{"projects/-Users-me-ws/", "file-history/s1/"}, "u@h:/Users/me/.claude-work")
-	want := []string{"-a", "-R", "-u", "--itemize-changes",
-		"-e", testShell,
-		"/Users/me/.claude/./projects/-Users-me-ws/", "/Users/me/.claude/./file-history/s1/",
-		"u@h:/Users/me/.claude-work/"}
+	got := SessionRsyncCmd(testShell, "/Users/me/.claude", []string{"projects/-Users-me-ws/", "file-history/s1/"}, "u@h:/Users/me/.claude-work")
+	want := Cmd{Name: "rsync", Dir: "/Users/me/.claude", Args: []string{"-a", "-R", "-u", "--itemize-changes",
+		"-e", testShell, "projects/-Users-me-ws/", "file-history/s1/", "u@h:/Users/me/.claude-work/"}}
 	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("argv = %q\nwant %q", got, want)
+		t.Fatalf("cmd = %+v\nwant %+v", got, want)
+	}
+}
+
+func TestRsyncSessionRealRsyncPlacesRelative(t *testing.T) {
+	src, dst := t.TempDir(), t.TempDir()
+	if err := os.MkdirAll(filepath.Join(src, "projects", "-ws"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(src, "projects", "-ws", "s.jsonl"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := (ExecRunner{}).Run(context.Background(), SessionRsyncCmd("", src, []string{"projects/-ws/"}, dst)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(dst, "projects", "-ws", "s.jsonl")); err != nil {
+		t.Fatalf("session file not at its relative path: %v", err)
 	}
 }
 

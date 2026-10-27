@@ -272,3 +272,28 @@ func TestReceiverPlainCopyPlacesPartial(t *testing.T) {
 		t.Fatalf("copy hook env = %+v", he)
 	}
 }
+
+// GNU rsync creates only a target's last path component, so an accepted
+// preflight makes the staging dir and the workspace's parent; a refused one
+// touches nothing.
+func TestReceiverPreflightMakesTargetParents(t *testing.T) {
+	f := newReceiverFixture(t)
+	m := f.manifest()
+	m.Agent.Workspace = filepath.Join(t.TempDir(), "deep", "er", "web")
+	stage := filepath.Join(f.home, "state/moves/web/staging")
+	f.agents.list = []agent.Record{{Name: "web", Status: "running"}}
+	var resp PreflightResponse
+	if err := f.call(t, VerbPreflight, m, &resp); err != nil || resp.OK {
+		t.Fatalf("preflight = %+v %v, want name_taken", resp, err)
+	}
+	if isDir(stage) || isDir(filepath.Dir(m.Agent.Workspace)) {
+		t.Fatal("a refused preflight created dirs")
+	}
+	f.agents.list = nil
+	if err := f.call(t, VerbPreflight, m, &resp); err != nil || !resp.OK {
+		t.Fatalf("preflight = %+v %v", resp, err)
+	}
+	if !isDir(stage) || !isDir(filepath.Dir(m.Agent.Workspace)) || isDir(m.Agent.Workspace) {
+		t.Fatal("accepted preflight did not make the staging dir and the workspace parent (only)")
+	}
+}

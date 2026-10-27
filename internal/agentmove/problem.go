@@ -67,10 +67,15 @@ func (ps Problems) Error() string {
 	return strings.Join(msgs, "; ")
 }
 
-// HasCode reports whether err is or holds a Problem with code.
+// HasCode reports whether err is or holds a Problem (or a destination's
+// VerbError) with code.
 func HasCode(err error, code string) bool {
 	var p *Problem
 	if errors.As(err, &p) && p.Code == code {
+		return true
+	}
+	var ve *VerbError
+	if errors.As(err, &ve) && ve.Code == code {
 		return true
 	}
 	var ps Problems
@@ -94,6 +99,10 @@ func CodeOf(err error) string {
 	if errors.As(err, &p) {
 		return p.Code
 	}
+	var ve *VerbError
+	if errors.As(err, &ve) {
+		return ve.Code
+	}
 	var ps Problems
 	if errors.As(err, &ps) && len(ps) > 0 {
 		return ps[0].Code
@@ -109,6 +118,23 @@ type VerbError struct {
 }
 
 func (e *VerbError) Error() string { return e.Code + ": " + e.Message }
+
+// CodeDaemonUnreachable is `move-receive`'s refusal when it could not reach
+// its own daemon: the verb may or may not have run there.
+const CodeDaemonUnreachable = "daemon_unreachable"
+
+// Definite reports whether err is a verdict: a coded refusal from this
+// package or from the destination. A transport failure, or a destination
+// that lost its daemon mid-verb, leaves the verb's outcome unknown.
+func Definite(err error) bool {
+	var ve *VerbError
+	if errors.As(err, &ve) {
+		return ve.Code != CodeDaemonUnreachable
+	}
+	var p *Problem
+	var ps Problems
+	return errors.As(err, &p) || errors.As(err, &ps)
+}
 
 // AsProblem is e as a Problem, so HasCode sees its code.
 func (e *VerbError) AsProblem() *Problem { return &Problem{Code: e.Code, Message: e.Message} }

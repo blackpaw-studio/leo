@@ -175,6 +175,8 @@ type Server struct {
 	drainNotifier atomic.Pointer[drainNotifierHolder]
 	// moveReceiver serves `leo agent move-receive` (see SetMoveReceiver).
 	moveReceiver atomic.Pointer[moveReceiverHolder]
+	// moveJobs runs `leo agent move` / `copy` from this host (SetMoveJobs).
+	moveJobs atomic.Pointer[moveJobsHolder]
 	// runningDispatches lists the web server's running dispatches for the
 	// drain (see RunningDispatches); set by StartWeb.
 	runningDispatches atomic.Pointer[func() []drain.Probe]
@@ -373,6 +375,9 @@ func New(sockPath, configPath string, processes ProcessStateProvider, opts ...Op
 	for _, verb := range agentmove.Verbs {
 		mux.HandleFunc("POST /agents/move/"+verb, s.handleMoveVerb(verb))
 	}
+	// Source side: a background job per transfer, polled by id.
+	mux.HandleFunc("POST /agents/{name}/move", s.handleMoveStart)
+	mux.HandleFunc("GET /moves/{id}", s.handleMoveJob)
 
 	// Claude mod bridge: the mod's `leo bridge` process holds the command
 	// stream open and posts acks/events back. The 0600 socket is the auth,

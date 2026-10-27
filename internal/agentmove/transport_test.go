@@ -3,6 +3,7 @@ package agentmove
 import (
 	"bytes"
 	"context"
+	"errors"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -149,5 +150,37 @@ func TestLocalEndpointRunsInProcess(t *testing.T) {
 	ssh, _ := NewSSHEndpoint(config.HostResolution{Name: "laptop", Host: config.HostConfig{SSH: "u@h"}, ControlPath: filepath.Join(t.TempDir(), "c.ctl")}, &fakeRunner{})
 	if ssh.Local() || ssh.Target("/x") != "u@h:/x" || !strings.HasPrefix(ssh.RsyncShell(), "ssh -o BatchMode=yes") {
 		t.Fatalf("ssh endpoint = local %v shell %q target %q", ssh.Local(), ssh.RsyncShell(), ssh.Target("/x"))
+	}
+}
+
+func TestSSHRunDecodesRefusal(t *testing.T) {
+	refusal := []byte(`{"error":"branch_diverged","message":"main has commits the source lacks"}` + "\n")
+	r := &fakeRunner{answer: func(Cmd) ([]byte, error) { return refusal, errors.New("ssh: exit status 1") }}
+	ep, _ := NewSSHEndpoint(laptop(), r)
+	_, err := ep.Run(context.Background(), VerbGitPrepare, []byte("{}"))
+	if !HasCode(err, CodeBranchDiverged) || !Definite(err) {
+		t.Fatalf("Run = %v, want a definite branch_diverged refusal", err)
+	}
+	r.answer = func(Cmd) ([]byte, error) { return nil, errors.New("ssh: exit status 255: connection reset") }
+	if _, err := ep.Run(context.Background(), VerbCommit, []byte("{}")); err == nil || Definite(err) {
+		t.Fatalf("a dropped connection = %v, want an indefinite error", err)
+	}
+	r.answer = func(Cmd) ([]byte, error) {
+		return []byte(`{"error":"daemon_unreachable","message":"EOF"}`), errors.New("exit status 1")
+	}
+	if _, err := ep.Run(context.Background(), VerbCommit, []byte("{}")); err == nil || Definite(err) {
+		t.Fatalf("an unreachable destination daemon = %v, want an indefinite error", err)
+	}
+}
+
+func TestEndpointPush(t *testing.T) {
+	ssh, _ := NewSSHEndpoint(laptop(), &fakeRunner{})
+	c, ok, err := ssh.Push("/Users/me/ws", "/Users/me/canon", "/usr/bin/git", []string{"+a:refs/leo-move/x/head"})
+	if err != nil || !ok || c.Name != "git" || c.Args[len(c.Args)-2] != "user@host:/Users/me/canon" {
+		t.Fatalf("ssh Push = %v %v %v", c, ok, err)
+	}
+	local := NewLocalEndpoint(nil)
+	if _, ok, err := local.Push("/ws", "/canon", "/usr/bin/git", nil); ok || err != nil {
+		t.Fatalf("local Push = %v %v, want skipped (one repository)", ok, err)
 	}
 }
