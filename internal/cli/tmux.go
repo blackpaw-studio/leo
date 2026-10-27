@@ -16,6 +16,7 @@ import (
 	"github.com/blackpaw-studio/leo/internal/config"
 	"github.com/blackpaw-studio/leo/internal/daemon"
 	"github.com/blackpaw-studio/leo/internal/harness"
+	"github.com/blackpaw-studio/leo/internal/remote"
 	"github.com/blackpaw-studio/leo/internal/service"
 	"github.com/blackpaw-studio/leo/internal/tmux"
 	"github.com/spf13/cobra"
@@ -388,26 +389,15 @@ func utf8Locale(env []string) []string {
 	return append(out, "LC_CTYPE=UTF-8")
 }
 
-// remoteLeoWord quotes the remote leo path for the remote login shell. A
-// leading $HOME/ or ~/ is the one thing left for that shell to expand
-// ("$HOME"/'rest'); everything else is single-quoted whole, so a path with a
-// space, a quote or $() reaches the remote exec as one literal word.
-func remoteLeoWord(path string) string {
-	for _, prefix := range []string{"$HOME/", "~/"} {
-		if rest, ok := strings.CutPrefix(path, prefix); ok {
-			return `"$HOME"/` + shellQuoteArg(rest)
-		}
-	}
-	return shellQuoteArg(path)
-}
+// remoteLeoWord quotes the remote leo path for the remote login shell; see
+// remote.LeoWord.
+func remoteLeoWord(path string) string { return remote.LeoWord(path) }
 
 // shellQuoteArg wraps a value in single quotes, escaping any embedded single
 // quotes, so it can be safely embedded in a tmux display-popup command string.
 // Paths and session names pass through `tmux display-popup -E "<cmd>"`, which
 // hands the string to `/bin/sh -c`, so shell-quoting is required.
-func shellQuoteArg(s string) string {
-	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
-}
+func shellQuoteArg(s string) string { return remote.Quote(s) }
 
 // remoteShellTarget quotes a tmux `-t` target for transit through a remote
 // login shell. ssh re-parses the whole command on the remote, so an exact-match
