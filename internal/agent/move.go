@@ -26,7 +26,33 @@ var (
 	// ErrAgentMoving is returned while a move holds the agent's lock: a launch
 	// then could leave two live copies of one conversation.
 	ErrAgentMoving = errors.New("agent is being moved")
+	// ErrMovePending is matched (errors.Is) by every *MovePendingError.
+	ErrMovePending = errors.New("agent has a move pending")
 )
+
+// MovePendingError refuses a verb on an agent fenced by a move whose
+// outcome is unknown: it may be live on the destination.
+type MovePendingError struct {
+	Name    string
+	Pending agentstore.MovePending
+}
+
+func (e *MovePendingError) Error() string {
+	p := e.Pending
+	return fmt.Sprintf("agent %s has a move to %s pending since %s (run %s) whose outcome is unknown, so it may be live there: check `leo --host %s agent list`, then settle it with `leo agent move %s --reconcile` (or `leo agent move %s --abandon-remote` if %s is gone for good)",
+		e.Name, p.To, p.Since.Format(time.RFC3339), p.RunID, p.To, e.Name, e.Name, p.To)
+}
+
+// Is makes errors.Is(err, ErrMovePending) match.
+func (e *MovePendingError) Is(target error) bool { return target == ErrMovePending }
+
+// pendingError returns the refusal for rec, or nil when no move is pending.
+func pendingError(rec agentstore.Record) error {
+	if rec.MovePending == nil {
+		return nil
+	}
+	return &MovePendingError{Name: rec.Name, Pending: *rec.MovePending}
+}
 
 // MovedError refuses a lifecycle verb on an agent whose live home is now
 // another host, and says where to find it.
@@ -61,9 +87,12 @@ func movedError(rec agentstore.Record) error {
 }
 
 // checkMovable refuses a verb that would launch, rewire or re-key rec: it is
-// moved to another host, or a move of it is in flight.
+// moved to another host, a move of it is pending, or one is in flight.
 func (m *Manager) checkMovable(rec agentstore.Record) error {
 	if err := movedError(rec); err != nil {
+		return err
+	}
+	if err := pendingError(rec); err != nil {
 		return err
 	}
 	if m.moveModeOf(rec.Name) == MoveModeMove {
@@ -106,6 +135,25 @@ func (m *Manager) moveModeOf(name string) MoveMode {
 
 // Moved returns name's stored record when it is marked moved to another host.
 func (m *Manager) Moved(name string) (agentstore.Record, bool) {
+	rec, ok := m.stored(name)
+	return rec, ok && rec.Moved()
+}
+
+// MovedErr returns the *MovedError for name, or its *MovePendingError while
+// a move of it is pending, nil otherwise.
+func (m *Manager) MovedErr(name string) error {
+	rec, ok := m.stored(name)
+	if !ok {
+		return nil
+	}
+	if err := movedError(rec); err != nil {
+		return err
+	}
+	return pendingError(rec)
+}
+
+// stored is name's agentstore record; load failures read as absent.
+func (m *Manager) stored(name string) (agentstore.Record, bool) {
 	cfg, err := m.cfgLoader()
 	if err != nil {
 		return agentstore.Record{}, false
@@ -115,20 +163,41 @@ func (m *Manager) Moved(name string) (agentstore.Record, bool) {
 		return agentstore.Record{}, false
 	}
 	rec, ok := stored[name]
-	return rec, ok && rec.Moved()
+	return rec, ok
 }
 
-// MovedErr returns the *MovedError for name, or nil when it is not moved.
-func (m *Manager) MovedErr(name string) error {
-	rec, ok := m.Moved(name)
-	if !ok {
-		return nil
+// FenceMove records on name that a move's commit is starting, before it
+// starts: until the move is settled (MarkMoved, ClearMoveFence), nothing
+// launches, wakes, moves or rewires the agent here, across daemon restarts.
+func (m *Manager) FenceMove(name string, p agentstore.MovePending) error {
+	cfg, err := m.cfgLoader()
+	if err != nil {
+		return fmt.Errorf("loading config: %w", err)
 	}
-	return movedError(rec)
+	return agentstore.Update(cfg.HomePath, name, func(r agentstore.Record) agentstore.Record {
+		r.MovePending = &p
+		return r
+	})
+}
+
+// ClearMoveFence lifts name's fence when it is run runID's; another run's
+// fence, or none, is left as it is.
+func (m *Manager) ClearMoveFence(name, runID string) error {
+	cfg, err := m.cfgLoader()
+	if err != nil {
+		return fmt.Errorf("loading config: %w", err)
+	}
+	return agentstore.Update(cfg.HomePath, name, func(r agentstore.Record) agentstore.Record {
+		if r.MovePending != nil && r.MovePending.RunID == runID {
+			r.MovePending = nil
+		}
+		return r
+	})
 }
 
 // MarkMoved marks name dormant here with its new home: to is the host key
-// shown to operators, peer the other side's hostname for the move log.
+// shown to operators, peer the other side's hostname for the move log. It
+// settles a pending move, lifting its fence.
 func (m *Manager) MarkMoved(name, to, peer string, at time.Time) error {
 	cfg, err := m.cfgLoader()
 	if err != nil {
@@ -140,6 +209,7 @@ func (m *Manager) MarkMoved(name, to, peer string, at time.Time) error {
 		r.MovedTo = to
 		r.MovedAt = &at
 		r.MoveLog = withMoveLog(r.MoveLog, peer, at)
+		r.MovePending = nil
 		return r
 	})
 }

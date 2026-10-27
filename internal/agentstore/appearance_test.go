@@ -95,3 +95,22 @@ func TestRemoveDropsAppearance(t *testing.T) {
 		t.Fatalf("a re-created record kept appearance %+v", recs["a"].Appearance)
 	}
 }
+
+// A pending move's fence outlives any Save: only Update lifts it.
+func TestSaveKeepsMovePending(t *testing.T) {
+	home := t.TempDir()
+	if err := Save(home, Record{Name: "a", Workspace: "/w"}); err != nil {
+		t.Fatal(err)
+	}
+	pend := &MovePending{To: "laptop", RunID: "run-1"}
+	if err := Update(home, "a", func(r Record) Record { r.MovePending = pend; return r }); err != nil {
+		t.Fatal(err)
+	}
+	if err := Save(home, Record{Name: "a", Workspace: "/w", Stopped: true}); err != nil {
+		t.Fatal(err)
+	}
+	recs, _ := Load(FilePath(home))
+	if got := recs["a"].MovePending; got == nil || got.RunID != "run-1" {
+		t.Fatalf("MovePending after Save = %+v", got)
+	}
+}

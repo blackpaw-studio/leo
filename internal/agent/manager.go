@@ -593,7 +593,7 @@ func (m *Manager) Wakeable(name string) bool {
 		return false
 	}
 	rec, ok := stored[name]
-	return ok && rec.Stopped && rec.WakeOnMessage && !rec.Moved()
+	return ok && rec.Stopped && rec.WakeOnMessage && !rec.Moved() && rec.MovePending == nil
 }
 
 // spawnShared is the non-worktree flow. Workspace resolution may do a network

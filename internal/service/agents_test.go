@@ -1434,6 +1434,33 @@ func TestRestoreSkipsMovedFailedRestore(t *testing.T) {
 	}
 }
 
+// TestRestoreSkipsMovePending: a record fenced by a pending move is never
+// respawned at boot, even one not marked stopped.
+func TestRestoreSkipsMovePending(t *testing.T) {
+	home := t.TempDir()
+	rec := agentstore.Record{
+		Name: "leo-fenced", Template: "coding", Workspace: t.TempDir(),
+		ClaudeArgs: []string{"--model", "sonnet"}, SessionID: "sid", WebPort: "8370", SpawnedAt: time.Now(),
+	}
+	if err := agentstore.Save(home, rec); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	if err := agentstore.Update(home, rec.Name, func(r agentstore.Record) agentstore.Record {
+		r.MovePending = &agentstore.MovePending{To: "laptop", RunID: "run-1"}
+		return r
+	}); err != nil {
+		t.Fatal(err)
+	}
+	spawner := &fakeAgentSpawner{}
+	if restored := RestoreAgents(home, "", "", spawner, leomcp.Server{}); restored != 0 || len(spawner.calls) != 0 {
+		t.Fatalf("restored=%d calls=%d for a fenced record", restored, len(spawner.calls))
+	}
+	stored, _ := agentstore.Load(agentstore.FilePath(home))
+	if got := stored[rec.Name]; got.MovePending == nil {
+		t.Fatalf("restore dropped the fence: %+v", got)
+	}
+}
+
 // TestRestoreKeepsMovedWorktreeRecordWithMissingWorkspace: a worktree agent
 // moved to another host keeps its record (the moved_to pointer) even when
 // its worktree directory is gone here.

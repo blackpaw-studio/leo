@@ -240,6 +240,21 @@ type Record struct {
 	// ForkFromSession is set on a copy until its first launch: the source
 	// session the copy's harness forks from.
 	ForkFromSession string `json:"fork_from_session,omitempty"`
+	// MovePending fences a source whose move's commit has begun and not
+	// settled: the agent may be live on To, so nothing starts, wakes,
+	// moves or rewires it here. Save keeps it; only Update lifts it.
+	MovePending *MovePending `json:"move_pending,omitempty"`
+}
+
+// MovePending is a move whose outcome the source does not know yet.
+type MovePending struct {
+	// To is the client.hosts key the agent was moving to.
+	To string `json:"to"`
+	// Peer is the destination's hostname, for the move log.
+	Peer string `json:"peer,omitempty"`
+	// RunID is the transfer's id, which the destination's status answers by.
+	RunID string    `json:"run_id"`
+	Since time.Time `json:"since"`
 }
 
 // Moved reports whether r's agent has been moved to another host.
@@ -288,8 +303,8 @@ func FilePath(homePath string) string {
 }
 
 // Save persists an agent record to agents.json. The stored AttentionToken,
-// opening delivery state and Appearance are kept whatever record carries (see
-// their fields).
+// opening delivery state, Appearance and MovePending are kept whatever record
+// carries (see their fields).
 func Save(homePath string, record Record) error {
 	storeMu.Lock()
 	defer storeMu.Unlock()
@@ -301,6 +316,7 @@ func Save(homePath string, record Record) error {
 	record.OpeningAckedID = stored.OpeningAckedID
 	record.OpeningQueuedLaunch, record.OpeningQueuedID = stored.OpeningQueuedLaunch, stored.OpeningQueuedID
 	record.Appearance = stored.Appearance
+	record.MovePending = stored.MovePending
 	records[record.Name] = record
 	return write(path, records)
 }
