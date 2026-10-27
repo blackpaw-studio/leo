@@ -290,3 +290,5 @@ Each step is test-first: write the named failing test, watch it fail, implement,
 ## Other risks
 - `Load` now also reads and decodes the cache and runs the probes on every call, at about 39 call sites. The files are a few KB, so this is cheap, but it should be measured in step 6.
 - yaml.v3 tolerates unknown keys, so a template field that only a newer lead understands is silently dropped on an older follower. Plan: surface it as a `lead_version` greater than the local version warning, not an error.
+- The daemon's ssh runs under launchd. It needs a key that works with BatchMode and no prompt, a reachable `SSH_AUTH_SOCK`, and Leo.app's Local Network grant on the laptop.
+- `localView` must strip every lead entry on save. If it misses one, a lead entry is quietly written into the follower's `leo.yaml` as a local override. Step 7 has a round-trip test for each section to catch this.
