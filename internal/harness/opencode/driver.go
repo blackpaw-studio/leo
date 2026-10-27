@@ -22,9 +22,13 @@ var execCommand = exec.CommandContext
 // refreshSessionArgs rewrites the launch argv from the stored session id:
 // the `-s <id>` pair may sit anywhere in argv, so it is stripped by scanning
 // (mirroring claude's stripResumeArg) rather than assumed positional, then a
-// fresh `-s <storedID>` pair is appended when storedID is non-empty.
+// fresh `-s <storedID>` pair is appended when storedID is non-empty. A copy's
+// pending `-s <src> --fork` stays until the fork's own id is stored.
 func refreshSessionArgs(args []string, storedID string) []string {
-	base := stripSessionFlag(args)
+	if storedID == "" && hasForkFlag(args) {
+		return append([]string{}, args...)
+	}
+	base := stripForkFlag(stripSessionFlag(args))
 	if storedID == "" {
 		return base
 	}
@@ -50,7 +54,7 @@ func stripSessionFlag(args []string) []string {
 // quick-exits just clears.
 func recoverQuickExitArgs(args []string) ([]string, harness.QuickExitAction) {
 	if hasSessionFlag(args) {
-		return stripSessionFlag(args), harness.QuickExitClearAndNoResume
+		return stripForkFlag(stripSessionFlag(args)), harness.QuickExitClearAndNoResume
 	}
 	return args, harness.QuickExitClearSession
 }

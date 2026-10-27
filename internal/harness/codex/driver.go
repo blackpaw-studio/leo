@@ -51,14 +51,16 @@ func ensureWorkspaceTrustedAt(path, cwd string) error {
 
 // refreshSessionArgs rewrites the launch argv from the stored session id:
 // prefix `resume <id>` (codex resumes via a subcommand, flags stay valid
-// after it — verified 2026-07-12), replacing any stale resume prefix.
+// after it — verified 2026-07-12), replacing any stale resume prefix. A
+// copy's pending `fork <src>` prefix stays until the fork's own id is
+// stored, then gives way to `resume <id>` like any other.
 func refreshSessionArgs(args []string, storedID string) []string {
-	base := args
-	if len(base) >= 2 && base[0] == "resume" {
-		base = base[2:]
+	if storedID == "" && len(args) >= 2 && args[0] == "fork" {
+		return append([]string{}, args...)
 	}
+	base := stripSessionPrefix(args)
 	if storedID == "" {
-		return append([]string{}, base...)
+		return base
 	}
 	return append([]string{"resume", storedID}, base...)
 }
@@ -67,7 +69,7 @@ func refreshSessionArgs(args []string, storedID string) []string {
 // is poisoned — strip it, clear the stored id, and mark no-resume (mirrors
 // claude's ladder step 2). A fresh launch that quick-exits just clears.
 func recoverQuickExitArgs(args []string) ([]string, harness.QuickExitAction) {
-	if len(args) >= 2 && args[0] == "resume" {
+	if len(args) >= 2 && (args[0] == "resume" || args[0] == "fork") {
 		return append([]string{}, args[2:]...), harness.QuickExitClearAndNoResume
 	}
 	return args, harness.QuickExitClearSession
