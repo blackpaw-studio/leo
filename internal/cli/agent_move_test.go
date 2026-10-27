@@ -3,6 +3,8 @@ package cli
 import (
 	"encoding/json"
 	"net/http"
+	"os/exec"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -226,5 +228,69 @@ func TestAgentMoveGatedByItsTool(t *testing.T) {
 		if err := root.Execute(); err == nil || !strings.Contains(err.Error(), c.tool) {
 			t.Errorf("%s with %s denied = %v", c.verb, c.tool, err)
 		}
+	}
+}
+
+// remoteResolveStub answers the remote `agent session-name <q> --json` with
+// an agent of template tmpl, and every other ssh call with success.
+func remoteResolveStub(t *testing.T, tmpl string) *[][]string {
+	t.Helper()
+	var calls [][]string
+	old := agentExecCommand
+	agentExecCommand = func(name string, args ...string) *exec.Cmd {
+		calls = append(calls, append([]string{name}, args...))
+		if slices.Contains(args, "session-name") && slices.Contains(args, "--json") {
+			return exec.Command("printf", "%s", `{"name":"leo-x","session":"leo-x","template":"`+tmpl+`"}`)
+		}
+		return exec.Command("true")
+	}
+	t.Cleanup(func() { agentExecCommand = old })
+	oldTI := ensureRemoteTerminfoFn
+	ensureRemoteTerminfoFn = func(config.HostResolution) string { return "" }
+	t.Cleanup(func() { ensureRemoteTerminfoFn = oldTI })
+	return &calls
+}
+
+func forwardedCopy(calls [][]string) bool {
+	return slices.ContainsFunc(calls, func(c []string) bool { return strings.Contains(strings.Join(c, " "), " agent copy x") })
+}
+
+// ssh does not carry LEO_PERMISSIONS, so a copy forwarded to another host is
+// gated here, against the remote agent's template, before anything is sent.
+func TestAgentCopyRemoteGatedBySpawnTemplate(t *testing.T) {
+	path := newAgentCLITestConfig(t)
+	withStubStdio(t)
+	for _, c := range []struct {
+		perms   string
+		allowed bool
+	}{
+		{`{"can_spawn":["review"]}`, false},
+		{`{"deny_tools":["leo_spawn_agent"]}`, false},
+		{`{"can_spawn":["cod*"]}`, true},
+	} {
+		calls := remoteResolveStub(t, "coding")
+		t.Setenv("LEO_PERMISSIONS", c.perms)
+		root := newRootCmd()
+		root.SetArgs([]string{"--config", path, "agent", "copy", "x", "--to", "laptop"})
+		root.SilenceErrors, root.SilenceUsage = true, true
+		err := root.Execute()
+		if c.allowed != (err == nil) || c.allowed != forwardedCopy(*calls) {
+			t.Errorf("%s: err = %v, forwarded = %v; want allowed %v", c.perms, err, forwardedCopy(*calls), c.allowed)
+		}
+	}
+}
+
+func TestAgentSessionNameJSON(t *testing.T) {
+	path, home := newAgentWorktreeTestConfig(t)
+	out, _ := withStubStdio(t)
+	startMoveDaemon(t, home, &moveDaemon{})
+	root := newRootCmd()
+	root.SetArgs([]string{"--config", path, "agent", "session-name", "x", "--json"})
+	if err := root.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	var got daemon.AgentResolveResponse
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil || got.Name != "leo-x" || got.Template != "coding" {
+		t.Fatalf("session-name --json = %s (%v)", out, err)
 	}
 }

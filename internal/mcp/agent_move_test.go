@@ -84,9 +84,10 @@ func TestMCPAgentCopyForwardsOptions(t *testing.T) {
 func TestMCPAgentCopyRequiresSpawnPerm(t *testing.T) {
 	d := moveDaemon(t, "opus")
 	reg := newRegistry(newDaemonClient(d.port(), ""), "primary", leotools.Permissions{CanSpawn: []string{"codex"}})
-	_, err := callTool(reg, "leo_agent_copy", map[string]any{"name": "scout-1"})
-	if err == nil || !strings.Contains(err.Error(), "codex") {
-		t.Fatalf("err = %v, want a denial listing codex", err)
+	for _, args := range []map[string]any{{"name": "scout-1"}, {"name": "scout-1", "to": "laptop"}} {
+		if _, err := callTool(reg, "leo_agent_copy", args); err == nil || !strings.Contains(err.Error(), "codex") {
+			t.Fatalf("copy %v: err = %v, want a denial listing codex", args, err)
+		}
 	}
 	for _, c := range d.recorded() {
 		if c.Method == "POST" {

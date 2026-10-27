@@ -787,6 +787,7 @@ func resolveRemoteSession(res config.HostResolution, query string) (string, erro
 
 func newAgentSessionNameCmd() *cobra.Command {
 	var host string
+	var asJSON bool
 	cmd := &cobra.Command{
 		Use:   "session-name <query>",
 		Short: "Print the tmux session name for an agent (supports shorthand)",
@@ -802,18 +803,47 @@ or any unambiguous suffix.`,
 				return err
 			}
 			if !res.Localhost {
-				return runRemote(res, []string{"session-name", query})
+				extra := []string{"session-name", query}
+				if asJSON {
+					extra = append(extra, "--json")
+				}
+				return runRemote(res, extra)
 			}
 			resolved, err := daemon.AgentResolve(cmd.Context(), cfg.HomePath, query)
 			if err != nil {
 				return fmt.Errorf("resolving agent: %w", err)
+			}
+			if asJSON {
+				return json.NewEncoder(agentStdout).Encode(resolved)
 			}
 			fmt.Fprintln(agentStdout, resolved.Session)
 			return nil
 		},
 	}
 	addHostFlag(cmd, &host)
+	cmd.Flags().BoolVar(&asJSON, "json", false, "print the resolved agent (name, session, repo, template) as JSON")
 	return cmd
+}
+
+// resolveRemoteAgent asks the remote daemon to resolve query, as
+// `leo agent session-name <query> --json` over ssh.
+func resolveRemoteAgent(res config.HostResolution, query string) (daemon.AgentResolveResponse, error) {
+	args := buildSSHArgs(res, res.Host.RemoteLeoPath(), "agent", "session-name", query, "--json")
+	cmd := agentExecCommand("ssh", args...)
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	out, err := cmd.Output()
+	if err != nil {
+		if msg := strings.TrimSpace(stderr.String()); msg != "" {
+			return daemon.AgentResolveResponse{}, fmt.Errorf("resolving remote agent %q: %w: %s", query, err, msg)
+		}
+		return daemon.AgentResolveResponse{}, fmt.Errorf("resolving remote agent %q: %w", query, err)
+	}
+	var resolved daemon.AgentResolveResponse
+	if err := json.Unmarshal(out, &resolved); err != nil {
+		return daemon.AgentResolveResponse{}, fmt.Errorf("resolving remote agent %q: decoding %q: %w", query, strings.TrimSpace(string(out)), err)
+	}
+	return resolved, nil
 }
 
 // --- delete-plan ---

@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/blackpaw-studio/leo/internal/agentmove"
+	"github.com/blackpaw-studio/leo/internal/config"
 	"github.com/blackpaw-studio/leo/internal/daemon"
 	"github.com/spf13/cobra"
 )
@@ -98,6 +99,9 @@ agent backing a persistent task is not wired to the task.`,
 				return err
 			}
 			if !res.Localhost {
+				if err := gateRemoteCopy(cmd.CommandPath(), res, args[0]); err != nil {
+					return err
+				}
 				fwd := []string{"copy", args[0]}
 				for _, f := range [][2]string{{"--to", to}, {"--name", name}, {"--branch", branch}} {
 					if f[1] != "" {
@@ -123,6 +127,27 @@ agent backing a persistent task is not wired to the task.`,
 	cmd.Flags().StringVar(&branch, "branch", "", "the copy's git branch (default <branch>-<copy name>)")
 	cmd.Flags().BoolVar(&asJSON, "json", false, "print the finished job as JSON instead of progress")
 	return cmd
+}
+
+// gateRemoteCopy applies the spawn gate to a copy forwarded to another host:
+// ssh does not carry LEO_PERMISSIONS, so the remote end cannot. A can_spawn
+// list needs the agent's template, which only the remote daemon knows.
+func gateRemoteCopy(label string, res config.HostResolution, name string) error {
+	if err := gateToolFor(label, "leo_spawn_agent"); err != nil {
+		return err
+	}
+	perms, ok := permissionsFromEnv()
+	if !ok {
+		return malformedPermissionsError(label)
+	}
+	if len(perms.CanSpawn) == 0 {
+		return nil
+	}
+	resolved, err := resolveRemoteAgent(res, name)
+	if err != nil {
+		return err
+	}
+	return gateSpawnTemplateFor(label, resolved.Template)
 }
 
 // forwardFlags appends each set boolean flag, in a fixed order.
