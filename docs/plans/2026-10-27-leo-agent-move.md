@@ -1,5 +1,7 @@
 # Plan: `leo agent move` / `leo agent copy`
 
+> **Amended:** worktree agents ARE supported in v1 (Evan, 2026-10-27). See `2026-10-27-leo-agent-move-worktrees.md`, which overrides §0 decision 1 and extends §1–§3 and §6–§9.
+
 Spec (source of truth): `docs/specs/2026-10-27-leo-agent-move.md`. Decision 1 is final: the destination preflight **refuses** when it lacks the agent's template or any environment the agent uses. No snapshot, no `--with-template`, no sync. Branch `feat/agent-move`, base `d744d2fc`.
 
 ## 0. Verdicts and plan-level decisions
