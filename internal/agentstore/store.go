@@ -5,12 +5,16 @@ package agentstore
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"sync"
 	"time"
 )
+
+// ErrNotFound is wrapped by the writers that require an existing record.
+var ErrNotFound = errors.New("not found")
 
 // storeMu serializes Load/Save/Remove across goroutines so concurrent daemon
 // handlers (spawn, stop, prune) don't perform interleaved read-modify-write
@@ -212,6 +216,12 @@ type Record struct {
 	// Save always keeps the stored values.
 	OpeningQueuedLaunch string `json:"opening_queued_launch,omitempty"`
 	OpeningQueuedID     string `json:"opening_queued_id,omitempty"`
+
+	// Appearance is the agent's manual emoji and color, nil when neither is
+	// set. It follows the record: Rename carries it and Remove drops it.
+	// SetAppearance is its only writer: Save always keeps the stored value,
+	// so a respawn that builds a fresh record never wipes it.
+	Appearance *Appearance `json:"appearance,omitempty"`
 }
 
 // Appearance is an agent's manual emoji and color; an empty field is unset
@@ -236,9 +246,9 @@ func FilePath(homePath string) string {
 	return filepath.Join(homePath, "state", "agents.json")
 }
 
-// Save persists an agent record to agents.json. The stored AttentionToken
-// and opening delivery state are kept whatever record carries (see their
-// fields).
+// Save persists an agent record to agents.json. The stored AttentionToken,
+// opening delivery state and Appearance are kept whatever record carries (see
+// their fields).
 func Save(homePath string, record Record) error {
 	storeMu.Lock()
 	defer storeMu.Unlock()
@@ -249,6 +259,7 @@ func Save(homePath string, record Record) error {
 	record.ClaimedSession = stored.ClaimedSession
 	record.OpeningAckedID = stored.OpeningAckedID
 	record.OpeningQueuedLaunch, record.OpeningQueuedID = stored.OpeningQueuedLaunch, stored.OpeningQueuedID
+	record.Appearance = stored.Appearance
 	records[record.Name] = record
 	return write(path, records)
 }
@@ -343,7 +354,7 @@ func Update(homePath, name string, mutate func(Record) Record) error {
 	records, _ := loadLocked(path)
 	rec, ok := records[name]
 	if !ok {
-		return fmt.Errorf("agent %q not found", name)
+		return fmt.Errorf("agent %q %w", name, ErrNotFound)
 	}
 	records[name] = mutate(rec)
 	return write(path, records)
