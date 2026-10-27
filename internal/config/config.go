@@ -121,6 +121,10 @@ type Config struct {
 	// the local ones at load; see shared_templates.go.
 	TemplatesFile string `yaml:"templates_file,omitempty"`
 
+	// Follow makes this host mirror a lead host's shared config; see
+	// follow.go. Nil means today's behaviour: local config only.
+	Follow *FollowConfig `yaml:"follow,omitempty"`
+
 	// Set at load time from the config file path, not serialized.
 	HomePath string `yaml:"-"`
 
@@ -797,6 +801,7 @@ func (c *Config) Validate() error {
 
 	errs = append(errs, c.validateDelegation()...)
 	errs = append(errs, c.validateEnvironments()...)
+	errs = append(errs, c.validateFollow()...)
 
 	if len(errs) > 0 {
 		return &ValidationErrors{Messages: errs}
