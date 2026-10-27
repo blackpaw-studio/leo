@@ -1302,7 +1302,15 @@ func (m *Manager) Start(name string) error {
 		return fmt.Errorf("starting %q: %w", name, err)
 	}
 	args := resolvedArgs
-	if isClaude {
+	// A copy's first launch forks its source's conversation; every later
+	// one resumes the fork like any other agent.
+	forking := rec.ForkFromSession != ""
+	switch {
+	case forking:
+		if args, err = forkArgs(rec, resolvedArgs); err != nil {
+			return fmt.Errorf("starting %q: %w", name, err)
+		}
+	case isClaude:
 		args = ResumeArgs(resolvedArgs, resumeID)
 	}
 
@@ -1322,7 +1330,11 @@ func (m *Manager) Start(name string) error {
 	rec.Stopped = false
 	rec.StoppedReason = ""
 	rec.WakeOnMessage = false
-	rec.SessionID = resumeID
+	if forking {
+		rec.ForkFromSession = ""
+	} else {
+		rec.SessionID = resumeID
+	}
 	rec.SessionPinnedAt = nil
 	// Persist the re-resolved wiring, same as Restart: leaving the record
 	// describing wiring the agent is no longer running would make StaleAgents

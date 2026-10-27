@@ -7,8 +7,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
+	"slices"
 	"sync"
 	"time"
 )
@@ -242,6 +244,26 @@ type Record struct {
 
 // Moved reports whether r's agent has been moved to another host.
 func (r Record) Moved() bool { return r.MovedTo != "" }
+
+// Portable is r as a move carries it between hosts: identity, workspace,
+// conversation and environment choices only. Launch args, env, web port,
+// attention and opening state, no_resume and the moved marker stay behind;
+// the destination rebuilds them from its own config.
+func (r Record) Portable() Record {
+	out := Record{
+		Name: r.Name, Template: r.Template, Repo: r.Repo, Workspace: r.Workspace,
+		Branch: r.Branch, CanonicalPath: r.CanonicalPath, Harness: r.Harness,
+		SessionID: r.SessionID, SessionsByTemplate: maps.Clone(r.SessionsByTemplate),
+		Environments: slices.Clone(r.Environments), SpawnEnv: maps.Clone(r.SpawnEnv),
+		InheritedEnv: maps.Clone(r.InheritedEnv), EnvLayered: r.EnvLayered,
+		IdleSuspendAfter: r.IdleSuspendAfter, MoveLog: maps.Clone(r.MoveLog),
+	}
+	if r.Appearance != nil {
+		a := *r.Appearance
+		out.Appearance = &a
+	}
+	return out
+}
 
 // Appearance is an agent's manual emoji and color; an empty field is unset
 // and falls back to the appearance rules.
