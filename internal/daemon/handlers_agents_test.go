@@ -65,6 +65,7 @@ type fakeAgentManager struct {
 		query   string
 		newName string
 	}
+	republished int
 
 	// handles backs ResolveHandle for attach-spec tests: keyed by agent name,
 	// maps to (harnessName, SessionHandle). A missing key means ok=false.
@@ -137,6 +138,8 @@ func (f *fakeAgentManager) SetEnvironments(name string, names []string) (agent.S
 	}
 	return agent.SetEnvironmentsResult{Name: name, To: names, Effective: names, Status: "running"}, nil
 }
+
+func (f *fakeAgentManager) RepublishAppearance() { f.republished++ }
 
 func (f *fakeAgentManager) RestartAll() agent.RestartResult {
 	f.restartAllCalled = true

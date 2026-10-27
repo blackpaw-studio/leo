@@ -405,3 +405,29 @@ func TestSpawnedAgentViewCarriesEnvironments(t *testing.T) {
 		t.Fatal("environments must serialize as [] even with no record or config")
 	}
 }
+
+func TestSpawnedEventCarriesAppearance(t *testing.T) {
+	home := t.TempDir()
+	cfgPath := filepath.Join(home, "leo.yaml")
+	cfgYAML := "templates:\n  coding:\n    model: sonnet\nappearance_rules:\n  - when: {field: template, op: is, value: coding}\n    color: teal\n    emoji: \"🛠️\"\n"
+	if err := os.WriteFile(cfgPath, []byte(cfgYAML), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := agentstore.Save(home, agentstore.Record{Name: "a", Template: "coding"}); err != nil {
+		t.Fatal(err)
+	}
+	emoji := "🏛️"
+	if _, err := agentstore.SetAppearance(home, "a", agentstore.AppearancePatch{Emoji: &emoji}); err != nil {
+		t.Fatal(err)
+	}
+	sv := &Supervisor{homePath: home, configPath: cfgPath}
+
+	got := sv.spawnedAgentView(daemon.AgentSpawnSpec{Name: "a"}, time.Now()).Appearance
+	want := &observe.Appearance{Emoji: "🏛️", Color: "teal", EmojiSource: "manual", ColorSource: "rule:0"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("spawned appearance = %+v, want %+v", got, want)
+	}
+	if bare := (&Supervisor{}).spawnedAgentView(daemon.AgentSpawnSpec{Name: "x"}, time.Now()); bare.Appearance != nil {
+		t.Fatalf("no record or config resolved to %+v, want nil", bare.Appearance)
+	}
+}

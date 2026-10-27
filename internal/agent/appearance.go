@@ -121,3 +121,20 @@ func globMatch(pattern, s string) bool {
 	}
 	return pi == len(p)
 }
+
+// AgentAppearance resolves the appearance of the agent filed under name from
+// the same facts the observability wire reports for it: its effective
+// environments, its template, and that template's harness. A nil cfg leaves
+// only the manual values.
+func AgentAppearance(cfg *config.Config, name, template string, override []string, manual *agentstore.Appearance) *observe.Appearance {
+	envs, _, _ := EnvironmentsView(cfg, name, template, override)
+	facts := AppearanceFacts{Name: name, Environments: envs, Template: template}
+	var rules config.AppearanceRuleList
+	if cfg != nil {
+		rules = cfg.AppearanceRules
+		if tmpl, ok := cfg.Templates[template]; ok && template != "" {
+			facts.Harness = cfg.TemplateHarness(tmpl)
+		}
+	}
+	return ResolveAppearance(rules, facts, manual)
+}

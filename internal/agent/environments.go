@@ -195,6 +195,8 @@ func (m *Manager) publishEnvironmentsChanged(cfg *config.Config, rec agentstore.
 			EnvironmentError:   errMsg,
 		},
 	})
+	// Environments feed the appearance rules.
+	m.publishRecordAppearance(cfg, rec)
 }
 
 // relaunchAfterFailedSave undoes a set-environment whose record could not be

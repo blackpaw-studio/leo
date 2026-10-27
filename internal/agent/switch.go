@@ -188,6 +188,7 @@ func (m *Manager) SwitchTemplate(name, template string) (SwitchResult, error) {
 		if err := agentstore.Save(cfg.HomePath, next); err != nil {
 			return SwitchResult{}, fmt.Errorf("saving switched agent record: %w", err)
 		}
+		m.publishRecordAppearance(cfg, next)
 		return switchResult(rec, next, status), nil
 	}
 
@@ -246,6 +247,7 @@ func (m *Manager) SwitchTemplate(name, template string) (SwitchResult, error) {
 	if err := agentstore.Save(cfg.HomePath, next); err != nil {
 		log.Printf("agent %q switched to template %q but agentstore.Save failed: %v — session id may lag until next save", name, template, err)
 	}
+	m.publishRecordAppearance(cfg, next)
 	return switchResult(rec, next, status), nil
 }
 
