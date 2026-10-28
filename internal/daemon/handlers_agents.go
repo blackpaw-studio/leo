@@ -404,6 +404,8 @@ func (s *Server) handleAgentSession(w http.ResponseWriter, r *http.Request) {
 		// "restoring" is deliberately not Stopped: the agent is not dormant,
 		// so clients must not offer to start it.
 		Restoring: rec.Status == "restoring",
+		MovedTo:   rec.MovedTo,
+		MovedAt:   rec.MovedAt,
 	})
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, fmt.Sprintf("marshaling session: %v", err))

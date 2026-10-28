@@ -400,6 +400,8 @@ type Record struct {
 	// MovedTo mirrors agentstore.Record.MovedTo: the host a stopped agent was
 	// moved to. Its Status stays "stopped".
 	MovedTo string `json:"moved_to,omitempty"`
+	// MovedAt mirrors agentstore.Record.MovedAt: when MovedTo was set.
+	MovedAt *time.Time `json:"moved_at,omitempty"`
 	// Bridge is a live claude agent's leo bridge: BridgeConnected or
 	// BridgeAbsent. Empty for other harnesses and stopped agents.
 	Bridge string `json:"bridge,omitempty"`
@@ -1133,6 +1135,7 @@ func (m *Manager) List() []Record {
 			StoppedReason: rec.StoppedReason,
 			WakeOnMessage: rec.WakeOnMessage,
 			MovedTo:       rec.MovedTo,
+			MovedAt:       rec.MovedAt,
 
 			ManualAppearance: rec.Appearance,
 		})

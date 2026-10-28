@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/blackpaw-studio/leo/internal/agent"
 	"github.com/blackpaw-studio/leo/internal/daemon"
 	"github.com/spf13/cobra"
 )
@@ -309,5 +310,37 @@ func TestAttachRestoreTimeout(t *testing.T) {
 	}
 	if *started {
 		t.Fatal("AgentStart must not fire while the daemon is restoring")
+	}
+}
+
+// Attaching a moved-away agent says where it went, as `start` does, instead
+// of offering to start it here: on a TTY or off one, from either door.
+func TestAttachMovedAgentShowsMovedErrorBeforeStartPrompt(t *testing.T) {
+	for _, door := range [][]string{{"attach", "scratch", "--host", "localhost"}, {"agent", "attach", "scratch"}} {
+		for _, tty := range []bool{true, false} {
+			t.Run(strings.Join(door, " ")+map[bool]string{true: " tty", false: " no tty"}[tty], func(t *testing.T) {
+				path := newAttachAliasTestConfig(t)
+				_, stderr := withStubStdio(t)
+				at := time.Date(2026, 10, 27, 15, 0, 0, 0, time.UTC)
+				stubAgentSessionFull(t, func(string, string) (daemon.AgentSessionResponse, error) {
+					return daemon.AgentSessionResponse{Session: "leo-scratch", Name: "scratch", Stopped: true, MovedTo: "laptop", MovedAt: &at}, nil
+				})
+				oldTTY := agentIsTTY
+				agentIsTTY = func() bool { return tty }
+				t.Cleanup(func() { agentIsTTY = oldTTY })
+				started := stubAgentStart(t, nil)
+
+				root := newRootCmd()
+				root.SetArgs(append([]string{"--config", path}, door...))
+				err := root.Execute()
+				want := (&agent.MovedError{Name: "scratch", To: "laptop", At: at}).Error()
+				if err == nil || err.Error() != want {
+					t.Fatalf("err = %v, want %q", err, want)
+				}
+				if *started || strings.Contains(stderr.String(), "Start it?") {
+					t.Fatalf("offered to start a moved agent (stderr %q)", stderr.String())
+				}
+			})
+		}
 	}
 }

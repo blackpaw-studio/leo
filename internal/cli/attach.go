@@ -124,6 +124,9 @@ while this client stays attached; see 'leo agent attach --help'.`,
 
 			// Dormant agents have no tmux session to attach to yet — prompt to
 			// start (or fail fast off a TTY) before doing anything else.
+			if err := movedSessionError(session); err != nil {
+				return err
+			}
 			ok, err := ensureAgentRunningPrompt(cmd.Context(), cmd, cfg.HomePath, session.Name, session.Stopped, !opts.cc)
 			if err != nil {
 				return err

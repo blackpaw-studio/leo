@@ -1,6 +1,9 @@
 package daemon
 
-import "encoding/json"
+import (
+	"encoding/json"
+	"time"
+)
 
 // Response is the standard envelope for all daemon API responses.
 // Code is an optional machine-readable classifier for failures (e.g.
@@ -140,6 +143,10 @@ type AgentSessionResponse struct {
 	// record is awaiting it (Status == "restoring"). The agent is neither
 	// attachable nor startable yet, so clients wait instead of offering start.
 	Restoring bool `json:"restoring,omitempty"`
+	// MovedTo and MovedAt are set for an agent moved to another host
+	// (Stopped too): clients refuse with the move instead of offering start.
+	MovedTo string     `json:"moved_to,omitempty"`
+	MovedAt *time.Time `json:"moved_at,omitempty"`
 }
 
 // AttachPlacementRequest is the body of POST /attach/placement: the attaching

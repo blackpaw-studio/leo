@@ -633,6 +633,9 @@ func attachLocal(ctx context.Context, cmd *cobra.Command, homePath, query string
 	// attach-spec lookup below. Shares ensureAgentRunning with the top-level
 	// `leo attach` door so the prompt behaves identically from either entry
 	// point.
+	if err := movedSessionError(session); err != nil {
+		return err
+	}
 	ok, err := ensureAgentRunningPrompt(ctx, cmd, homePath, session.Name, session.Stopped, !opts.cc)
 	if err != nil {
 		return err
