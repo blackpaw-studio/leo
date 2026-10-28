@@ -255,7 +255,7 @@ Claude Code displays a confirmation prompt before loading development channels. 
 
 ## `environments`
 
-Top-level map of named env maps (`environments.<name>.<KEY>: value`), referenced by name from `defaults`, `templates`, `tasks` and `leo agent spawn --environment`. See [Environments](environments.md).
+Top-level map of named env maps (`environments.<name>.<KEY>: value`), referenced by name from `defaults`, `templates`, `tasks` and `leo agent spawn --environment`. See [Environments](environments.md). A value may be a [secret reference](secret-env.md) resolved at launch.
 
 ## `appearance_rules`
 
@@ -326,7 +326,7 @@ templates:
 | `max_turns` | int | No | `defaults.max_turns` | Max turns. |
 | `mcp_config` | string | No | -- | Path to MCP config file. |
 | `add_dirs` | list | No | -- | Additional directories. |
-| `env` | map | No | -- | Environment variables. Wins over `environments`. |
+| `env` | map | No | -- | Environment variables. Wins over `environments`. A value may be a [secret reference](secret-env.md). |
 | `environments` | list | No | `defaults.environments` | Ordered [named environments](environments.md); replaces (does not extend) the inherited list. |
 | `idle_suspend_after` | string | No | `defaults.idle_suspend_after` | Idle interval (Go duration) before agents from this template are auto-stopped (dormant, auto-wakes on the next message). Empty inherits the default. |
 | `isolation` | string | No | -- | `worktree` runs every dispatch and consult of this template from a throwaway managed Git worktree at the caller's committed HEAD — the same as passing `isolation: "worktree"` to `leo_dispatch`, which takes precedence when given. The subagent's prompt names the worktree and warns that uncommitted changes in the caller's tree are not visible. Lets a reviewer run tests with a writable sandbox (e.g. codex `permission_mode: workspace-write`) without touching the real tree. See [Dispatches](dispatches.md). |

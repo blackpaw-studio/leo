@@ -86,6 +86,7 @@ nav:
       - Persistent Tasks: configuration/persistent-tasks.md
       - Harnesses: configuration/harnesses.md
       - Environments: configuration/environments.md
+      - Secret Env Values: configuration/secret-env.md
       - Following a Lead Host: configuration/follow-lead.md
       - Moving Agents: configuration/agent-move.md
       - Agent Appearance: configuration/appearance.md
