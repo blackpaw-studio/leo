@@ -12,6 +12,7 @@ import (
 	claudeharness "github.com/blackpaw-studio/leo/internal/harness/claude"
 	"github.com/blackpaw-studio/leo/internal/prompt"
 	"github.com/blackpaw-studio/leo/internal/redact"
+	"github.com/blackpaw-studio/leo/internal/secretenv"
 	"github.com/spf13/cobra"
 )
 
@@ -408,6 +409,9 @@ type effectiveTemplate struct {
 	DisallowedTools    []string          `json:"disallowed_tools,omitempty"`
 	AppendSystemPrompt string            `json:"append_system_prompt,omitempty"`
 	PermissionMode     string            `json:"permission_mode,omitempty"`
+	// envRefs are the template env's secret references, displayed as their
+	// descriptors; Env holds only the literals.
+	envRefs map[string]secretenv.Ref
 }
 
 // resolveTemplate returns an effective template config with defaults from
@@ -437,6 +441,7 @@ func resolveTemplate(cfg *config.Config, tmpl config.TemplateConfig) (effectiveT
 		MCPConfig:          tmpl.MCPConfig,
 		AddDirs:            tmpl.AddDirs,
 		Env:                tmpl.Env.Literals(),
+		envRefs:            tmpl.Env.Refs(),
 		Agent:              opts.AgentFile,
 		AllowedTools:       opts.AllowedTools,
 		DisallowedTools:    opts.DisallowedTools,
@@ -488,7 +493,7 @@ func literalTemplateJSON(name string, tmpl config.TemplateConfig) literalTemplat
 		MaxTurns:       tmpl.MaxTurns,
 		MCPConfig:      tmpl.MCPConfig,
 		AddDirs:        tmpl.AddDirs,
-		Env:            redact.EnvMap(tmpl.Env.Literals()),
+		Env:            redact.EnvDisplay(tmpl.Env.Literals(), tmpl.Env.Refs()),
 		HarnessOptions: tmpl.HarnessOptions,
 	}
 }
@@ -502,7 +507,7 @@ type effectiveTemplatePayload struct {
 func effectiveTemplateJSON(name string, eff effectiveTemplate) effectiveTemplatePayload {
 	// Mask credentials on the way out; the caller's effectiveTemplate keeps
 	// its real values (nothing else consumes this payload).
-	eff.Env = redact.EnvMap(eff.Env)
+	eff.Env = redact.EnvDisplay(eff.Env, eff.envRefs)
 	return effectiveTemplatePayload{Name: name, effectiveTemplate: eff}
 }
 
@@ -539,21 +544,22 @@ func printTemplate(name string, tmpl config.TemplateConfig) {
 	if tmpl.MCPConfig != "" {
 		printField("MCP config", tmpl.MCPConfig)
 	}
-	printEnvField(tmpl.Env.Literals())
+	printEnvField(redact.EnvDisplay(tmpl.Env.Literals(), tmpl.Env.Refs()))
 }
 
-// printEnvField renders an env map as sorted KEY=VALUE pairs with
-// credential-looking values masked. `leo template show` is a command agents
-// run, so an unmasked token here lands in a transcript; read leo.yaml
-// directly when the real value is needed.
-func printEnvField(env map[string]string) {
-	if len(env) == 0 {
+// printEnvField renders a display env map (see redact.EnvDisplay: literal
+// credentials masked, secret references as descriptors) as sorted KEY=VALUE
+// pairs. `leo template show` is a command agents run, so an unmasked token
+// here lands in a transcript; read leo.yaml directly when the real value is
+// needed.
+func printEnvField(display map[string]string) {
+	if len(display) == 0 {
 		return
 	}
-	keys := redact.Keys(env)
+	keys := redact.Keys(display)
 	pairs := make([]string, 0, len(keys))
 	for _, k := range keys {
-		pairs = append(pairs, fmt.Sprintf("%s=%s", k, redact.Value(k, env[k])))
+		pairs = append(pairs, fmt.Sprintf("%s=%s", k, display[k]))
 	}
 	printField("Env", strings.Join(pairs, " "))
 }
@@ -590,7 +596,7 @@ func printResolvedTemplate(name string, eff effectiveTemplate) {
 	if eff.MCPConfig != "" {
 		printField("MCP config", eff.MCPConfig)
 	}
-	printEnvField(eff.Env)
+	printEnvField(redact.EnvDisplay(eff.Env, eff.envRefs))
 }
 
 func printField(label, value string) {

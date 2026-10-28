@@ -159,7 +159,25 @@ func (c *Config) validateEnvironmentList(path string, names []string) []string {
 // TaskEnv is the environment a task's process runs with: the task's (or
 // defaults') named environments beneath its literal `env:` map.
 func (c *Config) TaskEnv(t TaskConfig, x Expander) (map[string]string, error) {
-	return c.ResolveEnv(c.EnvironmentNames(nil, t.Environments), t.Env, nil, x)
+	layer, err := c.TaskEnvLayer(t, x)
+	if err != nil {
+		return nil, err
+	}
+	return x.ResolveLayer(layer)
+}
+
+// TaskEnvLayer is TaskEnv before resolution: the merged layer whose Secrets
+// are the references a run would resolve. It does no secret I/O.
+func (c *Config) TaskEnvLayer(t TaskConfig, x Expander) (EnvLayer, error) {
+	named, err := c.NamedLayer(c.EnvironmentNames(nil, t.Environments), x)
+	if err != nil {
+		return EnvLayer{}, err
+	}
+	lit, err := x.LiteralLayer("env", t.Env)
+	if err != nil {
+		return EnvLayer{}, err
+	}
+	return MergeLayers(named, lit), nil
 }
 
 // ValidateEnvironmentNames checks an ordered list of environment names a

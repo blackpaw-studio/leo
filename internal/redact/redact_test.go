@@ -3,6 +3,8 @@ package redact
 import (
 	"reflect"
 	"testing"
+
+	"github.com/blackpaw-studio/leo/internal/secretenv"
 )
 
 func TestIsSecretKey(t *testing.T) {
@@ -108,5 +110,23 @@ func TestKeys(t *testing.T) {
 	}
 	if got := Keys(nil); got != nil {
 		t.Errorf("Keys(nil) = %v, want nil", got)
+	}
+}
+
+func TestEnvDisplayShowsRefsAsDescriptors(t *testing.T) {
+	got := EnvDisplay(
+		map[string]string{"API_TOKEN": "sk-live", "REGION": "us"},
+		map[string]secretenv.Ref{"OP_SERVICE_ACCOUNT_TOKEN": {Backend: secretenv.Keychain, Service: "OP"}},
+	)
+	want := map[string]string{
+		"API_TOKEN":                Mask,
+		"REGION":                   "us",
+		"OP_SERVICE_ACCOUNT_TOKEN": "<secret keychain(service=OP)>",
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("EnvDisplay = %v, want %v", got, want)
+	}
+	if EnvDisplay(nil, nil) != nil {
+		t.Error("EnvDisplay(nil, nil) is not nil")
 	}
 }
