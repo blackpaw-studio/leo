@@ -198,9 +198,9 @@ var configResources = []*configResource{
 				return taken("name", "Environment", name)
 			}
 			if cfg.Environments == nil {
-				cfg.Environments = make(map[string]map[string]string)
+				cfg.Environments = make(map[string]config.EnvMap)
 			}
-			cfg.Environments[name] = map[string]string{}
+			cfg.Environments[name] = config.EnvMap{}
 			return nil
 		},
 		remove: func(cfg *config.Config, name string) bool {

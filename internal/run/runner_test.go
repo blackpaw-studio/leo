@@ -1136,11 +1136,11 @@ func TestRunInjectsTaskEnvWithLeoMCPPrecedence(t *testing.T) {
 				PromptFile: "task.md",
 				Schedule:   "0 * * * *",
 				Enabled:    true,
-				Env: map[string]string{
+				Env: config.LiteralEnv(map[string]string{
 					"ANTHROPIC_BASE_URL":   "https://x.example",
 					"ANTHROPIC_AUTH_TOKEN": "sk-t",
 					"LEO_PROCESS_NAME":     "should-not-win",
-				},
+				}),
 			},
 		},
 	}
@@ -1201,10 +1201,10 @@ func TestRunTaskEnvOverridesHarnessEnv(t *testing.T) {
 				PromptFile: "task.md",
 				Schedule:   "0 * * * *",
 				Enabled:    true,
-				Env: map[string]string{
+				Env: config.LiteralEnv(map[string]string{
 					"CLAUDE_CODE_ENTRYPOINT": "custom",
 					"LEO_PROCESS_NAME":       "should-not-win",
-				},
+				}),
 			},
 		},
 	}
@@ -2276,15 +2276,15 @@ func TestRunTaskNamedEnvironmentsLayerBelowLiteralEnv(t *testing.T) {
 	cfg := &config.Config{
 		HomePath: dir,
 		Defaults: config.DefaultsConfig{Model: "sonnet", MaxTurns: 15},
-		Environments: map[string]map[string]string{
-			"base":   {"FROM_BASE": "1", "CONTESTED": "base"},
-			"acct-b": {"CLAUDE_CONFIG_DIR": acct, "CONTESTED": "acct-b"},
+		Environments: map[string]config.EnvMap{
+			"base":   config.LiteralEnv(map[string]string{"FROM_BASE": "1", "CONTESTED": "base"}),
+			"acct-b": config.LiteralEnv(map[string]string{"CLAUDE_CONFIG_DIR": acct, "CONTESTED": "acct-b"}),
 		},
 		Tasks: map[string]config.TaskConfig{
 			"mytask": {
 				PromptFile: "task.md", Schedule: "0 * * * *", Enabled: true,
 				Environments: []string{"base", "acct-b"},
-				Env:          map[string]string{"LITERAL_WINS": "literal"},
+				Env:          config.LiteralEnv(map[string]string{"LITERAL_WINS": "literal"}),
 			},
 		},
 	}
@@ -2321,8 +2321,8 @@ func TestRunWithExpandsTaskEnvAndFailsOnUnsetVariable(t *testing.T) {
 	cfg := &config.Config{
 		HomePath: dir,
 		Defaults: config.DefaultsConfig{Model: "sonnet", MaxTurns: 15},
-		Environments: map[string]map[string]string{
-			"b": {"CLAUDE_CONFIG_DIR": "${ACCT_ROOT}/.claude-b"},
+		Environments: map[string]config.EnvMap{
+			"b": config.LiteralEnv(map[string]string{"CLAUDE_CONFIG_DIR": "${ACCT_ROOT}/.claude-b"}),
 		},
 		Tasks: map[string]config.TaskConfig{
 			"mytask": {PromptFile: "task.md", Schedule: "0 * * * *", Enabled: true, Environments: []string{"b"}},

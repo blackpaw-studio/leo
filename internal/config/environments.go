@@ -35,11 +35,11 @@ func (c *Config) EnvironmentNames(override, scope []string) []string {
 // *UnknownEnvironmentError. Values are raw (unexpanded): use it to check
 // names, and ResolveNamed to build a launch environment. The result is a new
 // map, nil when names is empty.
-func (c *Config) MergeEnvironments(names []string) (map[string]string, error) {
+func (c *Config) MergeEnvironments(names []string) (EnvMap, error) {
 	if len(names) == 0 {
 		return nil, nil
 	}
-	merged := map[string]string{}
+	merged := EnvMap{}
 	for _, name := range names {
 		env, err := c.LookupEnvironment(name)
 		if err != nil {
@@ -75,7 +75,7 @@ func (c *Config) ResolveNamed(names []string, x Expander) (map[string]string, er
 
 // ExpandLiteral expands the values of a literal `env:` map (a template's or
 // task's) with x. The result is a new map; nil in, nil out.
-func ExpandLiteral(literal map[string]string, x Expander) (map[string]string, error) {
+func ExpandLiteral(literal EnvMap, x Expander) (map[string]string, error) {
 	if literal == nil {
 		return nil, nil
 	}
@@ -88,7 +88,7 @@ func ExpandLiteral(literal map[string]string, x Expander) (map[string]string, er
 // by x (see Expander); spawn pairs are passed through as given, since the
 // caller's shell has already had its say. Inputs are not mutated. Returns nil
 // when every layer is empty.
-func (c *Config) ResolveEnv(names []string, literal, spawn map[string]string, x Expander) (map[string]string, error) {
+func (c *Config) ResolveEnv(names []string, literal EnvMap, spawn map[string]string, x Expander) (map[string]string, error) {
 	named, err := c.ResolveNamed(names, x)
 	if err != nil {
 		return nil, err
@@ -126,8 +126,9 @@ func (c *Config) validateEnvironments() []string {
 	return errs
 }
 
-// validateEnvironment checks one named environment's name and keys.
-func validateEnvironment(name string, env map[string]string) []string {
+// validateEnvironment checks one named environment's name, keys and secret
+// references.
+func validateEnvironment(name string, env EnvMap) []string {
 	var errs []string
 	if name == "" || strings.ContainsAny(name, ", \t\n") {
 		errs = append(errs, fmt.Sprintf("environments name %q must be non-empty and contain no commas or whitespace", name))
@@ -137,7 +138,7 @@ func validateEnvironment(name string, env map[string]string) []string {
 			errs = append(errs, fmt.Sprintf("environments.%s key %q is not a valid environment variable name", name, k))
 		}
 	}
-	return errs
+	return append(errs, validateEnvRefs("environments."+name, env)...)
 }
 
 func (c *Config) validateEnvironmentList(path string, names []string) []string {
@@ -185,9 +186,10 @@ func (e *InvalidEnvironmentsError) Error() string { return strings.Join(e.Proble
 // different environment. A launch with the variable unset still fails.
 func (c *Config) EnvironmentWarnings(x Expander) []string {
 	var warnings []string
-	check := func(scope string, env map[string]string) {
-		for _, k := range slices.Sorted(maps.Keys(env)) {
-			if _, err := x.Expand(env[k]); err != nil {
+	check := func(scope string, env EnvMap) {
+		literals := env.Literals()
+		for _, k := range slices.Sorted(maps.Keys(literals)) {
+			if _, err := x.Expand(literals[k]); err != nil {
 				warnings = append(warnings, scoped(err, scope, k).Error()+" in this process (the launching daemon's environment may differ)")
 			}
 		}

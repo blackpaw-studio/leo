@@ -94,11 +94,11 @@ func TestZeroExpanderUsesProcessEnvironment(t *testing.T) {
 }
 
 func TestResolveEnvExpandsNamedAndLiteralNotSpawn(t *testing.T) {
-	c := &Config{Environments: map[string]map[string]string{
-		"b": {"CLAUDE_CONFIG_DIR": "${HOME}/.claude-b", "PLAIN": "x"},
+	c := &Config{Environments: map[string]EnvMap{
+		"b": LiteralEnv(map[string]string{"CLAUDE_CONFIG_DIR": "${HOME}/.claude-b", "PLAIN": "x"}),
 	}}
 	x := fakeExpander(map[string]string{"HOME": "/home/evan", "TOK": "secret"})
-	got, err := c.ResolveEnv([]string{"b"}, map[string]string{"TOKEN": "$TOK", "ESC": "$$TOK"}, map[string]string{"SPAWN": "$TOK"}, x)
+	got, err := c.ResolveEnv([]string{"b"}, LiteralEnv(map[string]string{"TOKEN": "$TOK", "ESC": "$$TOK"}), map[string]string{"SPAWN": "$TOK"}, x)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -109,13 +109,13 @@ func TestResolveEnvExpandsNamedAndLiteralNotSpawn(t *testing.T) {
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("got %v, want %v", got, want)
 	}
-	if c.Environments["b"]["CLAUDE_CONFIG_DIR"] != "${HOME}/.claude-b" {
+	if c.Environments["b"]["CLAUDE_CONFIG_DIR"] != Literal("${HOME}/.claude-b") {
 		t.Fatal("config was mutated by expansion")
 	}
 }
 
 func TestResolveEnvUnsetVariableNamesScopeKeyAndVariable(t *testing.T) {
-	c := &Config{Environments: map[string]map[string]string{"b": {"CLAUDE_CONFIG_DIR": "$NOPE/x"}}}
+	c := &Config{Environments: map[string]EnvMap{"b": LiteralEnv(map[string]string{"CLAUDE_CONFIG_DIR": "$NOPE/x"})}}
 	x := fakeExpander(nil)
 
 	_, err := c.ResolveEnv([]string{"b"}, nil, nil, x)
@@ -129,7 +129,7 @@ func TestResolveEnvUnsetVariableNamesScopeKeyAndVariable(t *testing.T) {
 		}
 	}
 
-	_, err = c.ResolveEnv(nil, map[string]string{"TOKEN": "${MISSING}"}, nil, x)
+	_, err = c.ResolveEnv(nil, LiteralEnv(map[string]string{"TOKEN": "${MISSING}"}), nil, x)
 	if err == nil || !strings.Contains(err.Error(), "env.TOKEN") || !strings.Contains(err.Error(), "$MISSING") {
 		t.Fatalf("literal env error = %v", err)
 	}
@@ -138,8 +138,8 @@ func TestResolveEnvUnsetVariableNamesScopeKeyAndVariable(t *testing.T) {
 func TestResolveEnvOverriddenLayerStillMustExpand(t *testing.T) {
 	// A key shadowed by a higher layer is still validated: a typo in a lower
 	// layer should not hide until someone removes the override.
-	c := &Config{Environments: map[string]map[string]string{"b": {"K": "$NOPE"}}}
-	if _, err := c.ResolveEnv([]string{"b"}, map[string]string{"K": "x"}, nil, fakeExpander(nil)); err == nil {
+	c := &Config{Environments: map[string]EnvMap{"b": LiteralEnv(map[string]string{"K": "$NOPE"})}}
+	if _, err := c.ResolveEnv([]string{"b"}, LiteralEnv(map[string]string{"K": "x"}), nil, fakeExpander(nil)); err == nil {
 		t.Fatal("want error for unset variable in shadowed layer")
 	}
 }
@@ -147,21 +147,21 @@ func TestResolveEnvOverriddenLayerStillMustExpand(t *testing.T) {
 func TestTaskAndTemplateEnvExpand(t *testing.T) {
 	c := &Config{}
 	x := fakeExpander(map[string]string{"HOME": "/h"})
-	te, err := c.TaskEnv(TaskConfig{Env: map[string]string{"D": "$HOME/t"}}, x)
+	te, err := c.TaskEnv(TaskConfig{Env: LiteralEnv(map[string]string{"D": "$HOME/t"})}, x)
 	if err != nil || te["D"] != "/h/t" {
 		t.Fatalf("TaskEnv = %v, %v", te, err)
 	}
-	me, err := c.TemplateEnv(TemplateConfig{Env: map[string]string{"D": "~/m"}}, x)
+	me, err := c.TemplateEnv(TemplateConfig{Env: LiteralEnv(map[string]string{"D": "~/m"})}, x)
 	if err != nil || me["D"] != "/home/evan/m" {
 		t.Fatalf("TemplateEnv = %v, %v", me, err)
 	}
-	if _, err := c.TaskEnv(TaskConfig{Env: map[string]string{"D": "$NOPE"}}, x); err == nil {
+	if _, err := c.TaskEnv(TaskConfig{Env: LiteralEnv(map[string]string{"D": "$NOPE"})}, x); err == nil {
 		t.Fatal("TaskEnv: want unset error")
 	}
 }
 
 func TestResolveNamedExpandsAndRejectsUnknown(t *testing.T) {
-	c := &Config{Environments: map[string]map[string]string{"b": {"K": "$HOME/x"}}}
+	c := &Config{Environments: map[string]EnvMap{"b": LiteralEnv(map[string]string{"K": "$HOME/x"})}}
 	x := fakeExpander(map[string]string{"HOME": "/h"})
 	got, err := c.ResolveNamed([]string{"b"}, x)
 	if err != nil || got["K"] != "/h/x" {
@@ -175,11 +175,11 @@ func TestResolveNamedExpandsAndRejectsUnknown(t *testing.T) {
 
 func TestEnvironmentWarningsFlagVariablesUnsetInProcess(t *testing.T) {
 	c := minimalValidConfig()
-	c.Environments = map[string]map[string]string{
-		"acct-b": {"CLAUDE_CONFIG_DIR": "$ACCT_ROOT/.claude", "FINE": "${HOME}/x", "TWICE": "$ACCT_ROOT/$ACCT_ROOT"},
+	c.Environments = map[string]EnvMap{
+		"acct-b": LiteralEnv(map[string]string{"CLAUDE_CONFIG_DIR": "$ACCT_ROOT/.claude", "FINE": "${HOME}/x", "TWICE": "$ACCT_ROOT/$ACCT_ROOT"}),
 	}
-	c.Templates = map[string]TemplateConfig{"t": {Env: map[string]string{"T": "$TMPL_VAR"}}}
-	c.Tasks["job"] = TaskConfig{Env: map[string]string{"J": "$TASK_VAR"}}
+	c.Templates = map[string]TemplateConfig{"t": {Env: LiteralEnv(map[string]string{"T": "$TMPL_VAR"})}}
+	c.Tasks["job"] = TaskConfig{Env: LiteralEnv(map[string]string{"J": "$TASK_VAR"})}
 	x := fakeExpander(map[string]string{"HOME": "/h"})
 
 	got := c.EnvironmentWarnings(x)
@@ -207,7 +207,7 @@ func TestLoadSaveKeepsVariableReferencesLiteral(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := cfg.Environments["acct-b"]["CLAUDE_CONFIG_DIR"]; got != "${HOME}/.claude-b" {
+	if got := cfg.Environments["acct-b"]["CLAUDE_CONFIG_DIR"]; got != Literal("${HOME}/.claude-b") {
 		t.Fatalf("Load expanded value: %q", got)
 	}
 	if err := Save(path, cfg); err != nil {
@@ -231,7 +231,7 @@ func TestExpansionErrorsNeverEchoValueContents(t *testing.T) {
 	}
 	for name, value := range cases {
 		t.Run(name, func(t *testing.T) {
-			c := &Config{Environments: map[string]map[string]string{"b": {"TOKEN": value}}, Templates: map[string]TemplateConfig{"t": {Env: map[string]string{"T": value}}}}
+			c := &Config{Environments: map[string]EnvMap{"b": LiteralEnv(map[string]string{"TOKEN": value})}, Templates: map[string]TemplateConfig{"t": {Env: LiteralEnv(map[string]string{"T": value})}}}
 			_, err := c.ResolveEnv([]string{"b"}, nil, nil, x)
 			if err == nil {
 				t.Fatal("want error")

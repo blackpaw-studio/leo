@@ -53,7 +53,7 @@ func TestSaveSplitEditNestedMapKeepsOrderAndComments(t *testing.T) {
 	const src = "templates:\n  a:\n    model: opus\n    env:\n      # token\n      Z_TOKEN: \"1\"\n      A_URL: x\n\n  b:\n    model: haiku\n"
 	got := editSharedAndRead(t, src, func(cfg *Config) {
 		tmpl := cfg.Templates["a"]
-		tmpl.Env = map[string]string{"Z_TOKEN": "2", "A_URL": "x"}
+		tmpl.Env = LiteralEnv(map[string]string{"Z_TOKEN": "2", "A_URL": "x"})
 		cfg.Templates["a"] = tmpl
 	})
 	if want := strings.Replace(src, `"1"`, `"2"`, 1); got != want {

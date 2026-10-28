@@ -19,7 +19,7 @@ import (
 func appearanceSnapshotConfig() *config.Config {
 	return &config.Config{
 		Defaults:     config.DefaultsConfig{Model: "sonnet"},
-		Environments: map[string]map[string]string{"homelab": {"X": "1"}},
+		Environments: map[string]config.EnvMap{"homelab": config.LiteralEnv(map[string]string{"X": "1"})},
 		Templates: map[string]config.TemplateConfig{
 			"ops":       {Model: "opus", Environments: []string{"homelab"}},
 			"assistant": {Model: "sonnet"},

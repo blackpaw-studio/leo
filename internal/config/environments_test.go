@@ -20,10 +20,10 @@ func minimalValidConfig() *Config {
 func envCfg() *Config {
 	return &Config{
 		Defaults: DefaultsConfig{Environments: []string{"base"}},
-		Environments: map[string]map[string]string{
-			"base":   {"FOO": "base", "SHARED": "base"},
-			"acct-b": {"CLAUDE_CONFIG_DIR": "/b", "SHARED": "b"},
-			"empty":  {},
+		Environments: map[string]EnvMap{
+			"base":   LiteralEnv(map[string]string{"FOO": "base", "SHARED": "base"}),
+			"acct-b": LiteralEnv(map[string]string{"CLAUDE_CONFIG_DIR": "/b", "SHARED": "b"}),
+			"empty":  LiteralEnv(map[string]string{}),
 		},
 	}
 }
@@ -66,12 +66,12 @@ func TestMergeEnvironmentsLaterWins(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := map[string]string{"FOO": "base", "SHARED": "b", "CLAUDE_CONFIG_DIR": "/b"}
+	want := LiteralEnv(map[string]string{"FOO": "base", "SHARED": "b", "CLAUDE_CONFIG_DIR": "/b"})
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("got %v, want %v", got, want)
 	}
 	got, _ = c.MergeEnvironments([]string{"acct-b", "base"})
-	if got["SHARED"] != "base" {
+	if got["SHARED"] != Literal("base") {
 		t.Fatalf("order must decide precedence, got SHARED=%q", got["SHARED"])
 	}
 }
@@ -88,7 +88,7 @@ func TestResolveEnvPrecedence(t *testing.T) {
 	c := envCfg()
 	literal := map[string]string{"SHARED": "literal", "LIT": "1"}
 	spawn := map[string]string{"SHARED": "spawn"}
-	got, err := c.ResolveEnv([]string{"base", "acct-b"}, literal, spawn, Expander{})
+	got, err := c.ResolveEnv([]string{"base", "acct-b"}, LiteralEnv(literal), spawn, Expander{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -111,7 +111,7 @@ func TestResolveEnvNoLayersIsNil(t *testing.T) {
 func TestValidateEnvironments(t *testing.T) {
 	base := func() *Config {
 		c := minimalValidConfig()
-		c.Environments = map[string]map[string]string{"a": {"X": "1"}, "b": {"Y": "2"}}
+		c.Environments = map[string]EnvMap{"a": LiteralEnv(map[string]string{"X": "1"}), "b": LiteralEnv(map[string]string{"Y": "2"})}
 		return c
 	}
 	tests := []struct {
@@ -129,8 +129,8 @@ func TestValidateEnvironments(t *testing.T) {
 			c.Tasks["job"] = t
 		}, `tasks.job.environments: unknown environment "zzz"`},
 		{"duplicate in list", func(c *Config) { c.Defaults.Environments = []string{"a", "b", "a"} }, `defaults.environments: duplicate environment "a"`},
-		{"bad key", func(c *Config) { c.Environments["a"] = map[string]string{"1BAD": "x"} }, `environments.a key "1BAD"`},
-		{"bad name", func(c *Config) { c.Environments["a,b"] = map[string]string{"X": "1"} }, `environments name "a,b"`},
+		{"bad key", func(c *Config) { c.Environments["a"] = LiteralEnv(map[string]string{"1BAD": "x"}) }, `environments.a key "1BAD"`},
+		{"bad name", func(c *Config) { c.Environments["a,b"] = LiteralEnv(map[string]string{"X": "1"}) }, `environments name "a,b"`},
 		{"environments on persistent task with template", func(c *Config) {
 			c.Templates = map[string]TemplateConfig{"t": {}}
 			c.Tasks["job"] = TaskConfig{Schedule: "0 * * * *", PromptFile: "p.md", Runtime: "persistent", Template: "t", Environments: []string{"a"}}
@@ -176,7 +176,7 @@ func TestDispatchEnvironmentNames(t *testing.T) {
 
 func TestDispatchEnvCallerWinsOverTemplate(t *testing.T) {
 	c := envCfg()
-	tmpl := TemplateConfig{Environments: []string{"base"}, Env: map[string]string{"SHARED": "literal", "CLAUDE_CONFIG_DIR": "/tmpl", "LIT": "1"}}
+	tmpl := TemplateConfig{Environments: []string{"base"}, Env: LiteralEnv(map[string]string{"SHARED": "literal", "CLAUDE_CONFIG_DIR": "/tmpl", "LIT": "1"})}
 	got, err := c.DispatchEnv(tmpl, []string{"acct-b"}, Expander{})
 	if err != nil {
 		t.Fatal(err)
@@ -189,7 +189,7 @@ func TestDispatchEnvCallerWinsOverTemplate(t *testing.T) {
 
 func TestDispatchEnvNoInheritedIsTemplateEnv(t *testing.T) {
 	c := envCfg()
-	tmpl := TemplateConfig{Env: map[string]string{"LIT": "1"}}
+	tmpl := TemplateConfig{Env: LiteralEnv(map[string]string{"LIT": "1"})}
 	got, err := c.DispatchEnv(tmpl, nil, Expander{})
 	if err != nil {
 		t.Fatal(err)
@@ -210,7 +210,7 @@ func TestDispatchEnvUnknownInherited(t *testing.T) {
 
 func TestEnvironmentKeys(t *testing.T) {
 	c := envCfg()
-	c.Templates = map[string]TemplateConfig{"t": {Env: map[string]string{"LIT": "1", "FOO": "x"}}}
+	c.Templates = map[string]TemplateConfig{"t": {Env: LiteralEnv(map[string]string{"LIT": "1", "FOO": "x"})}}
 	want := []string{"CLAUDE_CONFIG_DIR", "FOO", "LIT", "SHARED"}
 	if got := c.EnvironmentKeys(); !reflect.DeepEqual(got, want) {
 		t.Fatalf("got %#v, want %#v", got, want)

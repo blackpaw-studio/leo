@@ -51,15 +51,15 @@ func (e *FollowError) Error() string {
 // Section values keep their YAML types; a follower parses them with
 // UseNumber (see ParseFollowExport) and decodes them through YAML.
 type FollowExport struct {
-	Schema       int                          `json:"schema"`
-	Kind         string                       `json:"kind"`
-	LeoVersion   string                       `json:"leo_version"`
-	HomeID       string                       `json:"home_id"`
-	Revision     string                       `json:"revision"`
-	Templates    map[string]any               `json:"templates"`
-	Environments map[string]map[string]string `json:"environments"`
-	Delegation   any                          `json:"delegation"`
-	Defaults     map[string]any               `json:"defaults"`
+	Schema       int               `json:"schema"`
+	Kind         string            `json:"kind"`
+	LeoVersion   string            `json:"leo_version"`
+	HomeID       string            `json:"home_id"`
+	Revision     string            `json:"revision"`
+	Templates    map[string]any    `json:"templates"`
+	Environments map[string]EnvMap `json:"environments"`
+	Delegation   any               `json:"delegation"`
+	Defaults     map[string]any    `json:"defaults"`
 }
 
 // BuildFollowExport builds the export of the config at path. It never
@@ -147,7 +147,7 @@ func parseFollowExport(data []byte) (FollowExport, leadSections, error) {
 // paths unexpanded.
 type leadSections struct {
 	templates    map[string]TemplateConfig
-	environments map[string]map[string]string
+	environments map[string]EnvMap
 	delegation   *DelegationConfig
 	defaults     DefaultsConfig
 }
@@ -170,7 +170,7 @@ func (e FollowExport) decodeSections() (leadSections, error) {
 	if e.Environments != nil {
 		// A fresh copy per decode: the effective config and the ownership
 		// baseline must not share maps.
-		out.environments = make(map[string]map[string]string, len(e.Environments))
+		out.environments = make(map[string]EnvMap, len(e.Environments))
 		for name, env := range e.Environments {
 			out.environments[name] = maps.Clone(env)
 		}
@@ -194,10 +194,10 @@ func (e FollowExport) decodeSections() (leadSections, error) {
 // a follower can tell whether a pull changed anything it uses.
 func (e FollowExport) Digest() string {
 	data, err := json.Marshal(struct {
-		Templates    map[string]any               `json:"templates"`
-		Environments map[string]map[string]string `json:"environments"`
-		Delegation   any                          `json:"delegation"`
-		Defaults     map[string]any               `json:"defaults"`
+		Templates    map[string]any    `json:"templates"`
+		Environments map[string]EnvMap `json:"environments"`
+		Delegation   any               `json:"delegation"`
+		Defaults     map[string]any    `json:"defaults"`
 	}{e.Templates, e.Environments, e.Delegation, e.Defaults})
 	if err != nil {
 		return ""

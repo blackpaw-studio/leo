@@ -1400,7 +1400,7 @@ func TestRestoreAgentsSpawnsFreshWhenEnvironmentsExist(t *testing.T) {
 	home := t.TempDir()
 	seedEnvRecord(t, home, []string{"acct-b"})
 	withLiveTmuxSession(t, false)
-	cfg := &config.Config{HomePath: home, Environments: map[string]map[string]string{"acct-b": {"CLAUDE_CONFIG_DIR": "/acct/b"}}}
+	cfg := &config.Config{HomePath: home, Environments: map[string]config.EnvMap{"acct-b": config.LiteralEnv(map[string]string{"CLAUDE_CONFIG_DIR": "/acct/b"})}}
 
 	spawner := &fakeAgentSpawner{}
 	if restored := RestoreAgents(home, "tmux", "", spawner, leomcp.Server{}, WithRestoreConfig(cfg)); restored != 1 {

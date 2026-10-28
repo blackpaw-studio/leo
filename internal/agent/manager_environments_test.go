@@ -21,13 +21,13 @@ import (
 func envTestConfig(home, ws, acctA, acctB string) *config.Config {
 	return &config.Config{
 		HomePath: home,
-		Environments: map[string]map[string]string{
-			"base":   {"FOO": "base", "SHARED": "base"},
-			"acct-a": {"CLAUDE_CONFIG_DIR": acctA, "SHARED": "a"},
-			"acct-b": {"CLAUDE_CONFIG_DIR": acctB, "SHARED": "b"},
+		Environments: map[string]config.EnvMap{
+			"base":   config.LiteralEnv(map[string]string{"FOO": "base", "SHARED": "base"}),
+			"acct-a": config.LiteralEnv(map[string]string{"CLAUDE_CONFIG_DIR": acctA, "SHARED": "a"}),
+			"acct-b": config.LiteralEnv(map[string]string{"CLAUDE_CONFIG_DIR": acctB, "SHARED": "b"}),
 		},
 		Templates: map[string]config.TemplateConfig{
-			"coding": {Workspace: ws, Model: "sonnet", Environments: []string{"base", "acct-a"}, Env: map[string]string{"LITERAL": "tmpl"}},
+			"coding": {Workspace: ws, Model: "sonnet", Environments: []string{"base", "acct-a"}, Env: config.LiteralEnv(map[string]string{"LITERAL": "tmpl"})},
 		},
 	}
 }
@@ -40,7 +40,7 @@ func TestSpawnLayersNamedEnvironmentsLiteralAndSpawnEnv(t *testing.T) {
 	t.Setenv("CLAUDE_CONFIG_DIR", "")
 	home, ws, a, b := t.TempDir(), t.TempDir(), t.TempDir(), t.TempDir()
 	cfg := envTestConfig(home, ws, a, b)
-	cfg.Templates["coding"] = config.TemplateConfig{Workspace: ws, Environments: []string{"base", "acct-a"}, Env: map[string]string{"SHARED": "literal", "LITERAL": "tmpl"}}
+	cfg.Templates["coding"] = config.TemplateConfig{Workspace: ws, Environments: []string{"base", "acct-a"}, Env: config.LiteralEnv(map[string]string{"SHARED": "literal", "LITERAL": "tmpl"})}
 	sup := &capturingSupervisor{}
 	m := envManager(cfg, sup)
 
@@ -174,7 +174,7 @@ func TestSetEnvironmentsDropsKeysOfTheDepartingEnvironment(t *testing.T) {
 	t.Setenv("CLAUDE_CONFIG_DIR", "")
 	home, tws, a, b := t.TempDir(), t.TempDir(), t.TempDir(), t.TempDir()
 	cfg := envTestConfig(home, tws, a, b)
-	cfg.Environments["acct-a"]["ONLY_A"] = "1"
+	cfg.Environments["acct-a"]["ONLY_A"] = config.Literal("1")
 	rec, sup := savedLayeredAgent(t, cfg, nil)
 	if rec.Env["ONLY_A"] != "1" {
 		t.Fatalf("fixture env = %v", rec.Env)
@@ -258,7 +258,7 @@ func TestRestartReResolvesNamedEnvironmentsFromCurrentConfig(t *testing.T) {
 	cfg := envTestConfig(home, tws, a, b)
 	_, sup := savedLayeredAgent(t, cfg, []string{"acct-b"})
 	moved := t.TempDir()
-	cfg.Environments["acct-b"] = map[string]string{"CLAUDE_CONFIG_DIR": moved}
+	cfg.Environments["acct-b"] = config.LiteralEnv(map[string]string{"CLAUDE_CONFIG_DIR": moved})
 	if err := envManager(cfg, sup).Restart("leo-x"); err != nil {
 		t.Fatal(err)
 	}
@@ -369,7 +369,7 @@ func TestRestartReResolvesEnvironmentsOfImplicitPersistentTaskAgent(t *testing.T
 	sup := &capturingSupervisor{agents: map[string]ProcessState{"nightly": {Name: "nightly", Status: "running"}}}
 
 	moved := t.TempDir()
-	cfg.Environments["acct-b"] = map[string]string{"CLAUDE_CONFIG_DIR": moved}
+	cfg.Environments["acct-b"] = config.LiteralEnv(map[string]string{"CLAUDE_CONFIG_DIR": moved})
 	if err := envManager(cfg, sup).Restart("nightly"); err != nil {
 		t.Fatal(err)
 	}

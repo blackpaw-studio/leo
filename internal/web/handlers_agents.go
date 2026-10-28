@@ -11,7 +11,6 @@ import (
 
 	"github.com/blackpaw-studio/leo/internal/agent"
 	"github.com/blackpaw-studio/leo/internal/config"
-	"github.com/blackpaw-studio/leo/internal/redact"
 	"github.com/blackpaw-studio/leo/internal/web/schema"
 )
 
@@ -235,7 +234,7 @@ func (s *Server) handleAPITemplateList(w http.ResponseWriter, r *http.Request) {
 			MaxTurns:  tmpl.MaxTurns,
 			Channels:  tmpl.Channels,
 			AddDirs:   tmpl.AddDirs,
-			EnvKeys:   redact.Keys(tmpl.Env),
+			EnvKeys:   tmpl.Env.Keys(),
 
 			Environments: tmpl.Environments,
 		})

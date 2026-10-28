@@ -66,7 +66,7 @@ func TestValidateTemplateChannels(t *testing.T) {
 func TestValidateTemplateEnvKeys(t *testing.T) {
 	cfg := &Config{
 		Templates: map[string]TemplateConfig{
-			"test": {Env: map[string]string{"VALID": "ok", "1INVALID": "bad"}},
+			"test": {Env: LiteralEnv(map[string]string{"VALID": "ok", "1INVALID": "bad"})},
 		},
 	}
 	err := cfg.Validate()
@@ -221,7 +221,7 @@ templates:
 	if len(coding.Channels) != 1 {
 		t.Errorf("coding.Channels = %v", coding.Channels)
 	}
-	if coding.Env["MY_VAR"] != "value" {
+	if coding.Env["MY_VAR"] != Literal("value") {
 		t.Error("coding.Env missing MY_VAR")
 	}
 

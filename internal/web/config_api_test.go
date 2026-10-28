@@ -793,7 +793,7 @@ func TestSecretEnvEntriesAreRedactedAndKeepReplaceClear(t *testing.T) {
 	env := func() map[string]any {
 		return h.readValues("/config/templates/coder")["env"].(map[string]any)
 	}
-	fileEnv := func() map[string]string { return h.loadConfig().Templates["coder"].Env }
+	fileEnv := func() map[string]string { return h.loadConfig().Templates["coder"].Env.Literals() }
 
 	res := h.put("/config/templates/coder", map[string]any{"env": map[string]any{
 		"ANTHROPIC_AUTH_TOKEN": secret, "ANTHROPIC_BASE_URL": "http://localhost:3325",

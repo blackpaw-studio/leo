@@ -187,7 +187,7 @@ func TestRejectedInjectWithoutPaneDetailKeepsRejection(t *testing.T) {
 func TestInteractiveLaunchArgv(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("HOME", dir)
-	cfg := &config.Config{HomePath: dir, Web: config.WebConfig{Enabled: true, Port: 9100}, Templates: map[string]config.TemplateConfig{"claude": {Harness: "claude", Model: "sonnet", Env: map[string]string{"THING": "value"}}}}
+	cfg := &config.Config{HomePath: dir, Web: config.WebConfig{Enabled: true, Port: 9100}, Templates: map[string]config.TemplateConfig{"claude": {Harness: "claude", Model: "sonnet", Env: config.LiteralEnv(map[string]string{"THING": "value"})}}}
 	r := NewInteractiveRuntime("/tmp/leo.yaml", func() (*config.Config, error) { return cfg, nil }, func(string) (string, bool) { return "leo-caller", true }, "tmux", "/opt/leo")
 	tokenFile := filepath.Join(dir, "agent.token")
 	if err := os.WriteFile(tokenFile, []byte("token\n"), 0o600); err != nil {
@@ -504,7 +504,7 @@ func TestInteractiveClaudeDispatchLaunchProfile(t *testing.T) {
 		t.Fatal(err)
 	}
 	cfg := &config.Config{HomePath: t.TempDir(), Web: config.WebConfig{Enabled: true}, Delegation: &config.DelegationConfig{ActiveProfile: "p", Profiles: map[string]config.Profile{"p": {Roles: map[string]config.RoleTarget{"implement": {Template: "claude"}}}}}, Templates: map[string]config.TemplateConfig{
-		"claude": {Harness: "claude", Model: "sonnet", Env: map[string]string{"HOME": home}},
+		"claude": {Harness: "claude", Model: "sonnet", Env: config.LiteralEnv(map[string]string{"HOME": home})},
 	}}
 	r := NewInteractiveRuntime("/tmp/leo.yaml", func() (*config.Config, error) { return cfg, nil }, nil, "tmux", "/opt/leo")
 	var launch []string
@@ -591,7 +591,7 @@ func TestInteractiveLaunchPreparesCodexHome(t *testing.T) {
 	t.Run("template CODEX_HOME", func(t *testing.T) {
 		codexHome := t.TempDir()
 		r := interactiveCodexRuntime(t, &config.Config{HomePath: t.TempDir(), Templates: map[string]config.TemplateConfig{
-			"codex": {Harness: "codex", Env: map[string]string{"CODEX_HOME": codexHome}},
+			"codex": {Harness: "codex", Env: config.LiteralEnv(map[string]string{"CODEX_HOME": codexHome})},
 		}})
 		if _, _, err := r.Launch(context.Background(), LaunchRequest{ID: "d-home", Template: "codex", Cwd: t.TempDir()}); err != nil {
 			t.Fatal(err)
@@ -632,7 +632,7 @@ func TestInteractiveLaunchTrustsWorkspace(t *testing.T) {
 		t.Fatal(err)
 	}
 	r := interactiveCodexRuntime(t, &config.Config{HomePath: t.TempDir(), Templates: map[string]config.TemplateConfig{
-		"codex": {Harness: "codex", Env: map[string]string{"CODEX_HOME": codexHome}},
+		"codex": {Harness: "codex", Env: config.LiteralEnv(map[string]string{"CODEX_HOME": codexHome})},
 	}})
 	for range 2 {
 		if _, _, err := r.Launch(context.Background(), LaunchRequest{ID: "d-trust", Template: "codex", Cwd: link}); err != nil {
@@ -769,7 +769,7 @@ func contains(s, want string) bool { return strings.Contains(s, want) }
 
 func TestInteractiveSplitArgv(t *testing.T) {
 	codexHome, cwd := t.TempDir(), t.TempDir()
-	cfg := &config.Config{HomePath: t.TempDir(), Templates: map[string]config.TemplateConfig{"codex": {Harness: "codex", Model: "gpt-5", Env: map[string]string{"CODEX_HOME": codexHome}}}}
+	cfg := &config.Config{HomePath: t.TempDir(), Templates: map[string]config.TemplateConfig{"codex": {Harness: "codex", Model: "gpt-5", Env: config.LiteralEnv(map[string]string{"CODEX_HOME": codexHome})}}}
 	r := NewInteractiveRuntime("/tmp/leo.yaml", func() (*config.Config, error) { return cfg, nil }, nil, "tmux", "/opt/leo")
 	var calls [][]string
 	r.ExecCommandContext = func(_ context.Context, _ string, args ...string) *exec.Cmd {
@@ -808,7 +808,7 @@ func TestInteractiveSplitArgv(t *testing.T) {
 
 func TestInteractiveSplitFallbackArgv(t *testing.T) {
 	codexHome, cwd := t.TempDir(), t.TempDir()
-	cfg := &config.Config{HomePath: t.TempDir(), Templates: map[string]config.TemplateConfig{"codex": {Harness: "codex", Env: map[string]string{"CODEX_HOME": codexHome}}}}
+	cfg := &config.Config{HomePath: t.TempDir(), Templates: map[string]config.TemplateConfig{"codex": {Harness: "codex", Env: config.LiteralEnv(map[string]string{"CODEX_HOME": codexHome})}}}
 	r := NewInteractiveRuntime("/tmp/leo.yaml", func() (*config.Config, error) { return cfg, nil }, nil, "tmux", "/opt/leo")
 	var calls [][]string
 	r.ExecCommandContext = func(_ context.Context, _ string, args ...string) *exec.Cmd {
@@ -845,7 +845,7 @@ func TestInteractiveSplitFallbackArgv(t *testing.T) {
 
 func TestInteractiveSplitEmptyPaneIDUnsetsWindowOption(t *testing.T) {
 	codexHome, cwd := t.TempDir(), t.TempDir()
-	cfg := &config.Config{HomePath: t.TempDir(), Templates: map[string]config.TemplateConfig{"codex": {Harness: "codex", Env: map[string]string{"CODEX_HOME": codexHome}}}}
+	cfg := &config.Config{HomePath: t.TempDir(), Templates: map[string]config.TemplateConfig{"codex": {Harness: "codex", Env: config.LiteralEnv(map[string]string{"CODEX_HOME": codexHome})}}}
 	r := NewInteractiveRuntime("/tmp/leo.yaml", func() (*config.Config, error) { return cfg, nil }, nil, "tmux", "/opt/leo")
 	var calls [][]string
 	r.ExecCommandContext = func(_ context.Context, _ string, args ...string) *exec.Cmd {
@@ -942,7 +942,7 @@ func TestInteractiveClaudeDispatchRunsUnderTemplateEnvironments(t *testing.T) {
 	home, acctDir, cwd := t.TempDir(), t.TempDir(), t.TempDir()
 	cfg := &config.Config{
 		HomePath:     t.TempDir(),
-		Environments: map[string]map[string]string{"acct-b": {"CLAUDE_CONFIG_DIR": acctDir, "HOME": home}},
+		Environments: map[string]config.EnvMap{"acct-b": config.LiteralEnv(map[string]string{"CLAUDE_CONFIG_DIR": acctDir, "HOME": home})},
 		Templates:    map[string]config.TemplateConfig{"claude": {Harness: "claude", Model: "sonnet", Environments: []string{"acct-b"}}},
 	}
 	r := NewInteractiveRuntime("/tmp/leo.yaml", func() (*config.Config, error) { return cfg, nil }, nil, "tmux", "/opt/leo")
@@ -976,7 +976,7 @@ func TestInteractiveDispatchExpandsEnvironmentVariables(t *testing.T) {
 	root, cwd := t.TempDir(), t.TempDir()
 	cfg := &config.Config{
 		HomePath:     t.TempDir(),
-		Environments: map[string]map[string]string{"acct-b": {"CLAUDE_CONFIG_DIR": "${ACCT_ROOT}/.claude-b"}},
+		Environments: map[string]config.EnvMap{"acct-b": config.LiteralEnv(map[string]string{"CLAUDE_CONFIG_DIR": "${ACCT_ROOT}/.claude-b"})},
 		Templates:    map[string]config.TemplateConfig{"claude": {Harness: "claude", Model: "sonnet", Environments: []string{"acct-b"}}},
 	}
 	r := NewInteractiveRuntime("/tmp/leo.yaml", func() (*config.Config, error) { return cfg, nil }, nil, "tmux", "/opt/leo")
@@ -1025,10 +1025,10 @@ func TestInteractiveDispatchInheritsEnvironmentsAndBlanksTheRest(t *testing.T) {
 	tmplDir, callerDir, cwd := t.TempDir(), t.TempDir(), t.TempDir()
 	cfg := &config.Config{
 		HomePath: t.TempDir(),
-		Environments: map[string]map[string]string{
-			"tmpl":   {"CLAUDE_CONFIG_DIR": tmplDir},
-			"caller": {"CLAUDE_CONFIG_DIR": callerDir},
-			"unused": {"ANTHROPIC_BASE_URL": "http://elsewhere"},
+		Environments: map[string]config.EnvMap{
+			"tmpl":   config.LiteralEnv(map[string]string{"CLAUDE_CONFIG_DIR": tmplDir}),
+			"caller": config.LiteralEnv(map[string]string{"CLAUDE_CONFIG_DIR": callerDir}),
+			"unused": config.LiteralEnv(map[string]string{"ANTHROPIC_BASE_URL": "http://elsewhere"}),
 		},
 		Templates: map[string]config.TemplateConfig{"claude": {Harness: "claude", Model: "sonnet", Environments: []string{"tmpl"}}},
 	}

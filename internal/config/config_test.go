@@ -656,7 +656,7 @@ func TestValidateTaskEnvKeys(t *testing.T) {
 			"bad": {
 				Schedule:   "0 * * * *",
 				PromptFile: "t.md",
-				Env:        map[string]string{"VALID": "ok", "1INVALID": "bad"},
+				Env:        LiteralEnv(map[string]string{"VALID": "ok", "1INVALID": "bad"}),
 			},
 		},
 	}

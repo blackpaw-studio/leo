@@ -32,10 +32,10 @@ func newTestConfigWithTemplates(t *testing.T) string {
 				Model:          "opus",
 				HarnessOptions: map[string]any{"agent": "dev"},
 				Workspace:      "/tmp/coding",
-				Env: map[string]string{
+				Env: config.LiteralEnv(map[string]string{
 					"OP_SERVICE_ACCOUNT_TOKEN": testSecretEnvValue,
 					"ANTHROPIC_BASE_URL":       "http://localhost:3325",
-				},
+				}),
 			},
 			"research": {Model: "sonnet"},
 		},

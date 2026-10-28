@@ -59,7 +59,7 @@ func decodeData(t *testing.T, w interface{ Bytes() []byte }, into any) {
 func TestBuildSnapshotAgentCarriesEffectiveEnvironments(t *testing.T) {
 	cfg := &config.Config{
 		Defaults:     config.DefaultsConfig{Environments: []string{"base"}},
-		Environments: map[string]map[string]string{"base": {"A": "1"}, "work": {"B": "2"}},
+		Environments: map[string]config.EnvMap{"base": config.LiteralEnv(map[string]string{"A": "1"}), "work": config.LiteralEnv(map[string]string{"B": "2"})},
 		Templates: map[string]config.TemplateConfig{
 			"coding":   {Environments: []string{"base", "work"}},
 			"research": {},

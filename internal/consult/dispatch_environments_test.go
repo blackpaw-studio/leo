@@ -15,10 +15,10 @@ import (
 
 func envTestConfig() *config.Config {
 	cfg := testConfig()
-	cfg.Environments = map[string]map[string]string{
-		"tmpl-acct":   {"CLAUDE_CONFIG_DIR": "/tmpl", "TMPL_ONLY": "t"},
-		"caller-acct": {"CLAUDE_CONFIG_DIR": "/caller"},
-		"other":       {"CLAUDE_CONFIG_DIR": "/other"},
+	cfg.Environments = map[string]config.EnvMap{
+		"tmpl-acct":   config.LiteralEnv(map[string]string{"CLAUDE_CONFIG_DIR": "/tmpl", "TMPL_ONLY": "t"}),
+		"caller-acct": config.LiteralEnv(map[string]string{"CLAUDE_CONFIG_DIR": "/caller"}),
+		"other":       config.LiteralEnv(map[string]string{"CLAUDE_CONFIG_DIR": "/other"}),
 	}
 	tmpl := cfg.Templates["claude"]
 	tmpl.Environments = []string{"tmpl-acct"}

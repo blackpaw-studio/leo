@@ -152,10 +152,11 @@ func (fl *followLayer) probeHarnessBinary(name, harnessName string) []string {
 // probeConfigDirs checks each harness config dir an environment names. Only
 // a value that is an absolute path once ~ and variables expand is probed;
 // one that cannot expand here is left to launch time.
-func probeConfigDirs(name string, env map[string]string) []string {
+func probeConfigDirs(name string, env EnvMap) []string {
 	var errs []string
+	literals := env.Literals()
 	for _, key := range configDirKeys {
-		raw, ok := env[key]
+		raw, ok := literals[key]
 		if !ok {
 			continue
 		}
@@ -294,7 +295,7 @@ func (c *Config) LookupTemplate(name string) (TemplateConfig, error) {
 
 // LookupEnvironment returns the named environment, an *InvalidEntryError
 // for an invalid lead environment, or an *UnknownEnvironmentError.
-func (c *Config) LookupEnvironment(name string) (map[string]string, error) {
+func (c *Config) LookupEnvironment(name string) (EnvMap, error) {
 	if env, ok := c.Environments[name]; ok {
 		return env, nil
 	}

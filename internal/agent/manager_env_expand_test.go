@@ -19,7 +19,7 @@ func TestSpawnExpandsNamedAndLiteralEnvValues(t *testing.T) {
 	t.Setenv("CLAUDE_CONFIG_DIR", "")
 	home, ws := t.TempDir(), t.TempDir()
 	cfg := envTestConfig(home, ws, "${ROOT}/.claude-a", "/b")
-	cfg.Templates["coding"] = config.TemplateConfig{Workspace: ws, Environments: []string{"acct-a"}, Env: map[string]string{"LITERAL": "$ROOT/lit", "ESC": "$$ROOT"}}
+	cfg.Templates["coding"] = config.TemplateConfig{Workspace: ws, Environments: []string{"acct-a"}, Env: config.LiteralEnv(map[string]string{"LITERAL": "$ROOT/lit", "ESC": "$$ROOT"})}
 	sup := &capturingSupervisor{}
 	m := envManager(cfg, sup)
 	m.env = expanderOf(map[string]string{"ROOT": "/r"})
@@ -33,7 +33,7 @@ func TestSpawnExpandsNamedAndLiteralEnvValues(t *testing.T) {
 			t.Errorf("env[%s] = %q, want %q", k, got[k], want)
 		}
 	}
-	if cfg.Environments["acct-a"]["CLAUDE_CONFIG_DIR"] != "${ROOT}/.claude-a" {
+	if cfg.Environments["acct-a"]["CLAUDE_CONFIG_DIR"] != config.Literal("${ROOT}/.claude-a") {
 		t.Fatal("config was mutated")
 	}
 }
@@ -78,7 +78,7 @@ func TestLegacyRecordRestartUsesExpandedTemplateEnv(t *testing.T) {
 	t.Setenv("CLAUDE_CONFIG_DIR", "")
 	home, tws := t.TempDir(), t.TempDir()
 	cfg := envTestConfig(home, tws, "/a", "/b")
-	cfg.Templates["coding"] = config.TemplateConfig{Workspace: tws, Model: "sonnet", Env: map[string]string{"TOOLS": "~/tools", "REF": "$ROOT/x"}}
+	cfg.Templates["coding"] = config.TemplateConfig{Workspace: tws, Model: "sonnet", Env: config.LiteralEnv(map[string]string{"TOOLS": "~/tools", "REF": "$ROOT/x"})}
 	rec := agentstore.Record{
 		Name: "leo-old", Template: "coding", Harness: "claude", Workspace: t.TempDir(),
 		ClaudeArgs: []string{"--model", "sonnet", "--session-id", "s"},

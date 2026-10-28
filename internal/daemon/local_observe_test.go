@@ -91,7 +91,7 @@ func TestEventsRouteStreamsBusEventAndPing(t *testing.T) {
 func TestLocalMetadataRoutesUseExactEnvelopeShapes(t *testing.T) {
 	dir := t.TempDir()
 	cfgPath := filepath.Join(dir, "leo.yaml")
-	cfg := &config.Config{Environments: map[string]map[string]string{"work": {"A": "1"}, "base": {"B": "2"}}, Templates: map[string]config.TemplateConfig{
+	cfg := &config.Config{Environments: map[string]config.EnvMap{"work": config.LiteralEnv(map[string]string{"A": "1"}), "base": config.LiteralEnv(map[string]string{"B": "2"})}, Templates: map[string]config.TemplateConfig{
 		"coding": {Model: "opus", Workspace: "/work", Environments: []string{"base"}, HarnessOptions: map[string]any{"agent": "reviewer"}},
 	}}
 	if err := config.Save(cfgPath, cfg); err != nil {

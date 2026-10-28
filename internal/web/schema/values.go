@@ -7,6 +7,8 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+
+	"github.com/blackpaw-studio/leo/internal/config"
 )
 
 // FieldError is a parse failure pinned to the field that caused it. Error()
@@ -57,7 +59,7 @@ func Values(target any, section Section, defaults any) []FieldValue {
 		case KindCSV:
 			fv.Value = strings.Join(val.Interface().([]string), ", ")
 		case KindEnvMap:
-			fv.Value = renderEnvMap(val.Interface().(map[string]string))
+			fv.Value = renderEnvMap(val.Interface().(config.EnvMap).Literals())
 		default: // text-ish kinds
 			fv.Value = val.String()
 		}
@@ -124,7 +126,7 @@ func apply(target any, section Section, form url.Values, only map[string]bool) e
 			if err != nil {
 				return &FieldError{Key: f.Key, Err: fmt.Errorf("%s: %w", f.Key, err)}
 			}
-			val.Set(reflect.ValueOf(m))
+			val.Set(reflect.ValueOf(config.LiteralEnv(m)))
 		default:
 			val.SetString(strings.TrimSpace(raw))
 		}

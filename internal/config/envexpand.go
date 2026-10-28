@@ -2,10 +2,10 @@ package config
 
 import (
 	"fmt"
-	"maps"
 	"os"
-	"slices"
 	"strings"
+
+	"github.com/blackpaw-studio/leo/internal/secretenv"
 )
 
 // LookupFunc reports the value of an environment variable and whether it is
@@ -173,12 +173,33 @@ func isVarName(s string) bool {
 	return true
 }
 
+// SecretResolutionError reports an env value whose secret reference could not
+// be resolved. It names the scope, key and reference, never a value.
+type SecretResolutionError struct {
+	Scope, Key string
+	Ref        secretenv.Ref
+	Reason     string
+}
+
+func (e *SecretResolutionError) Error() string {
+	where := e.Key
+	if e.Scope != "" {
+		where = e.Scope + "." + e.Key
+	}
+	return fmt.Sprintf("%s: secret %s: %s", where, e.Ref, e.Reason)
+}
+
 // expandMap expands every value of env, naming scope and key in any error. It
 // returns a new map; env is untouched.
-func (x Expander) expandMap(scope string, env map[string]string) (map[string]string, error) {
+func (x Expander) expandMap(scope string, env EnvMap) (map[string]string, error) {
 	out := make(map[string]string, len(env))
-	for _, k := range slices.Sorted(maps.Keys(env)) {
-		expanded, err := x.Expand(env[k])
+	for _, k := range env.Keys() {
+		lit, ok := env[k].AsLiteral()
+		if !ok {
+			ref, _ := env[k].Ref()
+			return nil, &SecretResolutionError{Scope: scope, Key: k, Ref: ref, Reason: "not resolvable"}
+		}
+		expanded, err := x.Expand(lit)
 		if err != nil {
 			return nil, scoped(err, scope, k)
 		}

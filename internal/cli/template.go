@@ -436,7 +436,7 @@ func resolveTemplate(cfg *config.Config, tmpl config.TemplateConfig) (effectiveT
 		BypassPermissions:  opts.BypassPermissions,
 		MCPConfig:          tmpl.MCPConfig,
 		AddDirs:            tmpl.AddDirs,
-		Env:                tmpl.Env,
+		Env:                tmpl.Env.Literals(),
 		Agent:              opts.AgentFile,
 		AllowedTools:       opts.AllowedTools,
 		DisallowedTools:    opts.DisallowedTools,
@@ -488,7 +488,7 @@ func literalTemplateJSON(name string, tmpl config.TemplateConfig) literalTemplat
 		MaxTurns:       tmpl.MaxTurns,
 		MCPConfig:      tmpl.MCPConfig,
 		AddDirs:        tmpl.AddDirs,
-		Env:            redact.EnvMap(tmpl.Env),
+		Env:            redact.EnvMap(tmpl.Env.Literals()),
 		HarnessOptions: tmpl.HarnessOptions,
 	}
 }
@@ -539,7 +539,7 @@ func printTemplate(name string, tmpl config.TemplateConfig) {
 	if tmpl.MCPConfig != "" {
 		printField("MCP config", tmpl.MCPConfig)
 	}
-	printEnvField(tmpl.Env)
+	printEnvField(tmpl.Env.Literals())
 }
 
 // printEnvField renders an env map as sorted KEY=VALUE pairs with

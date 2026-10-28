@@ -111,7 +111,7 @@ func TestLeadEntryWritesAreOwnedByLead(t *testing.T) {
 		{"edit template", KindTemplate, "edit", func(c *Config) error { c.Templates["lt"] = TemplateConfig{Model: "haiku"}; return nil }},
 		{"delete template", KindTemplate, "delete", func(c *Config) error { delete(c.Templates, "lt"); return nil }},
 		{"rename template", KindTemplate, "delete", func(c *Config) error { return RenameTemplate(c, "lt", "lt2") }},
-		{"edit environment", KindEnvironment, "edit", func(c *Config) error { c.Environments["le"]["A"] = "x"; return nil }},
+		{"edit environment", KindEnvironment, "edit", func(c *Config) error { c.Environments["le"]["A"] = Literal("x"); return nil }},
 		{"delete environment", KindEnvironment, "delete", func(c *Config) error { delete(c.Environments, "le"); return nil }},
 		{"edit profile", KindProfile, "edit", func(c *Config) error {
 			c.Delegation.Profiles["night"].Roles["implement"] = RoleTarget{Template: "mine"}

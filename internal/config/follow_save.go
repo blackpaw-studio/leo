@@ -133,7 +133,7 @@ func (c *Config) InheritFollow(from *Config) {
 	for _, name := range from.leadNames(KindEnvironment) {
 		if _, ok := c.Environments[name]; !ok {
 			if c.Environments == nil {
-				c.Environments = map[string]map[string]string{}
+				c.Environments = map[string]EnvMap{}
 			}
 			c.Environments[name] = from.Environments[name]
 		}

@@ -65,7 +65,7 @@ const (
 // map under the single `env` key. It exists only so the schema machinery has
 // a struct to render and apply; config stores the bare map.
 type EnvironmentEntry struct {
-	Env map[string]string `yaml:"env"`
+	Env config.EnvMap `yaml:"env"`
 }
 
 // AllSections returns every section in stable order.
@@ -151,7 +151,7 @@ func DeriveKind(t reflect.Type) Kind {
 		return KindTriBool
 	case t.Kind() == reflect.Slice && t.Elem().Kind() == reflect.String:
 		return KindCSV
-	case t.Kind() == reflect.Map && t.Elem().Kind() == reflect.String:
+	case t == envMapType, t.Kind() == reflect.Map && t.Elem().Kind() == reflect.String:
 		return KindEnvMap
 	}
 	panic("schema: no derivable kind for type " + t.String())

@@ -143,7 +143,7 @@ func TestLaunchCommandWordsExpandTheTokenFromItsFileWithoutPuttingItInTheCommand
 
 func TestInteractiveChildBlanksAmbientLeoEnvItIsNotGiven(t *testing.T) {
 	cfg := testConfig() // web disabled: local-only
-	cfg.Templates = map[string]config.TemplateConfig{"claude": {Harness: "claude", Model: "sonnet", Env: map[string]string{"LEO_API_TOKEN": "template-token", "LEO_WEB_PORT": "8888", "LEO_PERMISSIONS": "{}"}}}
+	cfg.Templates = map[string]config.TemplateConfig{"claude": {Harness: "claude", Model: "sonnet", Env: config.LiteralEnv(map[string]string{"LEO_API_TOKEN": "template-token", "LEO_WEB_PORT": "8888", "LEO_PERMISSIONS": "{}"})}}
 	got := launchInteractiveChild(t, cfg, "claude", writeTokenFile(t))
 	// tmux's global environment would otherwise show through: each reserved
 	// variable the child is not given is set empty explicitly.

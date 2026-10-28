@@ -74,10 +74,10 @@ func TestTaskDryRunEnv(t *testing.T) {
 		{
 			name: "task env included, secrets masked",
 			task: config.TaskConfig{
-				Env: map[string]string{
+				Env: config.LiteralEnv(map[string]string{
 					"OP_SERVICE_ACCOUNT_TOKEN": "ops_totally_fake_token_do_not_use",
 					"ANTHROPIC_BASE_URL":       "http://localhost:3325",
-				},
+				}),
 			},
 			want: []envPair{
 				{key: "ANTHROPIC_BASE_URL", display: "http://localhost:3325"},
@@ -90,7 +90,7 @@ func TestTaskDryRunEnv(t *testing.T) {
 			name: "task env colliding with LEO_CHANNELS yields one entry",
 			task: config.TaskConfig{
 				Channels: []string{"plugin:telegram@x"},
-				Env:      map[string]string{"LEO_CHANNELS": "shadowed"},
+				Env:      config.LiteralEnv(map[string]string{"LEO_CHANNELS": "shadowed"}),
 			},
 			want: []envPair{
 				{key: "LEO_CHANNELS", display: "plugin:telegram@x"},
@@ -130,8 +130,8 @@ func TestTaskDryRunEnv(t *testing.T) {
 }
 
 func TestTaskDryRunEnvShowsNamedEnvironments(t *testing.T) {
-	cfg := &config.Config{Environments: map[string]map[string]string{"acct-b": {"CLAUDE_CONFIG_DIR": "/b", "SHARED": "env"}}}
-	got, err := taskDryRunEnv(cfg, config.TaskConfig{Environments: []string{"acct-b"}, Env: map[string]string{"SHARED": "literal"}}, config.Expander{})
+	cfg := &config.Config{Environments: map[string]config.EnvMap{"acct-b": config.LiteralEnv(map[string]string{"CLAUDE_CONFIG_DIR": "/b", "SHARED": "env"})}}
+	got, err := taskDryRunEnv(cfg, config.TaskConfig{Environments: []string{"acct-b"}, Env: config.LiteralEnv(map[string]string{"SHARED": "literal"})}, config.Expander{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -142,7 +142,7 @@ func TestTaskDryRunEnvShowsNamedEnvironments(t *testing.T) {
 }
 
 func TestTaskDryRunEnvShowsExpandedValuesAndFailsOnUnset(t *testing.T) {
-	cfg := &config.Config{Environments: map[string]map[string]string{"b": {"CLAUDE_CONFIG_DIR": "${ROOT}/.claude-b"}}}
+	cfg := &config.Config{Environments: map[string]config.EnvMap{"b": config.LiteralEnv(map[string]string{"CLAUDE_CONFIG_DIR": "${ROOT}/.claude-b"})}}
 	lookup := func(k string) (string, bool) { return "/r", k == "ROOT" }
 	x := config.Expander{Lookup: lookup}
 	got, err := taskDryRunEnv(cfg, config.TaskConfig{Environments: []string{"b"}}, x)

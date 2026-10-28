@@ -146,7 +146,7 @@ func guardDirsFor(cfg *config.Config) []guardDir {
 	}
 	sort.Strings(names)
 	for _, name := range names {
-		env := cfg.Environments[name]
+		env := cfg.Environments[name].Literals()
 		if env["CLAUDE_CONFIG_DIR"] == "" {
 			continue
 		}

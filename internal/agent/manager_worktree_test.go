@@ -832,7 +832,7 @@ func newFromAgentTemplateOverrideTestManager(t *testing.T) (*Manager, string, st
 		HomePath: home,
 		Templates: map[string]config.TemplateConfig{
 			"claude":   {Workspace: base},
-			"override": {Workspace: filepath.Join(home, "other-workspace"), Env: map[string]string{"TMPL_ENV": "x"}},
+			"override": {Workspace: filepath.Join(home, "other-workspace"), Env: config.LiteralEnv(map[string]string{"TMPL_ENV": "x"})},
 		},
 	}
 	sup := &capturingSupervisor{}

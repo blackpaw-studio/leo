@@ -8,7 +8,6 @@ import (
 	"sort"
 
 	"github.com/blackpaw-studio/leo/internal/config"
-	"github.com/blackpaw-studio/leo/internal/redact"
 )
 
 // decodeJSON decodes a JSON request body into v and writes an error response on failure.
@@ -182,7 +181,7 @@ func (s *Server) handleTaskList(w http.ResponseWriter, r *http.Request) {
 			Template:   task.Template,
 			Enabled:    task.Enabled,
 			Channels:   task.Channels,
-			EnvKeys:    redact.Keys(task.Env),
+			EnvKeys:    task.Env.Keys(),
 		})
 	}
 	// Config maps iterate in random order; sort for a stable listing.
