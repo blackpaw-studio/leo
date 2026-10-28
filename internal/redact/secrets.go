@@ -121,7 +121,7 @@ func (sw *SecretsWriter) Write(p []byte) (int, error) {
 	if sw.s.empty() {
 		return sw.w.Write(p)
 	}
-	buf := append(sw.pending, p...)
+	buf := slices.Concat(sw.pending, p)
 	cut := sw.s.safeCut(buf)
 	if cut > 0 {
 		if _, err := sw.w.Write(sw.s.Bytes(buf[:cut])); err != nil {
