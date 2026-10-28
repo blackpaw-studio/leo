@@ -3,13 +3,14 @@
 <p class="dim">Named, composable env maps. Reference them by name from defaults, templates, tasks, or <code>leo agent spawn --environment</code>; later names win. Use absolute paths: a literal <code>~</code> is not expanded. Running agents pick up changes on their next restart.</p>
 {{range .Data.Environments}}
 <div class="card">
-  <div class="card-head"><b>{{.Name}}</b></div>
-  <form hx-post="{{.RenameURL}}" hx-target="#flash-container" hx-swap="innerHTML" class="inline-rename">
+  <div class="card-head"><b>{{.Name}}</b> {{template "template_source_badge" .}}</div>
+  {{if .Invalid}}<p class="dim">Unusable on this host: {{.Invalid}}</p>{{else}}
+  {{if not .Form.ReadOnly}}<form hx-post="{{.RenameURL}}" hx-target="#flash-container" hx-swap="innerHTML" class="inline-rename">
     <input type="text" name="new_name" value="{{.Name}}" required
            pattern="[A-Za-z0-9._-]+" aria-label="New name for environment {{.Name}}" />
     <button type="submit" class="btn">Rename</button>
-  </form>
-  {{template "config_form" .Form}}
+  </form>{{end}}
+  {{template "config_form" .Form}}{{end}}
 </div>
 {{else}}
 <p class="dim">No environments configured.</p>

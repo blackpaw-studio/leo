@@ -27,6 +27,7 @@ import (
 	"github.com/blackpaw-studio/leo/internal/config"
 	"github.com/blackpaw-studio/leo/internal/daemon"
 	"github.com/blackpaw-studio/leo/internal/env"
+	"github.com/blackpaw-studio/leo/internal/follow"
 	"github.com/blackpaw-studio/leo/internal/harness"
 	claudeharness "github.com/blackpaw-studio/leo/internal/harness/claude"
 	"github.com/blackpaw-studio/leo/internal/leomcp"
@@ -1096,6 +1097,10 @@ func defaultSupervisedExec(opts RunSupervisedOptions) error {
 	// Graceful restart: the CLI drains busy agents through the socket's
 	// /drain routes before it restarts the daemon.
 	srv.SetDrain(newDrainManager(srv, supervisor, tmuxPath, homePath))
+	// A follower pulls its lead's shared config on a schedule; on a host
+	// without a follow block the loop idles until a reload adds one.
+	followLoop := follow.NewLoop(func() (*config.Config, error) { return config.Load(configPath) }, srv.ReloadConfig)
+	srv.SetFollower(followLoop)
 	stepDone()
 	stepDone = timer.Step("IPC listen")
 	err = srv.Start()
@@ -1131,6 +1136,7 @@ func defaultSupervisedExec(opts RunSupervisedOptions) error {
 		// message can auto-resume them (see Manager.Stop). Runs for the
 		// daemon's lifetime; ctx cancellation stops it.
 		go runIdleSweep(ctx, supervisor, agentMgr, tmuxPath, homePath)
+		go followLoop.Run(ctx)
 		stepDone()
 
 		// Start web UI if enabled

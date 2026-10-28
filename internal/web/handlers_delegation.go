@@ -18,9 +18,12 @@ type delegationPageData struct {
 	HiddenAgents string
 	Templates    []delegationTemplate
 	Profiles     []delegationProfileRow
-	Rows         []delegationRow
-	Warnings     []string
-	Records      []any
+	// InvalidProfiles are lead profiles unusable on this host; listed, but
+	// not in the grid.
+	InvalidProfiles []delegationProfileRow
+	Rows            []delegationRow
+	Warnings        []string
+	Records         []any
 }
 
 // delegationTemplate is a template choice plus the model a role inherits
@@ -35,6 +38,11 @@ type delegationProfileRow struct {
 	Description string
 	Active      bool
 	RoleCount   int
+	// Source, SourceKey, Lead and Invalid: see templateRow.
+	Source    string
+	SourceKey string
+	Lead      bool
+	Invalid   string
 }
 
 type delegationRole struct {
@@ -65,6 +73,8 @@ type delegationCell struct {
 	Target         config.RoleTarget
 	InheritedModel string
 	Templates      []delegationTemplate
+	// Locked disables a lead profile's cell; override the profile to edit it.
+	Locked bool
 }
 
 type delegationPreviewData struct {
@@ -108,15 +118,26 @@ func (s *Server) buildDelegationData(_ *http.Request) (any, error) {
 		}
 	}
 	profiles := delegationProfileRows(d)
+	for i := range profiles {
+		p := &profiles[i]
+		p.Source, p.SourceKey = entrySourceLabels(cfg, config.KindProfile, p.Name)
+		p.Lead = cfg.IsLeadEntry(config.KindProfile, p.Name)
+	}
 	rows := make([]delegationRow, 0)
 	for _, role := range delegationRoles(d) {
 		row := delegationRow{Role: role}
 		for _, p := range profiles {
-			row.Cells = append(row.Cells, newDelegationCell(cfg, templates, p.Name, role.Name, d.Profiles[p.Name].Roles[role.Name]))
+			cell := newDelegationCell(cfg, templates, p.Name, role.Name, d.Profiles[p.Name].Roles[role.Name])
+			cell.Locked = p.Lead
+			row.Cells = append(row.Cells, cell)
 		}
 		rows = append(rows, row)
 	}
-	return delegationPageData{Config: d, Enabled: d.IsEnabled(), HiddenAgents: strings.Join(d.HiddenNativeAgents(), ", "), Templates: templates, Profiles: profiles, Rows: rows, Warnings: cfg.DelegationWarnings(), Records: records}, nil
+	var invalid []delegationProfileRow
+	for _, e := range sortedInvalid(cfg, config.KindProfile) {
+		invalid = append(invalid, delegationProfileRow{Name: e.Name, Source: invalidLeadLabel, SourceKey: "invalid", Invalid: e.Reason})
+	}
+	return delegationPageData{Config: d, Enabled: d.IsEnabled(), HiddenAgents: strings.Join(d.HiddenNativeAgents(), ", "), Templates: templates, Profiles: profiles, InvalidProfiles: invalid, Rows: rows, Warnings: cfg.DelegationWarnings(), Records: records}, nil
 }
 
 func delegationTemplates(cfg *config.Config) []delegationTemplate {

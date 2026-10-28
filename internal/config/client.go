@@ -56,6 +56,12 @@ func (c *Config) ResolveHost(flagValue string) (HostResolution, error) {
 		return c.remoteResolution(name, host), nil
 	}
 
+	// A follower's client.hosts name its lead; that alone does not make this
+	// host a remote client (D5).
+	if c.IsFollower() {
+		return HostResolution{Localhost: true}, nil
+	}
+
 	// No explicit selection — fall through to the first configured host if any.
 	if len(c.Client.Hosts) > 0 {
 		names := make([]string, 0, len(c.Client.Hosts))

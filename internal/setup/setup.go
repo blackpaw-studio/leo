@@ -250,6 +250,7 @@ func buildConfig(workspace string, existing *config.Config) *config.Config {
 		cfg.Client = existing.Client
 		cfg.Client.Hosts = maps.Clone(existing.Client.Hosts)
 		cfg.InheritTemplatesFile(existing)
+		cfg.InheritFollow(existing)
 		for k, v := range existing.Templates {
 			cfg.Templates[k] = v
 		}

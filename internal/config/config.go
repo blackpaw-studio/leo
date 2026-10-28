@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"maps"
 	"net"
 	"net/netip"
 	"net/url"
@@ -121,11 +122,20 @@ type Config struct {
 	// the local ones at load; see shared_templates.go.
 	TemplatesFile string `yaml:"templates_file,omitempty"`
 
+	// Follow makes this host mirror a lead host's shared config; see
+	// follow.go. Nil means today's behaviour: local config only.
+	Follow *FollowConfig `yaml:"follow,omitempty"`
+
 	// Set at load time from the config file path, not serialized.
 	HomePath string `yaml:"-"`
 
 	// shared records the loaded templates_file; nil when the key is unset.
 	shared *sharedTemplates
+	// follow records the lead layer; nil when follow is unset.
+	follow *followLayer
+	// localEmpties holds, on a follower's local view only, the empty
+	// defaults and delegation keys that marshaling would drop.
+	localEmpties *localEmpties
 }
 
 // ClientConfig holds remote-host definitions used when leo is invoked as a
@@ -558,8 +568,9 @@ func (c *Config) TaskTimeout(t TaskConfig) time.Duration {
 	return 30 * time.Minute
 }
 
-// Validate checks the config for required fields and valid values.
-func (c *Config) Validate() error {
+// validateDefaults checks the defaults block. Every message starts with
+// "defaults.<key>", which the follow layer relies on to drop a bad lead key.
+func (c *Config) validateDefaults(hr harnessResolver) []string {
 	var errs []string
 	if p := c.DispatchViewerPlacement(); !IsDispatchViewerPlacement(p) {
 		errs = append(errs, fmt.Sprintf("defaults.dispatch.viewer.placement %q must be pane, window or background", p))
@@ -579,35 +590,16 @@ func (c *Config) Validate() error {
 	if _, err := parseAdoptTimeout(c.Defaults.Dispatch.AdoptTimeout); err != nil {
 		errs = append(errs, fmt.Sprintf("defaults.dispatch.adopt_timeout %q: %v", c.Defaults.Dispatch.AdoptTimeout, err))
 	}
-	errs = append(errs, c.validateChat()...)
-
-	// resolveHarness returns the adapter for a scope, emitting at most one
-	// error per bad name: defaults errors at defaults.harness; a scope only
-	// errors when it *explicitly* names an unregistered harness.
-	available := strings.Join(harness.Names(), ", ")
-	defaultsHarness, defaultsHarnessErr := harness.Get(c.DefaultsHarness())
-	if defaultsHarnessErr != nil {
-		errs = append(errs, fmt.Sprintf("defaults.harness %q is not a registered harness (available: %s)", c.DefaultsHarness(), available))
+	if hr.defaultsErr != nil {
+		errs = append(errs, fmt.Sprintf("defaults.harness %q is not a registered harness (available: %s)", c.DefaultsHarness(), hr.available))
 	}
-	resolveHarness := func(scope, explicit string) (harness.Harness, bool) {
-		if explicit == "" {
-			return defaultsHarness, defaultsHarnessErr == nil
-		}
-		h, err := harness.Get(explicit)
-		if err != nil {
-			errs = append(errs, fmt.Sprintf("%s.harness %q is not a registered harness (available: %s)", scope, explicit, available))
-			return nil, false
-		}
-		return h, true
-	}
-
-	if defaultsHarness != nil {
+	if hr.defaults != nil {
 		if c.Defaults.Model != "" {
-			if err := defaultsHarness.ValidateModel(c.Defaults.Model); err != nil {
+			if err := hr.defaults.ValidateModel(c.Defaults.Model); err != nil {
 				errs = append(errs, fmt.Sprintf("defaults.model %v", err))
 			}
 		}
-		if _, err := defaultsHarness.DecodeOptions(c.Defaults.HarnessOptions); err != nil {
+		if _, err := hr.defaults.DecodeOptions(c.Defaults.HarnessOptions); err != nil {
 			errs = append(errs, fmt.Sprintf("defaults.harness_options: %v", err))
 		}
 	}
@@ -620,6 +612,128 @@ func (c *Config) Validate() error {
 		}
 	}
 
+	errs = append(errs, c.validateEnvironmentList("defaults.environments", c.Defaults.Environments)...)
+	return errs
+}
+
+// harnessResolver resolves the adapter a scope runs for validation, so a bad
+// name is reported once: at defaults.harness for the default, and at a
+// scope only when it explicitly names an unregistered harness.
+type harnessResolver struct {
+	defaults    harness.Harness
+	defaultsErr error
+	available   string
+}
+
+func newHarnessResolver(defaultsName string) harnessResolver {
+	h, err := harness.Get(defaultsName)
+	return harnessResolver{defaults: h, defaultsErr: err, available: strings.Join(harness.Names(), ", ")}
+}
+
+// resolve returns the scope's adapter, nil when it has none; msg reports an
+// explicitly named unregistered harness.
+func (r harnessResolver) resolve(scope, explicit string) (h harness.Harness, msg string) {
+	if explicit == "" {
+		if r.defaultsErr != nil {
+			return nil, ""
+		}
+		return r.defaults, ""
+	}
+	h, err := harness.Get(explicit)
+	if err != nil {
+		return nil, fmt.Sprintf("%s.harness %q is not a registered harness (available: %s)", scope, explicit, r.available)
+	}
+	return h, ""
+}
+
+// knownTemplates is the template map existence checks run against: the
+// effective templates plus any invalid lead template, which counts as known
+// so it does not cascade into the entries that name it.
+func (c *Config) knownTemplates() map[string]TemplateConfig {
+	invalid := c.InvalidEntries(KindTemplate)
+	if len(invalid) == 0 {
+		return c.Templates
+	}
+	known := maps.Clone(c.Templates)
+	if known == nil {
+		known = map[string]TemplateConfig{}
+	}
+	for name := range invalid {
+		known[name] = TemplateConfig{}
+	}
+	return known
+}
+
+// validateTemplate checks one template; messages start with "templates.<name>".
+func (c *Config) validateTemplate(name string, tmpl TemplateConfig, hr harnessResolver) []string {
+	var errs []string
+	h, msg := hr.resolve("templates."+name, tmpl.Harness)
+	if msg != "" {
+		errs = append(errs, msg)
+	}
+	if h != nil {
+		if tmpl.Model != "" {
+			if err := h.ValidateModel(tmpl.Model); err != nil {
+				errs = append(errs, fmt.Sprintf("templates.%s.model %v", name, err))
+			}
+		}
+		if _, err := h.DecodeOptions(c.TemplateHarnessOptions(tmpl)); err != nil {
+			errs = append(errs, fmt.Sprintf("templates.%s.harness_options: %v", name, err))
+		}
+		if !h.SupportsChannels() && (len(tmpl.Channels) > 0 || len(tmpl.DevChannels) > 0) {
+			errs = append(errs, fmt.Sprintf("templates.%s.channels: the %s harness does not support channel plugins; use leo's MCP tools for messaging", name, h.Name()))
+		}
+		if !h.SupportsKind(harness.KindAgent) {
+			errs = append(errs, fmt.Sprintf("templates.%s.harness: the %s harness cannot run ephemeral agents yet (only scheduled tasks) — see docs/configuration/harnesses.md", name, h.Name()))
+		}
+	}
+	if tmpl.MaxTurns < 0 {
+		errs = append(errs, fmt.Sprintf("templates.%s.max_turns must not be negative", name))
+	}
+	for i, ch := range tmpl.Channels {
+		if !channelPattern.MatchString(ch) {
+			errs = append(errs, fmt.Sprintf("templates.%s.channels[%d] %q contains invalid characters", name, i, ch))
+		}
+	}
+	for i, ch := range tmpl.DevChannels {
+		if !channelPattern.MatchString(ch) {
+			errs = append(errs, fmt.Sprintf("templates.%s.dev_channels[%d] %q contains invalid characters", name, i, ch))
+		}
+	}
+	for k := range tmpl.Env {
+		if !envKeyPattern.MatchString(k) {
+			errs = append(errs, fmt.Sprintf("templates.%s.env key %q is not a valid environment variable name", name, k))
+		}
+	}
+	for i, dir := range tmpl.AddDirs {
+		if err := ValidateAddDir(dir); err != nil {
+			errs = append(errs, fmt.Sprintf("templates.%s.add_dirs[%d]: %v", name, i, err))
+		}
+	}
+	if tmpl.IdleSuspendAfter != "" {
+		if d, err := time.ParseDuration(tmpl.IdleSuspendAfter); err != nil || d <= 0 {
+			errs = append(errs, fmt.Sprintf("templates.%s.idle_suspend_after %q must be a positive duration", name, tmpl.IdleSuspendAfter))
+		}
+	}
+	if tmpl.Isolation != "" && tmpl.Isolation != "worktree" {
+		errs = append(errs, fmt.Sprintf("templates.%s.isolation %q must be empty or \"worktree\"", name, tmpl.Isolation))
+	}
+	errs = append(errs, validatePermissions(name, tmpl.Permissions, c.knownTemplates(), c.persistedClientTool)...)
+	return errs
+}
+
+// Validate checks the config for required fields and valid values.
+func (c *Config) Validate() error {
+	hr := newHarnessResolver(c.DefaultsHarness())
+	errs := c.validateDefaults(hr)
+	errs = append(errs, c.validateChat()...)
+	resolveHarness := func(scope, explicit string) (harness.Harness, bool) {
+		h, msg := hr.resolve(scope, explicit)
+		if msg != "" {
+			errs = append(errs, msg)
+		}
+		return h, h != nil
+	}
 	if len(c.Providers) > 0 {
 		errs = append(errs, "providers: this section has been removed — see docs/configuration/harnesses.md")
 	}
@@ -668,54 +782,7 @@ func (c *Config) Validate() error {
 	}
 
 	for name, tmpl := range c.Templates {
-		if h, ok := resolveHarness("templates."+name, tmpl.Harness); ok {
-			if tmpl.Model != "" {
-				if err := h.ValidateModel(tmpl.Model); err != nil {
-					errs = append(errs, fmt.Sprintf("templates.%s.model %v", name, err))
-				}
-			}
-			if _, err := h.DecodeOptions(c.TemplateHarnessOptions(tmpl)); err != nil {
-				errs = append(errs, fmt.Sprintf("templates.%s.harness_options: %v", name, err))
-			}
-			if !h.SupportsChannels() && (len(tmpl.Channels) > 0 || len(tmpl.DevChannels) > 0) {
-				errs = append(errs, fmt.Sprintf("templates.%s.channels: the %s harness does not support channel plugins; use leo's MCP tools for messaging", name, h.Name()))
-			}
-			if !h.SupportsKind(harness.KindAgent) {
-				errs = append(errs, fmt.Sprintf("templates.%s.harness: the %s harness cannot run ephemeral agents yet (only scheduled tasks) — see docs/configuration/harnesses.md", name, h.Name()))
-			}
-		}
-		if tmpl.MaxTurns < 0 {
-			errs = append(errs, fmt.Sprintf("templates.%s.max_turns must not be negative", name))
-		}
-		for i, ch := range tmpl.Channels {
-			if !channelPattern.MatchString(ch) {
-				errs = append(errs, fmt.Sprintf("templates.%s.channels[%d] %q contains invalid characters", name, i, ch))
-			}
-		}
-		for i, ch := range tmpl.DevChannels {
-			if !channelPattern.MatchString(ch) {
-				errs = append(errs, fmt.Sprintf("templates.%s.dev_channels[%d] %q contains invalid characters", name, i, ch))
-			}
-		}
-		for k := range tmpl.Env {
-			if !envKeyPattern.MatchString(k) {
-				errs = append(errs, fmt.Sprintf("templates.%s.env key %q is not a valid environment variable name", name, k))
-			}
-		}
-		for i, dir := range tmpl.AddDirs {
-			if err := ValidateAddDir(dir); err != nil {
-				errs = append(errs, fmt.Sprintf("templates.%s.add_dirs[%d]: %v", name, i, err))
-			}
-		}
-		if tmpl.IdleSuspendAfter != "" {
-			if d, err := time.ParseDuration(tmpl.IdleSuspendAfter); err != nil || d <= 0 {
-				errs = append(errs, fmt.Sprintf("templates.%s.idle_suspend_after %q must be a positive duration", name, tmpl.IdleSuspendAfter))
-			}
-		}
-		if tmpl.Isolation != "" && tmpl.Isolation != "worktree" {
-			errs = append(errs, fmt.Sprintf("templates.%s.isolation %q must be empty or \"worktree\"", name, tmpl.Isolation))
-		}
-		errs = append(errs, validatePermissions(name, tmpl.Permissions, c.Templates, c.persistedClientTool)...)
+		errs = append(errs, c.validateTemplate(name, tmpl, hr)...)
 	}
 
 	for name, task := range c.Tasks {
@@ -782,9 +849,13 @@ func (c *Config) Validate() error {
 		}
 		if task.Runtime == "persistent" && task.Template != "" {
 			_, tmpl, _, err := c.ResolveTaskTarget(name)
-			if err != nil {
+			var invalid *InvalidEntryError
+			switch {
+			case errors.As(err, &invalid):
+				// An isolated lead template: the task fails with its reason at run time.
+			case err != nil:
 				errs = append(errs, err.Error())
-			} else {
+			default:
 				if missing, ok := channelSubset(task.Channels, tmpl.Channels); !ok {
 					errs = append(errs, fmt.Sprintf("tasks.%s: channel %q is not in templates.%s.channels (task.channels must be a subset)", name, missing, task.Template))
 				}
@@ -797,6 +868,7 @@ func (c *Config) Validate() error {
 
 	errs = append(errs, c.validateDelegation()...)
 	errs = append(errs, c.validateEnvironments()...)
+	errs = append(errs, c.validateFollow()...)
 
 	if len(errs) > 0 {
 		return &ValidationErrors{Messages: errs}
@@ -846,20 +918,61 @@ func LoadWithRevision(path string) (*Config, string, error) {
 	if err != nil {
 		return nil, "", fmt.Errorf("reading config: %w", err)
 	}
-	cfg, err := parse(path, data)
+	return loadData(path, data, true)
+}
+
+// loadUnexpanded loads path like LoadWithRevision but leaves every ~ as
+// written, for the follow export, which must copy values verbatim.
+func loadUnexpanded(path string) (*Config, error) {
+	data, err := os.ReadFile(path) //nolint:gosec // the operator's own leo.yaml
+	if err != nil {
+		return nil, fmt.Errorf("reading config: %w", err)
+	}
+	cfg, _, err := loadData(path, data, false)
+	return cfg, err
+}
+
+// loadData parses leo.yaml content and merges its templates_file; expand
+// says whether ~ in path fields is expanded.
+func loadData(path string, data []byte, expand bool) (*Config, string, error) {
+	cfg, err := parseWith(path, data, expand)
 	if err != nil {
 		return nil, "", err
 	}
+	rev := RevisionOf(data)
+	var sharedBytes []byte
 	if cfg.TemplatesFile != "" {
-		if err := cfg.loadSharedTemplates(data); err != nil {
+		if err := cfg.loadSharedTemplates(data, expand); err != nil {
 			return nil, "", err
 		}
-		return cfg, revisionOfFiles(data, cfg.shared.sharedBytes), nil
+		sharedBytes = cfg.shared.sharedBytes
+		rev = revisionOfFiles(data, sharedBytes)
 	}
-	return cfg, RevisionOf(data), nil
+	if expand && cfg.Follow != nil {
+		cfg.applyFollowLayer(data)
+		if fc := cfg.follow.cache; fc != nil {
+			rev = revisionWithFollow(data, sharedBytes, fc.Digest)
+		}
+	}
+	return cfg, rev, nil
+}
+
+// revisionWithFollow is a follower's revision: "sha256:" plus the digest of
+// leo.yaml's digest, the shared file's (empty when none) and the lead
+// sections' digest, so a pull that changes what the follower uses changes
+// it, while a status write or a re-stamped cache does not.
+func revisionWithFollow(leo, shared []byte, leadDigest string) string {
+	l, s := sha256.Sum256(leo), sha256.Sum256(shared)
+	buf := append(append(l[:], s[:]...), leadDigest...)
+	sum := sha256.Sum256(buf)
+	return "sha256:" + hex.EncodeToString(sum[:])
 }
 
 func parse(path string, data []byte) (*Config, error) {
+	return parseWith(path, data, true)
+}
+
+func parseWith(path string, data []byte, expand bool) (*Config, error) {
 	var cfg Config
 	if err := yaml.Unmarshal(data, &cfg); err != nil {
 		return nil, fmt.Errorf("parsing config: %w", err)
@@ -873,7 +986,9 @@ func parse(path string, data []byte) (*Config, error) {
 	cfg.HomePath = filepath.Dir(absPath)
 
 	// Expand ~ in all workspace and path fields
-	cfg.expandPaths()
+	if expand {
+		cfg.expandPaths()
+	}
 
 	return &cfg, nil
 }
@@ -893,8 +1008,18 @@ func (c *Config) expandPaths() {
 // symlink, Save writes through it: the link survives and its target is
 // replaced (see resolveWriteTarget).
 func Save(path string, cfg *Config) error {
+	if err := cfg.CheckLeadOwnership(); err != nil {
+		return err
+	}
+	cfg, err := cfg.localView()
+	if err != nil {
+		return err
+	}
 	if cfg.shared != nil {
 		return saveSplit(path, cfg)
+	}
+	if cfg.follow != nil {
+		return saveFollower(path, cfg)
 	}
 	data, err := yaml.Marshal(cfg)
 	if err != nil {

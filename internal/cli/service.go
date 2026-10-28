@@ -64,6 +64,9 @@ func runService(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return err
 	}
+	// From here on PATH is the daemon's: lead templates whose harness binary
+	// it lacks are invalid, not just warned about.
+	config.SetFollowProbes(config.DaemonFollowProbes())
 	if _, err := lookClaude(); err != nil {
 		warn.Printf("  %v — the daemon is starting without it; claude agents fail until it is installed\n", err)
 	}

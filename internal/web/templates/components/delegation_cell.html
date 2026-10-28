@@ -1,5 +1,6 @@
 {{define "delegation_cell"}}
 <form class="deleg-cell{{if not .Target.Template}} is-unmapped{{end}}" hx-post="/web/delegation/cell" hx-trigger="change, submit" hx-target="find .cell-status" hx-swap="outerHTML" hx-sync="this:replace">
+  <fieldset class="form-fieldset"{{if .Locked}} disabled title="Mirrored from the lead: override the profile to edit it"{{end}}>
   <input type="hidden" name="profile" value="{{.Profile}}">
   <input type="hidden" name="role" value="{{.Role}}">
   <div class="deleg-cell-row">
@@ -11,6 +12,7 @@
     <input name="effort" class="deleg-effort" value="{{.Target.Effort}}" placeholder="effort" aria-label="Effort for {{.Role}} in {{.Profile}}">
     <span class="cell-status" role="status"></span>
   </div>
+  </fieldset>
   <div id="{{.ID}}-msg" class="cell-msg"></div>
 </form>
 {{end}}

@@ -590,6 +590,9 @@ const (
 	codeUnknownTemplate     = "unknown_template"
 	codeInvalidEnvironments = "invalid_environments"
 	codeInvalidName         = "invalid_name"
+	// codeInvalidLeadEntry: the template or environment comes from a follow
+	// lead and is unusable on this host; the message carries the reason.
+	codeInvalidLeadEntry = "invalid_lead_entry"
 )
 
 // ClassifyEnvironmentError picks the HTTP status and stable error code for a
@@ -603,8 +606,11 @@ func ClassifyEnvironmentError(err error) (int, string) {
 		unknownTmpl *agent.UnknownTemplateError
 		bound       *agent.PersistentTaskError
 		mismatch    *agent.HarnessMismatchError
+		invalidLead *config.InvalidEntryError
 	)
 	switch {
+	case errors.As(err, &invalidLead):
+		return http.StatusBadRequest, codeInvalidLeadEntry
 	case errors.As(err, &unknown):
 		return http.StatusBadRequest, codeUnknownEnvironment
 	case errors.As(err, &invalidEnvs):

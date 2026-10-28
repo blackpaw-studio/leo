@@ -77,7 +77,7 @@
     <thead><tr><th>profile</th><th>description</th><th>roles</th><th></th></tr></thead>
     <tbody>{{range .Data.Profiles}}
       <tr{{if .Active}} class="is-active"{{end}}>
-        <td><code>{{.Name}}</code>{{if .Active}} <span class="pill ok">active</span>{{end}}</td>
+        <td><code>{{.Name}}</code>{{if .Active}} <span class="pill ok">active</span>{{end}} {{template "template_source_badge" .}}</td>
         <td class="dim">{{if .Description}}{{.Description}}{{else}}—{{end}}</td>
         <td class="dim">{{.RoleCount}}</td>
         <td><div class="row-actions">
@@ -85,23 +85,31 @@
           <details class="menu">
             <summary class="btn btn-sm" aria-label="Actions for profile {{.Name}}">⋯</summary>
             <div class="menu-panel">
-              <form hx-post="/web/delegation/profile/rename" hx-target="#flash-container">
+              {{if .Lead}}<form hx-post="/web/delegation/profile/override" hx-target="#flash-container">
+                <input type="hidden" name="name" value="{{.Name}}">
+                <p class="menu-note">Mirrored from the lead; copy it into this host's leo.yaml to edit it.</p>
+                <button class="btn btn-sm hot menu-wide">override locally</button>
+              </form>{{else}}<form hx-post="/web/delegation/profile/rename" hx-target="#flash-container">
                 <input type="hidden" name="name" value="{{.Name}}">
                 <label class="menu-label">rename</label>
                 <div class="menu-row"><input name="new_name" placeholder="new-name" required aria-label="New name for {{.Name}}"><button class="btn btn-sm">rename</button></div>
-              </form>
+              </form>{{end}}
               <form hx-post="/web/delegation/profile/duplicate" hx-target="#flash-container">
                 <input type="hidden" name="name" value="{{.Name}}">
                 <label class="menu-label">duplicate as</label>
                 <div class="menu-row"><input name="new_name" placeholder="copy-name" required aria-label="Duplicate {{.Name}} as"><button class="btn btn-sm">duplicate</button></div>
               </form>
-              {{if not .Active}}<form hx-post="/web/delegation/profile/delete" hx-target="#flash-container">
+              {{if .Lead}}{{else if not .Active}}<form hx-post="/web/delegation/profile/delete" hx-target="#flash-container">
                 <input type="hidden" name="name" value="{{.Name}}">
                 <button class="btn btn-sm danger menu-wide">remove profile</button>
               </form>{{else}}<p class="menu-note">The active profile cannot be removed.</p>{{end}}
             </div>
           </details>
         </div></td>
+      </tr>{{end}}
+      {{range .Data.InvalidProfiles}}<tr>
+        <td><code>{{.Name}}</code> {{template "template_source_badge" .}}</td>
+        <td class="dim" colspan="3">Unusable on this host: {{.Invalid}}</td>
       </tr>{{end}}
     </tbody>
   </table>

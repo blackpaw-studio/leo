@@ -197,7 +197,7 @@ client:
 
 Why `leo_path` exists: SSH runs a non-interactive shell on the remote, which doesn't source `.zshrc` / `.bashrc`. If `leo` lives in `~/.local/bin` and PATH is only extended in `.zshrc`, bare `leo` won't resolve. The default full path avoids that; set `leo_path` explicitly when the remote installs leo elsewhere (Homebrew, `/usr/local/bin`, etc.).
 
-Resolution order for the target host: `--host` flag → `LEO_HOST` env → `default_host` → first entry sorted by key → localhost (only when no hosts are configured). `--host localhost` is a hard override. See the [Remote CLI guide](../guides/remote-cli.md).
+Resolution order for the target host: `--host` flag → `LEO_HOST` env → `default_host` → first entry sorted by key → localhost (only when no hosts are configured). `--host localhost` is a hard override. On a host with a [`follow`](#following-a-lead-host-follow) block, the "first entry" step is skipped: with no `default_host` the CLI targets localhost, since the lead's entry is there to be followed, not to be the CLI's remote. See the [Remote CLI guide](../guides/remote-cli.md).
 
 ## `api_clients`
 
@@ -365,6 +365,30 @@ templates:
 - **Trust.** The shared file has the same trust level as `leo.yaml`: templates can set `harness_options` (for example, bypass permissions). Only point `templates_file` at a repo you control.
 - Renaming a shared template rewrites task references in this machine's `leo.yaml` only; other machines whose tasks use the old name fail validation after their next pull.
 
+### Following a lead host (`follow`)
+
+A host can mirror another Leo host's `templates`, `environments`, `delegation` and `defaults` over ssh instead of sharing a file. See [Following a lead host](follow-lead.md) for setup, the cache and errors.
+
+```yaml
+client:
+  hosts:
+    server: {ssh: evan@10.0.2.10}
+follow:
+  host: server
+  interval: 5m
+```
+
+| Field | Type | Required | Default | Description |
+|-------|------|----------|---------|-------------|
+| `host` | string | Yes | — | A `client.hosts` name: the lead. Not `localhost` or a loopback ssh target. |
+| `interval` | duration | No | `5m` | How often the daemon re-pulls the lead (minimum `30s`). The cache is called stale after 3 × `interval` without a successful pull. |
+
+- **Layering**, lowest to highest: the lead, the follower's `templates_file` (templates only), the follower's `leo.yaml`. A local template, environment or delegation profile **replaces** the lead's entry of the same name entirely. In `defaults` and the other `delegation` keys, a key set locally replaces the lead's value for that key (`defaults.dispatch.*` and `defaults.push.*` one level deeper; `harness_options` whole; an empty local value overrides too, except `defaults.model: ""`, `defaults.max_turns: 0` and `delegation.active_profile: ""`, which count as unset).
+- **Trust.** The follower runs `leo config export --follow` on the lead over ssh with the `client.hosts` entry, the same trust as `leo agent --host`. The lead needs no config. Lead entries can set `harness_options` (for example, bypass permissions): only follow a host you control.
+- **Writes.** Lead entries are read-only on the follower (`owned_by_lead`); `leo template override <name>` (and the web **Override locally** button) copies one into `leo.yaml` for editing.
+- **Invalid entries.** A lead entry that fails on the follower (unknown harness, harness binary not on `PATH`, a missing `CLAUDE_CONFIG_DIR`, ...) is listed as `lead · invalid` and unusable instead of failing the whole config.
+- **CLI target.** With `follow` set and no `client.default_host`, the CLI's default host is localhost.
+
 ## Idle-suspend
 
 Ephemeral agents can be **auto-stopped** after a period of inactivity to free
@@ -416,7 +440,9 @@ Leo's runtime state lives under `~/.leo/state/` (or `<home>/state` for a
 non-default leo home): `sessions.json` (session-id bookkeeping — including
 the post-hoc-discovered codex/opencode session ids, see
 [Harnesses → Session driver semantics](harnesses.md#session-driver-semantics)),
-`history.json`, and `api.token` (see [Authentication](#authentication)).
+`history.json`, `api.token` (see [Authentication](#authentication)), and on a
+follower `follow-cache.json` and `follow-status.json` (see
+[Following a lead host](follow-lead.md#cache-and-status)).
 There is no more per-harness state directory — codex and opencode drive a
 resident tmux TUI the same way claude does, so their session ids live in the
 same `sessions.json` store rather than separate per-tmux-session files.

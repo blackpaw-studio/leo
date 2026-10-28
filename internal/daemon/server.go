@@ -112,7 +112,9 @@ type Server struct {
 	// configSvc is the leo.yaml write path shared with the web server: both
 	// serve the JSON config API from it and agree on the restart flags.
 	configSvc *web.ConfigService
-	logPath   string // service log path, set via SetLogPath; threaded into web.Options.LogPath by StartWeb
+	// follower is the follow loop; nil when this daemon runs none.
+	follower Follower
+	logPath  string // service log path, set via SetLogPath; threaded into web.Options.LogPath by StartWeb
 	// resolveHandle backs web.Options.ResolveHandle: resolves a config-defined
 	// process name to its harness name and SessionHandle. Set via
 	// SetResolveHandle by service boot; nil means every process is claude.
@@ -408,6 +410,7 @@ func (s *Server) newConfigService() *web.ConfigService {
 		Version:   func() string { return s.leoVersion },
 		StartedAt: time.Now(),
 		PID:       s.pid,
+		Follower:  s.followSyncer,
 	})
 }
 
@@ -664,6 +667,9 @@ func (s *Server) ReloadConfig() error {
 	cfg, err := config.Load(s.configPath)
 	if err != nil {
 		return fmt.Errorf("loading config: %w", err)
+	}
+	if s.follower != nil {
+		s.follower.Kick()
 	}
 	if sink := s.clientSink.Load(); sink != nil {
 		sink.c.SetClients(clientPolicies(cfg))

@@ -22,10 +22,15 @@ func saveConfig(cfg *config.Config) error {
 	if err != nil {
 		return err
 	}
+	// Ownership first: a removed lead template would otherwise surface as
+	// whatever referenced it failing validation.
+	if err := cfg.CheckLeadOwnership(); err != nil {
+		return withOverrideHint(err)
+	}
 	if err := cfg.Validate(); err != nil {
 		return fmt.Errorf("refusing to write a config leo cannot load: %w", err)
 	}
-	return config.Save(cfgPath, cfg)
+	return withOverrideHint(config.Save(cfgPath, cfg))
 }
 
 // splitAndTrim splits a comma-separated string and trims whitespace from each

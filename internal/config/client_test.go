@@ -55,6 +55,22 @@ func TestResolveHost(t *testing.T) {
 			wantName: "alpha",
 		},
 		{
+			name:      "follower without default_host — localhost (D5)",
+			cfg:       Config{Client: ClientConfig{Hosts: twoHosts}, Follow: &FollowConfig{Host: "alpha"}},
+			wantLocal: true,
+		},
+		{
+			name:     "follower: env var still selects a host",
+			cfg:      Config{Client: ClientConfig{Hosts: twoHosts}, Follow: &FollowConfig{Host: "alpha"}},
+			env:      "beta",
+			wantName: "beta",
+		},
+		{
+			name:     "follower: default_host still selects a host",
+			cfg:      Config{Client: ClientConfig{DefaultHost: "beta", Hosts: twoHosts}, Follow: &FollowConfig{Host: "alpha"}},
+			wantName: "beta",
+		},
+		{
 			name:     "first host when nothing else set",
 			cfg:      Config{Client: ClientConfig{Hosts: twoHosts}},
 			wantName: "alpha", // sorted: alpha < beta

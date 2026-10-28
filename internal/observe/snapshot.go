@@ -156,6 +156,11 @@ func AppearanceRuleSource(i int) string { return "rule:" + strconv.Itoa(i) }
 // can hold credentials and never cross the API.
 type Environment struct {
 	Name string `json:"name"`
+	// Source and Invalid are set on a follower only (follow-lead): where
+	// the entry comes from ("lead", "local", "local-override-lead") and, for
+	// a lead entry unusable on this host, why.
+	Source  string `json:"source,omitempty"`
+	Invalid string `json:"invalid,omitempty"`
 }
 
 // Template is a configured agent template as a spawn picker needs it. Its
@@ -165,6 +170,9 @@ type Template struct {
 	Harness      string   `json:"harness,omitempty"`
 	Model        string   `json:"model,omitempty"`
 	Environments []string `json:"environments"`
+	// Source and Invalid: see Environment.
+	Source  string `json:"source,omitempty"`
+	Invalid string `json:"invalid,omitempty"`
 }
 
 // BridgeState is whether a claude agent's mod bridge is connected.

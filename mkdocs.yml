@@ -86,6 +86,7 @@ nav:
       - Persistent Tasks: configuration/persistent-tasks.md
       - Harnesses: configuration/harnesses.md
       - Environments: configuration/environments.md
+      - Following a Lead Host: configuration/follow-lead.md
       - Agent Appearance: configuration/appearance.md
       - Dispatches: configuration/dispatches.md
       - Delegation Profiles: configuration/delegation.md
@@ -107,6 +108,7 @@ nav:
       - leo status: cli/status.md
       - leo validate: cli/validate.md
       - leo config: cli/config.md
+      - leo sync: cli/sync.md
       - leo logs: cli/logs.md
       - leo update: cli/update.md
       - leo completion: cli/completion.md

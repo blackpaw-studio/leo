@@ -661,3 +661,31 @@ func TestSpawnValidationErrorsAreTyped(t *testing.T) {
 		t.Fatal("a rejected set must not stop the agent")
 	}
 }
+
+// A follower's lead template that is invalid on this host is refused with
+// its reason, not as an unknown template.
+func TestSpawnInvalidLeadTemplateFailsWithReason(t *testing.T) {
+	home := t.TempDir()
+	export := `{"schema":1,"kind":"leo.follow.export","revision":"r","templates":{"bad":{"harness":"nope"}}}`
+	exp, err := config.ParseFollowExport([]byte(export))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := config.WriteFollowCache(filepath.Join(home, "state"), config.FollowCache{Host: "lead", Digest: exp.Digest(), Export: []byte(export)}); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(home, "leo.yaml")
+	if err := os.WriteFile(path, []byte("client:\n  hosts:\n    lead: {ssh: evan@10.0.2.10}\nfollow:\n  host: lead\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	sup := &capturingSupervisor{}
+	m := New(func() (*config.Config, error) { return config.Load(path) }, sup, "", "")
+	_, err = m.Spawn(context.Background(), SpawnSpec{Template: "bad"})
+	var invalid *config.InvalidEntryError
+	if !errors.As(err, &invalid) || !strings.Contains(err.Error(), `"nope" is not a registered harness`) {
+		t.Fatalf("err = %v, want *config.InvalidEntryError with the reason", err)
+	}
+	if sup.spawnCall != nil || len(sup.reservations) != 0 {
+		t.Fatal("spawned or reserved for an invalid template")
+	}
+}

@@ -64,6 +64,7 @@ and other defaults that inherit from the top-level 'defaults' block.`,
 		newTemplateShowCmd(),
 		newTemplateAddCmd(),
 		newTemplateRemoveCmd(),
+		newTemplateOverrideCmd(),
 	)
 	return cmd
 }
@@ -76,18 +77,41 @@ type templateListEntry struct {
 	Model     string `json:"model,omitempty"`
 	Agent     string `json:"agent,omitempty"`
 	Workspace string `json:"workspace,omitempty"`
-	// Source is "local", "shared" or "local-override"; empty without a
-	// templates_file.
+	// Source is "local", "shared", "local-override", "lead",
+	// "local-override-lead" or "shared-override-lead"; empty without a
+	// templates_file or a follow block.
 	Source string `json:"source,omitempty"`
+	// Invalid is why a lead template cannot be used on this host.
+	Invalid string `json:"invalid,omitempty"`
+}
+
+// showTemplateSources reports whether templates can come from more than
+// leo.yaml, so the list shows where each one does.
+func showTemplateSources(cfg *config.Config) bool {
+	return cfg.HasTemplatesFile() || cfg.IsFollower()
 }
 
 // templateSourceKey is a template's machine-readable source, empty when the
-// config has no shared templates file.
+// config has no shared templates file and no lead.
 func templateSourceKey(cfg *config.Config, name string) string {
-	if !cfg.HasTemplatesFile() {
+	if !showTemplateSources(cfg) {
 		return ""
 	}
 	return string(cfg.TemplateSource(name))
+}
+
+// listedTemplateNames is every template name, sorted: the effective ones
+// plus the lead's templates that are invalid on this host.
+func listedTemplateNames(cfg *config.Config, invalid map[string]string) []string {
+	names := make([]string, 0, len(cfg.Templates)+len(invalid))
+	for name := range cfg.Templates {
+		names = append(names, name)
+	}
+	for name := range invalid {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
 }
 
 func newTemplateListCmd() *cobra.Command {
@@ -106,15 +130,16 @@ Pass --json for machine-readable output suitable for scripting.`,
 				return err
 			}
 
-			names := make([]string, 0, len(cfg.Templates))
-			for name := range cfg.Templates {
-				names = append(names, name)
-			}
-			sort.Strings(names)
+			invalid := cfg.InvalidEntries(config.KindTemplate)
+			names := listedTemplateNames(cfg, invalid)
 
 			if asJSON {
 				entries := make([]templateListEntry, 0, len(names))
 				for _, name := range names {
+					if reason, ok := invalid[name]; ok {
+						entries = append(entries, templateListEntry{Name: name, Source: string(config.SourceLead), Invalid: reason})
+						continue
+					}
 					tmpl := cfg.Templates[name]
 					entries = append(entries, templateListEntry{
 						Name:      name,
@@ -129,18 +154,22 @@ Pass --json for machine-readable output suitable for scripting.`,
 				return enc.Encode(entries)
 			}
 
-			if len(cfg.Templates) == 0 {
+			if len(names) == 0 {
 				info.Println("No templates configured.")
 				return nil
 			}
 
-			showSource := cfg.HasTemplatesFile()
+			showSource := showTemplateSources(cfg)
 			header := fmt.Sprintf("  %-20s %-10s %-20s %s", "NAME", "MODEL", "AGENT", "WORKSPACE")
 			if showSource {
 				header = fmt.Sprintf("  %-20s %-24s %-10s %-20s %s", "NAME", "SOURCE", "MODEL", "AGENT", "WORKSPACE")
 			}
 			fmt.Println(header)
 			for _, name := range names {
+				if _, ok := invalid[name]; ok {
+					fmt.Printf("  %-20s %-24s %-10s %-20s %s\n", name, "lead · invalid", "-", "-", "-")
+					continue
+				}
 				tmpl := cfg.Templates[name]
 				model := tmpl.Model
 				if model == "" {

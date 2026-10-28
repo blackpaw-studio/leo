@@ -1,5 +1,6 @@
 {{define "config_form"}}
 <form class="config-form" hx-post="{{.Action}}" hx-target="#flash-container" hx-swap="innerHTML">
+  <fieldset class="form-fieldset"{{if .ReadOnly}} disabled{{end}}>
   {{$group := ""}}
   {{range .Fields}}{{if not .Advanced}}
     {{if ne .Group $group}}{{$group = .Group}}<div class="form-group-label">{{.Group}}</div>{{end}}
@@ -19,11 +20,17 @@
     </div>
   </details>
   {{end}}
+  </fieldset>
   <div class="form-actions">
+    {{if .OverrideURL}}
+    <span class="dim">Mirrored from lead <b>{{.Lead}}</b>; edit it there, or copy it into this host's leo.yaml.</span>
+    <button type="button" class="btn hot" hx-post="{{.OverrideURL}}" hx-target="#flash-container" hx-swap="innerHTML">Override locally</button>
+    {{else}}
     <button type="submit" class="btn hot">{{.SubmitLabel}}</button>
     {{if .DeleteURL}}
     <button type="button" class="btn danger" hx-delete="{{.DeleteURL}}" hx-confirm="Delete this?"
             hx-target="#flash-container" hx-swap="innerHTML">Delete</button>
+    {{end}}
     {{end}}
   </div>
 </form>

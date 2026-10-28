@@ -72,6 +72,11 @@ func (c *ConfigService) Mutate(opts mutateOpts, apply func(*config.Config) error
 		}
 		return WriteResult{}, asConfigError(err)
 	}
+	// Ownership before Validate: deleting a lead template a lead profile
+	// references must read as owned_by_lead, not as a dangling reference.
+	if err := cfg.CheckLeadOwnership(); err != nil {
+		return WriteResult{}, asConfigError(err)
+	}
 	if err := cfg.Validate(); err != nil {
 		var verrs *config.ValidationErrors
 		if errors.As(err, &verrs) {
@@ -82,6 +87,9 @@ func (c *ConfigService) Mutate(opts mutateOpts, apply func(*config.Config) error
 		return WriteResult{}, errInvalid("", err.Error())
 	}
 	if err := config.Save(c.configPath, cfg); err != nil {
+		if ce := ownedByLead(err); ce != nil {
+			return WriteResult{}, ce
+		}
 		return WriteResult{}, errInvalid("", fmt.Sprintf("Failed to save: %v", err))
 	}
 	if opts.AfterSave != nil {
@@ -118,6 +126,9 @@ func (c *ConfigService) currentRevision(fallback string) string {
 func asConfigError(err error) *ConfigError {
 	var ce *ConfigError
 	if errors.As(err, &ce) {
+		return ce
+	}
+	if ce := ownedByLead(err); ce != nil {
 		return ce
 	}
 	return errInvalid("", err.Error())

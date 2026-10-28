@@ -191,6 +191,9 @@ func (c *Config) ResolveRole(role string) (Resolution, error) {
 	d := c.Delegation
 	p, ok := d.Profiles[d.ActiveProfile]
 	if !ok {
+		if err := c.invalidEntry(KindProfile, d.ActiveProfile); err != nil {
+			return Resolution{}, err
+		}
 		return Resolution{}, fmt.Errorf("active delegation profile %q does not exist", d.ActiveProfile)
 	}
 	target, ok := p.Roles[role]
@@ -244,7 +247,7 @@ func (c *Config) validateDelegation() []string {
 	if len(d.Profiles) == 0 {
 		errs = append(errs, "delegation.profiles must not be empty")
 	}
-	if d.ActiveProfile != "" {
+	if d.ActiveProfile != "" && !c.isInvalidLead(KindProfile, d.ActiveProfile) {
 		if _, ok := d.Profiles[d.ActiveProfile]; !ok {
 			errs = append(errs, fmt.Sprintf("delegation.active_profile %q does not exist", d.ActiveProfile))
 		}
@@ -262,44 +265,7 @@ func (c *Config) validateDelegation() []string {
 		}
 	}
 	for _, profileName := range sortedProfileNames(d.Profiles) {
-		profile := d.Profiles[profileName]
-		if !ValidName(profileName) {
-			errs = append(errs, fmt.Sprintf("delegation.profiles.%q is not a valid name", profileName))
-		}
-		for _, role := range sortedRoleNames(profile.Roles) {
-			target := profile.Roles[role]
-			prefix := fmt.Sprintf("delegation.profiles.%s.roles.%s", profileName, role)
-			if !ValidName(role) {
-				errs = append(errs, fmt.Sprintf("%s is not a valid name", prefix))
-				continue
-			}
-			if target.Template == "" {
-				errs = append(errs, prefix+".template is required")
-				continue
-			}
-			tmpl, ok := c.Templates[target.Template]
-			if !ok {
-				errs = append(errs, fmt.Sprintf("%s.template %q does not exist", prefix, target.Template))
-				continue
-			}
-			h, err := harness.Get(c.TemplateHarness(tmpl))
-			if err != nil {
-				continue
-			} // Existing validation reports the bad harness.
-			if target.Model != "" {
-				if err := h.ValidateModel(target.Model); err != nil {
-					errs = append(errs, fmt.Sprintf("%s.model %v", prefix, err))
-				}
-			}
-			if target.Effort != "" {
-				validator, ok := h.(harness.EffortValidator)
-				if !ok {
-					errs = append(errs, fmt.Sprintf("%s.effort: effort not supported by harness %s", prefix, h.Name()))
-				} else if err := validator.ValidateEffort(target.Effort); err != nil {
-					errs = append(errs, fmt.Sprintf("%s.effort %v", prefix, err))
-				}
-			}
-		}
+		errs = append(errs, c.validateProfile(profileName, d.Profiles[profileName])...)
 	}
 	if d.Roles != nil && d.ActiveProfile != "" {
 		if profile, ok := d.Profiles[d.ActiveProfile]; ok {
@@ -307,6 +273,52 @@ func (c *Config) validateDelegation() []string {
 				if _, ok := profile.Roles[role]; !ok {
 					errs = append(errs, fmt.Sprintf("delegation.roles.%s is not mapped in active profile %s", role, d.ActiveProfile))
 				}
+			}
+		}
+	}
+	return errs
+}
+
+// validateProfile checks one delegation profile; messages start with
+// "delegation.profiles.<name>".
+func (c *Config) validateProfile(profileName string, profile Profile) []string {
+	var errs []string
+	if !ValidName(profileName) {
+		errs = append(errs, fmt.Sprintf("delegation.profiles.%q is not a valid name", profileName))
+	}
+	for _, role := range sortedRoleNames(profile.Roles) {
+		target := profile.Roles[role]
+		prefix := fmt.Sprintf("delegation.profiles.%s.roles.%s", profileName, role)
+		if !ValidName(role) {
+			errs = append(errs, fmt.Sprintf("%s is not a valid name", prefix))
+			continue
+		}
+		if target.Template == "" {
+			errs = append(errs, prefix+".template is required")
+			continue
+		}
+		tmpl, ok := c.Templates[target.Template]
+		if !ok {
+			if !c.isInvalidLead(KindTemplate, target.Template) {
+				errs = append(errs, fmt.Sprintf("%s.template %q does not exist", prefix, target.Template))
+			}
+			continue
+		}
+		h, err := harness.Get(c.TemplateHarness(tmpl))
+		if err != nil {
+			continue
+		} // Existing validation reports the bad harness.
+		if target.Model != "" {
+			if err := h.ValidateModel(target.Model); err != nil {
+				errs = append(errs, fmt.Sprintf("%s.model %v", prefix, err))
+			}
+		}
+		if target.Effort != "" {
+			validator, ok := h.(harness.EffortValidator)
+			if !ok {
+				errs = append(errs, fmt.Sprintf("%s.effort: effort not supported by harness %s", prefix, h.Name()))
+			} else if err := validator.ValidateEffort(target.Effort); err != nil {
+				errs = append(errs, fmt.Sprintf("%s.effort %v", prefix, err))
 			}
 		}
 	}

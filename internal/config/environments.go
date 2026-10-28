@@ -41,9 +41,9 @@ func (c *Config) MergeEnvironments(names []string) (map[string]string, error) {
 	}
 	merged := map[string]string{}
 	for _, name := range names {
-		env, ok := c.Environments[name]
-		if !ok {
-			return nil, &UnknownEnvironmentError{Name: name}
+		env, err := c.LookupEnvironment(name)
+		if err != nil {
+			return nil, err
 		}
 		maps.Copy(merged, env)
 	}
@@ -60,9 +60,9 @@ func (c *Config) ResolveNamed(names []string, x Expander) (map[string]string, er
 	}
 	merged := map[string]string{}
 	for _, name := range names {
-		env, ok := c.Environments[name]
-		if !ok {
-			return nil, &UnknownEnvironmentError{Name: name}
+		env, err := c.LookupEnvironment(name)
+		if err != nil {
+			return nil, err
 		}
 		expanded, err := x.expandMap("environments."+name, env)
 		if err != nil {
@@ -112,16 +112,8 @@ func (c *Config) ResolveEnv(names []string, literal, spawn map[string]string, x 
 func (c *Config) validateEnvironments() []string {
 	var errs []string
 	for name, env := range c.Environments {
-		if name == "" || strings.ContainsAny(name, ", \t\n") {
-			errs = append(errs, fmt.Sprintf("environments name %q must be non-empty and contain no commas or whitespace", name))
-		}
-		for k := range env {
-			if !envKeyPattern.MatchString(k) {
-				errs = append(errs, fmt.Sprintf("environments.%s key %q is not a valid environment variable name", name, k))
-			}
-		}
+		errs = append(errs, validateEnvironment(name, env)...)
 	}
-	errs = append(errs, c.validateEnvironmentList("defaults.environments", c.Defaults.Environments)...)
 	for name, tmpl := range c.Templates {
 		errs = append(errs, c.validateEnvironmentList("templates."+name+".environments", tmpl.Environments)...)
 	}
@@ -134,11 +126,25 @@ func (c *Config) validateEnvironments() []string {
 	return errs
 }
 
+// validateEnvironment checks one named environment's name and keys.
+func validateEnvironment(name string, env map[string]string) []string {
+	var errs []string
+	if name == "" || strings.ContainsAny(name, ", \t\n") {
+		errs = append(errs, fmt.Sprintf("environments name %q must be non-empty and contain no commas or whitespace", name))
+	}
+	for k := range env {
+		if !envKeyPattern.MatchString(k) {
+			errs = append(errs, fmt.Sprintf("environments.%s key %q is not a valid environment variable name", name, k))
+		}
+	}
+	return errs
+}
+
 func (c *Config) validateEnvironmentList(path string, names []string) []string {
 	var errs []string
 	seen := map[string]bool{}
 	for _, n := range names {
-		if _, ok := c.Environments[n]; !ok {
+		if _, ok := c.Environments[n]; !ok && !c.isInvalidLead(KindEnvironment, n) {
 			errs = append(errs, fmt.Sprintf("%s: unknown environment %q", path, n))
 		}
 		if seen[n] {

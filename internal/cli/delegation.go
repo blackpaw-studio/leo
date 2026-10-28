@@ -12,7 +12,7 @@ import (
 
 func newDelegationCmd() *cobra.Command {
 	cmd := &cobra.Command{Use: "delegation", Short: "Manage delegation profiles"}
-	cmd.AddCommand(newDelegationListCmd(), newDelegationShowCmd(), newDelegationRenderCmd(), newDelegationResolveCmd(), newDelegationUseCmd(), newDelegationToggleCmd(true), newDelegationToggleCmd(false))
+	cmd.AddCommand(newDelegationListCmd(), newDelegationShowCmd(), newDelegationRenderCmd(), newDelegationResolveCmd(), newDelegationUseCmd(), newDelegationToggleCmd(true), newDelegationToggleCmd(false), newDelegationOverrideCmd())
 	return cmd
 }
 

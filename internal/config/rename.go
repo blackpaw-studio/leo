@@ -28,7 +28,7 @@ func RenameTemplate(cfg *Config, oldName, newName string) error {
 
 	// A renamed shared template stays in the shared file; an override
 	// renames to a plain local template (the shared one shows through again).
-	keepShared := cfg.TemplateSource(oldName) == SourceShared
+	keepShared := isSharedSource(cfg.TemplateSource(oldName))
 
 	cfg.Templates[newName] = tmpl
 	delete(cfg.Templates, oldName)

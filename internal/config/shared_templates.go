@@ -26,8 +26,13 @@ const (
 
 // Label is the human-facing form of the source.
 func (s TemplateSource) Label() string {
-	if s == SourceLocalOverride {
+	switch s {
+	case SourceLocalOverride:
 		return "local · overrides shared"
+	case SourceLocalOverrideLead:
+		return "local · overrides lead"
+	case SourceSharedOverrideLead:
+		return "shared · overrides lead"
 	}
 	return string(s)
 }
@@ -89,6 +94,9 @@ func (c *Config) InheritTemplatesFile(from *Config) {
 func (c *Config) TemplateSource(name string) TemplateSource {
 	if _, ok := c.Templates[name]; !ok {
 		return ""
+	}
+	if s := c.followSource(KindTemplate, name); s != "" {
+		return s
 	}
 	if c.shared == nil {
 		return SourceLocal
@@ -158,8 +166,9 @@ func decodeTemplates(node yaml.Node) (map[string]TemplateConfig, error) {
 
 // loadSharedTemplates reads cfg.TemplatesFile and merges its templates under
 // cfg's local ones: a local template replaces a shared one of the same name
-// whole. leoBytes is leo.yaml as parsed.
-func (c *Config) loadSharedTemplates(leoBytes []byte) error {
+// whole. leoBytes is leo.yaml as parsed; expand says whether ~ in path fields
+// is expanded (the follow export loads unexpanded).
+func (c *Config) loadSharedTemplates(leoBytes []byte, expand bool) error {
 	path := resolveTemplatesFile(c.HomePath, c.TemplatesFile)
 	data, err := os.ReadFile(path) //nolint:gosec // path comes from the operator's own leo.yaml
 	if err != nil {
@@ -177,8 +186,10 @@ func (c *Config) loadSharedTemplates(leoBytes []byte) error {
 	if err != nil {
 		return fmt.Errorf("templates_file %s: %w", path, err)
 	}
-	expandTemplates(baseline)
-	expandTemplates(effective)
+	if expand {
+		expandTemplates(baseline)
+		expandTemplates(effective)
+	}
 
 	sources := make(map[string]TemplateSource, len(baseline)+len(c.Templates))
 	merged := make(map[string]TemplateConfig, len(baseline)+len(c.Templates))
@@ -507,19 +518,15 @@ func (sh *sharedTemplates) marshalLeo(path string, cfg *Config) ([]byte, bool, e
 	local := *cfg
 	local.Templates = make(map[string]TemplateConfig, len(cfg.Templates))
 	for name, tmpl := range cfg.Templates {
-		if cfg.TemplateSource(name) != SourceShared {
+		if !isSharedSource(cfg.TemplateSource(name)) {
 			local.Templates[name] = tmpl
 		}
 	}
-	data, err := yaml.Marshal(&local)
+	data, err := marshalLocal(&local)
 	if err != nil {
 		return nil, false, fmt.Errorf("marshaling config: %w", err)
 	}
-	loaded, err := parse(path, sh.leoBytes)
-	if err != nil {
-		return nil, false, err
-	}
-	same, err := sameYAML(loaded, &local)
+	same, err := sameAsLoaded(path, sh.leoBytes, &local, data)
 	if err != nil {
 		return nil, false, err
 	}

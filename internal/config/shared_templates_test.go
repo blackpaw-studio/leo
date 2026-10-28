@@ -8,7 +8,7 @@ import (
 )
 
 // writeFile writes content at dir/rel (creating directories) and returns the path.
-func writeFile(t *testing.T, dir, rel, content string) string {
+func writeFile(t testing.TB, dir, rel, content string) string {
 	t.Helper()
 	p := filepath.Join(dir, rel)
 	if err := os.MkdirAll(filepath.Dir(p), 0o750); err != nil {

@@ -38,7 +38,7 @@ Every write must send it back in `If-Match`:
 | 409 `revision_mismatch` | the file changed since the read; the body's `data.revision` is the current one. Re-read, re-apply, retry |
 | 200 / 201 | written; the body carries the new revision |
 
-When `templates_file` is set the revision covers both `leo.yaml` and the shared templates file, so a change to either (a `git pull`, say) invalidates a stale `If-Match`.
+When `templates_file` is set the revision covers both `leo.yaml` and the shared templates file, so a change to either (a `git pull`, say) invalidates a stale `If-Match`. On a [follower](follow-lead.md) it also covers the lead cache, so a pull that changes the lead layer does the same.
 
 `If-Match` takes the revision bare (`sha256:...`), quoted as the `ETag` header
 carries it (`"sha256:..."`), or weak (`W/"sha256:..."`). There is no way to
@@ -91,6 +91,7 @@ write-only: they read as `{"set": true|false}`.
 | `POST /config/{resource}/{name}/rename` | `{"new_name"}` | 200 |
 | `POST /config/{resource}/{name}/duplicate` | `{"new_name"}` | 201 |
 | `DELETE /config/{resource}/{name}` | none | 200 |
+| `POST /config/{templates,environments}/{name}/override` | none | 200 ([follower](#follow-lead) only) |
 
 `PUT` is a patch applied key by key: a key you send replaces the value, `null`
 clears it, a key you omit is left exactly as it is (it is not re-parsed or
@@ -178,8 +179,43 @@ block, reads answer `configured: false` and writes are 404
 | `POST /config/delegation/profiles/{p}/rename` | `{new_name}` |
 | `POST /config/delegation/profiles/{p}/duplicate` | `{new_name}` (201) |
 | `DELETE /config/delegation/profiles/{p}` | |
+| `POST /config/delegation/profiles/{p}/override` | none ([follower](#follow-lead) only) |
 
 A cell's validation errors land on `template`, `model` or `effort`.
+
+## Follow lead
+
+On a host with a `follow:` block ([Following a lead host](follow-lead.md)),
+templates, environments and delegation profiles can come from the lead.
+
+- **Sources.** Item documents (`GET /config/templates`, `/config/environments`
+  and their items) and each profile in the delegation document gain `source`:
+  `lead`, `local`, `local-override-lead` or `shared-override-lead` (plus
+  `shared` / `local-override` with a `templates_file`). A lead entry that is
+  unusable on this host is listed with empty `values` and an `invalid` reason.
+  Both fields are omitted on a host without `follow`, so its documents are
+  unchanged.
+- **Ownership.** A write that would edit, rename or delete a lead entry is
+  409 `owned_by_lead` with `data: {kind, name, lead}`, and nothing is written.
+  The check runs before validation, so it is the error you see even when the
+  write would also break a reference.
+- **Override.** `POST /config/templates/{name}/override`,
+  `POST /config/environments/{name}/override` and
+  `POST /config/delegation/profiles/{p}/override` copy the lead's entry into
+  `leo.yaml` as a local override (revision-gated like any write; the item is
+  the entry's new document). A non-lead entry or one already overridden is
+  422, an invalid lead entry is 422 (fix it on the lead), and an unknown name
+  is 404.
+- **Status and sync.**
+
+| Request | Answer |
+|---------|--------|
+| `GET /config/follow` | the follow report: `following, host, ssh, interval, pulled_at, age_seconds, stale, lead_revision, lead_version, last_attempt, last_error, last_error_code, warnings, invalid` (`following: false` and nothing else on a non-follower) |
+| `POST /config/follow/sync` | pulls now through the daemon's follow loop: `{changed, status}`. 409 `not_following` without a `follow:` block, 503 `follow_unavailable` when no follow loop runs, 502 with the follow error code (`unreachable`, `lead_too_old`, ...) and the report in `data` when the pull fails |
+
+`GET /api/v1/follow` serves the same report on the observability API
+(operator token). `/api/v1/templates` and `/api/v1/environments` gain the same
+omitempty `source` and `invalid` fields and list invalid lead entries.
 
 ## Appearance rules
 
