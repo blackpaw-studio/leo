@@ -13,9 +13,10 @@ import (
 // MoveJobs starts agent moves and copies in the background (agentmove.Jobs).
 type MoveJobs interface {
 	Start(ctx context.Context, req agentmove.Request) (agentmove.JobStatus, error)
+	Get(id string) (agentmove.JobStatus, bool)
 }
 
-// WithMoveJobs wires POST /api/agent/{name}/move.
+// WithMoveJobs wires POST /api/agent/{name}/move and GET /api/agent/moves/{id}.
 func WithMoveJobs(j MoveJobs) Option {
 	return func(s *Server) { s.moveJobs = j }
 }
@@ -53,4 +54,25 @@ func (s *Server) handleAPIAgentMove(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusAccepted, apiResponse{OK: true, Data: st})
+}
+
+// handleAPIAgentMoveStatus answers a move or copy job's current status, the
+// poll for the id the POST returned. A job the registry no longer holds
+// (never existed, or pruned after finishing) is a 404.
+// GET /api/agent/moves/{id} (mounted as /api/agent/{name}/{id}; see web.go)
+func (s *Server) handleAPIAgentMoveStatus(w http.ResponseWriter, r *http.Request) {
+	if r.PathValue("name") != "moves" {
+		http.NotFound(w, r)
+		return
+	}
+	if s.moveJobs == nil {
+		writeJSON(w, http.StatusServiceUnavailable, apiResponse{Error: "agent moves not available"})
+		return
+	}
+	st, ok := s.moveJobs.Get(r.PathValue("id"))
+	if !ok {
+		writeJSON(w, http.StatusNotFound, apiResponse{Error: "no such move job"})
+		return
+	}
+	writeJSON(w, http.StatusOK, apiResponse{OK: true, Data: st})
 }

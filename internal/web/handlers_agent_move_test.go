@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"net/http/httptest"
 	"testing"
 
 	"github.com/blackpaw-studio/leo/internal/agent"
@@ -13,6 +14,12 @@ import (
 type fakeMoveJobs struct {
 	reqs []agentmove.Request
 	err  error
+	jobs map[string]agentmove.JobStatus
+}
+
+func (f *fakeMoveJobs) Get(id string) (agentmove.JobStatus, bool) {
+	st, ok := f.jobs[id]
+	return st, ok
 }
 
 func (f *fakeMoveJobs) Start(_ context.Context, req agentmove.Request) (agentmove.JobStatus, error) {
@@ -60,4 +67,58 @@ func TestAPIAgentMoveStartsJob(t *testing.T) {
 	if w := postJSON(t, s, "/api/agent/nobody/move", `{"mode":"move"}`); w.Code != http.StatusNotFound {
 		t.Fatalf("unknown agent = %d", w.Code)
 	}
+}
+
+func TestAPIAgentMoveJobStatus(t *testing.T) {
+	s, _, _ := newTestServerWithAgents(t)
+	if w := getPath(t, s, "/api/agent/moves/mv-1"); w.Code != http.StatusServiceUnavailable {
+		t.Fatalf("unwired = %d, want 503", w.Code)
+	}
+	s.moveJobs = &fakeMoveJobs{jobs: map[string]agentmove.JobStatus{
+		"mv-1": {ID: "mv-1", Request: agentmove.Request{Agent: "a", Mode: "copy"}, State: agentmove.JobDone},
+	}}
+
+	w := getPath(t, s, "/api/agent/moves/mv-1")
+	var resp struct {
+		OK   bool                `json:"ok"`
+		Data agentmove.JobStatus `json:"data"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil || w.Code != http.StatusOK || !resp.OK ||
+		resp.Data.ID != "mv-1" || resp.Data.State != agentmove.JobDone || resp.Data.Request.Mode != "copy" {
+		t.Fatalf("found = %d %s (%v)", w.Code, w.Body, err)
+	}
+	if w := getPath(t, s, "/api/agent/moves/mv-gone"); w.Code != http.StatusNotFound {
+		t.Fatalf("unknown id = %d, want 404", w.Code)
+	}
+}
+
+// TestAPIAgentMoveJobStatusAuthScope: the poll takes the same tokens as the
+// POST that started the job — operator, agent and paired device — and no
+// token is refused.
+func TestAPIAgentMoveJobStatusAuthScope(t *testing.T) {
+	s, store, _ := newDeviceTestServer(t)
+	s.moveJobs = &fakeMoveJobs{jobs: map[string]agentmove.JobStatus{"mv-1": {ID: "mv-1", State: agentmove.JobRunning}}}
+	dev := pairDevice(t, s, store, "phone")
+
+	for name, tok := range map[string]string{"operator": testAPIToken, "agent": "agent-token", "device": dev.Token} {
+		if rec := doRequest(s, http.MethodGet, "/api/agent/moves/mv-1", tok, ""); rec.Code != http.StatusOK {
+			t.Errorf("%s token GET = %d: %s", name, rec.Code, rec.Body)
+		}
+		if rec := doRequest(s, http.MethodPost, "/api/agent/nobody/move", tok, `{"mode":"move"}`); rec.Code == http.StatusUnauthorized || rec.Code == http.StatusForbidden {
+			t.Errorf("%s token POST = %d, want it past auth", name, rec.Code)
+		}
+	}
+	if rec := doRequest(s, http.MethodGet, "/api/agent/moves/mv-1", "", ""); rec.Code != http.StatusUnauthorized {
+		t.Errorf("no token = %d, want 401", rec.Code)
+	}
+	if rec := doRequest(s, http.MethodGet, "/api/agent/moves/mv-1", "wrong", ""); rec.Code != http.StatusUnauthorized {
+		t.Errorf("bad token = %d, want 401", rec.Code)
+	}
+}
+
+func getPath(t *testing.T, s *Server, path string) *httptest.ResponseRecorder {
+	t.Helper()
+	w := httptest.NewRecorder()
+	s.httpServer.Handler.ServeHTTP(w, httptest.NewRequest(http.MethodGet, path, nil))
+	return w
 }

@@ -88,6 +88,8 @@ Each rsync stage (`rsync-workspace`, `rsync-sessions`, `rsync-staging`, `rsync-m
 
 - `leo_agent_move {name, to, force?}` and `leo_agent_copy {name, to?, new_name?, branch?}` start the job and return it at once. An agent that moves itself loses its MCP server partway through, and the daemon finishes the move anyway.
 - The same job starts from `POST /api/agent/{name}/move` with `{"mode": "move"|"copy", "to", "force", "name", "branch"}`. It answers 202 with the job, or 409 with an error `code`.
+- `GET /api/agent/moves/{id}` polls that job and answers `{ok, data: <job>}` with the same job shape, for a copy as well as a move. An unknown id, or one pruned after the job finished (the registry keeps the 64 most recent finished jobs), is a 404. It takes the same tokens as the POST, a paired device's included.
+- A daemon that has both advertises the `agent_move` feature on the event stream's `hello` and in `/version` capabilities. `/api/v1/state` carries `moved_to` and `moved_at` (RFC 3339) on the dormant source record of a moved agent, and neither on an agent that lives here.
 
 ### Permissions
 

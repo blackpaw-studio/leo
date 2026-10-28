@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/blackpaw-studio/leo/internal/agent"
 )
@@ -84,5 +85,18 @@ func TestObserveAgentCarriesMovedTo(t *testing.T) {
 	a := buildAgent(agent.Record{Name: "leo-gone", Status: "stopped", MovedTo: "laptop"}, nil, agentViews{}, nil)
 	if a.Status != "stopped" || a.MovedTo != "laptop" {
 		t.Fatalf("observe agent = status %q moved_to %q", a.Status, a.MovedTo)
+	}
+}
+
+// TestObserveAgentCarriesMovedAt: moved_at rides beside moved_to, and an
+// unmoved agent has neither.
+func TestObserveAgentCarriesMovedAt(t *testing.T) {
+	at := time.Date(2026, 10, 28, 9, 30, 0, 0, time.UTC)
+	a := buildAgent(agent.Record{Name: "leo-gone", Status: "stopped", MovedTo: "laptop", MovedAt: &at}, nil, agentViews{}, nil)
+	if a.MovedAt == nil || !a.MovedAt.Equal(at) {
+		t.Fatalf("moved_at = %v, want %v", a.MovedAt, at)
+	}
+	if got := buildAgent(agent.Record{Name: "leo-here", Status: "running"}, nil, agentViews{}, nil); got.MovedAt != nil {
+		t.Fatalf("unmoved agent moved_at = %v", got.MovedAt)
 	}
 }

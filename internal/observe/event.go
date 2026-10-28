@@ -98,11 +98,15 @@ const (
 	// published, and the appearance routes exist
 	// (docs/configuration/appearance.md).
 	FeatureAgentAppearance = "agent_appearance"
+	// FeatureAgentMove: `POST /api/agent/{name}/move` starts a move or copy,
+	// `GET /api/agent/moves/{id}` polls the job, and an agent moved away
+	// carries moved_to and moved_at (docs/configuration/agent-move.md).
+	FeatureAgentMove = "agent_move"
 )
 
 // Features returns the hello's features list, a fresh copy each call.
 func Features() []string {
-	return []string{FeatureBridgeTurns, FeatureAttentionReason, FeatureDispatchTree, FeatureAgentUsage, FeatureAgentControl, FeatureDispatchAttach, FeatureDispatchRemoved, FeatureStateSeq, FeatureAttachDispatchPlacement, FeatureDispatchPlacementLive, FeatureAgentEnvironments, FeatureChatQuestions, FeatureMachineStats, FeatureConfigAPI, FeatureAgentStatusRestoring, FeatureClientTools, FeatureAgentAppearance}
+	return []string{FeatureBridgeTurns, FeatureAttentionReason, FeatureDispatchTree, FeatureAgentUsage, FeatureAgentControl, FeatureDispatchAttach, FeatureDispatchRemoved, FeatureStateSeq, FeatureAttachDispatchPlacement, FeatureDispatchPlacementLive, FeatureAgentEnvironments, FeatureChatQuestions, FeatureMachineStats, FeatureConfigAPI, FeatureAgentStatusRestoring, FeatureClientTools, FeatureAgentAppearance, FeatureAgentMove}
 }
 
 // ActivityMinInterval is the most often agent_activity is published per

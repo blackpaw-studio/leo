@@ -671,6 +671,9 @@ func New(configPath string, processes ProcessStateProvider, scheduler SchedulerP
 	apiMux.HandleFunc("POST /api/agent/{name}/rename", s.handleAPIAgentRename)
 	apiMux.HandleFunc("POST /api/agent/{name}/environments", s.handleAPIAgentSetEnvironments)
 	apiMux.HandleFunc("POST /api/agent/{name}/move", s.handleAPIAgentMove)
+	// GET /api/agent/moves/{id}, spelled with a wildcard because the mux
+	// refuses the literal beside GET /api/agent/{name}/client-tools.
+	apiMux.HandleFunc("GET /api/agent/{name}/{id}", s.handleAPIAgentMoveStatus)
 	apiMux.HandleFunc("POST /api/agent/hook", s.handleAPIAgentHook)
 	apiMux.HandleFunc("POST /api/agent/context", s.handleAPIAgentContext)
 	apiMux.HandleFunc("POST /api/agent/permission", s.handleAPIPermission)

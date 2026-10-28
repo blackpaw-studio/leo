@@ -271,6 +271,7 @@ func buildAgent(rec agent.Record, states map[string]ProcessStateInfo, views agen
 	}
 	a.Status, a.WakeOnMessage = observe.AgentDormancy(rawStatus, rec.WakeOnMessage)
 	a.MovedTo = rec.MovedTo
+	a.MovedAt = rec.MovedAt
 
 	if cfg != nil && rec.Template != "" {
 		if tmpl, ok := cfg.Templates[rec.Template]; ok {
