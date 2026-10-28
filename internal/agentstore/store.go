@@ -282,7 +282,7 @@ func (r Record) Portable() Record {
 		Branch: r.Branch, CanonicalPath: r.CanonicalPath, Harness: r.Harness,
 		SessionID: r.SessionID, SessionsByTemplate: maps.Clone(r.SessionsByTemplate),
 		Environments: slices.Clone(r.Environments), SpawnEnv: maps.Clone(r.SpawnEnv),
-		InheritedEnv: maps.Clone(r.InheritedEnv), EnvLayered: r.EnvLayered,
+		InheritedEnv: maps.Clone(r.InheritedEnv), InheritedSecrets: maps.Clone(r.InheritedSecrets), EnvLayered: r.EnvLayered,
 		IdleSuspendAfter: r.IdleSuspendAfter, MoveLog: maps.Clone(r.MoveLog),
 	}
 	if r.Appearance != nil {

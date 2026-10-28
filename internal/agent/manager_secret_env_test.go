@@ -365,3 +365,23 @@ func TestLaunchesCarryRefsToTheSupervisor(t *testing.T) {
 	}
 	check("start")
 }
+
+// A moved agent that inherited a secret reference from its source agent
+// keeps it: the arriving record carries the reference, and the agent starts
+// with it resolved here.
+func TestReceiveKeepsInheritedSecretRefs(t *testing.T) {
+	f := &fakeSecrets{value: secretSentinel}
+	m, sup, home := secretManager(t, f, nil)
+	src := arriving(t.TempDir())
+	src.InheritedEnv = map[string]string{"FROM_SRC": "plain"}
+	src.InheritedSecrets = map[string]secretenv.Ref{"SRC_TOKEN": opRef}
+	if err := m.Receive(context.Background(), ReceiveSpec{Record: src, From: "studio", At: receiveAt}); err != nil {
+		t.Fatal(err)
+	}
+	if env := sup.spawnCall.Env; env["SRC_TOKEN"] != secretSentinel || env["FROM_SRC"] != "plain" {
+		t.Fatalf("launch env lacks the inherited keys: SRC_TOKEN set=%v FROM_SRC=%q", env["SRC_TOKEN"] != "", env["FROM_SRC"])
+	}
+	if rec := loadRec(t, home, "leo-x"); rec.InheritedSecrets["SRC_TOKEN"].Service != opRef.Service {
+		t.Fatalf("record inherited refs = %v", rec.InheritedSecrets)
+	}
+}
