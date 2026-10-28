@@ -327,7 +327,7 @@ type envLayers struct {
 	harness   map[string]string // the harness adapter's own env overlay
 	named     config.EnvLayer   // merged named environments, secrets unresolved
 	literal   config.EnvLayer   // the template's literal env:, secrets unresolved
-	inherited map[string]string // a from-agent spawn's inherited layer, raw
+	inherited config.EnvLayer   // a from-agent spawn's inherited layer, raw
 	spawn     map[string]string // the caller's explicit --env overrides
 }
 
@@ -342,8 +342,23 @@ type envLayers struct {
 func composeEnv(l envLayers, tmpl config.TemplateConfig, x config.Expander) (env map[string]string, secrets map[string]secretenv.Ref, err error) {
 	return resolveLayers(tmpl, x,
 		config.ValuesLayer(l.harness), l.named, l.literal,
-		config.ValuesLayer(pruneEnv(l.inherited, l.harness)), config.ValuesLayer(l.spawn),
+		pruneLayer(l.inherited, l.harness), config.ValuesLayer(l.spawn),
 	)
+}
+
+// pruneLayer is l without the keys fresh defines, values and secrets alike.
+func pruneLayer(l config.EnvLayer, fresh map[string]string) config.EnvLayer {
+	out := config.EnvLayer{Values: pruneEnv(l.Values, fresh)}
+	for k, sr := range l.Secrets {
+		if _, shadowed := fresh[k]; shadowed {
+			continue
+		}
+		if out.Secrets == nil {
+			out.Secrets = map[string]config.ScopedRef{}
+		}
+		out.Secrets[k] = sr
+	}
+	return out
 }
 
 // resolveLayers merges layers, resolves the effective secrets through x and
@@ -377,11 +392,26 @@ func HydrateEnv(rec agentstore.Record, x config.Expander) (map[string]string, er
 	if len(rec.EnvSecrets) == 0 {
 		return rec.Env, nil
 	}
-	layer := config.EnvLayer{Values: rec.Env, Secrets: make(map[string]config.ScopedRef, len(rec.EnvSecrets))}
-	for k, ref := range rec.EnvSecrets {
-		layer.Secrets[k] = config.ScopedRef{Scope: "env", Key: k, Ref: ref}
+	return x.ResolveLayer(config.MergeLayers(config.EnvLayer{Values: rec.Env, Secrets: storedRefs(rec.EnvSecrets)}))
+}
+
+// storedRefs is a record's stored references as layer secrets, named by key
+// alone: the config scope they came from is not recorded.
+func storedRefs(refs map[string]secretenv.Ref) map[string]config.ScopedRef {
+	if len(refs) == 0 {
+		return nil
 	}
-	return x.ResolveLayer(config.MergeLayers(layer))
+	out := make(map[string]config.ScopedRef, len(refs))
+	for k, ref := range refs {
+		out[k] = config.ScopedRef{Scope: "env", Key: k, Ref: ref}
+	}
+	return out
+}
+
+// storedInherited is a record's inherited layer: InheritedEnv's values and
+// InheritedSecrets' references.
+func storedInherited(rec agentstore.Record) config.EnvLayer {
+	return config.EnvLayer{Values: rec.InheritedEnv, Secrets: storedRefs(rec.InheritedSecrets)}
 }
 
 // templateEnvScope names a template's literal env in errors.
@@ -395,12 +425,14 @@ func templateEnvScope(template string) string {
 // inheritedFromSource is the env a from-agent spawn inherits from src: the
 // explicit layers of a layered record (so named and template env are
 // re-resolved for the new agent, not copied), or the stored env of a legacy
-// record whose layers cannot be told apart.
-func inheritedFromSource(src agentstore.Record) map[string]string {
+// record whose layers cannot be told apart. A key that came from a secret
+// reference is inherited as that reference, never its value, so the child
+// resolves it at each launch or fails like any spawn.
+func inheritedFromSource(src agentstore.Record) config.EnvLayer {
 	if !src.EnvLayered {
-		return src.Env
+		return config.MergeLayers(config.EnvLayer{Values: src.Env}, config.EnvLayer{Secrets: storedRefs(src.EnvSecrets)})
 	}
-	return mergeEnv(src.InheritedEnv, src.SpawnEnv)
+	return config.MergeLayers(storedInherited(src), config.ValuesLayer(src.SpawnEnv))
 }
 
 // resolveSpawnNamed resolves the named environments a spawn runs under: the
@@ -817,7 +849,7 @@ type worktreeSpawnParams struct {
 	// inheritEnv is merged between tmpl.Env and spec.Env, minus any key the
 	// freshly computed harness env defines — stale harness values from a
 	// source agent's record must not leak into the new agent.
-	inheritEnv map[string]string
+	inheritEnv config.EnvLayer
 }
 
 func (m *Manager) spawnWorktree(ctx context.Context, cfg *config.Config, tmpl config.TemplateConfig, spec SpawnSpec) (Record, error) {
@@ -916,7 +948,7 @@ func (m *Manager) spawnFromAgent(ctx context.Context, cfg *config.Config, spec S
 		}
 		runTmpl = t
 		runTmplName = spec.Template
-		inheritEnv = nil // override template: do not inherit the source agent's env
+		inheritEnv = config.EnvLayer{} // override template: do not inherit the source agent's env
 	}
 	spec.Template = runTmplName
 
@@ -1083,7 +1115,8 @@ func (m *Manager) spawnWorktreeCore(ctx context.Context, cfg *config.Config, tmp
 		Env:              env,
 		EnvSecrets:       secrets,
 		SpawnEnv:         spec.Env,
-		InheritedEnv:     p.inheritEnv,
+		InheritedEnv:     p.inheritEnv.Values,
+		InheritedSecrets: refsOf(p.inheritEnv),
 		Environments:     spec.Environments,
 		EnvLayered:       true,
 		WebPort:          webPort,
@@ -1785,8 +1818,8 @@ func resolveTemplateWiring(cfg *config.Config, rec agentstore.Record, tmpl confi
 		newEnv  map[string]string
 		secrets map[string]secretenv.Ref
 	)
-	if policy == rebuildEnvFromTemplate || rec.EnvLayered || rec.SpawnEnv != nil || rec.InheritedEnv != nil || rec.Env == nil {
-		newEnv, secrets, err = composeEnv(envLayers{harness: newHarnessEnv, named: named, literal: literal, inherited: rec.InheritedEnv, spawn: rec.SpawnEnv}, tmpl, x)
+	if policy == rebuildEnvFromTemplate || rec.EnvLayered || rec.SpawnEnv != nil || rec.InheritedEnv != nil || rec.InheritedSecrets != nil || rec.Env == nil {
+		newEnv, secrets, err = composeEnv(envLayers{harness: newHarnessEnv, named: named, literal: literal, inherited: storedInherited(rec), spawn: rec.SpawnEnv}, tmpl, x)
 		if err != nil {
 			return nil, nil, nil, fmt.Errorf("agent %q: %w", rec.Name, err)
 		}

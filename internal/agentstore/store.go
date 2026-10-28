@@ -162,6 +162,11 @@ type Record struct {
 	// by a stale inherited value. Empty/nil for shared spawns (no inheritance
 	// concept) and legacy records written before this field existed.
 	InheritedEnv map[string]string `json:"inherited_env,omitempty"`
+	// InheritedSecrets maps each inherited key whose value came from a
+	// secret reference (a legacy source agent's EnvSecrets) to that
+	// reference. Its keys are never in InheritedEnv; every launch resolves
+	// them afresh with the rest of the env.
+	InheritedSecrets map[string]secretenv.Ref `json:"inherited_secrets,omitempty"`
 
 	// AttentionToken is the per-launch token the agent's current session
 	// reports attention hooks with; empty means it launched without hooks.

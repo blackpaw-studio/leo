@@ -333,11 +333,11 @@ func TestStaleAgentsReportsMissingEnvironment(t *testing.T) {
 func TestInheritedFromSource(t *testing.T) {
 	layered := agentstore.Record{Name: "leo-src", Environments: []string{"acct-b"}, EnvLayered: true,
 		Env: map[string]string{"CLAUDE_CONFIG_DIR": "/b", "X": "1", "Y": "2"}, SpawnEnv: map[string]string{"X": "1"}, InheritedEnv: map[string]string{"Y": "2"}}
-	if got := inheritedFromSource(layered); !reflect.DeepEqual(got, map[string]string{"X": "1", "Y": "2"}) {
+	if got := inheritedFromSource(layered); !reflect.DeepEqual(got, config.EnvLayer{Values: map[string]string{"X": "1", "Y": "2"}}) {
 		t.Fatalf("layered source inherits only its explicit layers, got %v", got)
 	}
 	legacy := agentstore.Record{Name: "leo-old", Env: map[string]string{"K": "v"}}
-	if got := inheritedFromSource(legacy); !reflect.DeepEqual(got, map[string]string{"K": "v"}) {
+	if got := inheritedFromSource(legacy); !reflect.DeepEqual(got, config.EnvLayer{Values: map[string]string{"K": "v"}}) {
 		t.Fatalf("legacy source inherits its stored env, got %v", got)
 	}
 }

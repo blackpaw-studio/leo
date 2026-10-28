@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"os"
+	"path/filepath"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -252,5 +254,81 @@ func TestReceivePersistsRefsNotValues(t *testing.T) {
 				t.Fatalf("agents.json holds the value:\n%s", data)
 			}
 		})
+	}
+}
+
+// legacySecretSource saves a pre-layering source agent (EnvLayered false, as
+// Restart leaves a legacy record) whose OP_TOKEN came from a reference.
+func legacySecretSource(t *testing.T, f *fakeSecrets) (*Manager, *capturingSupervisor, string) {
+	t.Helper()
+	t.Setenv("CLAUDE_CONFIG_DIR", "")
+	home := t.TempDir()
+	cfg := &config.Config{HomePath: home, Templates: map[string]config.TemplateConfig{"claude": {Workspace: filepath.Join(home, "workspace")}}}
+	sup := &capturingSupervisor{}
+	m := New(func() (*config.Config, error) { return cfg, nil }, sup, "", "")
+	m.env = config.Expander{Lookup: func(string) (string, bool) { return "", false }, Secrets: f}
+	repo := filepath.Join(t.TempDir(), "src-repo")
+	initRemotelessRepo(t, repo)
+	src := agentstore.Record{Name: "src", Template: "claude", Workspace: repo,
+		Env: map[string]string{"FOO": "bar"}, EnvSecrets: map[string]secretenv.Ref{"OP_TOKEN": opRef}}
+	if err := agentstore.Save(home, src); err != nil {
+		t.Fatal(err)
+	}
+	return m, sup, home
+}
+
+func TestSpawnFromLegacySourceInheritsSecretRefs(t *testing.T) {
+	f := &fakeSecrets{value: secretSentinel}
+	m, sup, home := legacySecretSource(t, f)
+	rec, err := m.Spawn(context.Background(), SpawnSpec{FromAgent: "src", Branch: "b"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sup.spawnCall.Env["OP_TOKEN"] != secretSentinel || sup.spawnCall.Env["FOO"] != "bar" {
+		t.Fatalf("child launch env = %v", sup.spawnCall.Env)
+	}
+	data, err := os.ReadFile(agentstore.FilePath(home))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(data), secretSentinel) {
+		t.Fatalf("agents.json holds the value:\n%s", data)
+	}
+	// The child keeps the reference across a restart, resolved afresh.
+	f.value = "rotated"
+	if err := m.Restart(rec.Name); err != nil {
+		t.Fatal(err)
+	}
+	if got := sup.spawnCall.Env["OP_TOKEN"]; got != "rotated" {
+		t.Errorf("child restart OP_TOKEN = %q, want rotated", got)
+	}
+}
+
+func TestSpawnFromLegacySourceFailsClosedOnSecret(t *testing.T) {
+	m, sup, _ := legacySecretSource(t, &fakeSecrets{reason: "item not found"})
+	_, err := m.Spawn(context.Background(), SpawnSpec{FromAgent: "src", Branch: "b"})
+	if err == nil || !strings.Contains(err.Error(), "OP_TOKEN: secret keychain(service=OP): item not found") {
+		t.Fatalf("err = %v", err)
+	}
+	if sup.spawnCall != nil {
+		t.Errorf("child launched without its secret: %v", sup.spawnCall.Env)
+	}
+}
+
+func TestInheritedFromSourceKeepsRefsNotValues(t *testing.T) {
+	// A legacy record in memory still holds the resolved value; a layered
+	// child of a legacy agent carries InheritedSecrets on to its own children.
+	legacy := agentstore.Record{Env: map[string]string{"FOO": "bar", "OP_TOKEN": secretSentinel}, EnvSecrets: map[string]secretenv.Ref{"OP_TOKEN": opRef}}
+	layered := agentstore.Record{EnvLayered: true, InheritedEnv: map[string]string{"FOO": "bar"}, InheritedSecrets: map[string]secretenv.Ref{"OP_TOKEN": opRef}}
+	want := config.EnvLayer{Values: map[string]string{"FOO": "bar"}, Secrets: map[string]config.ScopedRef{"OP_TOKEN": {Scope: "env", Key: "OP_TOKEN", Ref: opRef}}}
+	for name, src := range map[string]agentstore.Record{"legacy": legacy, "layered": layered} {
+		if got := inheritedFromSource(src); !reflect.DeepEqual(got, want) {
+			t.Errorf("%s: inherited = %+v, want %+v", name, got, want)
+		}
+	}
+	// An explicit --env on the source wins over its inherited reference.
+	layered.SpawnEnv = map[string]string{"OP_TOKEN": "explicit"}
+	if got := inheritedFromSource(layered); got.Values["OP_TOKEN"] != "explicit" || len(got.Secrets) != 0 {
+		t.Errorf("spawn env did not shadow the ref: %+v", got)
 	}
 }
