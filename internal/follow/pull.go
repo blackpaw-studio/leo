@@ -7,8 +7,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
-	"path/filepath"
 	"strings"
 	"time"
 
@@ -155,16 +153,10 @@ func (p *Puller) leadVersion(ctx context.Context, res config.HostResolution) str
 // leadArgv is the ssh argv (without "ssh") that runs `<leo> <leoArgs...>`
 // on the lead: BatchMode so a launchd daemon fails instead of prompting, the
 // host's ssh_args, the shared ControlMaster socket, and a short connect
-// timeout. It matches remote.SSHArgv(res, true, "-o", "ConnectTimeout=10",
-// tail...) from feat/agent-move; swap that in when the branches meet.
+// timeout, all from the one builder the CLI and agent moves use.
 func leadArgv(res config.HostResolution, leoArgs ...string) []string {
-	args := []string{"-o", "BatchMode=yes", res.Host.SSH}
-	args = append(args, res.Host.SSHArgs...)
-	if res.ControlPath != "" && os.MkdirAll(filepath.Dir(res.ControlPath), 0o700) == nil {
-		args = append(args, "-o", "ControlMaster=auto", "-o", "ControlPath="+res.ControlPath)
-	}
-	args = append(args, "-o", "ConnectTimeout="+connectTimeout, remote.LeoWord(res.Host.RemoteLeoPath()))
-	return append(args, leoArgs...)
+	tail := append([]string{"-o", "ConnectTimeout=" + connectTimeout, remote.LeoWord(res.Host.RemoteLeoPath())}, leoArgs...)
+	return remote.SSHArgv(res, true, tail...)
 }
 
 func isUnknownCommand(stderr string) bool {
