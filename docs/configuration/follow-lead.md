@@ -191,7 +191,7 @@ and the Settings page. The cache is kept in every case.
 | `lead_config_invalid` | the lead's own config does not load |
 | `self_follow` | the lead is this same Leo home |
 | `malformed` | the export is not valid JSON of the expected shape, or is over 8 MiB |
-| `follower_too_old` | the lead's export schema is newer than this `leo` understands; update the follower |
+| `follower_too_old` | the lead's export schema is newer than this `leo` understands; update the follower (a lead whose templates or environments hold a [secret reference](secret-env.md) exports schema 2) |
 
 A lead running a newer `leo` than the follower is a warning, not an error:
 settings only the newer version knows are ignored on the follower.

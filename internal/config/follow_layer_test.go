@@ -78,7 +78,7 @@ func TestFollowLayerTemplatesReplaceByName(t *testing.T) {
 func TestFollowLayerEnvironmentsReplaceByName(t *testing.T) {
 	lead := "environments:\n  work: {A: lead, B: lead}\n  home: {H: lead}\n"
 	cfg := loadFollower(t, lead, "environments:\n  work: {A: local}\n  mine: {M: local}\n")
-	want := map[string]map[string]string{"work": {"A": "local"}, "home": {"H": "lead"}, "mine": {"M": "local"}}
+	want := map[string]EnvMap{"work": LiteralEnv(map[string]string{"A": "local"}), "home": LiteralEnv(map[string]string{"H": "lead"}), "mine": LiteralEnv(map[string]string{"M": "local"})}
 	if !reflect.DeepEqual(cfg.Environments, want) {
 		t.Fatalf("environments = %v, want %v", cfg.Environments, want)
 	}

@@ -11,9 +11,17 @@ import (
 	"maps"
 )
 
-// FollowExportSchema is the export format this build reads and writes.
-// Adding fields does not bump it; a follower refuses a newer one.
-const FollowExportSchema = 1
+// FollowExportSchema is the newest export format this build reads and
+// writes. Adding fields does not bump it; a follower refuses a newer one.
+const FollowExportSchema = followSchemaRefs
+
+// An export is written at the oldest schema that can carry it, so a lead
+// with no secret reference in a synced section still serves followers that
+// predate references.
+const (
+	followSchemaPlain = 1
+	followSchemaRefs  = 2 // a synced env value may be a secret reference
+)
 
 // FollowExportKind tags the export document.
 const FollowExportKind = "leo.follow.export"
@@ -51,15 +59,15 @@ func (e *FollowError) Error() string {
 // Section values keep their YAML types; a follower parses them with
 // UseNumber (see ParseFollowExport) and decodes them through YAML.
 type FollowExport struct {
-	Schema       int                          `json:"schema"`
-	Kind         string                       `json:"kind"`
-	LeoVersion   string                       `json:"leo_version"`
-	HomeID       string                       `json:"home_id"`
-	Revision     string                       `json:"revision"`
-	Templates    map[string]any               `json:"templates"`
-	Environments map[string]map[string]string `json:"environments"`
-	Delegation   any                          `json:"delegation"`
-	Defaults     map[string]any               `json:"defaults"`
+	Schema       int               `json:"schema"`
+	Kind         string            `json:"kind"`
+	LeoVersion   string            `json:"leo_version"`
+	HomeID       string            `json:"home_id"`
+	Revision     string            `json:"revision"`
+	Templates    map[string]any    `json:"templates"`
+	Environments map[string]EnvMap `json:"environments"`
+	Delegation   any               `json:"delegation"`
+	Defaults     map[string]any    `json:"defaults"`
 }
 
 // BuildFollowExport builds the export of the config at path. It never
@@ -85,7 +93,7 @@ func BuildFollowExport(path, leoVersion string) (FollowExport, error) {
 		return FollowExport{}, err
 	}
 	exp := FollowExport{
-		Schema: FollowExportSchema, Kind: FollowExportKind, LeoVersion: leoVersion,
+		Schema: followSchemaPlain, Kind: FollowExportKind, LeoVersion: leoVersion,
 		HomeID: homeID, Revision: rev,
 		Templates:    map[string]any{},
 		Environments: raw.Environments,
@@ -105,7 +113,26 @@ func BuildFollowExport(path, leoVersion string) (FollowExport, error) {
 		return FollowExport{}, fmt.Errorf("exporting defaults: %w", err)
 	}
 	exp.Defaults, _ = defaults.(map[string]any)
+	if syncsSecretRefs(raw) {
+		exp.Schema = followSchemaRefs
+	}
 	return exp, nil
+}
+
+// syncsSecretRefs reports whether a synced section (environments or a
+// template's env) holds a secret reference.
+func syncsSecretRefs(c *Config) bool {
+	for _, env := range c.Environments {
+		if len(env.Refs()) > 0 {
+			return true
+		}
+	}
+	for _, tmpl := range c.Templates {
+		if len(tmpl.Env.Refs()) > 0 {
+			return true
+		}
+	}
+	return false
 }
 
 // ParseFollowExport parses and fully checks an export: the kind, a schema
@@ -147,7 +174,7 @@ func parseFollowExport(data []byte) (FollowExport, leadSections, error) {
 // paths unexpanded.
 type leadSections struct {
 	templates    map[string]TemplateConfig
-	environments map[string]map[string]string
+	environments map[string]EnvMap
 	delegation   *DelegationConfig
 	defaults     DefaultsConfig
 }
@@ -170,7 +197,7 @@ func (e FollowExport) decodeSections() (leadSections, error) {
 	if e.Environments != nil {
 		// A fresh copy per decode: the effective config and the ownership
 		// baseline must not share maps.
-		out.environments = make(map[string]map[string]string, len(e.Environments))
+		out.environments = make(map[string]EnvMap, len(e.Environments))
 		for name, env := range e.Environments {
 			out.environments[name] = maps.Clone(env)
 		}
@@ -194,10 +221,10 @@ func (e FollowExport) decodeSections() (leadSections, error) {
 // a follower can tell whether a pull changed anything it uses.
 func (e FollowExport) Digest() string {
 	data, err := json.Marshal(struct {
-		Templates    map[string]any               `json:"templates"`
-		Environments map[string]map[string]string `json:"environments"`
-		Delegation   any                          `json:"delegation"`
-		Defaults     map[string]any               `json:"defaults"`
+		Templates    map[string]any    `json:"templates"`
+		Environments map[string]EnvMap `json:"environments"`
+		Delegation   any               `json:"delegation"`
+		Defaults     map[string]any    `json:"defaults"`
 	}{e.Templates, e.Environments, e.Delegation, e.Defaults})
 	if err != nil {
 		return ""

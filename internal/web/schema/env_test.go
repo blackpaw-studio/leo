@@ -34,11 +34,11 @@ func TestIsSecretEnvKey(t *testing.T) {
 }
 
 func TestValuesJSONRedactsSecretEnvEntries(t *testing.T) {
-	tmpl := &config.TemplateConfig{Env: map[string]string{
+	tmpl := &config.TemplateConfig{Env: config.LiteralEnv(map[string]string{
 		"ANTHROPIC_AUTH_TOKEN": "sk-real-secret",
 		"EMPTY_TOKEN":          "",
 		"ANTHROPIC_BASE_URL":   "http://localhost:3325",
-	}}
+	})}
 	got := ValuesJSON(tmpl, SectionTemplate, nil)["env"].(map[string]any)
 	want := map[string]any{
 		"ANTHROPIC_AUTH_TOKEN": map[string]any{"set": true},
@@ -50,7 +50,9 @@ func TestValuesJSONRedactsSecretEnvEntries(t *testing.T) {
 	}
 }
 
-func envOf(m map[string]string) *config.TemplateConfig { return &config.TemplateConfig{Env: m} }
+func envOf(m map[string]string) *config.TemplateConfig {
+	return &config.TemplateConfig{Env: config.LiteralEnv(m)}
+}
 
 func TestApplyEnvPatchEntries(t *testing.T) {
 	start := func() *config.TemplateConfig {
@@ -67,7 +69,7 @@ func TestApplyEnvPatchEntries(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		want := map[string]string{"A_TOKEN": "keep-me ", "PLAIN": "z", "NEW": "n"}
+		want := config.LiteralEnv(map[string]string{"A_TOKEN": "keep-me ", "PLAIN": "z", "NEW": "n"})
 		if !reflect.DeepEqual(tmpl.Env, want) {
 			t.Errorf("env = %v, want %v", tmpl.Env, want)
 		}
@@ -77,7 +79,7 @@ func TestApplyEnvPatchEntries(t *testing.T) {
 		if err := ApplyEnvPatch(tmpl, SectionTemplate, "env", map[string]any{"PLAIN": "z"}); err != nil {
 			t.Fatal(err)
 		}
-		if tmpl.Env["A_TOKEN"] != "keep-me " || tmpl.Env["GONE"] != "y" {
+		if tmpl.Env["A_TOKEN"] != config.Literal("keep-me ") || tmpl.Env["GONE"] != config.Literal("y") {
 			t.Errorf("env = %v", tmpl.Env)
 		}
 	})

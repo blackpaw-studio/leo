@@ -1,0 +1,142 @@
+{
+  "Defaults": {
+    "Model": "sonnet",
+    "MaxTurns": 0,
+    "IdleSuspendAfter": "",
+    "Harness": "",
+    "HarnessOptions": null,
+    "Dispatch": {
+      "Viewer": {
+        "Placement": "",
+        "MaxPanes": null,
+        "MainPaneHeight": null
+      },
+      "ApprovalTimeout": "",
+      "MaxConcurrent": null,
+      "AdoptTimeout": ""
+    },
+    "Environments": [
+      "acct"
+    ],
+    "Push": {
+      "NeedsInput": null,
+      "Finished": null,
+      "Errored": null,
+      "Chat": null
+    }
+  },
+  "Web": {
+    "Enabled": false,
+    "Port": 0,
+    "Bind": "",
+    "AllowedHosts": null,
+    "TrustedProxies": null,
+    "PublicURLs": null
+  },
+  "Client": {
+    "DefaultHost": "",
+    "Hosts": null
+  },
+  "APIClients": null,
+  "Tasks": {
+    "nightly": {
+      "Workspace": "",
+      "Schedule": "0 3 * * *",
+      "Timezone": "",
+      "PromptFile": "nightly.md",
+      "Model": "",
+      "MaxTurns": 0,
+      "Enabled": false,
+      "Silent": false,
+      "Timeout": "",
+      "Retries": 0,
+      "Channels": null,
+      "DevChannels": null,
+      "NotifyOnFail": false,
+      "Env": {
+        "NUM": "42",
+        "TASK_KEY": "value"
+      },
+      "Environments": null,
+      "Runtime": "",
+      "Template": "",
+      "QueueMax": 0,
+      "Harness": "",
+      "HarnessOptions": null,
+      "Owner": ""
+    }
+  },
+  "Templates": {
+    "coder": {
+      "Workspace": "",
+      "Channels": null,
+      "DevChannels": null,
+      "Model": "opus",
+      "MaxTurns": 0,
+      "MCPConfig": "",
+      "AddDirs": null,
+      "Env": {
+        "API_URL": "https://example.test/v1",
+        "DOLLAR": "$$literal",
+        "TILDE": "~"
+      },
+      "Environments": [
+        "acct",
+        "other"
+      ],
+      "IdleSuspendAfter": "",
+      "Harness": "",
+      "HarnessOptions": null,
+      "Isolation": "",
+      "Permissions": {},
+      "Push": {
+        "NeedsInput": null,
+        "Finished": null,
+        "Errored": null,
+        "Chat": null
+      },
+      "Move": {
+        "Exclude": null,
+        "HookTimeout": "",
+        "Hooks": {
+          "PreSend": null,
+          "PostReceive": null
+        }
+      }
+    }
+  },
+  "Environments": {
+    "acct": {
+      "CLAUDE_CONFIG_DIR": "~/.claude-acct",
+      "EMPTY": "",
+      "FLAG": "true",
+      "PORT": "8080",
+      "QUOTED": "has: colon",
+      "REF": "${HOME}/x"
+    },
+    "other": {
+      "FLOAT": "1.50",
+      "HEX": "0x1F",
+      "MULTI": "line one\nline two\n"
+    }
+  },
+  "Delegation": null,
+  "AppearanceRules": null,
+  "Chat": {
+    "WhisperModel": "",
+    "PermissionTimeout": "",
+    "QuestionTimeout": ""
+  },
+  "Move": {
+    "Exclude": null,
+    "HookTimeout": "",
+    "Hooks": {
+      "PreSend": null,
+      "PostReceive": null
+    }
+  },
+  "Providers": null,
+  "TemplatesFile": "",
+  "Follow": null,
+  "HomePath": ""
+}

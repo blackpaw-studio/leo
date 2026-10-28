@@ -160,7 +160,7 @@ var ambientLeoEnv = map[string]string{
 
 func TestHeadlessChildDropsAmbientLeoCredentialsWhenLocalOnly(t *testing.T) {
 	cfg := testConfig() // web disabled: the child must be local-only
-	cfg.Templates["claude"] = config.TemplateConfig{Harness: "claude", Model: "opus", Env: map[string]string{"LEO_API_TOKEN": "template-token", "LEO_WEB_PORT": "8888"}}
+	cfg.Templates["claude"] = config.TemplateConfig{Harness: "claude", Model: "opus", Env: config.LiteralEnv(map[string]string{"LEO_API_TOKEN": "template-token", "LEO_WEB_PORT": "8888"})}
 	cfg.HomePath = os.TempDir()
 	t.Setenv("HOME", t.TempDir())
 	var captured *exec.Cmd

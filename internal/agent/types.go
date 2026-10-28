@@ -1,6 +1,10 @@
 package agent
 
-import "time"
+import (
+	"time"
+
+	"github.com/blackpaw-studio/leo/internal/secretenv"
+)
 
 // SpawnRequest is the minimal info needed for the Supervisor to start a new
 // ephemeral agent. It lives here (not in daemon) so the agent package can
@@ -10,6 +14,11 @@ type SpawnRequest struct {
 	ClaudeArgs []string
 	WorkDir    string
 	Env        map[string]string
+	// EnvSecrets are the references behind Env's secret keys. Env holds
+	// their values for this launch; the supervisor resolves them afresh
+	// before every later launch (a crash restart, or a fresh launch after an
+	// adopted session ends) and never launches without them.
+	EnvSecrets map[string]secretenv.Ref
 	WebPort    string
 	// WebToken is the daemon's API bearer token. The supervisor exports it
 	// as LEO_API_TOKEN so the MCP server inside claude can authenticate

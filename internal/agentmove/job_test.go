@@ -19,6 +19,7 @@ import (
 	"github.com/blackpaw-studio/leo/internal/config"
 	"github.com/blackpaw-studio/leo/internal/drain"
 	"github.com/blackpaw-studio/leo/internal/git/gittest"
+	"github.com/blackpaw-studio/leo/internal/redact"
 	"github.com/blackpaw-studio/leo/internal/session"
 )
 
@@ -62,8 +63,9 @@ type fakeSource struct {
 	markFails int
 }
 
-func (f *fakeSource) RuntimeEnv(rec agentstore.Record) (map[string]string, error) {
-	return f.envs.of(rec)
+func (f *fakeSource) RuntimeEnv(rec agentstore.Record) (map[string]string, *redact.Secrets, error) {
+	env, err := f.envs.of(rec)
+	return env, redact.NewSecrets(f.envs.secrets), err
 }
 
 func (f *fakeSource) BeginMove(name string, mode agent.MoveMode) (func(), error) {
@@ -285,7 +287,7 @@ func newMoveFixture(t *testing.T) *moveFixture {
 	}
 	f.cfg = &config.Config{
 		HomePath:     f.home,
-		Environments: map[string]map[string]string{"work": {"CLAUDE_CONFIG_DIR": f.claude}},
+		Environments: map[string]config.EnvMap{"work": config.LiteralEnv(map[string]string{"CLAUDE_CONFIG_DIR": f.claude})},
 		Templates: map[string]config.TemplateConfig{"coder": {
 			Environments: []string{"work"},
 			Move:         config.MoveConfig{Exclude: []string{"node_modules/"}, Hooks: config.MoveHooksConfig{PreSend: []string{"/bin/export"}}},

@@ -6,6 +6,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -24,7 +25,13 @@ func allowProbes(t testing.TB) {
 // cache, for lead content the lead's own Validate would refuse to export.
 func writeRawLeadCache(t testing.TB, followerDir, sections string) {
 	t.Helper()
-	data := []byte(`{"schema":1,"kind":"leo.follow.export","leo_version":"v0.64.0","home_id":"ab","revision":"sha256:r",` + sections + `}`)
+	writeRawLeadCacheSchema(t, followerDir, 1, sections)
+}
+
+// writeRawLeadCacheSchema is writeRawLeadCache with an explicit schema.
+func writeRawLeadCacheSchema(t testing.TB, followerDir string, schema int, sections string) {
+	t.Helper()
+	data := []byte(`{"schema":` + strconv.Itoa(schema) + `,"kind":"leo.follow.export","leo_version":"v0.64.0","home_id":"ab","revision":"sha256:r",` + sections + `}`)
 	exp, err := ParseFollowExport(data)
 	if err != nil {
 		t.Fatalf("raw export: %v", err)

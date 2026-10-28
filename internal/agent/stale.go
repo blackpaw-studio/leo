@@ -7,6 +7,8 @@ import (
 	"strings"
 
 	"github.com/blackpaw-studio/leo/internal/agentstore"
+	"github.com/blackpaw-studio/leo/internal/config"
+	"github.com/blackpaw-studio/leo/internal/secretenv"
 )
 
 // StaleAgent describes one running agent whose wiring would change if it were
@@ -55,6 +57,11 @@ func (m *Manager) StaleAgents() []StaleAgent {
 		return nil
 	}
 
+	// Secrets render as their descriptors: drift in a reference shows as a
+	// changed key, and checking never touches a secret store.
+	describe := m.env
+	describe.Secrets = secretenv.Describe{}
+
 	running := m.sup.EphemeralAgents()
 	out := make([]StaleAgent, 0, len(running))
 	for name := range running {
@@ -62,7 +69,7 @@ func (m *Manager) StaleAgents() []StaleAgent {
 		if !ok {
 			continue
 		}
-		newArgs, newEnv, err := resolveRestartArgs(cfg, rec, m.webToken, m.leoMCP, m.env)
+		newArgs, newEnv, _, err := resolveRestartArgs(cfg, rec, m.webToken, m.leoMCP, describe)
 		if err != nil {
 			// A restart would refuse: surface why instead of reporting no drift.
 			out = append(out, StaleAgent{Name: name, EnvironmentError: err.Error()})
@@ -85,6 +92,10 @@ func (m *Manager) StaleAgents() []StaleAgent {
 // two are equivalent.
 func diffWiring(rec agentstore.Record, newArgs []string, newEnv map[string]string) (StaleAgent, bool) {
 	var drift StaleAgent
+	oldEnv, err := HydrateEnv(rec, config.Expander{Secrets: secretenv.Describe{}})
+	if err != nil { // Describe never fails
+		oldEnv = rec.Env
+	}
 
 	before := stripSessionArgs(rec.ClaudeArgs)
 	after := stripSessionArgs(newArgs)
@@ -93,7 +104,7 @@ func diffWiring(rec agentstore.Record, newArgs []string, newEnv map[string]strin
 	}
 
 	for k := range newEnv {
-		old, had := rec.Env[k]
+		old, had := oldEnv[k]
 		switch {
 		case !had:
 			drift.EnvAdded = append(drift.EnvAdded, k)
@@ -101,7 +112,7 @@ func diffWiring(rec agentstore.Record, newArgs []string, newEnv map[string]strin
 			drift.EnvChanged = append(drift.EnvChanged, k)
 		}
 	}
-	for k := range rec.Env {
+	for k := range oldEnv {
 		if _, still := newEnv[k]; !still {
 			drift.EnvRemoved = append(drift.EnvRemoved, k)
 		}

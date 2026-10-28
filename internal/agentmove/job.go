@@ -17,6 +17,7 @@ import (
 	"github.com/blackpaw-studio/leo/internal/drain"
 	"github.com/blackpaw-studio/leo/internal/git"
 	"github.com/blackpaw-studio/leo/internal/harness"
+	"github.com/blackpaw-studio/leo/internal/redact"
 	"github.com/blackpaw-studio/leo/internal/session"
 )
 
@@ -97,7 +98,7 @@ func (nopProgress) Note(Problem) {}
 // SourceManager is the part of agent.Manager a source job needs.
 type SourceManager interface {
 	// RuntimeEnv is the env the stored agent runs with on this host.
-	RuntimeEnv(rec agentstore.Record) (map[string]string, error)
+	RuntimeEnv(rec agentstore.Record) (map[string]string, *redact.Secrets, error)
 	BeginMove(name string, mode agent.MoveMode) (release func(), err error)
 	Stop(name string, opts agent.StopOptions) error
 	// MarkMoved marks the agent moved and lifts its fence.
@@ -173,6 +174,13 @@ func (mv *Mover) Run(ctx context.Context, req Request, p Progress) (Result, erro
 	defer release()
 	t := &transfer{mv: mv, req: req, p: p}
 	defer t.deleteTempRefs(ctx)
+	res, err := t.execute(ctx)
+	res.Notes = redactProblems(t.scrub, res.Notes)
+	return res, redactError(t.scrub, err)
+}
+
+// execute is Run past the move lock: every phase, in order.
+func (t *transfer) execute(ctx context.Context) (Result, error) {
 	if err := t.validate(ctx); err != nil {
 		return Result{}, err
 	}
@@ -204,8 +212,11 @@ type transfer struct {
 	resp    PreflightResponse
 	moveCfg config.ResolvedMove
 	env     map[string]string
-	prep    GitPrepareResult
-	notes   []Problem
+	// scrub replaces the agent's resolved secret values in what the run
+	// keeps or returns: hook and harness output reaches its errors.
+	scrub *redact.Secrets
+	prep  GitPrepareResult
+	notes []Problem
 	// rsyncs are the itemized changes of each rsync stage run so far.
 	rsyncs []RsyncStage
 	// A copy's candidate names, its source branch and pre-issued fork id.
@@ -219,6 +230,7 @@ type transfer struct {
 func (t *transfer) isCopy() bool { return t.req.Mode == ModeCopy }
 
 func (t *transfer) note(p Problem) {
+	p.Message = t.scrub.String(p.Message)
 	t.notes = append(t.notes, p)
 	t.p.Note(p)
 }
@@ -273,7 +285,7 @@ func (t *transfer) validate(ctx context.Context) error {
 	if t.m.Git, err = t.git.Manifest(ctx, rec.Workspace, rec.Repo); err != nil {
 		return err
 	}
-	if t.env, err = t.mv.Agents.RuntimeEnv(rec); err != nil {
+	if t.env, t.scrub, err = t.mv.Agents.RuntimeEnv(rec); err != nil {
 		return problemf(CodeEnvironmentMissing, "%s's env cannot be resolved here: %v", rec.Name, err)
 	}
 	if err := t.checkTranscript(); err != nil {

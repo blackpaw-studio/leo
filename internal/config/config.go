@@ -105,8 +105,8 @@ type Config struct {
 	// Environments are named, composable env maps independent of templates.
 	// Templates, tasks, defaults and agent spawns reference them by name via
 	// `environments:`; see environments.go for the merge and cascade rules.
-	Environments map[string]map[string]string `yaml:"environments,omitempty"`
-	Delegation   *DelegationConfig            `yaml:"delegation,omitempty"`
+	Environments map[string]EnvMap `yaml:"environments,omitempty"`
+	Delegation   *DelegationConfig `yaml:"delegation,omitempty"`
 	// AppearanceRules are the ordered rules that give agents a color and/or
 	// an emoji; see appearance.go.
 	AppearanceRules AppearanceRuleList `yaml:"appearance_rules,omitempty"`
@@ -388,26 +388,26 @@ func (c *Config) DispatchViewerMainPaneHeight() int {
 }
 
 type TaskConfig struct {
-	Workspace      string            `yaml:"workspace,omitempty"`
-	Schedule       string            `yaml:"schedule"`
-	Timezone       string            `yaml:"timezone,omitempty"`
-	PromptFile     string            `yaml:"prompt_file"`
-	Model          string            `yaml:"model,omitempty"`
-	MaxTurns       int               `yaml:"max_turns,omitempty"`
-	Enabled        bool              `yaml:"enabled"`
-	Silent         bool              `yaml:"silent,omitempty"`
-	Timeout        string            `yaml:"timeout,omitempty"`        // e.g. "30m", "1h" — default 30m
-	Retries        int               `yaml:"retries,omitempty"`        // number of retry attempts on failure, default 0
-	Channels       []string          `yaml:"channels,omitempty"`       // channel plugin IDs for NotifyOnFail's channel notification
-	DevChannels    []string          `yaml:"dev_channels,omitempty"`   // loaded via --dangerously-load-development-channels
-	NotifyOnFail   bool              `yaml:"notify_on_fail,omitempty"` // failure card in Leo Chat; also notifies configured channels
-	Env            map[string]string `yaml:"env,omitempty"`
-	Environments   []string          `yaml:"environments,omitempty"` // named environments, merged left to right
-	Runtime        string            `yaml:"runtime,omitempty"`      // "oneshot" (default) | "persistent"
-	Template       string            `yaml:"template,omitempty"`
-	QueueMax       int               `yaml:"queue_max,omitempty"` // 0 → use default (5)
-	Harness        string            `yaml:"harness,omitempty"`
-	HarnessOptions map[string]any    `yaml:"harness_options,omitempty"`
+	Workspace      string         `yaml:"workspace,omitempty"`
+	Schedule       string         `yaml:"schedule"`
+	Timezone       string         `yaml:"timezone,omitempty"`
+	PromptFile     string         `yaml:"prompt_file"`
+	Model          string         `yaml:"model,omitempty"`
+	MaxTurns       int            `yaml:"max_turns,omitempty"`
+	Enabled        bool           `yaml:"enabled"`
+	Silent         bool           `yaml:"silent,omitempty"`
+	Timeout        string         `yaml:"timeout,omitempty"`        // e.g. "30m", "1h" — default 30m
+	Retries        int            `yaml:"retries,omitempty"`        // number of retry attempts on failure, default 0
+	Channels       []string       `yaml:"channels,omitempty"`       // channel plugin IDs for NotifyOnFail's channel notification
+	DevChannels    []string       `yaml:"dev_channels,omitempty"`   // loaded via --dangerously-load-development-channels
+	NotifyOnFail   bool           `yaml:"notify_on_fail,omitempty"` // failure card in Leo Chat; also notifies configured channels
+	Env            EnvMap         `yaml:"env,omitempty"`
+	Environments   []string       `yaml:"environments,omitempty"` // named environments, merged left to right
+	Runtime        string         `yaml:"runtime,omitempty"`      // "oneshot" (default) | "persistent"
+	Template       string         `yaml:"template,omitempty"`
+	QueueMax       int            `yaml:"queue_max,omitempty"` // 0 → use default (5)
+	Harness        string         `yaml:"harness,omitempty"`
+	HarnessOptions map[string]any `yaml:"harness_options,omitempty"`
 	// Owner is the agent whose Leo Chat thread receives this task's output
 	// (leo_chat_post from a run). Validated as a name only; resolved when a
 	// message is posted. Empty defaults: a persistent task's own agent,
@@ -418,14 +418,14 @@ type TaskConfig struct {
 // TemplateConfig defines a reusable blueprint for spawning ephemeral agents.
 // Workspace is the base directory — repos are cloned as subdirectories.
 type TemplateConfig struct {
-	Workspace   string            `yaml:"workspace,omitempty"`
-	Channels    []string          `yaml:"channels,omitempty"`
-	DevChannels []string          `yaml:"dev_channels,omitempty"` // loaded via --dangerously-load-development-channels
-	Model       string            `yaml:"model,omitempty"`
-	MaxTurns    int               `yaml:"max_turns,omitempty"`
-	MCPConfig   string            `yaml:"mcp_config,omitempty"`
-	AddDirs     []string          `yaml:"add_dirs,omitempty"`
-	Env         map[string]string `yaml:"env,omitempty"`
+	Workspace   string   `yaml:"workspace,omitempty"`
+	Channels    []string `yaml:"channels,omitempty"`
+	DevChannels []string `yaml:"dev_channels,omitempty"` // loaded via --dangerously-load-development-channels
+	Model       string   `yaml:"model,omitempty"`
+	MaxTurns    int      `yaml:"max_turns,omitempty"`
+	MCPConfig   string   `yaml:"mcp_config,omitempty"`
+	AddDirs     []string `yaml:"add_dirs,omitempty"`
+	Env         EnvMap   `yaml:"env,omitempty"`
 	// Environments are the template's default named environments, merged left
 	// to right beneath Env; a spawn's own list replaces them.
 	Environments []string `yaml:"environments,omitempty"`
@@ -711,6 +711,7 @@ func (c *Config) validateTemplate(name string, tmpl TemplateConfig, hr harnessRe
 			errs = append(errs, fmt.Sprintf("templates.%s.env key %q is not a valid environment variable name", name, k))
 		}
 	}
+	errs = append(errs, validateEnvRefs("templates."+name+".env", tmpl.Env)...)
 	for i, dir := range tmpl.AddDirs {
 		if err := ValidateAddDir(dir); err != nil {
 			errs = append(errs, fmt.Sprintf("templates.%s.add_dirs[%d]: %v", name, i, err))
@@ -848,6 +849,7 @@ func (c *Config) Validate() error {
 				errs = append(errs, fmt.Sprintf("tasks.%s.env key %q is not a valid environment variable name", name, k))
 			}
 		}
+		errs = append(errs, validateEnvRefs("tasks."+name+".env", task.Env)...)
 		if task.Runtime != "" && task.Runtime != "oneshot" && task.Runtime != "persistent" {
 			errs = append(errs, fmt.Sprintf("tasks.%s.runtime %q is not valid (use \"oneshot\" or \"persistent\")", name, task.Runtime))
 		}

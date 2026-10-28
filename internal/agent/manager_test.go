@@ -1583,7 +1583,7 @@ func TestRestartSpawnEnvOverlayWinsAndSurvives(t *testing.T) {
 	cfg := &config.Config{
 		HomePath: home,
 		Templates: map[string]config.TemplateConfig{
-			"coding": {Env: map[string]string{"FOO": "template", "BAR": "template"}},
+			"coding": {Env: config.LiteralEnv(map[string]string{"FOO": "template", "BAR": "template"})},
 		},
 	}
 	sup := &capturingSupervisor{

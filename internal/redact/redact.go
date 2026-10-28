@@ -14,6 +14,8 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+
+	"github.com/blackpaw-studio/leo/internal/secretenv"
 )
 
 // Mask is what a redacted value renders as.
@@ -90,6 +92,23 @@ func EnvMap(env map[string]string) map[string]string {
 		safe[k] = Value(k, v)
 	}
 	return safe
+}
+
+// EnvDisplay is an env map for display: literal values masked as by EnvMap,
+// and each secret reference shown as its descriptor ("<secret …>"), which
+// names the store item but never holds the value. Nil when both are empty.
+func EnvDisplay(literals map[string]string, refs map[string]secretenv.Ref) map[string]string {
+	if len(literals) == 0 && len(refs) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(literals)+len(refs))
+	for k, v := range literals {
+		out[k] = Value(k, v)
+	}
+	for k, r := range refs {
+		out[k] = "<secret " + r.String() + ">"
+	}
+	return out
 }
 
 // Keys returns env's key names, sorted. Useful where callers want to know

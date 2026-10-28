@@ -11,6 +11,7 @@ import (
 	"github.com/blackpaw-studio/leo/internal/leomcp"
 	"github.com/blackpaw-studio/leo/internal/redact"
 	"github.com/blackpaw-studio/leo/internal/run"
+	"github.com/blackpaw-studio/leo/internal/secretenv"
 	"github.com/blackpaw-studio/leo/internal/session"
 	"github.com/spf13/cobra"
 )
@@ -100,12 +101,17 @@ type envPair struct {
 func taskDryRunEnv(cfg *config.Config, task config.TaskConfig, x config.Expander) ([]envPair, error) {
 	// Mirror run.Run's merge order: task.Env is the base layer and leo's own
 	// vars win on collision, so a task that sets LEO_CHANNELS in its env
-	// shows the value it will actually get — one entry, not two.
-	env, err := cfg.TaskEnv(task, x)
+	// shows the value it will actually get — one entry, not two. A dry run
+	// never reads a secret store: references show as their descriptors.
+	layer, err := cfg.TaskEnvLayer(task, x)
 	if err != nil {
 		return nil, err
 	}
-	env = maps.Clone(env)
+	refs := make(map[string]secretenv.Ref, len(layer.Secrets))
+	for k, sr := range layer.Secrets {
+		refs[k] = sr.Ref
+	}
+	env := maps.Clone(layer.Values)
 	if env == nil {
 		env = map[string]string{}
 	}
@@ -115,13 +121,18 @@ func taskDryRunEnv(cfg *config.Config, task config.TaskConfig, x config.Expander
 	if len(task.DevChannels) > 0 {
 		env["LEO_DEV_CHANNELS"] = strings.Join(task.DevChannels, ",")
 	}
-	if len(env) == 0 {
+	for k := range refs {
+		if _, leoOwned := env[k]; leoOwned {
+			delete(refs, k)
+		}
+	}
+	display := redact.EnvDisplay(env, refs)
+	if len(display) == 0 {
 		return nil, nil
 	}
-
-	pairs := make([]envPair, 0, len(env))
-	for _, k := range redact.Keys(env) {
-		pairs = append(pairs, envPair{key: k, display: redact.Value(k, env[k])})
+	pairs := make([]envPair, 0, len(display))
+	for _, k := range redact.Keys(display) {
+		pairs = append(pairs, envPair{key: k, display: display[k]})
 	}
 	return pairs, nil
 }

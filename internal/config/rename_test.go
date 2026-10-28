@@ -60,9 +60,9 @@ func TestRenameTemplate_Errors(t *testing.T) {
 
 func environmentRenameFixture() *Config {
 	return &Config{
-		Environments: map[string]map[string]string{
-			"old":   {"A": "1"},
-			"other": {"B": "2"},
+		Environments: map[string]EnvMap{
+			"old":   LiteralEnv(map[string]string{"A": "1"}),
+			"other": LiteralEnv(map[string]string{"B": "2"}),
 		},
 		Defaults: DefaultsConfig{Environments: []string{"other", "old"}},
 		Templates: map[string]TemplateConfig{
@@ -85,10 +85,10 @@ func TestRenameEnvironment_CascadesPreservingOrder(t *testing.T) {
 	if _, ok := next.Environments["old"]; ok {
 		t.Error("old environment key still present")
 	}
-	if got := next.Environments["new"]["A"]; got != "1" {
+	if got := next.Environments["new"]["A"]; got != Literal("1") {
 		t.Errorf("new environment A = %q, want 1", got)
 	}
-	if got := next.Environments["other"]["B"]; got != "2" {
+	if got := next.Environments["other"]["B"]; got != Literal("2") {
 		t.Errorf("unrelated environment changed: %v", next.Environments["other"])
 	}
 	lists := map[string][]string{

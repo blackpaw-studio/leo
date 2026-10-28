@@ -62,7 +62,7 @@ func TestRoundTripTask(t *testing.T) {
 func TestRoundTripTemplateEnv(t *testing.T) {
 	tmpl := config.TemplateConfig{
 		Model: "opus",
-		Env:   map[string]string{"FOO": "bar", "BAZ": "qux"},
+		Env:   config.LiteralEnv(map[string]string{"FOO": "bar", "BAZ": "qux"}),
 	}
 	form := renderToForm(Values(&tmpl, SectionTemplate, nil))
 	var got config.TemplateConfig

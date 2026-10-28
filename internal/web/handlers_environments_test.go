@@ -35,7 +35,7 @@ func TestEnvironmentAddSaveAndPageRender(t *testing.T) {
 		t.Fatalf("save failed: %s", body)
 	}
 	got := reloadTestConfig(t, dir).Environments["work"]
-	if got["CLAUDE_CONFIG_DIR"] != "/Users/me/.claude-work" || got["FOO"] != "bar" {
+	if got["CLAUDE_CONFIG_DIR"] != config.Literal("/Users/me/.claude-work") || got["FOO"] != config.Literal("bar") {
 		t.Fatalf("saved env = %v", got)
 	}
 
@@ -178,7 +178,7 @@ func TestEnvironmentRenameRejections(t *testing.T) {
 
 func TestEnvironmentRenameFormUsesEscapedURLForSlashedName(t *testing.T) {
 	s, cfgPath := newTestServerWithConfigFile(t, &config.Config{
-		Environments: map[string]map[string]string{"aws/prod": {"A": "1"}},
+		Environments: map[string]config.EnvMap{"aws/prod": config.LiteralEnv(map[string]string{"A": "1"})},
 	})
 
 	page := readBody(t, getRequest(t, s, "/config/environments"))

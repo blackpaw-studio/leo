@@ -75,7 +75,7 @@ func (d *Dispatcher) continueHeadless(cfg *config.Config, rec Record, message st
 	if err != nil {
 		return SendResult{}, fmt.Errorf("template %q harness_options: %w", rec.Template, err)
 	}
-	tmplEnv, err := cfg.DispatchEnv(tmpl, rec.InheritedEnvironments, d.Env)
+	tmplEnv, secretValues, err := cfg.DispatchLaunchEnv(tmpl, rec.InheritedEnvironments, d.Env)
 	if err != nil {
 		return SendResult{}, fmt.Errorf("template %q: %w", rec.Template, err)
 	}
@@ -188,6 +188,7 @@ func (d *Dispatcher) continueHeadless(cfg *config.Config, rec Record, message st
 	}
 	state.record, state.handle = prospective, handle
 	state.mcpEnv = childEnv
+	state.scrub = state.scrub.With(secretValues)
 	state.done, state.cancel = done, cancel
 	d.persistLocked(state, "turn")
 	d.mu.Unlock()

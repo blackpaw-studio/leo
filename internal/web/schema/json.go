@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/blackpaw-studio/leo/internal/config"
 	"github.com/blackpaw-studio/leo/internal/harness"
 )
 
@@ -263,7 +264,7 @@ func ValuesJSON(target any, section Section, defaults any) map[string]any {
 		case KindCSV:
 			out[f.Key] = append([]string{}, val.Interface().([]string)...)
 		case KindEnvMap:
-			out[f.Key] = envJSON(val.Interface().(map[string]string))
+			out[f.Key] = envJSON(val.Interface().(config.EnvMap))
 		default:
 			out[f.Key] = val.String()
 		}

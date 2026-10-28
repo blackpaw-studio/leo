@@ -67,6 +67,7 @@ func (d *Dispatcher) persistRecordLocked(state *runState) {
 
 func (d *Dispatcher) complete(state *runState, status Status, text string, cause error) {
 	d.mu.Lock()
+	text, cause = state.scrub.String(text), state.scrub.Error(cause)
 	persist := true
 	if state.record.Status.Terminal() {
 		status, text = state.record.Status, state.record.Text

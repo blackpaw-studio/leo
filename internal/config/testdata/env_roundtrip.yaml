@@ -1,0 +1,32 @@
+defaults:
+  model: sonnet
+  environments: [acct]
+environments:
+  acct:
+    CLAUDE_CONFIG_DIR: ~/.claude-acct
+    PORT: 8080
+    FLAG: true
+    EMPTY:
+    QUOTED: "has: colon"
+    REF: ${HOME}/x
+  other:
+    MULTI: |
+      line one
+      line two
+    FLOAT: 1.50
+    HEX: 0x1F
+tasks:
+  nightly:
+    schedule: "0 3 * * *"
+    prompt_file: nightly.md
+    env:
+      TASK_KEY: value
+      NUM: 42
+templates:
+  coder:
+    model: opus
+    env:
+      API_URL: https://example.test/v1
+      DOLLAR: $$literal
+      TILDE: "~"
+    environments: [acct, other]

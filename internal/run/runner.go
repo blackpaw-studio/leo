@@ -28,6 +28,7 @@ import (
 	opencodeharness "github.com/blackpaw-studio/leo/internal/harness/opencode"
 	"github.com/blackpaw-studio/leo/internal/history"
 	"github.com/blackpaw-studio/leo/internal/leomcp"
+	"github.com/blackpaw-studio/leo/internal/redact"
 	"github.com/blackpaw-studio/leo/internal/session"
 	"github.com/blackpaw-studio/leo/internal/web"
 )
@@ -230,11 +231,15 @@ func RunWith(cfg *config.Config, taskName string, sessions *session.Store, mcp l
 	// runTaskAttempt — but the notify-on-fail child below stays claude-only
 	// by construction and adds that env explicitly, so this plain two-way
 	// merge is what it uses.
-	taskEnv, err := cfg.TaskEnv(task, x)
+	taskEnv, secretValues, err := cfg.TaskLaunchEnv(task, x)
 	if err != nil {
 		return fmt.Errorf("task %q: %w", taskName, err)
 	}
 	spawnEnv := mergeEnvMaps(taskEnv, leoEnv)
+	// scrub replaces the resolved secret values in everything this run keeps
+	// or returns from a child's output: the log, errors, the failure card
+	// and the notify-on-fail prompt and output.
+	scrub := redact.NewSecrets(secretValues)
 
 	prompt, err := assemblePrompt(cfg, task)
 	if err != nil {
@@ -282,7 +287,7 @@ func RunWith(cfg *config.Config, taskName string, sessions *session.Store, mcp l
 		isChannelInitRetry = false
 
 		ar := runTaskAttempt(cfg, task, taskName, prompt, sessionID, taskWorkspace, timeout, taskEnv, leoEnv, channelPrefixes, sessions, h, mcp)
-		lastLogContent = string(ar.output)
+		lastLogContent = scrub.String(string(ar.output))
 
 		// A harness that exits 0 while its own stream reports a fatal error
 		// (opencode has known exit-0-on-error bugs) must still be treated as
@@ -316,8 +321,8 @@ func RunWith(cfg *config.Config, taskName string, sessions *session.Store, mcp l
 			break
 		}
 
-		lastErr = ar.execErr
-		lastOutput = ar.output
+		lastErr = scrub.Error(ar.execErr)
+		lastOutput = scrub.Bytes(ar.output)
 
 		// Interrupted: stop immediately. No retry, no session clear (handled
 		// above and by never re-entering the loop top), no notify-on-fail —
@@ -334,7 +339,7 @@ func RunWith(cfg *config.Config, taskName string, sessions *session.Store, mcp l
 			channelInitAttempts++
 			isChannelInitRetry = true
 			fmt.Fprintf(os.Stderr, "warning: task %q channel plugin MCP init failed (%v); retrying (%d/%d) without consuming retry budget\n",
-				taskName, ar.execErr, channelInitAttempts, maxChannelInitAttempts)
+				taskName, lastErr, channelInitAttempts, maxChannelInitAttempts)
 			time.Sleep(channelInitBackoff)
 			continue
 		}
@@ -378,7 +383,7 @@ func RunWith(cfg *config.Config, taskName string, sessions *session.Store, mcp l
 	if lastErr != nil && !errors.Is(lastErr, errInterrupted) && task.NotifyOnFail {
 		postFailureCard(cfg, taskName, runID, maxAttempts, lastErr, logFile)
 		if len(task.Channels) > 0 {
-			notifyFailure(cfg, taskName, task, taskWorkspace, lastErr, maxAttempts, spawnEnv, logFile)
+			notifyFailure(cfg, taskName, task, taskWorkspace, lastErr, maxAttempts, spawnEnv, logFile, scrub)
 		}
 	}
 
@@ -473,7 +478,9 @@ func postFailureCard(cfg *config.Config, taskName, runID string, attempts int, r
 	}
 }
 
-func notifyFailure(cfg *config.Config, taskName string, task config.TaskConfig, workspace string, taskErr error, attempts int, extraEnv map[string]string, logFile string) {
+// notifyFailure's taskErr is already redacted; scrub redacts the notify
+// child's own output, which runs with the task's secrets too.
+func notifyFailure(cfg *config.Config, taskName string, task config.TaskConfig, workspace string, taskErr error, attempts int, extraEnv map[string]string, logFile string, scrub *redact.Secrets) {
 	prompt := fmt.Sprintf(
 		"Task %q failed after %d attempt(s): %v.\n"+
 			"Use a messaging tool from one of your configured channel plugins (see $LEO_CHANNELS) "+
@@ -519,7 +526,7 @@ func notifyFailure(cfg *config.Config, taskName string, task config.TaskConfig, 
 	}
 
 	if logFile != "" && len(output) > 0 {
-		appendNotifyOutputToLog(cfg, logFile, output)
+		appendNotifyOutputToLog(cfg, logFile, scrub.Bytes(output))
 	}
 }
 

@@ -555,7 +555,7 @@ func (d *Dispatcher) closeTurnLocked(s *runState, id string, outcome TurnOutcome
 		t.Outcome = outcome
 		t.Pending = nil
 		t.EndedAt = boundary
-		t.mergeWaitText(text)
+		t.mergeWaitText(s.scrub.String(text))
 		if t.SlotHeld {
 			t.SlotHeld = false
 			d.slotsFor(s).Release()
@@ -1114,7 +1114,7 @@ func (d *Dispatcher) waitOnBackgroundLocked(s *runState, w *PendingWork, text st
 	for _, t := range turns {
 		t.Pending = w
 		delete(s.adoptWaits, t.TurnID)
-		t.WaitText = appendStopText(t.WaitText, text)
+		t.WaitText = appendStopText(t.WaitText, s.scrub.String(text))
 	}
 	d.recomputeStatusLocked(s, d.now())
 	if s.record.Status != StatusRunning {

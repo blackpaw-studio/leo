@@ -60,7 +60,7 @@ func newValidateCmd() *cobra.Command {
 		Short: "Check config, prerequisites, and workspace health",
 		Long:  "Run diagnostic checks on config, prerequisites, daemon, and workspace. Like a doctor's checkup for your leo setup.",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			findings, cfg := collectValidateFindings(cmd.Context())
+			findings, cfg := collectValidateFindings(cmd.Context(), config.Expander{})
 
 			if asJSON {
 				return emitValidateJSON(findings)
@@ -76,8 +76,9 @@ func newValidateCmd() *cobra.Command {
 }
 
 // collectValidateFindings runs all validation checks and returns findings plus
-// the loaded config (may be nil if loading failed). Sorted by severity.
-func collectValidateFindings(ctx context.Context) ([]Finding, *config.Config) {
+// the loaded config (may be nil if loading failed). Sorted by severity. x
+// resolves the config's secret references.
+func collectValidateFindings(ctx context.Context, x config.Expander) ([]Finding, *config.Config) {
 	var findings []Finding
 	add := func(sev Severity, check, msg string) {
 		findings = append(findings, Finding{Severity: sev, Check: check, Message: msg})
@@ -91,6 +92,7 @@ func collectValidateFindings(ctx context.Context) ([]Finding, *config.Config) {
 	}
 	add(SeverityInfo, "config", "valid")
 	findings = append(findings, configWarningFindings(cfg)...)
+	findings = append(findings, secretFindings(cfg, x)...)
 
 	// 2. Check prerequisites — one line per harness referenced by the config.
 	for _, name := range referencedHarnesses(cfg) {

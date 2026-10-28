@@ -35,11 +35,11 @@ func (c *Config) EnvironmentNames(override, scope []string) []string {
 // *UnknownEnvironmentError. Values are raw (unexpanded): use it to check
 // names, and ResolveNamed to build a launch environment. The result is a new
 // map, nil when names is empty.
-func (c *Config) MergeEnvironments(names []string) (map[string]string, error) {
+func (c *Config) MergeEnvironments(names []string) (EnvMap, error) {
 	if len(names) == 0 {
 		return nil, nil
 	}
-	merged := map[string]string{}
+	merged := EnvMap{}
 	for _, name := range names {
 		env, err := c.LookupEnvironment(name)
 		if err != nil {
@@ -53,58 +53,58 @@ func (c *Config) MergeEnvironments(names []string) (map[string]string, error) {
 // ResolveNamed merges the named environments like MergeEnvironments, with
 // every value expanded by x. Each environment is expanded before merging, so
 // an unset variable in a key a later environment overrides still fails. An
-// *UnsetVariableError names the environment, key and variable.
+// *UnsetVariableError names the environment, key and variable. Secret
+// references are resolved after merging, so only the effective one of each
+// key reaches its backend.
 func (c *Config) ResolveNamed(names []string, x Expander) (map[string]string, error) {
 	if len(names) == 0 {
 		return nil, nil
 	}
-	merged := map[string]string{}
-	for _, name := range names {
-		env, err := c.LookupEnvironment(name)
-		if err != nil {
-			return nil, err
-		}
-		expanded, err := x.expandMap("environments."+name, env)
-		if err != nil {
-			return nil, err
-		}
-		maps.Copy(merged, expanded)
+	layer, err := c.NamedLayer(names, x)
+	if err != nil {
+		return nil, err
 	}
-	return merged, nil
+	return nonNil(x.ResolveLayer(layer))
 }
 
 // ExpandLiteral expands the values of a literal `env:` map (a template's or
-// task's) with x. The result is a new map; nil in, nil out.
-func ExpandLiteral(literal map[string]string, x Expander) (map[string]string, error) {
+// task's) with x and resolves its secret references. The result is a new
+// map; nil in, nil out.
+func ExpandLiteral(literal EnvMap, x Expander) (map[string]string, error) {
 	if literal == nil {
 		return nil, nil
 	}
-	return x.expandMap("env", literal)
+	layer, err := x.LiteralLayer("env", literal)
+	if err != nil {
+		return nil, err
+	}
+	return nonNil(x.ResolveLayer(layer))
+}
+
+func nonNil(env map[string]string, err error) (map[string]string, error) {
+	if err == nil && env == nil {
+		env = map[string]string{}
+	}
+	return env, err
 }
 
 // ResolveEnv layers the final environment, lowest to highest precedence:
 // merged named environments, the literal `env:` map of a template or task,
 // then per-spawn `--env K=V` pairs. The named and literal layers are expanded
 // by x (see Expander); spawn pairs are passed through as given, since the
-// caller's shell has already had its say. Inputs are not mutated. Returns nil
-// when every layer is empty.
-func (c *Config) ResolveEnv(names []string, literal, spawn map[string]string, x Expander) (map[string]string, error) {
-	named, err := c.ResolveNamed(names, x)
+// caller's shell has already had its say. Secret references resolve once the
+// layers merge, so a shadowed one never runs. Inputs are not mutated.
+// Returns nil when every layer is empty.
+func (c *Config) ResolveEnv(names []string, literal EnvMap, spawn map[string]string, x Expander) (map[string]string, error) {
+	named, err := c.NamedLayer(names, x)
 	if err != nil {
 		return nil, err
 	}
-	lit, err := ExpandLiteral(literal, x)
+	lit, err := x.LiteralLayer("env", literal)
 	if err != nil {
 		return nil, err
 	}
-	if len(named) == 0 && len(lit) == 0 && len(spawn) == 0 {
-		return nil, nil
-	}
-	out := map[string]string{}
-	maps.Copy(out, named)
-	maps.Copy(out, lit)
-	maps.Copy(out, spawn)
-	return out, nil
+	return x.ResolveLayer(MergeLayers(named, lit, ValuesLayer(spawn)))
 }
 
 // validateEnvironments checks the top-level environments map and every
@@ -126,8 +126,9 @@ func (c *Config) validateEnvironments() []string {
 	return errs
 }
 
-// validateEnvironment checks one named environment's name and keys.
-func validateEnvironment(name string, env map[string]string) []string {
+// validateEnvironment checks one named environment's name, keys and secret
+// references.
+func validateEnvironment(name string, env EnvMap) []string {
 	var errs []string
 	if name == "" || strings.ContainsAny(name, ", \t\n") {
 		errs = append(errs, fmt.Sprintf("environments name %q must be non-empty and contain no commas or whitespace", name))
@@ -137,7 +138,7 @@ func validateEnvironment(name string, env map[string]string) []string {
 			errs = append(errs, fmt.Sprintf("environments.%s key %q is not a valid environment variable name", name, k))
 		}
 	}
-	return errs
+	return append(errs, validateEnvRefs("environments."+name, env)...)
 }
 
 func (c *Config) validateEnvironmentList(path string, names []string) []string {
@@ -158,7 +159,32 @@ func (c *Config) validateEnvironmentList(path string, names []string) []string {
 // TaskEnv is the environment a task's process runs with: the task's (or
 // defaults') named environments beneath its literal `env:` map.
 func (c *Config) TaskEnv(t TaskConfig, x Expander) (map[string]string, error) {
-	return c.ResolveEnv(c.EnvironmentNames(nil, t.Environments), t.Env, nil, x)
+	env, _, err := c.TaskLaunchEnv(t, x)
+	return env, err
+}
+
+// TaskLaunchEnv is TaskEnv plus the resolved value of each of its secret
+// keys, which the caller scrubs from the child's output.
+func (c *Config) TaskLaunchEnv(t TaskConfig, x Expander) (env, secrets map[string]string, err error) {
+	layer, err := c.TaskEnvLayer(t, x)
+	if err != nil {
+		return nil, nil, err
+	}
+	return x.resolveWithSecrets(layer)
+}
+
+// TaskEnvLayer is TaskEnv before resolution: the merged layer whose Secrets
+// are the references a run would resolve. It does no secret I/O.
+func (c *Config) TaskEnvLayer(t TaskConfig, x Expander) (EnvLayer, error) {
+	named, err := c.NamedLayer(c.EnvironmentNames(nil, t.Environments), x)
+	if err != nil {
+		return EnvLayer{}, err
+	}
+	lit, err := x.LiteralLayer("env", t.Env)
+	if err != nil {
+		return EnvLayer{}, err
+	}
+	return MergeLayers(named, lit), nil
 }
 
 // ValidateEnvironmentNames checks an ordered list of environment names a
@@ -185,9 +211,10 @@ func (e *InvalidEnvironmentsError) Error() string { return strings.Join(e.Proble
 // different environment. A launch with the variable unset still fails.
 func (c *Config) EnvironmentWarnings(x Expander) []string {
 	var warnings []string
-	check := func(scope string, env map[string]string) {
-		for _, k := range slices.Sorted(maps.Keys(env)) {
-			if _, err := x.Expand(env[k]); err != nil {
+	check := func(scope string, env EnvMap) {
+		literals := env.Literals()
+		for _, k := range slices.Sorted(maps.Keys(literals)) {
+			if _, err := x.Expand(literals[k]); err != nil {
 				warnings = append(warnings, scoped(err, scope, k).Error()+" in this process (the launching daemon's environment may differ)")
 			}
 		}
@@ -231,23 +258,26 @@ func (c *Config) DispatchEnvironmentNames(tmpl TemplateConfig, inherited []strin
 // inherited named environments layered on top, so the caller wins any key
 // both set. With no inherited names it equals TemplateEnv.
 func (c *Config) DispatchEnv(tmpl TemplateConfig, inherited []string, x Expander) (map[string]string, error) {
-	base, err := c.TemplateEnv(tmpl, x)
+	env, _, err := c.DispatchLaunchEnv(tmpl, inherited, x)
+	return env, err
+}
+
+// DispatchLaunchEnv is DispatchEnv plus the resolved value of each of its
+// secret keys, which the caller scrubs from the child's output.
+func (c *Config) DispatchLaunchEnv(tmpl TemplateConfig, inherited []string, x Expander) (env, secrets map[string]string, err error) {
+	named, err := c.NamedLayer(c.EnvironmentNames(nil, tmpl.Environments), x)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	top, err := c.ResolveNamed(inherited, x)
+	lit, err := x.LiteralLayer("env", tmpl.Env)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	if len(top) == 0 {
-		return base, nil
+	top, err := c.NamedLayer(inherited, x)
+	if err != nil {
+		return nil, nil, err
 	}
-	out := maps.Clone(base)
-	if out == nil {
-		out = map[string]string{}
-	}
-	maps.Copy(out, top)
-	return out, nil
+	return x.resolveWithSecrets(MergeLayers(named, lit, top))
 }
 
 // EnvironmentKeys lists, sorted, every variable a named environment or a

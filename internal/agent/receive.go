@@ -10,6 +10,8 @@ import (
 
 	"github.com/blackpaw-studio/leo/internal/agentstore"
 	"github.com/blackpaw-studio/leo/internal/harness"
+	"github.com/blackpaw-studio/leo/internal/redact"
+	"github.com/blackpaw-studio/leo/internal/secretenv"
 )
 
 // copyStartFailed prefixes a copy's StoppedReason when its first launch
@@ -34,36 +36,48 @@ type ReceiveSpec struct {
 
 // ArrivalEnv is the env Receive starts spec's agent with here: the same
 // resolver, so a move reads and writes the session store the agent will
-// actually use (an inherited CLAUDE_CONFIG_DIR included).
-func (m *Manager) ArrivalEnv(spec ReceiveSpec) (map[string]string, error) {
+// actually use (an inherited CLAUDE_CONFIG_DIR included). The redactor
+// covers the values its secret references resolved to.
+func (m *Manager) ArrivalEnv(spec ReceiveSpec) (map[string]string, *redact.Secrets, error) {
 	cfg, err := m.cfgLoader()
 	if err != nil {
-		return nil, fmt.Errorf("loading config: %w", err)
+		return nil, nil, fmt.Errorf("loading config: %w", err)
 	}
 	rec := arrivedRecord(spec)
 	tmpl, ok := templateOf(cfg, rec)
 	if !ok {
-		return nil, &UnknownTemplateError{Name: rec.Template}
+		return nil, nil, &UnknownTemplateError{Name: rec.Template}
 	}
-	_, env, err := resolveTemplateWiring(cfg, rec, tmpl, m.webToken, m.leoMCP, rebuildEnvFromTemplate, m.env)
+	_, env, secrets, err := resolveTemplateWiring(cfg, rec, tmpl, m.webToken, m.leoMCP, rebuildEnvFromTemplate, m.env)
 	if err != nil {
-		return nil, fmt.Errorf("resolving %q's env: %w", rec.Name, err)
+		return nil, nil, fmt.Errorf("resolving %q's env: %w", rec.Name, err)
 	}
-	return env, nil
+	return env, secretRedactor(env, secrets), nil
 }
 
 // RuntimeEnv is the env rec runs with when it next starts here, from the
-// resolver a restart uses: the agent's session store as it really is.
-func (m *Manager) RuntimeEnv(rec agentstore.Record) (map[string]string, error) {
+// resolver a restart uses: the agent's session store as it really is. The
+// redactor covers the values its secret references resolved to.
+func (m *Manager) RuntimeEnv(rec agentstore.Record) (map[string]string, *redact.Secrets, error) {
 	cfg, err := m.cfgLoader()
 	if err != nil {
-		return nil, fmt.Errorf("loading config: %w", err)
+		return nil, nil, fmt.Errorf("loading config: %w", err)
 	}
-	_, env, err := resolveRestartArgs(cfg, rec, m.webToken, m.leoMCP, m.env)
+	_, env, secrets, err := resolveRestartArgs(cfg, rec, m.webToken, m.leoMCP, m.env)
 	if err != nil {
-		return nil, fmt.Errorf("resolving %q's env: %w", rec.Name, err)
+		return nil, nil, fmt.Errorf("resolving %q's env: %w", rec.Name, err)
 	}
-	return env, nil
+	return env, secretRedactor(env, secrets), nil
+}
+
+// secretRedactor replaces, in text a move keeps or returns, each value env
+// holds for a key a secret reference supplied.
+func secretRedactor(env map[string]string, refs map[string]secretenv.Ref) *redact.Secrets {
+	values := make(map[string]string, len(refs))
+	for k := range refs {
+		values[k] = env[k]
+	}
+	return redact.NewSecrets(values)
 }
 
 // Receive saves an arriving agent and starts it. Launch args and env are
@@ -89,11 +103,13 @@ func (m *Manager) Receive(_ context.Context, spec ReceiveSpec) error {
 	if !ok {
 		return &UnknownTemplateError{Name: rec.Template}
 	}
-	args, env, err := resolveTemplateWiring(cfg, rec, tmpl, m.webToken, m.leoMCP, rebuildEnvFromTemplate, m.env)
+	args, env, secrets, err := resolveTemplateWiring(cfg, rec, tmpl, m.webToken, m.leoMCP, rebuildEnvFromTemplate, m.env)
 	if err != nil {
 		return fmt.Errorf("receiving %q: %w", name, err)
 	}
-	rec.ClaudeArgs, rec.Env = args, env
+	// The record keeps this host's secret references; agentstore leaves
+	// their values out of Env.
+	rec.ClaudeArgs, rec.Env, rec.EnvSecrets = args, env, secrets
 	rec.WebPort = fmt.Sprint(cfg.WebPort())
 	if err := agentstore.Save(cfg.HomePath, rec); err != nil {
 		return fmt.Errorf("saving %q: %w", name, err)

@@ -37,7 +37,7 @@ func TestSpawnSharedOpencodeEnvOverlay(t *testing.T) {
 	mgr, sup, home := newEnvTestManager(t, "coding", config.TemplateConfig{
 		Workspace: t.TempDir(),
 		Harness:   "opencode",
-		Env:       map[string]string{"MY_VAR": "1"},
+		Env:       config.LiteralEnv(map[string]string{"MY_VAR": "1"}),
 	})
 
 	rec, err := mgr.Spawn(context.Background(), SpawnSpec{
@@ -79,7 +79,7 @@ func TestSpawnSharedOpencodeTemplateEnvWinsOnCollision(t *testing.T) {
 	mgr, sup, _ := newEnvTestManager(t, "coding", config.TemplateConfig{
 		Workspace: t.TempDir(),
 		Harness:   "opencode",
-		Env:       map[string]string{"OPENCODE_CONFIG_CONTENT": "template-override"},
+		Env:       config.LiteralEnv(map[string]string{"OPENCODE_CONFIG_CONTENT": "template-override"}),
 	})
 
 	if _, err := mgr.Spawn(context.Background(), SpawnSpec{Template: "coding", Repo: "myagent"}); err != nil {
@@ -99,7 +99,7 @@ func TestSpawnSharedOpencodeTemplateEnvWinsOnCollision(t *testing.T) {
 func TestSpawnSharedClaudeNoOpencodeEnvKeys(t *testing.T) {
 	mgr, sup, _ := newEnvTestManager(t, "coding", config.TemplateConfig{
 		Workspace: t.TempDir(),
-		Env:       map[string]string{"MY_VAR": "1"},
+		Env:       config.LiteralEnv(map[string]string{"MY_VAR": "1"}),
 	})
 
 	if _, err := mgr.Spawn(context.Background(), SpawnSpec{Template: "coding", Repo: "myagent"}); err != nil {

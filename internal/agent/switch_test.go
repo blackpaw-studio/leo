@@ -346,7 +346,7 @@ func TestSwitchTemplateReResolvesEnvFromNewTemplate(t *testing.T) {
 	cfg := switchCfg(home)
 	cfg.Templates["review"] = config.TemplateConfig{
 		Model: "opus",
-		Env:   map[string]string{"REVIEW_ONLY": "1"},
+		Env:   config.LiteralEnv(map[string]string{"REVIEW_ONLY": "1"}),
 	}
 	sup := &capturingSupervisor{agents: map[string]ProcessState{"leo-x": {Name: "leo-x", Status: "running"}}}
 	_ = agentstore.Save(home, agentstore.Record{
@@ -492,10 +492,10 @@ func TestSwitchTemplateRebuildsEnvOnAnOrdinaryAgent(t *testing.T) {
 	home := t.TempDir()
 	cfg := switchCfg(home)
 	cfg.Templates["proxied"] = config.TemplateConfig{
-		Env: map[string]string{"ANTHROPIC_BASE_URL": "https://proxy", "ANTHROPIC_AUTH_TOKEN": "secret"},
+		Env: config.LiteralEnv(map[string]string{"ANTHROPIC_BASE_URL": "https://proxy", "ANTHROPIC_AUTH_TOKEN": "secret"}),
 	}
 	cfg.Templates["plain"] = config.TemplateConfig{
-		Env: map[string]string{"PLAIN_ONLY": "1"},
+		Env: config.LiteralEnv(map[string]string{"PLAIN_ONLY": "1"}),
 	}
 	sup := &capturingSupervisor{agents: map[string]ProcessState{"leo-x": {Name: "leo-x", Status: "running"}}}
 	_ = agentstore.Save(home, agentstore.Record{
