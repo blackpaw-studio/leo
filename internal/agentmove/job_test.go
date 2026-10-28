@@ -914,3 +914,44 @@ func TestMoveRefusesStoreSymlinkConflict(t *testing.T) {
 		})
 	}
 }
+
+// A symlink inside a source store path is sent as a symlink, so it must
+// still resolve on the destination: only a relative link to something the
+// same transfer carries is allowed. Others are refused before the stop.
+func TestMoveRefusesSourceStoreSymlinks(t *testing.T) {
+	for name, tc := range map[string]struct {
+		target  func(f *moveFixture, proj string) string
+		refused bool
+	}{
+		"outside the store": {target: func(*moveFixture, string) string { return t.TempDir() }, refused: true},
+		"dangling":          {target: func(*moveFixture, string) string { return "gone.jsonl" }, refused: true},
+		"absolute inside":   {target: func(_ *moveFixture, proj string) string { return filepath.Join(proj, "sid-1.jsonl") }, refused: true},
+		"escapes the rel":   {target: func(*moveFixture, string) string { return "../other" }, refused: true},
+		"relative inside":   {target: func(*moveFixture, string) string { return "sid-1.jsonl" }, refused: false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := newMoveFixture(t)
+			proj := filepath.Join(f.claude, "projects", session.ProjectSlug(f.ws))
+			if err := os.MkdirAll(filepath.Join(f.claude, "projects", "other"), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Symlink(tc.target(f, proj), filepath.Join(proj, "link")); err != nil {
+				t.Fatal(err)
+			}
+			_, err := f.move(t, false)
+			if !tc.refused {
+				if err != nil {
+					t.Fatalf("move: %v", err)
+				}
+				return
+			}
+			rel := filepath.Join("projects", session.ProjectSlug(f.ws), "link")
+			if !HasCode(err, CodeStoreSymlinkSource) || !strings.Contains(err.Error(), rel) {
+				t.Fatalf("err = %v, want store_symlink_source naming %s", err, rel)
+			}
+			if f.log.has("stop ") || f.log.has("verb ") {
+				t.Fatalf("something ran before the refusal: %v", f.log.all())
+			}
+		})
+	}
+}

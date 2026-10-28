@@ -116,6 +116,56 @@ func StoreSymlinks(root string, rels []string) ([]string, error) {
 	return out, nil
 }
 
+// checkSourceSymlinks refuses the symlinks inside the source store paths
+// rels name that would not resolve once sent: rsync sends a link as a link,
+// so only a relative one to something the same directory rel carries lands
+// intact. A file rel is sent resolved and needs no check.
+func checkSourceSymlinks(root string, rels []string) error {
+	var bad []string
+	for _, rel := range rels {
+		if !strings.HasSuffix(rel, "/") {
+			continue
+		}
+		dir, err := filepath.EvalSymlinks(filepath.Join(root, rel))
+		if err != nil {
+			return fmt.Errorf("resolving %s: %w", filepath.Join(root, rel), err)
+		}
+		err = filepath.WalkDir(dir, func(p string, d fs.DirEntry, err error) error {
+			if err != nil || d.Type()&fs.ModeSymlink == 0 || linkStaysInside(p, dir) {
+				return err
+			}
+			sub, err := filepath.Rel(dir, p)
+			if err != nil {
+				return err
+			}
+			bad = append(bad, filepath.Join(rel, sub))
+			return nil
+		})
+		if err != nil {
+			return fmt.Errorf("listing %s: %w", dir, err)
+		}
+	}
+	if len(bad) == 0 {
+		return nil
+	}
+	return problemf(CodeStoreSymlinkSource, "the session store %s has symlinks that would not resolve once sent: %s; replace each with its target or a relative link inside the same dir, then retry", root, strings.Join(bad, ", "))
+}
+
+// linkStaysInside reports whether link is relative and resolves to
+// something under dir (itself resolved).
+func linkStaysInside(link, dir string) bool {
+	text, err := os.Readlink(link)
+	if err != nil || filepath.IsAbs(text) {
+		return false
+	}
+	real, err := filepath.EvalSymlinks(link)
+	if err != nil {
+		return false
+	}
+	rel, err := filepath.Rel(dir, real)
+	return err == nil && rel != ".." && !strings.HasPrefix(rel, "../")
+}
+
 func isSymlink(p string) bool {
 	info, err := os.Lstat(p)
 	return err == nil && info.Mode()&os.ModeSymlink != 0

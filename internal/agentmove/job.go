@@ -282,6 +282,9 @@ func (t *transfer) validate(ctx context.Context) error {
 	if t.m.SessionRels, err = t.sessionRels(sessionIDs(t.rec)); err != nil {
 		return err
 	}
+	if err := checkSourceSymlinks(t.adapter.SessionRoot(t.env), t.m.SessionRels); err != nil {
+		return err
+	}
 	t.notePersistentTask()
 	if t.isCopy() {
 		return t.validateCopy(ctx, records)
