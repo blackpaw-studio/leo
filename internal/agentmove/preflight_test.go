@@ -39,7 +39,7 @@ func TestCheckDestination(t *testing.T) {
 		want   string // comma-joined codes, "" for none
 	}{
 		{"ok", func(*Manifest, *DestFacts) {}, ""},
-		{"protocol", func(m *Manifest, _ *DestFacts) { m.Protocol = 2 }, CodeProtocolMismatch},
+		{"protocol", func(m *Manifest, _ *DestFacts) { m.Protocol = Protocol + 1 }, CodeProtocolMismatch},
 		{"home", func(_ *Manifest, d *DestFacts) { d.Host.Home = "/home/me" }, CodeHomeMismatch},
 		{"user", func(_ *Manifest, d *DestFacts) { d.Host.User = "other" }, CodeUserMismatch},
 		{"template", func(_ *Manifest, d *DestFacts) { d.TemplateFound = false }, CodeTemplateMissing},

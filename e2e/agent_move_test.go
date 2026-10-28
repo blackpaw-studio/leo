@@ -508,3 +508,28 @@ func TestAgentCopyWorktreeLocal(t *testing.T) {
 		t.Errorf("hooks ran as:\n%s", strings.Join(got, "\n"))
 	}
 }
+
+// A session store dir that is a symlink (a shared projects/ tree) must stay
+// a symlink with the transcripts behind it: rsync used to replace it with a
+// real, empty directory.
+func TestAgentMoveKeepsSymlinkedSessionStore(t *testing.T) {
+	p := newMovePair(t)
+	shared := filepath.Join(p.root, "shared-projects")
+	slugDir := filepath.Join(shared, session.ProjectSlug(p.ws))
+	mustMkdir(t, slugDir)
+	mustWrite(t, filepath.Join(slugDir, "old.jsonl"), "{}\n", 0o600)
+	if err := os.Symlink(shared, filepath.Join(p.claudeDir, "projects")); err != nil {
+		t.Fatal(err)
+	}
+	p.a.mustLeo(t, "agent", "spawn", "mv")
+	p.a.waitRunning(t, "mv")
+	p.a.mustLeo(t, "agent", "move", "mv", "--to", "host-b")
+	p.b.waitRunning(t, "mv")
+
+	if info, err := os.Lstat(filepath.Join(p.claudeDir, "projects")); err != nil || info.Mode()&os.ModeSymlink == 0 {
+		t.Fatalf("projects is no longer a symlink: %v, %v", info, err)
+	}
+	if _, err := os.Stat(filepath.Join(slugDir, "old.jsonl")); err != nil {
+		t.Fatalf("transcript lost behind the symlink: %v", err)
+	}
+}

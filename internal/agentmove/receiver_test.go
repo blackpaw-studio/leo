@@ -472,3 +472,62 @@ func TestReceiverStatusReportsCommitPhase(t *testing.T) {
 		t.Fatalf("status after a failure not left dormant = %+v, %v, want the last phase reached", st, err)
 	}
 }
+
+// The destination's store dirs may be symlinks (a shared projects/ tree):
+// the verb hands back the real path behind each one, creates what is
+// missing there, and leaves every symlink alone.
+func TestSessionTargetsResolveSymlinkedStores(t *testing.T) {
+	f := newReceiverFixture(t)
+	shared := t.TempDir()
+	if err := os.Symlink(shared, filepath.Join(f.claude, "projects")); err != nil {
+		t.Fatal(err)
+	}
+	slug := session.ProjectSlug(f.ws)
+	m := f.manifest()
+	m.SessionRels = []string{"projects/" + slug + "/", "file-history/sid/"}
+	var got SessionTargetsResponse
+	if err := f.call(t, VerbSessionTargets, m, &got); err != nil {
+		t.Fatal(err)
+	}
+	realClaude, _ := filepath.EvalSymlinks(f.claude)
+	realShared, _ := filepath.EvalSymlinks(shared)
+	want := []string{filepath.Join(realShared, slug), filepath.Join(realClaude, "file-history", "sid")}
+	if !slices.Equal(got.Targets, want) {
+		t.Fatalf("targets = %q, want %q", got.Targets, want)
+	}
+	for _, dir := range want {
+		if !isDir(dir) {
+			t.Errorf("%s was not created", dir)
+		}
+	}
+	if info, err := os.Lstat(filepath.Join(f.claude, "projects")); err != nil || info.Mode()&os.ModeSymlink == 0 {
+		t.Fatalf("projects is no longer a symlink: %v %v", info, err)
+	}
+}
+
+// A file rel (a codex rollout) lands in its resolved parent dir.
+func TestSessionTargetsForFileRelUsesParentDir(t *testing.T) {
+	f := newReceiverFixture(t)
+	m := f.manifest()
+	m.SessionRels = []string{"projects/-x/s.jsonl"}
+	var got SessionTargetsResponse
+	if err := f.call(t, VerbSessionTargets, m, &got); err != nil {
+		t.Fatal(err)
+	}
+	realClaude, _ := filepath.EvalSymlinks(f.claude)
+	if want := []string{filepath.Join(realClaude, "projects", "-x")}; !slices.Equal(got.Targets, want) {
+		t.Fatalf("targets = %q, want %q", got.Targets, want)
+	}
+}
+
+func TestSessionTargetsRefuseEscapingRels(t *testing.T) {
+	f := newReceiverFixture(t)
+	for _, rel := range []string{"../x/", "/abs/", "-rf/", "projects/../../x/"} {
+		m := f.manifest()
+		m.SessionRels = []string{rel}
+		var got SessionTargetsResponse
+		if err := f.call(t, VerbSessionTargets, m, &got); err == nil {
+			t.Errorf("rel %q accepted: %v", rel, got.Targets)
+		}
+	}
+}

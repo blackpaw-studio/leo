@@ -124,7 +124,7 @@ func TestCopyWorkspacePartialRename(t *testing.T) {
 	if !f.log.has("run rsync -a --delete --itemize-changes --stats -e ssh -o BatchMode=yes --exclude=node_modules/ --exclude=/.worktrees/ " + f.ws + "/ u@laptop:" + f.ws + "-web-copy.leo-partial/") {
 		t.Fatalf("workspace rsync does not fill the partial: %v", f.log.all())
 	}
-	if f.log.has("run rsync -a -R") {
+	if f.log.has("verb session-targets") {
 		t.Fatal("a claude copy sent the source's session files; its snapshot travels in staging")
 	}
 	m := f.ep.manifests[len(f.ep.manifests)-1]

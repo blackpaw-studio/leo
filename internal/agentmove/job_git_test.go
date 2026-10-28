@@ -56,6 +56,7 @@ func TestMoveWorktreeHappyPathOrder(t *testing.T) {
 		t.Fatalf("move: %v", err)
 	}
 	stage := StagingDir(f.home, "web")
+	realClaude, _ := filepath.EvalSymlinks(f.claude)
 	want := []string{
 		"lock web move",
 		"verb preflight",
@@ -64,7 +65,8 @@ func TestMoveWorktreeHappyPathOrder(t *testing.T) {
 		"run git -C " + f.ws + " push u@laptop:" + repo + " +" + head + ":refs/leo-move/web/head +refs/leo-move/web/index:refs/leo-move/web/index",
 		"verb git-prepare",
 		"run rsync -a --delete --itemize-changes --stats -e ssh -o BatchMode=yes --exclude=node_modules/ --exclude=/.worktrees/ --exclude=/.git " + f.ws + "/ u@laptop:" + f.ws + "/",
-		"run rsync -a -R -u --itemize-changes -e ssh -o BatchMode=yes projects/" + session.ProjectSlug(f.ws) + "/ u@laptop:/Users/me/.claude-work/ (in " + f.claude + ")",
+		"verb session-targets",
+		"run rsync -a -u --itemize-changes -e ssh -o BatchMode=yes " + realClaude + "/projects/" + session.ProjectSlug(f.ws) + "/ u@laptop:/Users/me/.claude-work/projects/" + session.ProjectSlug(f.ws) + "/",
 		"run rsync -a --delete -e ssh -o BatchMode=yes " + stage + "/ u@laptop:" + destStage + "/",
 		"fence web laptop",
 		"verb commit",

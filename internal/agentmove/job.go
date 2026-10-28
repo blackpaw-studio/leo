@@ -722,15 +722,64 @@ func (t *transfer) rsyncSessions(ctx context.Context, ids []string) error {
 		return err
 	}
 	for _, rel := range rels {
-		if strings.HasPrefix(rel, "-") || filepath.IsAbs(rel) {
-			return problemf(CodeUnsafePath, "session path %q must be relative to %s", rel, root)
+		if err := checkSessionRel(rel); err != nil {
+			return err
 		}
 		if err := ValidatePath(filepath.Join(root, rel)); err != nil {
 			return err
 		}
 	}
 	t.p.Stage(StageSessions)
-	return t.run(ctx, SessionRsyncCmd(t.ep.RsyncShell(), root, rels, t.ep.Target(t.resp.SessionRoot)))
+	return t.sendSessions(ctx, root, rels)
+}
+
+// sendSessions asks the destination where each session path really lives
+// (through any symlinked store dir), then rsyncs each straight into it from
+// its own resolved source path.
+func (t *transfer) sendSessions(ctx context.Context, root string, rels []string) error {
+	m := t.m
+	m.SessionRels = rels
+	body, _ := json.Marshal(m) //nolint:errchkjson // plain structs and maps
+	out, err := t.ep.Run(ctx, VerbSessionTargets, body)
+	if err != nil {
+		return err
+	}
+	var resp SessionTargetsResponse
+	if err := json.Unmarshal(out, &resp); err != nil {
+		return fmt.Errorf("decoding the session-targets answer from %s: %w", t.ep.Name(), err)
+	}
+	if len(resp.Targets) != len(rels) {
+		return problemf(CodeBadRequest, "%s resolved %d session targets for %d paths", t.ep.Name(), len(resp.Targets), len(rels))
+	}
+	for i, rel := range rels {
+		if err := ValidatePath(resp.Targets[i]); err != nil {
+			return err
+		}
+		src, err := resolveSessionSource(root, rel)
+		if err != nil {
+			return err
+		}
+		if err := t.run(ctx, SessionRsyncCmd(t.ep.RsyncShell(), src, t.ep.Target(resp.Targets[i]))); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// resolveSessionSource is the real path of root/rel, keeping a trailing "/"
+// on a directory.
+func resolveSessionSource(root, rel string) (string, error) {
+	real, err := filepath.EvalSymlinks(filepath.Join(root, rel))
+	if err != nil {
+		return "", fmt.Errorf("resolving %s: %w", filepath.Join(root, rel), err)
+	}
+	if err := ValidatePath(real); err != nil {
+		return "", err
+	}
+	if strings.HasSuffix(rel, "/") {
+		real += "/"
+	}
+	return real, nil
 }
 
 func (t *transfer) rsync(ctx context.Context, argv []string) error {

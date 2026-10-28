@@ -25,30 +25,44 @@ func TestRsyncWorkspaceArgv(t *testing.T) {
 	}
 }
 
-// Session paths travel relative to the session root, run from it: openrsync
-// (macOS) ignores a /./ anchor and would recreate the full source path.
-func TestRsyncSessionArgvRelative(t *testing.T) {
-	got := SessionRsyncCmd(testShell, "/Users/me/.claude", []string{"projects/-Users-me-ws/", "file-history/s1/"}, "u@h:/Users/me/.claude-work")
-	want := Cmd{Name: "rsync", Dir: "/Users/me/.claude", Args: []string{"-a", "-R", "-u", "--itemize-changes",
-		"-e", testShell, "projects/-Users-me-ws/", "file-history/s1/", "u@h:/Users/me/.claude-work/"}}
+// Session files go straight from their real source path into the real
+// destination dir: no -R, so rsync never creates (or replaces) an implied
+// parent such as a symlinked projects/.
+func TestRsyncSessionArgv(t *testing.T) {
+	got := SessionRsyncCmd(testShell, "/real/.claude/projects/-Users-me-ws/", "u@h:/real/shared/-Users-me-ws")
+	want := Cmd{Name: "rsync", Args: []string{"-a", "-u", "--itemize-changes",
+		"-e", testShell, "/real/.claude/projects/-Users-me-ws/", "u@h:/real/shared/-Users-me-ws/"}}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("cmd = %+v\nwant %+v", got, want)
 	}
 }
 
-func TestRsyncSessionRealRsyncPlacesRelative(t *testing.T) {
-	src, dst := t.TempDir(), t.TempDir()
-	if err := os.MkdirAll(filepath.Join(src, "projects", "-ws"), 0o755); err != nil {
+// Invariant: a destination store dir that is a symlink stays a symlink and
+// the files land behind it. Runs the real rsync (openrsync on macOS).
+func TestRsyncSessionKeepsDestinationSymlink(t *testing.T) {
+	src, dstRoot, shared := t.TempDir(), t.TempDir(), t.TempDir()
+	if err := os.MkdirAll(filepath.Join(src, "projects", "-ws", "memory"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(src, "projects", "-ws", "s.jsonl"), []byte("x"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(src, "projects", "-ws", "memory", "m.md"), []byte("x"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := (ExecRunner{}).Run(context.Background(), SessionRsyncCmd("", src, []string{"projects/-ws/"}, dst)); err != nil {
+	if err := os.Symlink(shared, filepath.Join(dstRoot, "projects")); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := os.Stat(filepath.Join(dst, "projects", "-ws", "s.jsonl")); err != nil {
-		t.Fatalf("session file not at its relative path: %v", err)
+	target := filepath.Join(shared, "-ws")
+	if err := os.MkdirAll(target, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	cmd := SessionRsyncCmd("", filepath.Join(src, "projects", "-ws")+"/", target)
+	if _, err := (ExecRunner{}).Run(context.Background(), cmd); err != nil {
+		t.Fatal(err)
+	}
+	if info, err := os.Lstat(filepath.Join(dstRoot, "projects")); err != nil || info.Mode()&os.ModeSymlink == 0 {
+		t.Fatalf("projects is no longer a symlink: %v %v", info, err)
+	}
+	if _, err := os.Stat(filepath.Join(shared, "-ws", "memory", "m.md")); err != nil {
+		t.Fatalf("file not behind the symlink: %v", err)
 	}
 }
 

@@ -45,15 +45,15 @@ func WorkspaceRsyncArgv(shell, ws, target string, excludes []string) []string {
 	return append(args, ws+"/", target+"/")
 }
 
-// SessionRsyncCmd sends session files by path relative to root: run from
-// root, -R recreates each relative path under target, so differing roots
-// map onto each other. (A /./ anchor would do the same in GNU rsync, but
-// openrsync ignores it and recreates the full source path.) --update never
+// SessionRsyncCmd sends one session path (src, symlinks already resolved;
+// a trailing "/" sends a directory's contents) into dst, the real directory
+// the destination resolved for it. There is no -R: rsync never creates, and
+// so never replaces, an implied parent such as a symlinked projects/. (-K
+// would keep it, but openrsync on macOS fails with it.) --update never
 // overwrites a newer destination file, and nothing is deleted.
-func SessionRsyncCmd(shell, root string, rels []string, target string) Cmd {
-	args := withShell([]string{"-a", "-R", "-u", "--itemize-changes"}, shell)
-	args = append(args, rels...)
-	return Cmd{Name: "rsync", Dir: root, Args: append(args, target+"/")}
+func SessionRsyncCmd(shell, src, dst string) Cmd {
+	args := withShell([]string{"-a", "-u", "--itemize-changes"}, shell)
+	return Cmd{Name: "rsync", Args: append(args, src, strings.TrimSuffix(dst, "/")+"/")}
 }
 
 // StagingRsyncArgv mirrors the staging dir (hook output, harness exports).

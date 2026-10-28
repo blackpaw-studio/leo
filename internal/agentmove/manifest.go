@@ -9,7 +9,10 @@ import (
 )
 
 // Protocol is the move wire protocol version; both ends must speak it.
-const Protocol = 1
+//
+// Protocol 2 adds the session-targets verb: session files are rsynced into
+// the real dirs the destination resolved, never through a symlink.
+const Protocol = 2
 
 // Transfer modes.
 const (
@@ -96,6 +99,15 @@ type Manifest struct {
 	LastMove *time.Time   `json:"last_move,omitempty"`
 	Copy     *CopySpec    `json:"copy,omitempty"`
 	Git      *GitManifest `json:"git,omitempty"`
+	// SessionRels are the session paths the session-targets verb resolves,
+	// relative to the session root (a trailing "/" marks a directory).
+	SessionRels []string `json:"session_rels,omitempty"`
+}
+
+// SessionTargetsResponse answers session-targets: for each rel, in order,
+// the real destination directory its files are rsynced into.
+type SessionTargetsResponse struct {
+	Targets []string `json:"targets"`
 }
 
 // IsCopy reports a copy.

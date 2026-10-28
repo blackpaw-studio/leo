@@ -28,10 +28,12 @@ const (
 	VerbStatus     = "status"
 	VerbGitSeed    = "git-seed"
 	VerbGitPrepare = "git-prepare"
+	// VerbSessionTargets resolves where each session path is rsynced to.
+	VerbSessionTargets = "session-targets"
 )
 
 // Verbs lists every destination verb.
-var Verbs = []string{VerbPreflight, VerbCommit, VerbStatus, VerbGitSeed, VerbGitPrepare}
+var Verbs = []string{VerbPreflight, VerbCommit, VerbStatus, VerbGitSeed, VerbGitPrepare, VerbSessionTargets}
 
 // CodeBadRequest refuses a verb whose body is not a usable manifest.
 const CodeBadRequest = "bad_request"
@@ -130,6 +132,8 @@ func (r *Receiver) Handle(ctx context.Context, verb string, body []byte) ([]byte
 		out, err = r.Preflight(ctx, m)
 	case VerbStatus:
 		out, err = r.Status(m)
+	case VerbSessionTargets:
+		out, err = r.SessionTargets(m)
 	case VerbCommit, VerbGitSeed, VerbGitPrepare:
 		if err := validateManifest(m); err != nil {
 			return nil, err

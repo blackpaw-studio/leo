@@ -189,6 +189,21 @@ func runLine(c Cmd) string {
 	return c.String()
 }
 
+// mirrorSessionTargets answers session-targets with each rel's dir under root.
+func mirrorSessionTargets(root string) func(Manifest) ([]byte, error) {
+	return func(m Manifest) ([]byte, error) {
+		var out SessionTargetsResponse
+		for _, rel := range m.SessionRels {
+			dir := filepath.Join(root, rel)
+			if !strings.HasSuffix(rel, "/") {
+				dir = filepath.Dir(dir)
+			}
+			out.Targets = append(out.Targets, dir)
+		}
+		return json.Marshal(out)
+	}
+}
+
 func jsonAnswer(v any) func(Manifest) ([]byte, error) {
 	return func(Manifest) ([]byte, error) { return json.Marshal(v) }
 }
@@ -285,8 +300,9 @@ func newMoveFixture(t *testing.T) *moveFixture {
 	f.ep = &fakeEndpoint{log: log, answer: map[string]func(Manifest) ([]byte, error){
 		VerbPreflight: jsonAnswer(PreflightResponse{Protocol: Protocol, Host: laptopHost(), OK: true,
 			SessionRoot: "/Users/me/.claude-work", StagingDir: destStage, WSState: WSAbsent}),
-		VerbCommit: jsonAnswer(CommitResult{Name: "web", Status: "running"}),
-		VerbStatus: jsonAnswer(StatusResult{Present: true, Status: "running", Live: true}),
+		VerbSessionTargets: mirrorSessionTargets("/Users/me/.claude-work"),
+		VerbCommit:         jsonAnswer(CommitResult{Name: "web", Status: "running"}),
+		VerbStatus:         jsonAnswer(StatusResult{Present: true, Status: "running", Live: true}),
 	}}
 	var waited []time.Duration
 	f.mv = &Mover{
@@ -311,13 +327,15 @@ func TestMoveHappyPathOrder(t *testing.T) {
 		t.Fatalf("move: %v", err)
 	}
 	stage := StagingDir(f.home, "web")
+	realClaude, _ := filepath.EvalSymlinks(f.claude)
 	want := []string{
 		"lock web move",
 		"verb preflight",
 		"stop web wake=false",
 		"hooks pre_send /bin/export",
 		"run rsync -a --delete --itemize-changes --stats -e ssh -o BatchMode=yes --exclude=node_modules/ --exclude=/.worktrees/ " + f.ws + "/ u@laptop:" + f.ws + "/",
-		"run rsync -a -R -u --itemize-changes -e ssh -o BatchMode=yes projects/" + session.ProjectSlug(f.ws) + "/ u@laptop:/Users/me/.claude-work/ (in " + f.claude + ")",
+		"verb session-targets",
+		"run rsync -a -u --itemize-changes -e ssh -o BatchMode=yes " + realClaude + "/projects/" + session.ProjectSlug(f.ws) + "/ u@laptop:/Users/me/.claude-work/projects/" + session.ProjectSlug(f.ws) + "/",
 		"run rsync -a --delete -e ssh -o BatchMode=yes " + stage + "/ u@laptop:" + destStage + "/",
 		"fence web laptop",
 		"verb commit",
@@ -673,7 +691,8 @@ func TestMoveSessionsFromAgentEnv(t *testing.T) {
 		t.Fatal(err)
 	}
 	sentFrom := func(root string) bool {
-		return slices.ContainsFunc(f.log.all(), func(e string) bool { return strings.HasSuffix(e, "(in "+root+")") })
+		real, _ := filepath.EvalSymlinks(root)
+		return slices.ContainsFunc(f.log.all(), func(e string) bool { return strings.Contains(e, " "+real+"/projects/") })
 	}
 	if !sentFrom(inherited) || sentFrom(f.claude) {
 		t.Fatalf("sessions not sent from the agent's store %s:\n%v", inherited, f.log.all())
@@ -774,6 +793,27 @@ func TestMoveSettledOutcomeLiftsFence(t *testing.T) {
 			}
 			if p := f.src.fence(t, "web"); p != nil {
 				t.Fatalf("fence after a settled outcome = %+v", p)
+			}
+		})
+	}
+}
+
+// The destination's answer is checked: one safe dir per rel, or the move
+// stops with the source recoverable.
+func TestMoveRefusesBadSessionTargets(t *testing.T) {
+	for name, answer := range map[string]SessionTargetsResponse{
+		"too few":  {},
+		"unsafe":   {Targets: []string{"/a b/c"}},
+		"relative": {Targets: []string{"projects/x"}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := newMoveFixture(t)
+			f.ep.answer[VerbSessionTargets] = jsonAnswer(answer)
+			if _, err := f.move(t, false); err == nil {
+				t.Fatal("move succeeded")
+			}
+			if f.log.has("verb commit") {
+				t.Fatalf("committed after a bad answer: %v", f.log.all())
 			}
 		})
 	}
