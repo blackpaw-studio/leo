@@ -336,7 +336,7 @@ func TestMoveHappyPathOrder(t *testing.T) {
 		"run rsync -a --delete --itemize-changes --stats -e ssh -o BatchMode=yes --exclude=node_modules/ --exclude=/.worktrees/ " + f.ws + "/ u@laptop:" + f.ws + "/",
 		"verb session-targets",
 		"run rsync -a -u --itemize-changes -e ssh -o BatchMode=yes " + realClaude + "/projects/" + session.ProjectSlug(f.ws) + "/ u@laptop:/Users/me/.claude-work/projects/" + session.ProjectSlug(f.ws) + "/",
-		"run rsync -a --delete -e ssh -o BatchMode=yes " + stage + "/ u@laptop:" + destStage + "/",
+		"run rsync -a --delete --itemize-changes -e ssh -o BatchMode=yes " + stage + "/ u@laptop:" + destStage + "/",
 		"fence web laptop",
 		"verb commit",
 		"mark web laptop laptop",
@@ -841,5 +841,32 @@ func TestMoveRefusesMissingSourceTranscript(t *testing.T) {
 				t.Fatalf("something ran before the refusal: %v", f.log.all())
 			}
 		})
+	}
+}
+
+// The job result carries each rsync stage's itemized changes, so a move can
+// be audited after the fact.
+func TestMoveResultListsItemizedChangesPerStage(t *testing.T) {
+	f := newMoveFixture(t)
+	f.runner.answer = func(c Cmd) ([]byte, error) {
+		switch {
+		case strings.Contains(c.String(), "--stats"):
+			return []byte(">f+++++++++ notes.txt\n*deleting   old.txt\n\nNumber of files: 2\n"), nil
+		case strings.Contains(c.String(), "/projects/"):
+			return []byte(">f+++++++++ sid-1.jsonl\n"), nil
+		}
+		return nil, nil
+	}
+	res, err := f.move(t, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []RsyncStage{
+		{Stage: StageWorkspace, Total: 2, Lines: []string{">f+++++++++ notes.txt", "*deleting   old.txt"}},
+		{Stage: StageSessions, Total: 1, Lines: []string{">f+++++++++ sid-1.jsonl"}},
+		{Stage: StageStaging, Total: 0, Lines: []string{}},
+	}
+	if !reflect.DeepEqual(res.Rsync, want) {
+		t.Fatalf("Rsync = %+v\nwant %+v", res.Rsync, want)
 	}
 }

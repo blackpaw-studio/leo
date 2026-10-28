@@ -1,6 +1,7 @@
 package agentmove
 
 import (
+	"bytes"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -58,7 +59,7 @@ func SessionRsyncCmd(shell, src, dst string) Cmd {
 
 // StagingRsyncArgv mirrors the staging dir (hook output, harness exports).
 func StagingRsyncArgv(shell, stage, target string) []string {
-	return append(withShell([]string{"-a", "--delete"}, shell), stage+"/", target+"/")
+	return append(withShell([]string{"-a", "--delete", "--itemize-changes"}, shell), stage+"/", target+"/")
 }
 
 // ModulesRsyncArgv mirrors the agent's private submodule git dirs (S5m).
@@ -142,4 +143,49 @@ func (w WorkspaceSpec) Excludes() []string {
 		out = append(out, "/"+strings.Trim(p, "/")+"/")
 	}
 	return out
+}
+
+// MaxItemizedLines caps the itemized changes a stage keeps in the result.
+const MaxItemizedLines = 200
+
+// itemized matches one --itemize-changes line: a deletion, or an update
+// flag block (type, then eleven attribute flags) before the path.
+var itemized = regexp.MustCompile(`^(\*deleting\s|[<>ch.][fdLDS][.+?a-zA-Z]{9}\s)`)
+
+// ItemizedLines picks the itemized change lines out of rsync's stdout,
+// dropping the file-list banner and --stats summary.
+func ItemizedLines(out []byte) []string {
+	lines := []string{}
+	for _, l := range bytes.Split(out, []byte("\n")) {
+		if itemized.Match(l) {
+			lines = append(lines, string(l))
+		}
+	}
+	return lines
+}
+
+// RsyncStage is one rsync stage's itemized changes: the first
+// MaxItemizedLines of Total, Truncated being the rest.
+type RsyncStage struct {
+	Stage     string   `json:"stage"`
+	Total     int      `json:"total"`
+	Lines     []string `json:"lines"`
+	Truncated int      `json:"truncated,omitempty"`
+}
+
+func newRsyncStage(stage string, lines []string) RsyncStage {
+	st := RsyncStage{Stage: stage, Lines: []string{}}
+	st.add(lines)
+	return st
+}
+
+// add records more itemized lines, keeping only up to the cap.
+func (s *RsyncStage) add(lines []string) {
+	s.Total += len(lines)
+	room := MaxItemizedLines - len(s.Lines)
+	if room > len(lines) {
+		room = len(lines)
+	}
+	s.Lines = append(s.Lines, lines[:room]...)
+	s.Truncated = s.Total - len(s.Lines)
 }

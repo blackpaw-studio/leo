@@ -79,6 +79,8 @@ type Result struct {
 	Workspace string    `json:"workspace"`
 	Branch    string    `json:"branch,omitempty"`
 	Notes     []Problem `json:"notes,omitempty"`
+	// Rsync lists what each rsync stage changed, in the order they ran.
+	Rsync []RsyncStage `json:"rsync,omitempty"`
 }
 
 // Progress hears a job's stages and notes as they happen.
@@ -204,6 +206,8 @@ type transfer struct {
 	env     map[string]string
 	prep    GitPrepareResult
 	notes   []Problem
+	// rsyncs are the itemized changes of each rsync stage run so far.
+	rsyncs []RsyncStage
 	// A copy's candidate names, its source branch and pre-issued fork id.
 	names     []string
 	curBranch string
@@ -507,7 +511,7 @@ func (t *transfer) send(ctx context.Context) (Result, error) {
 func (t *transfer) result() Result {
 	return Result{
 		Name: t.m.TargetName(), Host: t.resp.Host.Hostname, To: t.ep.Name(),
-		Workspace: t.m.TargetWorkspace(), Branch: t.m.TargetBranch(), Notes: t.notes,
+		Workspace: t.m.TargetWorkspace(), Branch: t.m.TargetBranch(), Notes: t.notes, Rsync: t.rsyncs,
 	}
 }
 
@@ -703,14 +707,14 @@ func (t *transfer) rsyncAll(ctx context.Context, stage string, ids []string) err
 	if t.isCopy() {
 		target += PartialSuffix
 	}
-	t.p.Stage(StageWorkspace)
+	t.beginRsync(StageWorkspace)
 	if err := t.rsync(ctx, WorkspaceRsyncArgv(shell, ws, t.ep.Target(target), spec.Excludes())); err != nil {
 		return err
 	}
 	if err := t.rsyncSessions(ctx, ids); err != nil {
 		return err
 	}
-	t.p.Stage(StageStaging)
+	t.beginRsync(StageStaging)
 	if err := t.rsync(ctx, StagingRsyncArgv(shell, stage, t.ep.Target(t.resp.StagingDir))); err != nil {
 		return err
 	}
@@ -718,7 +722,7 @@ func (t *transfer) rsyncAll(ctx context.Context, stage string, ids []string) err
 	if !t.gitMode() || src == "" || !isDir(src) {
 		return nil
 	}
-	t.p.Stage(StageModules)
+	t.beginRsync(StageModules)
 	dst := ModulesTarget(t.isCopy(), t.prep.ModulesDir, t.prep.GitDir)
 	if err := ValidatePath(src); err != nil {
 		return err
@@ -748,7 +752,7 @@ func (t *transfer) rsyncSessions(ctx context.Context, ids []string) error {
 			return err
 		}
 	}
-	t.p.Stage(StageSessions)
+	t.beginRsync(StageSessions)
 	return t.sendSessions(ctx, root, rels)
 }
 
@@ -801,13 +805,23 @@ func resolveSessionSource(root, rel string) (string, error) {
 	return real, nil
 }
 
+// beginRsync reports an rsync stage and opens its itemized record.
+func (t *transfer) beginRsync(stage string) {
+	t.p.Stage(stage)
+	t.rsyncs = append(t.rsyncs, newRsyncStage(stage, nil))
+}
+
 func (t *transfer) rsync(ctx context.Context, argv []string) error {
 	return t.run(ctx, Cmd{Name: "rsync", Args: argv})
 }
 
 func (t *transfer) run(ctx context.Context, c Cmd) error {
-	if _, err := t.mv.Runner.Run(ctx, c); err != nil {
+	out, err := t.mv.Runner.Run(ctx, c)
+	if err != nil {
 		return fmt.Errorf("%s to %s: %w", c.Name, t.ep.Name(), err)
+	}
+	if c.Name == "rsync" && len(t.rsyncs) > 0 {
+		t.rsyncs[len(t.rsyncs)-1].add(ItemizedLines(out))
 	}
 	return nil
 }

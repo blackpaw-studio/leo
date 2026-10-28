@@ -67,7 +67,7 @@ func TestMoveWorktreeHappyPathOrder(t *testing.T) {
 		"run rsync -a --delete --itemize-changes --stats -e ssh -o BatchMode=yes --exclude=node_modules/ --exclude=/.worktrees/ --exclude=/.git " + f.ws + "/ u@laptop:" + f.ws + "/",
 		"verb session-targets",
 		"run rsync -a -u --itemize-changes -e ssh -o BatchMode=yes " + realClaude + "/projects/" + session.ProjectSlug(f.ws) + "/ u@laptop:/Users/me/.claude-work/projects/" + session.ProjectSlug(f.ws) + "/",
-		"run rsync -a --delete -e ssh -o BatchMode=yes " + stage + "/ u@laptop:" + destStage + "/",
+		"run rsync -a --delete --itemize-changes -e ssh -o BatchMode=yes " + stage + "/ u@laptop:" + destStage + "/",
 		"fence web laptop",
 		"verb commit",
 		"mark web laptop laptop",

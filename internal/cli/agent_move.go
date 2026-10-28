@@ -341,5 +341,12 @@ func printJobDone(st agentmove.JobStatus) {
 	} else {
 		fmt.Fprintf(agentStdout, "moved %s to %s (%s)\n", r.Name, r.To, r.Host)
 	}
+	for _, st := range r.Rsync {
+		changes := "no changes"
+		if st.Total > 0 {
+			changes = fmt.Sprintf("%d changes", st.Total)
+		}
+		fmt.Fprintf(agentStdout, "  %s: %s\n", st.Stage, changes)
+	}
 	fmt.Fprintf(agentStdout, "attach with: leo %sagent attach %s\n", hostFlag, r.Name)
 }

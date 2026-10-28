@@ -76,8 +76,13 @@ The move runs as a job in the source daemon, so interrupting the command does no
 
 ```
 moved web to laptop (laptop.lan)
+  rsync-workspace: 12 changes
+  rsync-sessions: 3 changes
+  rsync-staging: no changes
 attach with: leo --host laptop agent attach web
 ```
+
+Each rsync stage (`rsync-workspace`, `rsync-sessions`, `rsync-staging`, `rsync-modules`) reports how many changes it made. With `--json` the result carries them in `rsync`, one entry per stage in the order they ran: `{"stage", "total", "lines", "truncated"}`. `lines` are rsync's `--itemize-changes` lines (including deletions), capped at 200 per stage; `truncated` counts the rest.
 
 ### MCP and HTTP
 
@@ -95,7 +100,7 @@ attach with: leo --host laptop agent attach web
 | Part | How |
 |---|---|
 | Workspace | rsync over ssh with `--delete` (the source wins), uncommitted and untracked files included, minus `move.exclude`. In a plain repo, `.git` travels too. |
-| Conversation | The harness's session files for this agent: Claude's transcript and sidecars, or Codex's rollouts. They go with `--update` and no delete, so a newer file on the destination is never overwritten. opencode sessions go by `opencode export` / `import` through staging. |
+| Conversation | The harness's session files for this agent: Claude's transcript and sidecars, or Codex's rollouts. They go with `--update` and no delete, so a newer file on the destination is never overwritten. A store directory on the destination may be a symlink (a shared `projects/` tree): the destination resolves each path to its real directory first (`session-targets`, move protocol 2) and the files are rsynced straight into it, so a symlink is never replaced. opencode sessions go by `opencode export` / `import` through staging. |
 | Project memory | Claude's `projects/<encoded path>/memory/`, sent with `--update` and no delete. |
 | Hook staging | `LEO_MOVE_DIR`, carried from `pre_send` to `post_receive`. |
 | Agent record | Name, template, environments, session id, repo and branch. The destination creates or updates its record and starts the agent, which resumes the session. |
@@ -223,6 +228,7 @@ If the destination is gone for good (wiped, decommissioned, never coming back), 
 | `harness_mismatch`, `harness_binary_missing` | The destination's template uses another harness, or its binary is missing. |
 | `harness_unsupported` | The harness cannot move (or, for a copy, fork) a session. |
 | `session_root_missing` | The destination lacks the harness's config dir. |
+| `session_missing` | The source has no transcript for the agent's resume session (the message names the path searched). Nothing was stopped; the destination would otherwise resume another session of the same workspace. |
 | `name_taken`, `workspace_in_use`, `workspace_exists` | The destination already has that name or path. |
 | `unsafe_path`, `unsafe_ref` | A path or ref outside the safe character set. |
 | `canonical_missing`, `canonical_mismatch` | No usable canonical clone on the destination. |

@@ -387,3 +387,25 @@ func TestAgentMoveAbandonRemote(t *testing.T) {
 		t.Fatalf("--abandon-remote with --reconcile = %v, want a refusal", err)
 	}
 }
+
+func TestAgentMovePrintsRsyncSummaryPerStage(t *testing.T) {
+	path, home := newAgentWorktreeTestConfig(t)
+	out, _ := withStubStdio(t)
+	final := agentmove.JobStatus{ID: "mv-1", State: agentmove.JobDone, Stages: stages("validate", "commit"),
+		Result: &agentmove.Result{Name: "x", Host: "mbp", To: "laptop", Rsync: []agentmove.RsyncStage{
+			{Stage: "rsync-workspace", Total: 3, Lines: []string{"a", "b", "c"}},
+			{Stage: "rsync-sessions", Total: 250, Lines: make([]string, 200), Truncated: 50},
+			{Stage: "rsync-staging", Lines: []string{}},
+		}}}
+	startMoveDaemon(t, home, &moveDaemon{polls: []agentmove.JobStatus{final}})
+	root := newRootCmd()
+	root.SetArgs([]string{"--config", path, "agent", "move", "x", "--to", "laptop"})
+	if err := root.Execute(); err != nil {
+		t.Fatalf("execute: %v", err)
+	}
+	for _, want := range []string{"rsync-workspace: 3 changes", "rsync-sessions: 250 changes", "rsync-staging: no changes"} {
+		if !strings.Contains(out.String(), want) {
+			t.Errorf("output lacks %q:\n%s", want, out)
+		}
+	}
+}

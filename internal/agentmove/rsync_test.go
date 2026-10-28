@@ -68,7 +68,7 @@ func TestRsyncSessionKeepsDestinationSymlink(t *testing.T) {
 
 func TestStagingRsyncArgv(t *testing.T) {
 	got := StagingRsyncArgv(testShell, "/s/moves/a/staging", "u@h:/d/moves/a/staging")
-	want := []string{"-a", "--delete", "-e", testShell, "/s/moves/a/staging/", "u@h:/d/moves/a/staging/"}
+	want := []string{"-a", "--delete", "--itemize-changes", "-e", testShell, "/s/moves/a/staging/", "u@h:/d/moves/a/staging/"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("argv = %q, want %q", got, want)
 	}
@@ -121,5 +121,26 @@ func TestValidatePathRejectsShellMeta(t *testing.T) {
 		if err := ValidatePath(bad); err == nil {
 			t.Errorf("ValidatePath(%q) accepted", bad)
 		}
+	}
+}
+
+// Only itemized change lines count: --stats' summary and rsync's chatter
+// are dropped, deletions are kept.
+func TestItemizedLines(t *testing.T) {
+	out := []byte("sending incremental file list\n>f+++++++++ a.txt\ncd+++++++++ sub/\n*deleting   gone.txt\n.d..t...... ./\n\nNumber of files: 4 (reg: 2, dir: 2)\nTotal file size: 10 bytes\n")
+	want := []string{">f+++++++++ a.txt", "cd+++++++++ sub/", "*deleting   gone.txt", ".d..t...... ./"}
+	if got := ItemizedLines(out); !reflect.DeepEqual(got, want) {
+		t.Fatalf("ItemizedLines = %q, want %q", got, want)
+	}
+}
+
+func TestRsyncStageCapsLines(t *testing.T) {
+	var lines []string
+	for i := 0; i < MaxItemizedLines+30; i++ {
+		lines = append(lines, ">f+++++++++ f")
+	}
+	st := newRsyncStage("rsync-workspace", lines)
+	if len(st.Lines) != MaxItemizedLines || st.Total != MaxItemizedLines+30 || st.Truncated != 30 {
+		t.Fatalf("stage = lines %d total %d truncated %d", len(st.Lines), st.Total, st.Truncated)
 	}
 }
