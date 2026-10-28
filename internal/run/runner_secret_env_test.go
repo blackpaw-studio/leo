@@ -122,3 +122,46 @@ func TestRunWithSecretFailureNeverExecs(t *testing.T) {
 	}
 	assertNoFileContains(t, cfg.HomePath, secretSentinel)
 }
+
+// A child that prints its secret, in plain output and in its result's
+// errors, leaves no trace of the value in anything leo keeps or returns:
+// the task log, the returned error, the failure card, or the notify-on-fail
+// child's prompt and appended output.
+func TestRunWithRedactsSecretFromChildOutput(t *testing.T) {
+	cards := stubFailureCards(t, nil)
+	orig := execCommand
+	defer func() { execCommand = orig }()
+	cfg := secretTaskConfig(t)
+	task := cfg.Tasks["mytask"]
+	task.NotifyOnFail = true
+	task.Channels = []string{"plugin:telegram@claude-plugins-official"}
+	cfg.Tasks["mytask"] = task
+	var argvs []string
+	execCommand = func(_ string, args ...string) *exec.Cmd {
+		argvs = append(argvs, strings.Join(args, " "))
+		return exec.Command("sh", "-c", `echo "plain $OP_TOKEN"; printf '{"type":"result","subtype":"error_during_execution","is_error":true,"errors":["bad token %s"]}\n' "$OP_TOKEN"`)
+	}
+	err := RunWith(cfg, "mytask", nil, leomcp.Server{}, config.Expander{Secrets: &fakeSecrets{value: secretSentinel}})
+	if err == nil || strings.Contains(err.Error(), secretSentinel) || !strings.Contains(err.Error(), "<secret OP_TOKEN>") {
+		t.Errorf("returned error = %v", err)
+	}
+	if len(*cards) != 1 || strings.Contains((*cards)[0].Error, secretSentinel) || !strings.Contains((*cards)[0].Error, "<secret OP_TOKEN>") {
+		t.Errorf("failure cards = %+v", *cards)
+	}
+	if len(argvs) != 2 {
+		t.Fatalf("children = %d, want the task and its notify child", len(argvs))
+	}
+	for _, a := range argvs {
+		if strings.Contains(a, secretSentinel) {
+			t.Errorf("a child's argv carries the value: %s", a)
+		}
+	}
+	logs, _ := filepath.Glob(filepath.Join(cfg.HomePath, "state", "logs", "mytask-*.log"))
+	if len(logs) != 1 {
+		t.Fatalf("logs = %v", logs)
+	}
+	if data, _ := os.ReadFile(logs[0]); strings.Count(string(data), "<secret OP_TOKEN>") < 4 {
+		t.Errorf("log lacks the redacted value in both outputs:\n%s", data)
+	}
+	assertNoFileContains(t, cfg.HomePath, secretSentinel)
+}

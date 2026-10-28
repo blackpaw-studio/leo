@@ -9,6 +9,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -25,6 +26,7 @@ import (
 	"github.com/blackpaw-studio/leo/internal/harness"
 	claudeharness "github.com/blackpaw-studio/leo/internal/harness/claude"
 	"github.com/blackpaw-studio/leo/internal/leomcp"
+	"github.com/blackpaw-studio/leo/internal/redact"
 	"github.com/blackpaw-studio/leo/internal/tmux"
 )
 
@@ -154,7 +156,12 @@ type runState struct {
 	// mcpEnv is the leo MCP environment of the headless child (see
 	// Dispatcher.headlessChildMCP); it carries the daemon token, so it is
 	// process env only and never persisted or logged.
-	mcpEnv         map[string]string
+	mcpEnv map[string]string
+	// scrub replaces the run's resolved secret values in what its child
+	// printed before any of it is recorded or returned. It holds values, so
+	// it lives in memory only: an interactive run adopted after a daemon
+	// restart (adoptRestarted) has none, and its later turns go unredacted.
+	scrub          *redact.Secrets
 	record         Record
 	handle         Handle
 	done           chan struct{}
@@ -382,7 +389,7 @@ func (d *Dispatcher) Start(_ context.Context, cfg *config.Config, req Request) (
 	if err != nil {
 		return Started{}, err
 	}
-	tmplEnv, err := cfg.DispatchEnv(tmpl, inherited, d.Env)
+	tmplEnv, secretValues, err := cfg.DispatchLaunchEnv(tmpl, inherited, d.Env)
 	if err != nil {
 		return Started{}, invalidf("template %q: %v", req.Template, err)
 	}
@@ -454,6 +461,7 @@ func (d *Dispatcher) Start(_ context.Context, cfg *config.Config, req Request) (
 	}
 	runCtx, cancel := context.WithCancel(d.daemonCtx)
 	state := newRunState(rec, handle, make(chan struct{}), cancel)
+	state.scrub = redact.NewSecrets(secretValues)
 	if mode == ModeHeadless {
 		state.record.Turns = append(state.record.Turns, Turn{TurnID: rec.ID + "#1", Source: TurnSourceOrchestrator, StartedAt: rec.StartedAt, Delivered: true, Text: req.Prompt})
 		d.beginUsageInvocationLocked(state)
@@ -620,7 +628,10 @@ func (d *Dispatcher) runInvocation(parent context.Context, state *runState, done
 	// value: os/exec only serializes concurrent writes to a shared output
 	// when the two are the same value, so this keeps the harness's combined
 	// output in order — the behavior CombinedOutput used to supply.
-	tee := &recordingTee{handle: state.handle}
+	d.mu.Lock()
+	recording := state.scrub.Writer(state.handle)
+	d.mu.Unlock()
+	tee := &recordingTee{handle: recording}
 	if factory, ok := h.(harness.UsageAccounter); ok {
 		tee.usage = factory.NewUsageAccumulator()
 		tee.onUsage = func(usage *harness.Usage) {
@@ -654,6 +665,9 @@ func (d *Dispatcher) runInvocation(parent context.Context, state *runState, done
 		notifyLaunch(nil)
 		runErr = cmd.Wait()
 	}
+	tee.mu.Lock()
+	_ = recording.Flush() // best-effort, as the recording's other writes are
+	tee.mu.Unlock()
 	parsed, parseErr := h.ParseEvents(bytes.NewReader(tee.Bytes()))
 	if parsed.Usage != nil {
 		d.mu.Lock()
@@ -1348,7 +1362,7 @@ func finish(handle Handle, id string, status Status, cause error) {
 type recordingTee struct {
 	mu      sync.Mutex
 	buf     bytes.Buffer
-	handle  Handle
+	handle  io.Writer
 	usage   harness.UsageAccumulator
 	pending []byte
 	onUsage func(*harness.Usage)

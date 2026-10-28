@@ -50,6 +50,13 @@ templates.coder.env.OP_TOKEN: secret keychain(service=OP): item not found
 
 There is no fallback to an empty string. `restart`, `reset` and `set-environment` resolve before stopping the agent, so a failure leaves it running. At boot restore an agent whose secret fails is marked failed with `secret unavailable: …`; an agent whose tmux session survived a daemon restart is adopted as is. The supervisor never relaunches an agent without its secrets: when a crash restart (or the end of an adopted session) needs a reference that does not resolve, it logs the named reference and retries with backoff until it does. A failed command reports only its exit status, never its stderr, since that may echo what it read.
 
+## Output redaction
+
+A child that prints its own secret (a token echoed in an error, say) does not carry the value into what leo keeps or returns. Every resolved value of a task run or dispatch is replaced with `<secret KEY>` in the task log and history, the returned and notified error, the failure card, a dispatch's recording (`leo dispatch output`), its wait result, and an interactive dispatch's turn text. A headless follow-up that resolved a rotated value masks both the old and the new value.
+
+- **Threshold.** Values shorter than 4 bytes are never replaced: a PIN or `on` would match ordinary output everywhere and shred it. Keep secrets you want masked at 4 bytes or longer.
+- **Not covered.** Only literal occurrences are masked, not an encoded or split form (base64, URL-escaped). An interactive dispatch adopted after a daemon restart has no values to mask with, so its later turn text is not redacted. Output leo never stores is out of scope: a tmux pane's scrollback and the harness's own transcript files.
+
 ## `leo validate`
 
 `leo validate` resolves every reference a configured launch would resolve: each template's and task's effective env (shadowed keys skipped, as at launch), plus the references of any environment nothing in config names, since only a spawn-time `--environment` list applies those. Each distinct reference resolves once. A failure is an ERROR naming scope, key and reference. A backend that cannot run in the validating process is a WARN: another platform's store, or `systemd-creds` with `CREDENTIALS_DIRECTORY` unset, which is normal outside the unit. Neither text nor `--json` output carries a value.

@@ -159,11 +159,18 @@ func (c *Config) validateEnvironmentList(path string, names []string) []string {
 // TaskEnv is the environment a task's process runs with: the task's (or
 // defaults') named environments beneath its literal `env:` map.
 func (c *Config) TaskEnv(t TaskConfig, x Expander) (map[string]string, error) {
+	env, _, err := c.TaskLaunchEnv(t, x)
+	return env, err
+}
+
+// TaskLaunchEnv is TaskEnv plus the resolved value of each of its secret
+// keys, which the caller scrubs from the child's output.
+func (c *Config) TaskLaunchEnv(t TaskConfig, x Expander) (env, secrets map[string]string, err error) {
 	layer, err := c.TaskEnvLayer(t, x)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	return x.ResolveLayer(layer)
+	return x.resolveWithSecrets(layer)
 }
 
 // TaskEnvLayer is TaskEnv before resolution: the merged layer whose Secrets
@@ -251,19 +258,26 @@ func (c *Config) DispatchEnvironmentNames(tmpl TemplateConfig, inherited []strin
 // inherited named environments layered on top, so the caller wins any key
 // both set. With no inherited names it equals TemplateEnv.
 func (c *Config) DispatchEnv(tmpl TemplateConfig, inherited []string, x Expander) (map[string]string, error) {
+	env, _, err := c.DispatchLaunchEnv(tmpl, inherited, x)
+	return env, err
+}
+
+// DispatchLaunchEnv is DispatchEnv plus the resolved value of each of its
+// secret keys, which the caller scrubs from the child's output.
+func (c *Config) DispatchLaunchEnv(tmpl TemplateConfig, inherited []string, x Expander) (env, secrets map[string]string, err error) {
 	named, err := c.NamedLayer(c.EnvironmentNames(nil, tmpl.Environments), x)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	lit, err := x.LiteralLayer("env", tmpl.Env)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	top, err := c.NamedLayer(inherited, x)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	return x.ResolveLayer(MergeLayers(named, lit, top))
+	return x.resolveWithSecrets(MergeLayers(named, lit, top))
 }
 
 // EnvironmentKeys lists, sorted, every variable a named environment or a

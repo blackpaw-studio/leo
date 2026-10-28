@@ -152,6 +152,29 @@ func resolutionError(sr ScopedRef, err error) *SecretResolutionError {
 	return out
 }
 
+// resolveWithSecrets is ResolveLayer plus the value each of l's secret keys
+// resolved to.
+func (x Expander) resolveWithSecrets(l EnvLayer) (env, secrets map[string]string, err error) {
+	env, err = x.ResolveLayer(l)
+	if err != nil {
+		return nil, nil, err
+	}
+	return env, SecretValues(l, env), nil
+}
+
+// SecretValues is the value env, which ResolveLayer built from l, holds for
+// each of l's secret keys; nil when l has none.
+func SecretValues(l EnvLayer, env map[string]string) map[string]string {
+	if len(l.Secrets) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(l.Secrets))
+	for k := range l.Secrets {
+		out[k] = env[k]
+	}
+	return out
+}
+
 // expandRefPath is sr's reference with a file path's variables and leading
 // ~ expanded, as a literal's would be.
 func (x Expander) expandRefPath(sr ScopedRef) (secretenv.Ref, error) {
