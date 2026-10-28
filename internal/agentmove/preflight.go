@@ -42,15 +42,35 @@ func CheckDestination(m Manifest, d DestFacts) []Problem {
 
 func checkAgentConfig(m Manifest, d DestFacts) *Problem {
 	if m.Agent.Template != "" && !d.TemplateFound {
+		if d.TemplateInvalid != "" {
+			return problemf(CodeTemplateMissing, "template %q is invalid on %s: %s", m.Agent.Template, d.Host.Hostname, d.TemplateInvalid)
+		}
 		return problemf(CodeTemplateMissing, "template %q is not defined on %s; add it there first", m.Agent.Template, d.Host.Hostname)
 	}
 	if len(d.MissingEnvironments) > 0 {
-		return problemf(CodeEnvironmentMissing, "environment(s) %s are not defined on %s", strings.Join(d.MissingEnvironments, ", "), d.Host.Hostname)
+		return problemf(CodeEnvironmentMissing, "%s", missingEnvironments(d))
 	}
 	if d.EnvError != "" {
 		return problemf(CodeEnvironmentMissing, "the agent's env cannot be resolved on %s: %s", d.Host.Hostname, d.EnvError)
 	}
 	return nil
+}
+
+// missingEnvironments words the refusal for d's missing environments, with
+// the reason for each one a followed lead defines but this host isolated.
+func missingEnvironments(d DestFacts) string {
+	var undefined, invalid []string
+	for _, n := range d.MissingEnvironments {
+		if reason, ok := d.InvalidEnvironments[n]; ok {
+			invalid = append(invalid, fmt.Sprintf("environment %q is invalid on %s: %s", n, d.Host.Hostname, reason))
+		} else {
+			undefined = append(undefined, n)
+		}
+	}
+	if len(undefined) > 0 {
+		invalid = append(invalid, fmt.Sprintf("environment(s) %s are not defined on %s", strings.Join(undefined, ", "), d.Host.Hostname))
+	}
+	return strings.Join(invalid, "; ")
 }
 
 func checkHarness(m Manifest, d DestFacts) *Problem {

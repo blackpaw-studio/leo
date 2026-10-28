@@ -150,3 +150,19 @@ func TestValidatorsReturnCodes(t *testing.T) {
 		t.Errorf("ValidateRef = %v, want unsafe_ref", err)
 	}
 }
+
+func TestCheckDestinationQuotesTheInvalidReason(t *testing.T) {
+	m, d := moveManifest(), okFacts()
+	d.TemplateFound, d.TemplateInvalid = false, `harness "nope" is unknown`
+	got := CheckDestination(m, d)
+	if len(got) != 1 || !strings.Contains(got[0].Message, `harness "nope" is unknown`) || strings.Contains(got[0].Message, "add it there first") {
+		t.Fatalf("template problems = %+v", got)
+	}
+	d = okFacts()
+	d.MissingEnvironments = []string{"badenv", "gone"}
+	d.InvalidEnvironments = map[string]string{"badenv": "bad var name"}
+	got = CheckDestination(m, d)
+	if len(got) != 1 || !strings.Contains(got[0].Message, "bad var name") || !strings.Contains(got[0].Message, "gone") {
+		t.Fatalf("environment problems = %+v", got)
+	}
+}

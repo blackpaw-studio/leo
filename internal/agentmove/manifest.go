@@ -172,10 +172,16 @@ type GitPreflight struct {
 // DestFacts is what the destination observed about itself for a manifest;
 // CheckDestination judges them.
 type DestFacts struct {
-	Host                Host
-	TemplateFound       bool
-	TemplateHarness     string
+	Host            Host
+	TemplateFound   bool
+	TemplateHarness string
+	// TemplateInvalid is why a followed lead's template was isolated here,
+	// "" when it is simply not defined.
+	TemplateInvalid     string
 	MissingEnvironments []string
+	// InvalidEnvironments maps a missing environment to why a followed
+	// lead's definition of it was isolated here.
+	InvalidEnvironments map[string]string
 	// EnvError is why the agent's env cannot be resolved here, "" when it can.
 	EnvError string
 	// HarnessBinary is the resolved harness executable, "" when missing.

@@ -531,3 +531,64 @@ func TestSessionTargetsRefuseEscapingRels(t *testing.T) {
 		}
 	}
 }
+
+// loadFollowerWithInvalidLead is a follower whose lead's template "bad" and
+// environment "badenv" are isolated as invalid on this host; the local
+// template "mine" uses badenv.
+func loadFollowerWithInvalidLead(t *testing.T) *config.Config {
+	t.Helper()
+	dir := t.TempDir()
+	data := []byte(`{"schema":1,"kind":"leo.follow.export","leo_version":"v0.64.0","home_id":"ab","revision":"sha256:r",` +
+		`"templates":{"bad":{"harness":"nope"}},"environments":{"badenv":{"1X":"y"}}}`)
+	exp, err := config.ParseFollowExport(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = config.WriteFollowCache(filepath.Join(dir, "state"), config.FollowCache{
+		Host: "lead", PulledAt: time.Now(), LeadRevision: exp.Revision, Digest: exp.Digest(), Export: json.RawMessage(data),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	yaml := "client:\n  default_host: localhost\n  hosts:\n    lead: {ssh: evan@10.0.2.10}\nfollow:\n  host: lead\n" +
+		"templates:\n  mine:\n    environments: [badenv]\n"
+	path := filepath.Join(dir, "leo.yaml")
+	if err := os.WriteFile(path, []byte(yaml), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := config.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return cfg
+}
+
+// A lead entry that is invalid here is not "missing": the refusal carries
+// the reason the follower isolated it for, not "add it there first".
+func TestPreflightReportsWhyALeadEntryIsInvalid(t *testing.T) {
+	cfg := loadFollowerWithInvalidLead(t)
+	for _, tt := range []struct {
+		template, code, reason string
+	}{
+		{"bad", CodeTemplateMissing, "nope"},
+		{"mine", CodeEnvironmentMissing, `"1X"`},
+	} {
+		t.Run(tt.template, func(t *testing.T) {
+			f := newReceiverFixture(t)
+			f.r.Config = func() (*config.Config, error) { return cfg, nil }
+			m := f.manifest()
+			m.Agent.Template = tt.template
+			var resp PreflightResponse
+			if err := f.call(t, VerbPreflight, m, &resp); err != nil {
+				t.Fatal(err)
+			}
+			if resp.OK || codes(resp.Problems) != tt.code {
+				t.Fatalf("problems = %+v, want %s", resp.Problems, tt.code)
+			}
+			msg := resp.Problems[0].Message
+			if !strings.Contains(msg, tt.reason) || strings.Contains(msg, "add it there first") {
+				t.Fatalf("message = %q, want the isolation reason %s", msg, tt.reason)
+			}
+		})
+	}
+}

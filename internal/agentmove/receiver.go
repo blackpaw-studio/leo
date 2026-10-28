@@ -217,15 +217,25 @@ func (r *Receiver) Preflight(ctx context.Context, m Manifest) (PreflightResponse
 
 func (r *Receiver) facts(ctx context.Context, cfg *config.Config, host Host, m Manifest) DestFacts {
 	d := DestFacts{Host: host, StagingDir: StagingDir(cfg.HomePath, m.TargetName())}
-	tmpl, found := cfg.Templates[m.Agent.Template]
+	tmpl, err := cfg.LookupTemplate(m.Agent.Template)
+	found := err == nil
 	d.TemplateFound = found
 	if found {
 		d.TemplateHarness = cfg.TemplateHarness(tmpl)
+	} else if inv := (*config.InvalidEntryError)(nil); errors.As(err, &inv) {
+		d.TemplateInvalid = inv.Reason
 	}
-	names := cfg.EnvironmentNames(m.Agent.Environments, tmpl.Environments)
-	for _, n := range names {
-		if _, ok := cfg.Environments[n]; !ok {
-			d.MissingEnvironments = append(d.MissingEnvironments, n)
+	for _, n := range cfg.EnvironmentNames(m.Agent.Environments, tmpl.Environments) {
+		_, err := cfg.LookupEnvironment(n)
+		if err == nil {
+			continue
+		}
+		d.MissingEnvironments = append(d.MissingEnvironments, n)
+		if inv := (*config.InvalidEntryError)(nil); errors.As(err, &inv) {
+			if d.InvalidEnvironments == nil {
+				d.InvalidEnvironments = map[string]string{}
+			}
+			d.InvalidEnvironments[n] = inv.Reason
 		}
 	}
 	if h, err := harness.Get(orClaude(m.Agent.Harness)); err == nil {
