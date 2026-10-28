@@ -11,9 +11,17 @@ import (
 	"maps"
 )
 
-// FollowExportSchema is the export format this build reads and writes.
-// Adding fields does not bump it; a follower refuses a newer one.
-const FollowExportSchema = 1
+// FollowExportSchema is the newest export format this build reads and
+// writes. Adding fields does not bump it; a follower refuses a newer one.
+const FollowExportSchema = followSchemaRefs
+
+// An export is written at the oldest schema that can carry it, so a lead
+// with no secret reference in a synced section still serves followers that
+// predate references.
+const (
+	followSchemaPlain = 1
+	followSchemaRefs  = 2 // a synced env value may be a secret reference
+)
 
 // FollowExportKind tags the export document.
 const FollowExportKind = "leo.follow.export"
@@ -85,7 +93,7 @@ func BuildFollowExport(path, leoVersion string) (FollowExport, error) {
 		return FollowExport{}, err
 	}
 	exp := FollowExport{
-		Schema: FollowExportSchema, Kind: FollowExportKind, LeoVersion: leoVersion,
+		Schema: followSchemaPlain, Kind: FollowExportKind, LeoVersion: leoVersion,
 		HomeID: homeID, Revision: rev,
 		Templates:    map[string]any{},
 		Environments: raw.Environments,
@@ -105,7 +113,26 @@ func BuildFollowExport(path, leoVersion string) (FollowExport, error) {
 		return FollowExport{}, fmt.Errorf("exporting defaults: %w", err)
 	}
 	exp.Defaults, _ = defaults.(map[string]any)
+	if syncsSecretRefs(raw) {
+		exp.Schema = followSchemaRefs
+	}
 	return exp, nil
+}
+
+// syncsSecretRefs reports whether a synced section (environments or a
+// template's env) holds a secret reference.
+func syncsSecretRefs(c *Config) bool {
+	for _, env := range c.Environments {
+		if len(env.Refs()) > 0 {
+			return true
+		}
+	}
+	for _, tmpl := range c.Templates {
+		if len(tmpl.Env.Refs()) > 0 {
+			return true
+		}
+	}
+	return false
 }
 
 // ParseFollowExport parses and fully checks an export: the kind, a schema

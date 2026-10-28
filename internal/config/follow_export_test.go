@@ -78,7 +78,7 @@ func TestBuildFollowExportContent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if exp.Schema != FollowExportSchema || exp.Kind != FollowExportKind || exp.LeoVersion != "v9.9.9" || exp.Revision != rev {
+	if exp.Schema != 1 || exp.Kind != FollowExportKind || exp.LeoVersion != "v9.9.9" || exp.Revision != rev {
 		t.Fatalf("header = %d %q %q %q, want schema/kind/v9.9.9/%s", exp.Schema, exp.Kind, exp.LeoVersion, exp.Revision, rev)
 	}
 	cfg, _ := Load(path)
@@ -179,7 +179,7 @@ func TestParseFollowExportRejects(t *testing.T) {
 	}{
 		"not json":     {`nope`, FollowMalformed},
 		"wrong kind":   {`{"schema":1,"kind":"other"}`, FollowMalformed},
-		"newer schema": {`{"schema":2,"kind":"leo.follow.export"}`, FollowFollowerTooOld},
+		"newer schema": {`{"schema":3,"kind":"leo.follow.export"}`, FollowFollowerTooOld},
 		"no schema":    {`{"kind":"leo.follow.export"}`, FollowMalformed},
 		"bad section":  {`{"schema":1,"kind":"leo.follow.export","templates":{"x":{"max_turns":"lots"}}}`, FollowMalformed},
 		"trailing":     {`{"schema":1,"kind":"leo.follow.export"} {}`, FollowMalformed},
