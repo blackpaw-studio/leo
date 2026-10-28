@@ -122,3 +122,39 @@ func getPath(t *testing.T, s *Server, path string) *httptest.ResponseRecorder {
 	s.httpServer.Handler.ServeHTTP(w, httptest.NewRequest(http.MethodGet, path, nil))
 	return w
 }
+
+// TestMoveStatusRouteLeavesSiblingRoutesAlone pins how the routes beside
+// GET /api/agent/moves/{id} answer: a wrong method on a POST-only sibling is
+// a 405 that advertises POST, and the client-tools route a literal "moves"
+// agent shares a shape with keeps its handler.
+func TestMoveStatusRouteLeavesSiblingRoutesAlone(t *testing.T) {
+	s, _, _ := newDeviceTestServer(t)
+	s.moveJobs = &fakeMoveJobs{jobs: map[string]agentmove.JobStatus{"mv-1": {ID: "mv-1", State: agentmove.JobDone}}}
+	cases := []struct {
+		method, path string
+		status       int
+		allow        string
+	}{
+		{http.MethodGet, "/api/agent/foo/move", http.StatusMethodNotAllowed, "POST"},
+		{http.MethodPut, "/api/agent/foo/move", http.StatusMethodNotAllowed, "POST"},
+		{http.MethodGet, "/api/agent/foo/rename", http.StatusMethodNotAllowed, "POST"},
+		{http.MethodGet, "/api/agent/moves/rename", http.StatusMethodNotAllowed, "POST"},
+		{http.MethodPut, "/api/agent/moves/mv-1", http.StatusMethodNotAllowed, "GET, HEAD"},
+		{http.MethodGet, "/api/agent/moves/mv-1", http.StatusOK, ""},
+		{http.MethodHead, "/api/agent/moves/mv-1", http.StatusOK, ""},
+	}
+	for _, c := range cases {
+		rec := doRequest(s, c.method, c.path, "agent-token", "")
+		if rec.Code != c.status || rec.Header().Get("Allow") != c.allow {
+			t.Errorf("%s %s = %d Allow %q, want %d Allow %q", c.method, c.path, rec.Code, rec.Header().Get("Allow"), c.status, c.allow)
+		}
+	}
+
+	// Same handler as any other agent's client-tools list: no relay wired
+	// here, so whatever it answers for "foo" it answers for "moves".
+	want := doRequest(s, http.MethodGet, "/api/agent/foo/client-tools", "agent-token", "")
+	got := doRequest(s, http.MethodGet, "/api/agent/moves/client-tools", "agent-token", "")
+	if got.Code != want.Code || got.Body.String() != want.Body.String() {
+		t.Errorf("GET /api/agent/moves/client-tools = %d %q, want %d %q", got.Code, got.Body, want.Code, want.Body)
+	}
+}
