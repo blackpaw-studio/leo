@@ -237,9 +237,11 @@ func RestoreAgents(homePath, tmuxPath, webToken string, sv agentSpawner, mcp leo
 		rec.ClaudeArgs, rec.Env = migratedArgs, migratedEnv
 
 		// agents.json holds secret references, not values: resolve them for
-		// this launch (and the supervisor's crash restarts of it). A failure
-		// keeps a fresh launch down with the reason recorded; a surviving
-		// session already runs with its env, so it is still adopted.
+		// this launch. A failure keeps a fresh launch down with the reason
+		// recorded; a surviving session already runs with its env, so it is
+		// still adopted. Either way the spec carries the references, and the
+		// supervisor resolves them again before any later launch, retrying
+		// rather than launching without them.
 		launchEnv, err := agent.HydrateEnv(rec, o.env)
 		if err != nil {
 			if !adopt {
@@ -247,7 +249,7 @@ func RestoreAgents(homePath, tmuxPath, webToken string, sv agentSpawner, mcp leo
 				markFailedRestore(homePath, rec, fmt.Sprintf("secret unavailable: %v", err))
 				continue
 			}
-			fmt.Fprintf(os.Stderr, "restore: agent %q adopted, but a crash restart will lack its secrets until they resolve: %v\n", name, err)
+			fmt.Fprintf(os.Stderr, "restore: agent %q adopted; its secrets must resolve before any relaunch: %v\n", name, err)
 			launchEnv = rec.Env
 		}
 
@@ -264,6 +266,7 @@ func RestoreAgents(homePath, tmuxPath, webToken string, sv agentSpawner, mcp leo
 			ClaudeArgs:     args,
 			WorkDir:        rec.Workspace,
 			Env:            launchEnv,
+			EnvSecrets:     rec.EnvSecrets,
 			WebPort:        rec.WebPort,
 			WebToken:       webToken,
 			Adopt:          adopt,

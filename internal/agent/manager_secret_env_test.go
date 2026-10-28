@@ -332,3 +332,36 @@ func TestInheritedFromSourceKeepsRefsNotValues(t *testing.T) {
 		t.Errorf("spawn env did not shadow the ref: %+v", got)
 	}
 }
+
+// Every launch hands the supervisor its references alongside the values,
+// so it can resolve them again before a relaunch.
+func TestLaunchesCarryRefsToTheSupervisor(t *testing.T) {
+	f := &fakeSecrets{value: secretSentinel}
+	m, sup, _ := secretManager(t, f, config.EnvMap{"OP_TOKEN": config.Secret(opRef)})
+	check := func(step string) {
+		t.Helper()
+		if got := sup.spawnCall.EnvSecrets["OP_TOKEN"]; !reflect.DeepEqual(got, opRef) {
+			t.Errorf("%s: supervisor got EnvSecrets %v", step, sup.spawnCall.EnvSecrets)
+		}
+	}
+	rec, err := m.Spawn(context.Background(), SpawnSpec{Template: "coding", Repo: "x"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	check("spawn")
+	if err := m.Restart(rec.Name); err != nil {
+		t.Fatal(err)
+	}
+	check("restart")
+	if err := m.Reset(rec.Name); err != nil {
+		t.Fatal(err)
+	}
+	check("reset")
+	if err := m.Stop(rec.Name, StopOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.Start(rec.Name); err != nil {
+		t.Fatal(err)
+	}
+	check("start")
+}

@@ -36,6 +36,7 @@ import (
 	"github.com/blackpaw-studio/leo/internal/machine"
 	"github.com/blackpaw-studio/leo/internal/managed"
 	"github.com/blackpaw-studio/leo/internal/observe"
+	"github.com/blackpaw-studio/leo/internal/secretenv"
 	"github.com/blackpaw-studio/leo/internal/startup"
 	"github.com/blackpaw-studio/leo/internal/tmux"
 )
@@ -142,6 +143,9 @@ type ProcessSpec struct {
 	ClaudeArgs []string
 	WorkDir    string
 	Env        map[string]string
+	// EnvSecrets are the references behind Env's secret keys; see
+	// agent.SpawnRequest.EnvSecrets.
+	EnvSecrets map[string]secretenv.Ref
 	WebPort    string // Leo web UI port for plugin control commands
 	// WebToken is the daemon's API bearer token. The supervised Claude
 	// process reads it from LEO_API_TOKEN and the built-in MCP server
@@ -211,8 +215,11 @@ type Supervisor struct {
 	// installed after the daemon started works without a restart. nil means
 	// claudePath is authoritative (tests, and callers that pin a binary).
 	claudeLookup func() (string, error)
-	homePath     string
-	configPath   string
+	// secretEnv resolves an agent's EnvSecrets before each relaunch; the
+	// zero value reads the OS secret stores.
+	secretEnv  config.Expander
+	homePath   string
+	configPath string
 	// reportCmd is the `<leo> dispatch report` argv attention hooks call back
 	// into; nil means the bare `leo` on the agent's PATH.
 	reportCmd []string
@@ -475,6 +482,7 @@ func (s *Supervisor) SpawnAgent(spec daemon.AgentSpawnSpec) error {
 		ClaudeArgs:       spec.ClaudeArgs,
 		WorkDir:          spec.WorkDir,
 		Env:              spec.Env,
+		EnvSecrets:       spec.EnvSecrets,
 		WebPort:          spec.WebPort,
 		WebToken:         spec.WebToken,
 		Adopt:            spec.Adopt,
@@ -1435,6 +1443,9 @@ func superviseProcess(ctx context.Context, tmuxPath, claudePath string, spec Pro
 	// opening tracks the claude opening brief across launches: delivered
 	// over the bridge only once the mod acks it (see openingDelivery).
 	opening := newOpeningDelivery(homePath, spec, id)
+	// envFresh: spec.Env's secret values were resolved by the caller for this
+	// spawn's first launch. Every other launch resolves them again.
+	envFresh := !spec.Adopt
 
 	for {
 		// Snapshot identity for this iteration. The tmux session name is also
@@ -1544,6 +1555,26 @@ func superviseProcess(ctx context.Context, tmuxPath, claudePath string, spec Pro
 				}
 				binPath = path
 			}
+			if !envFresh && len(spec.EnvSecrets) > 0 {
+				// A launch never goes ahead without its secrets: a failure
+				// waits and retries, naming the reference, as a missing
+				// claude does above.
+				env, err := agent.HydrateEnv(agentstore.Record{Env: spec.Env, EnvSecrets: spec.EnvSecrets}, sv.secretEnv)
+				if err != nil {
+					sv.setState(name, id, "restarting")
+					fmt.Fprintf(os.Stderr, "[%s] %v, retrying in %s\n", name, err, backoff)
+					select {
+					case <-ctx.Done():
+						sv.setState(name, id, "stopped")
+						return
+					case <-time.After(backoff):
+					}
+					backoff = time.Duration(math.Min(float64(backoff)*2, float64(maxBackoff)))
+					continue
+				}
+				spec.Env = env
+			}
+			envFresh = false
 			if pl, ok := drv.(harness.PreLauncher); ok {
 				if err := pl.PreLaunch(handleForSpec(spec, id, homePath, tmuxPath)); err != nil {
 					fmt.Fprintf(os.Stderr, "[%s] pre-launch: %v\n", name, err)

@@ -226,6 +226,7 @@ func (m *Manager) SwitchTemplate(name, template string) (SwitchResult, error) {
 		ClaudeArgs: next.ClaudeArgs,
 		WorkDir:    next.Workspace,
 		Env:        next.Env,
+		EnvSecrets: next.EnvSecrets,
 		WebPort:    next.WebPort,
 		WebToken:   m.webToken,
 		Harness:    next.Harness,

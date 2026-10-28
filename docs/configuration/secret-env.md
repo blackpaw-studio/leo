@@ -37,7 +37,7 @@ A reference is a YAML mapping whose `secret:` key names the backend. A string is
 
 - **Effective keys only.** Layers merge first and only the final value of each key resolves (precedence as in [Environments](environments.md#semantics)). A reference that a higher layer overrides — say a lead's `keychain` entry that a Linux host shadows with a local literal — is never resolved and cannot fail that launch.
 - **Every launch.** Spawn, `leo agent start`, `restart`, `reset`, `set-environment`, boot restore, each task run, each dispatch and consult launch, and each headless dispatch follow-up resolve afresh. An interactive dispatch's follow-ups go to the pane already running. The agent record stores the reference, never the value.
-- **Rotation** takes effect at the next spawn, start, restart, reset or boot restore. A running agent keeps the env it launched with, and a crash restart of its session reuses that env, so after revoking a token run `leo agent restart <name>`.
+- **Rotation** takes effect at the next launch: spawn, start, restart, reset, boot restore, or the supervisor's relaunch after a crash. A running agent keeps the env it launched with, so to apply a rotation now run `leo agent restart <name>`.
 - **Display paths never resolve.** `leo config show`, `leo template show`, `leo run --dry-run`, the web UI and the config API show the reference (`<secret keychain(service=OP_SERVICE_ACCOUNT_TOKEN, account=evan)>`) and never touch the store.
 
 ## Failures
@@ -48,7 +48,7 @@ A failed resolution fails that launch only, with an error naming the scope, key 
 templates.coder.env.OP_TOKEN: secret keychain(service=OP): item not found
 ```
 
-There is no fallback to an empty string. `restart`, `reset` and `set-environment` resolve before stopping the agent, so a failure leaves it running. At boot restore an agent whose secret fails is marked failed with `secret unavailable: …`; an agent whose tmux session survived a daemon restart is adopted as is. A failed command reports only its exit status, never its stderr, since that may echo what it read.
+There is no fallback to an empty string. `restart`, `reset` and `set-environment` resolve before stopping the agent, so a failure leaves it running. At boot restore an agent whose secret fails is marked failed with `secret unavailable: …`; an agent whose tmux session survived a daemon restart is adopted as is. The supervisor never relaunches an agent without its secrets: when a crash restart (or the end of an adopted session) needs a reference that does not resolve, it logs the named reference and retries with backoff until it does. A failed command reports only its exit status, never its stderr, since that may echo what it read.
 
 ## `leo validate`
 
