@@ -94,6 +94,14 @@
         "Finished": null,
         "Errored": null,
         "Chat": null
+      },
+      "Move": {
+        "Exclude": null,
+        "HookTimeout": "",
+        "Hooks": {
+          "PreSend": null,
+          "PostReceive": null
+        }
       }
     }
   },
@@ -118,6 +126,14 @@
     "WhisperModel": "",
     "PermissionTimeout": "",
     "QuestionTimeout": ""
+  },
+  "Move": {
+    "Exclude": null,
+    "HookTimeout": "",
+    "Hooks": {
+      "PreSend": null,
+      "PostReceive": null
+    }
   },
   "Providers": null,
   "TemplatesFile": "",
