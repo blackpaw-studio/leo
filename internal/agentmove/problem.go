@@ -18,6 +18,9 @@ const (
 	CodeHarnessUnsupported   = "harness_unsupported"
 	CodeSessionRootMissing   = "session_root_missing"
 	CodeSessionMissing       = "session_missing"
+	// CodeStoreSymlinkConflict: a destination store path holds a symlink
+	// where the source would send a file or dir; rsync would replace it.
+	CodeStoreSymlinkConflict = "store_symlink_conflict"
 	CodeNameTaken            = "name_taken"
 	CodeWorkspaceInUse       = "workspace_in_use"
 	CodeWorkspaceExists      = "workspace_exists"

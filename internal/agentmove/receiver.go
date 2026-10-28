@@ -211,7 +211,7 @@ func (r *Receiver) Preflight(ctx context.Context, m Manifest) (PreflightResponse
 	return PreflightResponse{
 		Protocol: Protocol, Host: host, LeoVersion: r.Version, OK: len(problems) == 0, Problems: problems,
 		SessionRoot: d.SessionRoot, StagingDir: d.StagingDir, Existing: d.Existing, WSState: d.WSState, Git: d.Git,
-		Nested: d.Nested,
+		Nested: d.Nested, StoreSymlinks: d.StoreSymlinks,
 	}, nil
 }
 
@@ -248,6 +248,9 @@ func (r *Receiver) facts(ctx context.Context, cfg *config.Config, host Host, m M
 				d.EnvError = err.Error()
 			} else if root := mover.SessionRoot(env); root != "" {
 				d.SessionRoot, d.SessionRootPresent = root, isDir(root)
+				if d.SessionRootPresent {
+					d.StoreSymlinks, d.StoreError = StoreSymlinks(root, m.SessionRels)
+				}
 			}
 		}
 	}

@@ -28,6 +28,7 @@ func CheckDestination(m Manifest, d DestFacts) []Problem {
 	}
 	add(checkAgentConfig(m, d))
 	add(checkHarness(m, d))
+	add(checkStore(d))
 	add(checkIdentity(m, d))
 	for _, p := range []string{m.TargetWorkspace(), d.SessionRoot, d.StagingDir} {
 		if p != "" {
@@ -84,6 +85,18 @@ func checkHarness(m Manifest, d DestFacts) *Problem {
 		return problemf(CodeSessionRootMissing, "the session store %s does not exist on %s; log %s in there first", d.SessionRoot, d.Host.Hostname, have)
 	}
 	return nil
+}
+
+// checkStore refuses a store whose paths could not be listed for symlinks
+// (a dangling link on the way would also fail the session rsync).
+func checkStore(d DestFacts) *Problem {
+	if d.StoreError == nil {
+		return nil
+	}
+	if p := asProblem(d.StoreError); p != nil {
+		return p
+	}
+	return problemf(CodeStoreSymlinkConflict, "the session store %s on %s cannot be checked for symlinks: %v", d.SessionRoot, d.Host.Hostname, d.StoreError)
 }
 
 func orClaude(h string) string {

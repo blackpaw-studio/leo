@@ -870,3 +870,47 @@ func TestMoveResultListsItemizedChangesPerStage(t *testing.T) {
 		t.Fatalf("Rsync = %+v\nwant %+v", res.Rsync, want)
 	}
 }
+
+// A symlink the destination reports inside a store path is refused before
+// the stop when the source would send something in its place (rsync turns
+// it into a real dir); one the source lacks is left alone.
+func TestMoveRefusesStoreSymlinkConflict(t *testing.T) {
+	for name, tc := range map[string]struct {
+		sourceHas bool
+		refused   bool
+	}{
+		"source sends a dir there": {sourceHas: true, refused: true},
+		"source has nothing there": {sourceHas: false, refused: false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := newMoveFixture(t)
+			slug := session.ProjectSlug(f.ws)
+			rel := "projects/" + slug + "/memory"
+			if tc.sourceHas {
+				if err := os.MkdirAll(filepath.Join(f.claude, rel), 0o755); err != nil {
+					t.Fatal(err)
+				}
+			}
+			f.ep.answer[VerbPreflight] = func(m Manifest) ([]byte, error) {
+				if !slices.Contains(m.SessionRels, "projects/"+slug+"/") {
+					return nil, fmt.Errorf("preflight manifest lacks the session rels: %q", m.SessionRels)
+				}
+				return json.Marshal(PreflightResponse{Protocol: Protocol, Host: laptopHost(), OK: true,
+					SessionRoot: "/Users/me/.claude-work", StagingDir: destStage, WSState: WSAbsent, StoreSymlinks: []string{rel}})
+			}
+			_, err := f.move(t, false)
+			if !tc.refused {
+				if err != nil {
+					t.Fatalf("move: %v", err)
+				}
+				return
+			}
+			if !HasCode(err, CodeStoreSymlinkConflict) || !strings.Contains(err.Error(), rel) {
+				t.Fatalf("err = %v, want store_symlink_conflict naming %s", err, rel)
+			}
+			if f.log.has("stop ") {
+				t.Fatalf("stopped before refusing: %v", f.log.all())
+			}
+		})
+	}
+}

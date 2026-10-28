@@ -279,6 +279,9 @@ func (t *transfer) validate(ctx context.Context) error {
 	if err := t.checkTranscript(); err != nil {
 		return err
 	}
+	if t.m.SessionRels, err = t.sessionRels(sessionIDs(t.rec)); err != nil {
+		return err
+	}
 	t.notePersistentTask()
 	if t.isCopy() {
 		return t.validateCopy(ctx, records)
@@ -404,6 +407,9 @@ func (t *transfer) preflight(ctx context.Context) error {
 			}
 		}
 	}
+	if err := t.checkStoreSymlinks(); err != nil {
+		return err
+	}
 	if last, ok := t.rec.MoveLog[t.resp.Host.Hostname]; ok && !t.isCopy() {
 		t.m.LastMove = &last
 	}
@@ -411,6 +417,29 @@ func (t *transfer) preflight(ctx context.Context) error {
 		return t.checkCopyBranch(ctx)
 	}
 	return t.checkDiverged(ctx)
+}
+
+// checkStoreSymlinks refuses the destination store symlinks the session
+// rsync would replace: the source has an entry at that path, which rsync
+// sends in place of the link (a symlinked memory/ becomes a real dir).
+func (t *transfer) checkStoreSymlinks() error {
+	root := t.adapter.SessionRoot(t.env)
+	if root == "" || (t.ep.Local() && git.SamePath(root, t.resp.SessionRoot)) {
+		return nil
+	}
+	var hit []string
+	for _, rel := range t.resp.StoreSymlinks {
+		if err := checkSessionRel(rel); err != nil {
+			return err
+		}
+		if _, err := os.Lstat(filepath.Join(root, rel)); err == nil {
+			hit = append(hit, rel)
+		}
+	}
+	if len(hit) == 0 {
+		return nil
+	}
+	return problemf(CodeStoreSymlinkConflict, "%s's session store %s on %s has symlinks where this transfer would write: %s; rsync would replace them, so nothing was stopped or sent", t.rec.Name, t.resp.SessionRoot, t.resp.Host.Hostname, strings.Join(hit, ", "))
 }
 
 // ask sends a preflight and keeps its answer.
@@ -564,14 +593,19 @@ func (t *transfer) finalSessions() ([]string, error) {
 		t.rec = rec
 	}
 	t.m.SourceSessionID = agent.ResumeIDFor(t.rec)
-	ids := []string{t.m.SourceSessionID}
-	for _, id := range t.rec.SessionsByTemplate {
+	return sessionIDs(t.rec), nil
+}
+
+// sessionIDs are rec's resume session first, then its other sessions.
+func sessionIDs(rec agentstore.Record) []string {
+	ids := []string{agent.ResumeIDFor(rec)}
+	for _, id := range rec.SessionsByTemplate {
 		if id != "" && !slices.Contains(ids, id) {
 			ids = append(ids, id)
 		}
 	}
 	slices.Sort(ids[1:])
-	return ids, nil
+	return ids
 }
 
 // prepareStaging is S3 and S4: a fresh staging dir, pre_send hooks, then
@@ -735,25 +769,38 @@ func (t *transfer) rsyncSessions(ctx context.Context, ids []string) error {
 	switch {
 	case root == "" || t.resp.SessionRoot == "":
 		return nil
-	case t.isCopy() && snapshotCopier(t.adapter):
-		return nil // the snapshot travels in staging
 	case t.ep.Local() && git.SamePath(root, t.resp.SessionRoot):
 		return nil // the same files
 	}
-	rels, err := t.adapter.SessionFiles(root, t.rec.Workspace, ids)
+	rels, err := t.sessionRels(ids)
 	if err != nil || len(rels) == 0 {
 		return err
 	}
-	for _, rel := range rels {
-		if err := checkSessionRel(rel); err != nil {
-			return err
-		}
-		if err := ValidatePath(filepath.Join(root, rel)); err != nil {
-			return err
-		}
-	}
 	t.beginRsync(StageSessions)
 	return t.sendSessions(ctx, root, rels)
+}
+
+// sessionRels are the session paths, relative to the source's store, that
+// the session rsync sends for ids: none when the harness keeps no store or
+// a copy's snapshot travels in staging instead.
+func (t *transfer) sessionRels(ids []string) ([]string, error) {
+	root := t.adapter.SessionRoot(t.env)
+	if root == "" || (t.isCopy() && snapshotCopier(t.adapter)) {
+		return nil, nil
+	}
+	rels, err := t.adapter.SessionFiles(root, t.rec.Workspace, ids)
+	if err != nil {
+		return nil, err
+	}
+	for _, rel := range rels {
+		if err := checkSessionRel(rel); err != nil {
+			return nil, err
+		}
+		if err := ValidatePath(filepath.Join(root, rel)); err != nil {
+			return nil, err
+		}
+	}
+	return rels, nil
 }
 
 // sendSessions asks the destination where each session path really lives

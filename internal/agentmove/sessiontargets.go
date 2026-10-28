@@ -6,6 +6,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"github.com/blackpaw-studio/leo/internal/harness"
@@ -71,6 +72,53 @@ func ResolveSessionDir(root, rel string, create bool) (string, error) {
 		return "", err
 	}
 	return real, nil
+}
+
+// StoreSymlinks lists the symlinks inside the destination store paths rels
+// write into under root, relative to root and sorted: everything under a
+// directory rel (links are not followed), or a file rel itself. rsync
+// replaces such a link with whatever the source sends in its place, even
+// with -u, so the source refuses before it stops anything. Nothing is
+// created; a store path that does not exist yet holds none.
+func StoreSymlinks(root string, rels []string) ([]string, error) {
+	var out []string
+	for _, rel := range rels {
+		dir, err := ResolveSessionDir(root, rel, false)
+		if err != nil {
+			return nil, err
+		}
+		if !strings.HasSuffix(rel, "/") {
+			if isSymlink(filepath.Join(dir, filepath.Base(rel))) {
+				out = append(out, filepath.Clean(rel))
+			}
+			continue
+		}
+		err = filepath.WalkDir(dir, func(p string, d fs.DirEntry, err error) error {
+			switch {
+			case errors.Is(err, fs.ErrNotExist):
+				return nil
+			case err != nil:
+				return err
+			case d.Type()&fs.ModeSymlink != 0:
+				sub, err := filepath.Rel(dir, p)
+				if err != nil {
+					return err
+				}
+				out = append(out, filepath.Join(rel, sub))
+			}
+			return nil
+		})
+		if err != nil {
+			return nil, fmt.Errorf("listing %s: %w", dir, err)
+		}
+	}
+	slices.Sort(out)
+	return out, nil
+}
+
+func isSymlink(p string) bool {
+	info, err := os.Lstat(p)
+	return err == nil && info.Mode()&os.ModeSymlink != 0
 }
 
 // checkSessionRel refuses a session path that could leave its root or pass

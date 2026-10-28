@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"slices"
@@ -590,5 +591,34 @@ func TestPreflightReportsWhyALeadEntryIsInvalid(t *testing.T) {
 				t.Fatalf("message = %q, want the isolation reason %s", msg, tt.reason)
 			}
 		})
+	}
+}
+
+// Symlinks inside a destination store path the transfer writes into (a
+// shared memory/ dir) are reported, root-relative, so the source can refuse
+// before it stops anything. Nothing is created while looking.
+func TestPreflightReportsStoreSymlinks(t *testing.T) {
+	f := newReceiverFixture(t)
+	slug := session.ProjectSlug(f.ws)
+	proj := filepath.Join(f.claude, "projects", slug)
+	gittest.Write(t, filepath.Join(proj, "sid.jsonl"), "{}\n")
+	if err := os.Symlink(t.TempDir(), filepath.Join(proj, "memory")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("sid.jsonl", filepath.Join(proj, "latest.jsonl")); err != nil {
+		t.Fatal(err)
+	}
+	m := f.manifest()
+	m.SessionRels = []string{"projects/" + slug + "/", "file-history/sid/"}
+	var resp PreflightResponse
+	if err := f.call(t, VerbPreflight, m, &resp); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"projects/" + slug + "/latest.jsonl", "projects/" + slug + "/memory"}
+	if !resp.OK || !slices.Equal(resp.StoreSymlinks, want) {
+		t.Fatalf("ok=%v problems=%+v store symlinks = %q, want %q", resp.OK, resp.Problems, resp.StoreSymlinks, want)
+	}
+	if _, err := os.Lstat(filepath.Join(f.claude, "file-history")); !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("preflight created file-history: %v", err)
 	}
 }

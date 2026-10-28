@@ -100,7 +100,8 @@ type Manifest struct {
 	Copy     *CopySpec    `json:"copy,omitempty"`
 	Git      *GitManifest `json:"git,omitempty"`
 	// SessionRels are the session paths the session-targets verb resolves,
-	// relative to the session root (a trailing "/" marks a directory).
+	// relative to the session root (a trailing "/" marks a directory). A
+	// preflight carries them too, for the destination's StoreSymlinks.
 	SessionRels []string `json:"session_rels,omitempty"`
 }
 
@@ -198,6 +199,11 @@ type DestFacts struct {
 	Git            *GitPreflight
 	// Nested are what lies inside the target workspace here.
 	Nested []NestedPath
+	// StoreSymlinks are the symlinks inside the store paths SessionRels
+	// write into, relative to SessionRoot; StoreError is why they could not
+	// be listed.
+	StoreSymlinks []string
+	StoreError    error
 }
 
 // PreflightResponse answers a preflight: the facts plus the verdict.
@@ -215,4 +221,8 @@ type PreflightResponse struct {
 	// Nested are the destination's paths inside the target workspace that
 	// the workspace rsync must not delete (an older leo sends none).
 	Nested []NestedPath `json:"nested,omitempty"`
+	// StoreSymlinks are the symlinks inside the destination's store paths
+	// for the manifest's SessionRels, relative to SessionRoot. rsync would
+	// replace any the source sends something in place of.
+	StoreSymlinks []string `json:"store_symlinks,omitempty"`
 }
