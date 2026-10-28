@@ -61,6 +61,14 @@ func HeadState(ctx context.Context, dir string) (Head, error) {
 	return Head{Ref: ref, SHA: sha}, nil
 }
 
+// The snapshot commit's identity when the environment names none: it only
+// backs an internal ref, and a server or CI runner has no git identity
+// configured, which makes commit-tree refuse.
+const (
+	snapshotAuthorName  = "leo-move"
+	snapshotAuthorEmail = "bots@blackpaw.studio"
+)
+
 // SnapshotIndex records dir's index as a commit on top of HEAD and points
 // ref at it (G1): write-tree, commit-tree -p HEAD, update-ref. The worktree
 // itself is only read.
@@ -69,7 +77,8 @@ func SnapshotIndex(ctx context.Context, dir, ref string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	commit, err := gitOut(ctx, dir, "commit-tree", tree, "-p", "HEAD", "-m", "leo-move")
+	commit, err := gitOut(ctx, dir, "-c", "user.name="+snapshotAuthorName, "-c", "user.email="+snapshotAuthorEmail,
+		"commit-tree", tree, "-p", "HEAD", "-m", "leo-move")
 	if err != nil {
 		return "", err
 	}

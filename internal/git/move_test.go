@@ -2,6 +2,7 @@ package git
 
 import (
 	"context"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
@@ -157,5 +158,23 @@ func TestWorktreeListReportsCheckedOutBranches(t *testing.T) {
 	byBranch := CheckedOut(list)
 	if !SamePath(byBranch["main"], dir) || !SamePath(byBranch["feat"], wt) || len(byBranch) != 2 {
 		t.Fatalf("CheckedOut = %v", byBranch)
+	}
+}
+
+// The snapshot is an internal ref, so it must not need the user to have
+// configured a git identity: a server or CI runner has none.
+func TestSnapshotIndexWithoutGitIdentity(t *testing.T) {
+	src := newRepo(t)
+	for _, k := range []string{"GIT_AUTHOR_NAME", "GIT_AUTHOR_EMAIL", "GIT_COMMITTER_NAME", "GIT_COMMITTER_EMAIL"} {
+		t.Setenv(k, "")
+		os.Unsetenv(k)
+	}
+	t.Setenv("GIT_CONFIG_COUNT", "2")
+	t.Setenv("GIT_CONFIG_KEY_1", "user.useConfigOnly")
+	t.Setenv("GIT_CONFIG_VALUE_1", "true")
+
+	commit, err := SnapshotIndex(context.Background(), src, "refs/leo-move/a/index")
+	if err != nil || commit == "" {
+		t.Fatalf("SnapshotIndex = %q, %v", commit, err)
 	}
 }
