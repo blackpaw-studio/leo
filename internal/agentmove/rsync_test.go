@@ -134,6 +134,16 @@ func TestItemizedLines(t *testing.T) {
 	}
 }
 
+// macOS's /usr/bin/rsync (openrsync) prints 9-character change codes, two
+// shorter than GNU rsync's; captured from openrsync protocol 29.
+func TestItemizedLinesOpenrsync(t *testing.T) {
+	out := []byte(">f+++++++ a\ncL+++++++ l -> a\ncd+++++++ d/\n>f+++++++ d/b\n*deleting d/b\n>f.s..... a\n")
+	want := []string{">f+++++++ a", "cL+++++++ l -> a", "cd+++++++ d/", ">f+++++++ d/b", "*deleting d/b", ">f.s..... a"}
+	if got := ItemizedLines(out); !reflect.DeepEqual(got, want) {
+		t.Fatalf("ItemizedLines = %q, want %q", got, want)
+	}
+}
+
 func TestRsyncStageCapsLines(t *testing.T) {
 	var lines []string
 	for i := 0; i < MaxItemizedLines+30; i++ {

@@ -149,8 +149,9 @@ func (w WorkspaceSpec) Excludes() []string {
 const MaxItemizedLines = 200
 
 // itemized matches one --itemize-changes line: a deletion, or an update
-// flag block (type, then eleven attribute flags) before the path.
-var itemized = regexp.MustCompile(`^(\*deleting\s|[<>ch.][fdLDS][.+?a-zA-Z]{9}\s)`)
+// flag block before the path: update type, file type, then nine attribute
+// flags (GNU rsync) or seven (openrsync, macOS's /usr/bin/rsync).
+var itemized = regexp.MustCompile(`^(\*deleting\s|[<>ch.][fdLDS][.+?a-zA-Z]{7,9}\s)`)
 
 // ItemizedLines picks the itemized change lines out of rsync's stdout,
 // dropping the file-list banner and --stats summary.
