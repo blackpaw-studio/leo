@@ -67,18 +67,13 @@ func MergeLayers(layers ...EnvLayer) EnvLayer {
 
 // LiteralLayer expands an `env:` map whose entries live under scope (e.g.
 // "templates.coder.env"): literals have variables expanded, and references
-// stay unresolved with a file reference's path expanded.
+// stay as written, a file reference's path included. ResolveLayer expands
+// that path only for a reference that survives the merge, so a shadowed one
+// can never fail a launch.
 func (x Expander) LiteralLayer(scope string, env EnvMap) (EnvLayer, error) {
 	var out EnvLayer
 	for _, k := range env.Keys() {
 		if ref, ok := env[k].Ref(); ok {
-			if ref.Path != "" {
-				p, err := x.Expand(ref.Path)
-				if err != nil {
-					return EnvLayer{}, scoped(err, scope, k)
-				}
-				ref.Path = p
-			}
 			if out.Secrets == nil {
 				out.Secrets = map[string]ScopedRef{}
 			}
@@ -118,7 +113,8 @@ func (c *Config) NamedLayer(names []string, x Expander) (EnvLayer, error) {
 }
 
 // ResolveLayer returns l's launch environment: its values plus each secret
-// resolved through x. A resolved value is used verbatim, never expanded.
+// resolved through x, a file reference's path expanded first. A resolved
+// value is used verbatim, never expanded.
 // The first failure, in key order, is a *SecretResolutionError. Returns nil
 // when l is empty.
 func (x Expander) ResolveLayer(l EnvLayer) (map[string]string, error) {
@@ -131,9 +127,13 @@ func (x Expander) ResolveLayer(l EnvLayer) (map[string]string, error) {
 	}
 	for _, k := range slices.Sorted(maps.Keys(l.Secrets)) {
 		sr := l.Secrets[k]
-		v, err := x.secrets().Resolve(sr.Ref)
+		ref, err := x.expandRefPath(sr)
 		if err != nil {
-			return nil, resolutionError(sr, err)
+			return nil, err
+		}
+		v, err := x.secrets().Resolve(ref)
+		if err != nil {
+			return nil, resolutionError(ScopedRef{Scope: sr.Scope, Key: sr.Key, Ref: ref}, err)
 		}
 		out[k] = v
 	}
@@ -150,6 +150,21 @@ func resolutionError(sr ScopedRef, err error) *SecretResolutionError {
 		out.Reason, out.Unavailable = re.Reason, re.Unavailable
 	}
 	return out
+}
+
+// expandRefPath is sr's reference with a file path's variables and leading
+// ~ expanded, as a literal's would be.
+func (x Expander) expandRefPath(sr ScopedRef) (secretenv.Ref, error) {
+	ref := sr.Ref
+	if ref.Path == "" {
+		return ref, nil
+	}
+	p, err := x.Expand(ref.Path)
+	if err != nil {
+		return secretenv.Ref{}, scoped(err, sr.Scope, sr.Key)
+	}
+	ref.Path = p
+	return ref, nil
 }
 
 func (x Expander) secrets() SecretResolver {

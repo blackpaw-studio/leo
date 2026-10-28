@@ -188,3 +188,31 @@ func TestResolveTaskTargetCarriesSecretRefs(t *testing.T) {
 		t.Errorf("env K = %v, want the reference", tmpl.Env["K"])
 	}
 }
+
+func TestShadowedFileRefPathIsNeverExpanded(t *testing.T) {
+	// A lower layer's file ref whose path names an unset variable,
+	// overridden by a literal: expanding it would fail the launch.
+	c := &Config{Environments: map[string]EnvMap{
+		"shared": {"OP_TOKEN": Secret(secretenv.Ref{Backend: secretenv.File, Path: "${UNSET_SECRET_DIR}/token"})},
+		"local":  {"OP_TOKEN": Literal("local")},
+	}}
+	f := &fakeSecrets{value: "v"}
+	x := secretExpander(f)
+	got, err := c.ResolveNamed([]string{"shared", "local"}, x)
+	if err != nil || got["OP_TOKEN"] != "local" {
+		t.Fatalf("ResolveNamed = %v, %v", got, err)
+	}
+	got, err = c.ResolveEnv([]string{"shared"}, EnvMap{"OP_TOKEN": Literal("lit")}, nil, x)
+	if err != nil || got["OP_TOKEN"] != "lit" {
+		t.Fatalf("ResolveEnv = %v, %v", got, err)
+	}
+	if len(f.calls) != 0 {
+		t.Errorf("resolver called for a shadowed ref: %v", f.calls)
+	}
+	// The effective ref still fails, naming the variable.
+	_, err = c.ResolveNamed([]string{"shared"}, x)
+	var unset *UnsetVariableError
+	if !errors.As(err, &unset) || unset.Scope != "environments.shared" || unset.Key != "OP_TOKEN" {
+		t.Errorf("effective unset path: %v", err)
+	}
+}
