@@ -19,6 +19,7 @@ import (
 	"github.com/blackpaw-studio/leo/internal/daemon"
 	claudeharness "github.com/blackpaw-studio/leo/internal/harness/claude"
 	"github.com/blackpaw-studio/leo/internal/leomcp"
+	"github.com/blackpaw-studio/leo/internal/secretenv"
 	"github.com/blackpaw-studio/leo/internal/session"
 )
 
@@ -1482,5 +1483,54 @@ func TestRestoreKeepsMovedWorktreeRecordWithMissingWorkspace(t *testing.T) {
 	}
 	if len(spawner.calls) != 0 || len(spawner.dropped) != 0 {
 		t.Fatalf("calls=%d dropped=%v for a moved record", len(spawner.calls), spawner.dropped)
+	}
+}
+
+func seedSecretRecord(t *testing.T, home, name string) {
+	t.Helper()
+	rec := agentstore.Record{
+		Name: name, Workspace: t.TempDir(), Harness: "claude",
+		ClaudeArgs: []string{"--model", "sonnet"}, SessionID: "sid", WebPort: "8370",
+		Env:        map[string]string{"PLAIN": "p"},
+		EnvSecrets: map[string]secretenv.Ref{"OP_TOKEN": {Backend: secretenv.Keychain, Service: "OP-" + name}},
+		EnvLayered: true, SpawnedAt: time.Now(),
+	}
+	if err := agentstore.Save(home, rec); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// secretByService resolves "OP-ok" and fails every other service.
+type secretByService struct{}
+
+func (secretByService) Resolve(r secretenv.Ref) (string, error) {
+	if r.Service == "OP-ok" {
+		return "S3CR3T-SENTINEL", nil
+	}
+	return "", &secretenv.ResolutionError{Ref: r, Reason: "item not found"}
+}
+
+func TestRestoreAgentsResolvesStoredSecrets(t *testing.T) {
+	home := t.TempDir()
+	seedSecretRecord(t, home, "ok")
+	seedSecretRecord(t, home, "bad")
+	withLiveTmuxSession(t, false)
+
+	spawner := &fakeAgentSpawner{}
+	x := config.Expander{Secrets: secretByService{}}
+	if restored := RestoreAgents(home, "tmux", "", spawner, leomcp.Server{}, WithRestoreExpander(x)); restored != 1 {
+		t.Fatalf("restored = %d, want 1", restored)
+	}
+	if len(spawner.calls) != 1 || spawner.calls[0].Name != "ok" || spawner.calls[0].Env["OP_TOKEN"] != "S3CR3T-SENTINEL" || spawner.calls[0].Env["PLAIN"] != "p" {
+		t.Fatalf("calls = %+v", spawner.calls)
+	}
+	got, _ := agentstore.Load(agentstore.FilePath(home))
+	bad := got["bad"]
+	if !bad.IsFailedRestore() || !strings.Contains(bad.StoppedReason, "OP_TOKEN: secret keychain(service=OP-bad): item not found") {
+		t.Fatalf("bad record = stopped:%v reason:%q", bad.Stopped, bad.StoppedReason)
+	}
+	data, _ := os.ReadFile(agentstore.FilePath(home))
+	if strings.Contains(string(data), "S3CR3T-SENTINEL") {
+		t.Fatal("agents.json holds the secret value after restore")
 	}
 }

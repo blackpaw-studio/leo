@@ -45,7 +45,7 @@ func (m *Manager) ArrivalEnv(spec ReceiveSpec) (map[string]string, error) {
 	if !ok {
 		return nil, &UnknownTemplateError{Name: rec.Template}
 	}
-	_, env, err := resolveTemplateWiring(cfg, rec, tmpl, m.webToken, m.leoMCP, rebuildEnvFromTemplate, m.env)
+	_, env, _, err := resolveTemplateWiring(cfg, rec, tmpl, m.webToken, m.leoMCP, rebuildEnvFromTemplate, m.env)
 	if err != nil {
 		return nil, fmt.Errorf("resolving %q's env: %w", rec.Name, err)
 	}
@@ -59,7 +59,7 @@ func (m *Manager) RuntimeEnv(rec agentstore.Record) (map[string]string, error) {
 	if err != nil {
 		return nil, fmt.Errorf("loading config: %w", err)
 	}
-	_, env, err := resolveRestartArgs(cfg, rec, m.webToken, m.leoMCP, m.env)
+	_, env, _, err := resolveRestartArgs(cfg, rec, m.webToken, m.leoMCP, m.env)
 	if err != nil {
 		return nil, fmt.Errorf("resolving %q's env: %w", rec.Name, err)
 	}
@@ -89,11 +89,13 @@ func (m *Manager) Receive(_ context.Context, spec ReceiveSpec) error {
 	if !ok {
 		return &UnknownTemplateError{Name: rec.Template}
 	}
-	args, env, err := resolveTemplateWiring(cfg, rec, tmpl, m.webToken, m.leoMCP, rebuildEnvFromTemplate, m.env)
+	args, env, secrets, err := resolveTemplateWiring(cfg, rec, tmpl, m.webToken, m.leoMCP, rebuildEnvFromTemplate, m.env)
 	if err != nil {
 		return fmt.Errorf("receiving %q: %w", name, err)
 	}
-	rec.ClaudeArgs, rec.Env = args, env
+	// The record keeps this host's secret references; agentstore leaves
+	// their values out of Env.
+	rec.ClaudeArgs, rec.Env, rec.EnvSecrets = args, env, secrets
 	rec.WebPort = fmt.Sprint(cfg.WebPort())
 	if err := agentstore.Save(cfg.HomePath, rec); err != nil {
 		return fmt.Errorf("saving %q: %w", name, err)

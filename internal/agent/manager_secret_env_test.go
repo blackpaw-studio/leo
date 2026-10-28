@@ -98,3 +98,159 @@ func TestSpawnEnvShadowsNamedSecretWithoutResolving(t *testing.T) {
 		t.Errorf("resolver called %d times for a shadowed ref", f.calls)
 	}
 }
+
+func TestSpawnPersistsRefsNotValues(t *testing.T) {
+	f := &fakeSecrets{value: secretSentinel}
+	m, sup, home := secretManager(t, f, config.EnvMap{"OP_TOKEN": config.Secret(opRef)})
+	if _, err := m.Spawn(context.Background(), SpawnSpec{Template: "coding", Repo: "x"}); err != nil {
+		t.Fatal(err)
+	}
+	if sup.spawnCall.Env["OP_TOKEN"] != secretSentinel {
+		t.Fatalf("launch env lacks the value")
+	}
+	data, err := os.ReadFile(agentstore.FilePath(home))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(data), secretSentinel) || !strings.Contains(string(data), `"env_secrets"`) {
+		t.Fatalf("agents.json:\n%s", data)
+	}
+}
+
+func TestHydrateEnvResolvesStoredRefs(t *testing.T) {
+	rec := agentstore.Record{Name: "a", Env: map[string]string{"P": "p"}, EnvSecrets: map[string]secretenv.Ref{"OP_TOKEN": opRef}}
+	env, err := HydrateEnv(rec, config.Expander{Secrets: &fakeSecrets{value: "v"}})
+	if err != nil || env["OP_TOKEN"] != "v" || env["P"] != "p" {
+		t.Fatalf("HydrateEnv = %v, %v", env, err)
+	}
+	_, err = HydrateEnv(rec, config.Expander{Secrets: &fakeSecrets{reason: "item not found"}})
+	if err == nil || !strings.Contains(err.Error(), "OP_TOKEN: secret keychain(service=OP): item not found") {
+		t.Fatalf("err = %v", err)
+	}
+}
+
+// failingResolver fails the test if anything resolves through it.
+type failingResolver struct{ t *testing.T }
+
+func (r failingResolver) Resolve(secretenv.Ref) (string, error) {
+	r.t.Error("StaleAgents resolved a secret")
+	return "", errors.New("unexpected")
+}
+
+func TestStaleAgentsComparesRefsWithoutResolving(t *testing.T) {
+	f := &fakeSecrets{value: secretSentinel}
+	m, sup, home := secretManager(t, f, config.EnvMap{"OP_TOKEN": config.Secret(opRef)})
+	if _, err := m.Spawn(context.Background(), SpawnSpec{Template: "coding", Repo: "x"}); err != nil {
+		t.Fatal(err)
+	}
+	_ = sup
+	m.env.Secrets = failingResolver{t}
+	if stale := m.StaleAgents(); len(stale) != 0 {
+		t.Fatalf("unchanged ref reported stale: %+v", stale)
+	}
+
+	cfg, _ := m.cfgLoader()
+	tmpl := cfg.Templates["coding"]
+	tmpl.Env = config.EnvMap{"OP_TOKEN": config.Secret(secretenv.Ref{Backend: secretenv.Keychain, Service: "OTHER"})}
+	cfg.Templates["coding"] = tmpl
+	stale := m.StaleAgents()
+	if len(stale) != 1 || len(stale[0].EnvChanged) != 1 || stale[0].EnvChanged[0] != "OP_TOKEN" {
+		t.Fatalf("stale = %+v, want EnvChanged [OP_TOKEN]", stale)
+	}
+	_ = home
+}
+
+func TestResetReResolvesSecrets(t *testing.T) {
+	f := &fakeSecrets{value: "first"}
+	m, sup, _ := secretManager(t, f, config.EnvMap{"OP_TOKEN": config.Secret(opRef)})
+	rec, err := m.Spawn(context.Background(), SpawnSpec{Template: "coding", Repo: "x"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.value = "rotated"
+	if err := m.Reset(rec.Name); err != nil {
+		t.Fatal(err)
+	}
+	if got := sup.spawnCall.Env["OP_TOKEN"]; got != "rotated" {
+		t.Errorf("reset launch OP_TOKEN = %q, want rotated", got)
+	}
+}
+
+func TestResetSecretFailureLeavesAgentRunning(t *testing.T) {
+	f := &fakeSecrets{value: "first"}
+	m, sup, _ := secretManager(t, f, config.EnvMap{"OP_TOKEN": config.Secret(opRef)})
+	rec, err := m.Spawn(context.Background(), SpawnSpec{Template: "coding", Repo: "x"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.reason = "item not found"
+	if err := m.Reset(rec.Name); err == nil || !strings.Contains(err.Error(), "OP_TOKEN") {
+		t.Fatalf("err = %v", err)
+	}
+	if len(sup.stopCalls) != 0 {
+		t.Errorf("reset stopped the agent before its secret resolved: %v", sup.stopCalls)
+	}
+}
+
+func TestRestartAndStartKeepSecretsOutOfAgentsJSON(t *testing.T) {
+	f := &fakeSecrets{value: secretSentinel}
+	m, sup, home := secretManager(t, f, config.EnvMap{"OP_TOKEN": config.Secret(opRef)})
+	rec, err := m.Spawn(context.Background(), SpawnSpec{Template: "coding", Repo: "x"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertClean := func(step string) {
+		t.Helper()
+		data, err := os.ReadFile(agentstore.FilePath(home))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(string(data), secretSentinel) || !strings.Contains(string(data), `"env_secrets"`) {
+			t.Fatalf("after %s agents.json:\n%s", step, data)
+		}
+		if sup.spawnCall.Env["OP_TOKEN"] != secretSentinel {
+			t.Fatalf("after %s the launch env lacks the value", step)
+		}
+	}
+	if err := m.Restart(rec.Name); err != nil {
+		t.Fatal(err)
+	}
+	assertClean("restart")
+	if err := m.Stop(rec.Name, StopOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.Start(rec.Name); err != nil {
+		t.Fatal(err)
+	}
+	assertClean("start")
+}
+
+// An agent moved or copied here starts with this host's resolved secrets
+// and stores their references, never the values: also when its first start
+// fails and the record stays behind dormant.
+func TestReceivePersistsRefsNotValues(t *testing.T) {
+	for name, spawnErr := range map[string]error{"started": nil, "start failed": errors.New("tmux exploded")} {
+		t.Run(name, func(t *testing.T) {
+			f := &fakeSecrets{value: secretSentinel}
+			m, sup, home := secretManager(t, f, config.EnvMap{"OP_TOKEN": config.Secret(opRef)})
+			sup.spawnErr = spawnErr
+			err := m.Receive(context.Background(), ReceiveSpec{Record: arriving(t.TempDir()), From: "studio", At: receiveAt})
+			if (err != nil) != (spawnErr != nil) {
+				t.Fatalf("Receive = %v", err)
+			}
+			if spawnErr == nil && sup.spawnCall.Env["OP_TOKEN"] != secretSentinel {
+				t.Fatalf("launch env lacks the value")
+			}
+			if rec := loadRec(t, home, "leo-x"); rec.EnvSecrets["OP_TOKEN"].Service != opRef.Service {
+				t.Fatalf("record refs = %v", rec.EnvSecrets)
+			}
+			data, err := os.ReadFile(agentstore.FilePath(home))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if strings.Contains(string(data), secretSentinel) {
+				t.Fatalf("agents.json holds the value:\n%s", data)
+			}
+		})
+	}
+}

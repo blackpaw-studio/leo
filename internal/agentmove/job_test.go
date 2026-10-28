@@ -285,7 +285,7 @@ func newMoveFixture(t *testing.T) *moveFixture {
 	}
 	f.cfg = &config.Config{
 		HomePath:     f.home,
-		Environments: map[string]map[string]string{"work": {"CLAUDE_CONFIG_DIR": f.claude}},
+		Environments: map[string]config.EnvMap{"work": config.LiteralEnv(map[string]string{"CLAUDE_CONFIG_DIR": f.claude})},
 		Templates: map[string]config.TemplateConfig{"coder": {
 			Environments: []string{"work"},
 			Move:         config.MoveConfig{Exclude: []string{"node_modules/"}, Hooks: config.MoveHooksConfig{PreSend: []string{"/bin/export"}}},

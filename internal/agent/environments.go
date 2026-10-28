@@ -123,7 +123,7 @@ func (m *Manager) SetEnvironments(name string, names []string) (SetEnvironmentsR
 
 	next := rec
 	next.Environments = names
-	args, env, err := resolveTemplateWiring(cfg, next, tmpl, m.webToken, m.leoMCP, rebuildEnvFromTemplate, m.env)
+	args, env, secrets, err := resolveTemplateWiring(cfg, next, tmpl, m.webToken, m.leoMCP, rebuildEnvFromTemplate, m.env)
 	if errors.Is(err, errWiringNotBuilt) {
 		return SetEnvironmentsResult{}, fmt.Errorf("building %s wiring for agent %q failed (agent left as it was; see the daemon log)", normalizeHarness(rec.Harness), name)
 	}
@@ -133,7 +133,7 @@ func (m *Manager) SetEnvironments(name string, names []string) (SetEnvironmentsR
 	if isClaude {
 		args = ResumeArgs(args, resumeID)
 	}
-	next.ClaudeArgs, next.Env, next.EnvLayered = args, env, true
+	next.ClaudeArgs, next.Env, next.EnvSecrets, next.EnvLayered = args, env, secrets, true
 	next.SessionID = resumeID
 	next.SessionPinnedAt = nil
 	next.OpeningBriefID = "" // args were rebuilt promptless; see Start
@@ -212,15 +212,19 @@ func (m *Manager) relaunchAfterFailedSave(homePath string, old agentstore.Record
 	if isClaude {
 		args = ResumeArgs(args, resumeID)
 	}
-	if err := spawn(SpawnRequest{
-		Name:       old.Name,
-		ClaudeArgs: args,
-		WorkDir:    old.Workspace,
-		Env:        old.Env,
-		WebPort:    old.WebPort,
-		WebToken:   m.webToken,
-		Harness:    old.Harness,
-	}); err != nil {
+	env, err := HydrateEnv(old, m.env)
+	if err == nil {
+		err = spawn(SpawnRequest{
+			Name:       old.Name,
+			ClaudeArgs: args,
+			WorkDir:    old.Workspace,
+			Env:        env,
+			WebPort:    old.WebPort,
+			WebToken:   m.webToken,
+			Harness:    old.Harness,
+		})
+	}
+	if err != nil {
 		down := old
 		down.Stopped, down.WakeOnMessage = true, false
 		if markErr := agentstore.Save(homePath, down); markErr != nil {

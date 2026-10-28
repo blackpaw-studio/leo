@@ -139,7 +139,7 @@ func (m *Manager) SwitchTemplate(name, template string) (SwitchResult, error) {
 	// Resolve the new wiring BEFORE stopping anything: a template that cannot
 	// produce launch args must fail the switch with the agent still running,
 	// not leave it dead on a template it never reached.
-	args, env, err := resolveTemplateWiring(cfg, next, tmpl, m.webToken, m.leoMCP, rebuildEnvFromTemplate, m.env)
+	args, env, secrets, err := resolveTemplateWiring(cfg, next, tmpl, m.webToken, m.leoMCP, rebuildEnvFromTemplate, m.env)
 	if errors.Is(err, errWiringNotBuilt) {
 		return SwitchResult{}, fmt.Errorf("building %s wiring for template %q failed (agent left on %q; see the daemon log)", next.Harness, template, rec.Template)
 	}
@@ -161,7 +161,7 @@ func (m *Manager) SwitchTemplate(name, template string) (SwitchResult, error) {
 	// SessionArgsRefresher reads the id off the RECORD at launch, and an empty
 	// id re-arms post-hoc discovery for a fresh conversation.
 	next.ClaudeArgs = args
-	next.Env = env
+	next.Env, next.EnvSecrets = env, secrets
 	next.EnvLayered = true // the env was just rebuilt layer by layer
 	// next started as a copy of rec (see withTemplate), so it still carries
 	// the DEPARTING template's OpeningBriefID — a claude-only field that has

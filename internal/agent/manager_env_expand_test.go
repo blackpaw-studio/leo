@@ -64,11 +64,11 @@ func TestResolveRestartArgsExpandsAndReportsUnset(t *testing.T) {
 	rec := agentstore.Record{Name: "leo-x", Template: "coding", Harness: "claude", Workspace: t.TempDir(), EnvLayered: true,
 		ClaudeArgs: []string{"--model", "sonnet"}}
 
-	_, env, err := resolveRestartArgs(cfg, rec, "tok", leomcp.Server{}, expanderOf(map[string]string{"ROOT": "/r"}))
+	_, env, _, err := resolveRestartArgs(cfg, rec, "tok", leomcp.Server{}, expanderOf(map[string]string{"ROOT": "/r"}))
 	if err != nil || env["CLAUDE_CONFIG_DIR"] != "/r/.claude-a" {
 		t.Fatalf("env = %v, err = %v", env, err)
 	}
-	_, _, err = resolveRestartArgs(cfg, rec, "tok", leomcp.Server{}, expanderOf(nil))
+	_, _, _, err = resolveRestartArgs(cfg, rec, "tok", leomcp.Server{}, expanderOf(nil))
 	if err == nil || !strings.Contains(err.Error(), "$ROOT") {
 		t.Fatalf("err = %v, want unset $ROOT (restart must not run on a wrong dir)", err)
 	}

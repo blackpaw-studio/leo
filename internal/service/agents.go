@@ -39,7 +39,10 @@ type mailDropper interface {
 }
 
 // restoreOptions are RestoreAgents' optional inputs.
-type restoreOptions struct{ cfg *config.Config }
+type restoreOptions struct {
+	cfg *config.Config
+	env config.Expander
+}
 
 // RestoreOption configures RestoreAgents.
 type RestoreOption func(*restoreOptions)
@@ -48,6 +51,13 @@ type RestoreOption func(*restoreOptions)
 // fresh launch whose named environments no longer exist.
 func WithRestoreConfig(cfg *config.Config) RestoreOption {
 	return func(o *restoreOptions) { o.cfg = cfg }
+}
+
+// WithRestoreExpander supplies the resolver for records' secret references
+// (agentstore.Record.EnvSecrets). Without it they resolve through this
+// machine's secret stores.
+func WithRestoreExpander(x config.Expander) RestoreOption {
+	return func(o *restoreOptions) { o.env = x }
 }
 
 // restoreSpawn is one agent RestoreAgents is bringing back.
@@ -226,6 +236,21 @@ func RestoreAgents(homePath, tmuxPath, webToken string, sv agentSpawner, mcp leo
 		}
 		rec.ClaudeArgs, rec.Env = migratedArgs, migratedEnv
 
+		// agents.json holds secret references, not values: resolve them for
+		// this launch (and the supervisor's crash restarts of it). A failure
+		// keeps a fresh launch down with the reason recorded; a surviving
+		// session already runs with its env, so it is still adopted.
+		launchEnv, err := agent.HydrateEnv(rec, o.env)
+		if err != nil {
+			if !adopt {
+				fmt.Fprintf(os.Stderr, "restore: agent %q not started: %v\n", name, err)
+				markFailedRestore(homePath, rec, fmt.Sprintf("secret unavailable: %v", err))
+				continue
+			}
+			fmt.Fprintf(os.Stderr, "restore: agent %q adopted, but a crash restart will lack its secrets until they resolve: %v\n", name, err)
+			launchEnv = rec.Env
+		}
+
 		args := rec.ClaudeArgs
 		if rec.Harness == "" || rec.Harness == "claude" {
 			args = agent.ResumeArgs(rec.ClaudeArgs, resumeID)
@@ -238,7 +263,7 @@ func RestoreAgents(homePath, tmuxPath, webToken string, sv agentSpawner, mcp leo
 			Name:           rec.Name,
 			ClaudeArgs:     args,
 			WorkDir:        rec.Workspace,
-			Env:            rec.Env,
+			Env:            launchEnv,
 			WebPort:        rec.WebPort,
 			WebToken:       webToken,
 			Adopt:          adopt,

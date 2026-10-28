@@ -13,6 +13,8 @@ import (
 	"slices"
 	"sync"
 	"time"
+
+	"github.com/blackpaw-studio/leo/internal/secretenv"
 )
 
 // ErrNotFound is wrapped by the writers that require an existing record.
@@ -46,9 +48,14 @@ type Record struct {
 	ClaudeArgs    []string          `json:"claude_args"`
 	SessionID     string            `json:"session_id,omitempty"`
 	Env           map[string]string `json:"env,omitempty"`
-	WebPort       string            `json:"web_port"`
-	SpawnedAt     time.Time         `json:"spawned_at"`
-	Stopped       bool              `json:"stopped,omitempty"`
+	// EnvSecrets maps each env key whose value came from a secret reference
+	// to that reference. In memory Env holds the resolved value too; on disk
+	// it never does (see MarshalJSON), so a launch from a loaded record
+	// re-resolves these first (agent.HydrateEnv).
+	EnvSecrets map[string]secretenv.Ref `json:"env_secrets,omitempty"`
+	WebPort    string                   `json:"web_port"`
+	SpawnedAt  time.Time                `json:"spawned_at"`
+	Stopped    bool                     `json:"stopped,omitempty"`
 
 	// StoppedReason records WHY the system (not the user) marked this record
 	// Stopped — e.g. a missing shared-workspace directory or a SpawnAgent
@@ -295,6 +302,23 @@ type Appearance struct {
 // empty.
 func (r Record) IsFailedRestore() bool {
 	return r.Stopped && r.StoppedReason != ""
+}
+
+// MarshalJSON writes the record with every EnvSecrets key left out of Env:
+// agents.json keeps the reference, never the resolved value. The receiver is
+// not modified.
+func (r Record) MarshalJSON() ([]byte, error) {
+	type plain Record
+	p := plain(r)
+	if len(r.EnvSecrets) > 0 && len(r.Env) > 0 {
+		p.Env = make(map[string]string, len(r.Env))
+		for k, v := range r.Env {
+			if _, secret := r.EnvSecrets[k]; !secret {
+				p.Env[k] = v
+			}
+		}
+	}
+	return json.Marshal(p)
 }
 
 // FilePath returns the path to agents.json in the state directory.

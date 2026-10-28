@@ -66,7 +66,7 @@ func pairHost(t *testing.T, root string) *config.Config {
 	}
 	return &config.Config{
 		HomePath:     filepath.Join(root, "home"),
-		Environments: map[string]map[string]string{"work": {"CLAUDE_CONFIG_DIR": filepath.Join(root, "claude")}},
+		Environments: map[string]config.EnvMap{"work": config.LiteralEnv(map[string]string{"CLAUDE_CONFIG_DIR": filepath.Join(root, "claude")})},
 		Templates:    map[string]config.TemplateConfig{"coder": {Environments: []string{"work"}}},
 	}
 }
