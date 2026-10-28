@@ -17,10 +17,12 @@ import (
 	"github.com/blackpaw-studio/leo/internal/agentstore"
 	"github.com/blackpaw-studio/leo/internal/git"
 	"github.com/blackpaw-studio/leo/internal/git/gittest"
+	"github.com/blackpaw-studio/leo/internal/testenv"
 )
 
 func commitFile(t *testing.T, dir, name, content string) {
 	t.Helper()
+	testenv.Git(t) // a CI runner has no git identity to commit with
 	gittest.Write(t, filepath.Join(dir, name), content)
 	gittest.Run(t, dir, "add", name)
 	gittest.Run(t, dir, "commit", "-qm", name)
