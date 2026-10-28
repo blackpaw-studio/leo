@@ -181,6 +181,9 @@ type SecretResolutionError struct {
 	Scope, Key string
 	Ref        secretenv.Ref
 	Reason     string
+	// Unavailable: the backend cannot run in this process (see
+	// secretenv.ResolutionError), so another host may resolve it.
+	Unavailable bool
 }
 
 func (e *SecretResolutionError) Error() string {

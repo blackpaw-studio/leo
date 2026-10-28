@@ -44,10 +44,14 @@ const keychainNotFound = 44
 type Runner func(ctx context.Context, argv []string) (stdout, stderr []byte, exitCode int, err error)
 
 // ResolutionError reports a reference that could not be resolved. Reason
-// never carries the value or a backend's stdout.
+// never carries the value or a backend's stdout. Unavailable marks a backend
+// that cannot run in this process at all (another platform's store, or
+// systemd-creds outside its unit), as opposed to one that failed on this
+// reference: the same config may resolve on another host.
 type ResolutionError struct {
-	Ref    Ref
-	Reason string
+	Ref         Ref
+	Reason      string
+	Unavailable bool
 }
 
 func (e *ResolutionError) Error() string {
@@ -72,8 +76,8 @@ func (s System) Resolve(ref Ref) (string, error) {
 	if err := ref.Validate(); err != nil {
 		return fail("invalid reference: %v", err)
 	}
-	if need := requiredGOOS[ref.Backend]; need != "" && s.goos() != need {
-		return fail("not supported on %s", s.goos())
+	if reason := s.unavailable(ref); reason != "" {
+		return "", &ResolutionError{Ref: ref, Reason: reason, Unavailable: true}
 	}
 	var (
 		value  string
@@ -106,6 +110,22 @@ var requiredGOOS = map[Backend]string{
 	Keychain:      "darwin",
 	SecretService: "linux",
 	SystemdCreds:  "linux",
+}
+
+// noCredentialsDirectory is why systemd-creds cannot run outside its unit.
+const noCredentialsDirectory = "CREDENTIALS_DIRECTORY is not set (load the credential with LoadCredential= in the unit)"
+
+// unavailable is why ref's backend cannot run in this process, or "".
+func (s System) unavailable(ref Ref) string {
+	if need := requiredGOOS[ref.Backend]; need != "" && s.goos() != need {
+		return "not supported on " + s.goos()
+	}
+	if ref.Backend == SystemdCreds {
+		if dir, ok := s.lookupEnv("CREDENTIALS_DIRECTORY"); !ok || dir == "" {
+			return noCredentialsDirectory
+		}
+	}
+	return ""
 }
 
 func (s System) keychain(ref Ref) (string, string) {
@@ -155,10 +175,7 @@ func (s System) command(ref Ref) (string, string) {
 }
 
 func (s System) systemdCreds(ref Ref) (string, string) {
-	dir, ok := s.lookupEnv("CREDENTIALS_DIRECTORY")
-	if !ok || dir == "" {
-		return "", "CREDENTIALS_DIRECTORY is not set (load the credential with LoadCredential= in the unit)"
-	}
+	dir, _ := s.lookupEnv("CREDENTIALS_DIRECTORY") // set: checked by unavailable
 	data, reason := readCapped(filepath.Join(dir, ref.Name), nil)
 	if reason == "file not found" {
 		reason = "credential not found"

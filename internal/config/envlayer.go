@@ -133,22 +133,23 @@ func (x Expander) ResolveLayer(l EnvLayer) (map[string]string, error) {
 		sr := l.Secrets[k]
 		v, err := x.secrets().Resolve(sr.Ref)
 		if err != nil {
-			return nil, &SecretResolutionError{Scope: sr.Scope, Key: sr.Key, Ref: sr.Ref, Reason: resolutionReason(err)}
+			return nil, resolutionError(sr, err)
 		}
 		out[k] = v
 	}
 	return out, nil
 }
 
-// resolutionReason keeps only a *secretenv.ResolutionError's reason, which
-// never carries a value; any other resolver error is reported generically,
-// since its text is not known to be value-free.
-func resolutionReason(err error) string {
+// resolutionError names sr and keeps only a *secretenv.ResolutionError's
+// reason, which never carries a value; any other resolver error is reported
+// generically, since its text is not known to be value-free.
+func resolutionError(sr ScopedRef, err error) *SecretResolutionError {
+	out := &SecretResolutionError{Scope: sr.Scope, Key: sr.Key, Ref: sr.Ref, Reason: "resolution failed"}
 	var re *secretenv.ResolutionError
 	if errors.As(err, &re) {
-		return re.Reason
+		out.Reason, out.Unavailable = re.Reason, re.Unavailable
 	}
-	return "resolution failed"
+	return out
 }
 
 func (x Expander) secrets() SecretResolver {

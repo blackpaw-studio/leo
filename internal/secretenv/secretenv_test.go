@@ -437,3 +437,30 @@ func TestValidate(t *testing.T) {
 		})
 	}
 }
+
+// TestResolveUnavailableMarksContextNotReference: a backend that cannot run
+// here (wrong platform, or systemd-creds outside its unit) is Unavailable,
+// so validate can warn instead of failing a config another host uses.
+func TestResolveUnavailableMarksContextNotReference(t *testing.T) {
+	noEnv := func(string) (string, bool) { return "", false }
+	cases := []struct {
+		name string
+		sys  System
+		ref  Ref
+		want bool
+	}{
+		{"keychain on linux", System{GOOS: "linux", Run: failRun(t)}, Ref{Backend: Keychain, Service: "S"}, true},
+		{"secret-service on darwin", System{GOOS: "darwin", Run: failRun(t)}, Ref{Backend: SecretService, Attributes: map[string]string{"k": "v"}}, true},
+		{"systemd-creds outside a unit", System{GOOS: "linux", Run: failRun(t), LookupEnv: noEnv}, Ref{Backend: SystemdCreds, Name: "n"}, true},
+		{"missing item", System{GOOS: "darwin", Run: (&fakeRun{code: 44}).run}, Ref{Backend: Keychain, Service: "S"}, false},
+		{"missing file", System{Run: failRun(t)}, Ref{Backend: File, Path: "/nonexistent/leo-secret"}, false},
+		{"invalid ref", System{Run: failRun(t)}, Ref{Backend: "vault"}, false},
+	}
+	for _, tc := range cases {
+		_, err := tc.sys.Resolve(tc.ref)
+		var re *ResolutionError
+		if !errors.As(err, &re) || re.Unavailable != tc.want {
+			t.Errorf("%s: err = %#v, want Unavailable=%v", tc.name, err, tc.want)
+		}
+	}
+}
