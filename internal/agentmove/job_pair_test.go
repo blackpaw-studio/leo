@@ -52,6 +52,12 @@ func (p *pairEndpoint) Push(ws, canonical, _ string, refspecs []string) (Cmd, bo
 	return Cmd{Name: "git", Args: args}, true, nil
 }
 
+// writeTranscript gives the agent at ws a transcript in the claude store under root.
+func writeTranscript(t *testing.T, root, ws, id string) {
+	t.Helper()
+	gittest.Write(t, filepath.Join(root, "claude", "projects", session.ProjectSlug(ws), id+".jsonl"), "{}\n")
+}
+
 // pairHost is one side's config: a coder template on a claude env.
 func pairHost(t *testing.T, root string) *config.Config {
 	t.Helper()
@@ -171,6 +177,7 @@ func TestMoveCanonicalKeepsDestinationOnlyNestedWorktree(t *testing.T) {
 
 	srcCfg, dstCfg := pairHost(t, src), pairHost(t, dst)
 	rec := agentstore.Record{Name: "web", Template: "coder", Harness: "claude", Workspace: canon, SessionID: "sid-1", Environments: []string{"work"}}
+	writeTranscript(t, src, canon, "sid-1")
 	if err := agentstore.Save(srcCfg.HomePath, rec); err != nil {
 		t.Fatal(err)
 	}
@@ -198,6 +205,7 @@ func TestMoveFailedRollbackKeepsSourceFenced(t *testing.T) {
 	ws := filepath.Join(src, "web")
 	gittest.Write(t, filepath.Join(ws, "notes.txt"), "wip\n")
 	srcCfg, dstCfg := pairHost(t, src), pairHost(t, dst)
+	writeTranscript(t, src, ws, "sid-1")
 	if err := agentstore.Save(srcCfg.HomePath, agentstore.Record{Name: "web", Template: "coder", Harness: "claude", Workspace: ws, SessionID: "sid-1", Environments: []string{"work"}}); err != nil {
 		t.Fatal(err)
 	}

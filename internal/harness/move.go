@@ -44,6 +44,15 @@ type SessionMover interface {
 	FinishReceive(ctx context.Context, mc MoveContext, stage string) error
 }
 
+// TranscriptLocator is the optional SessionMover capability of finding an
+// agent's conversation in its session store, so a move can refuse an agent
+// with nothing to resume before it stops anything.
+type TranscriptLocator interface {
+	// Transcript reports whether session id's conversation exists under
+	// root; searched is where it looked, for the refusal.
+	Transcript(root, workspace, id string) (searched string, found bool)
+}
+
 // Forker is the optional Harness capability `leo agent copy` needs: a launch
 // that resumes src as a new, independent session. newID is the pre-issued
 // id of the fork for harnesses that can pin one (claude); others ignore it

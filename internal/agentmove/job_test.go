@@ -686,6 +686,9 @@ func TestMoveSessionsFromAgentEnv(t *testing.T) {
 	if err := os.MkdirAll(proj, 0o755); err != nil {
 		t.Fatal(err)
 	}
+	if err := os.WriteFile(filepath.Join(proj, "sid-1.jsonl"), []byte("{}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	f.src.envs.env = map[string]string{"CLAUDE_CONFIG_DIR": inherited}
 	if _, err := f.move(t, false); err != nil {
 		t.Fatal(err)
@@ -814,6 +817,28 @@ func TestMoveRefusesBadSessionTargets(t *testing.T) {
 			}
 			if f.log.has("verb commit") {
 				t.Fatalf("committed after a bad answer: %v", f.log.all())
+			}
+		})
+	}
+}
+
+// An agent whose resume transcript is not in the source's session store is
+// refused before anything stops or reaches the destination: the destination
+// must never resume some other session of the same workspace instead.
+func TestMoveRefusesMissingSourceTranscript(t *testing.T) {
+	for _, mode := range []string{ModeMove, ModeCopy} {
+		t.Run(mode, func(t *testing.T) {
+			f := newMoveFixture(t)
+			transcript := filepath.Join(f.claude, "projects", session.ProjectSlug(f.ws), "sid-1.jsonl")
+			if err := os.Remove(transcript); err != nil {
+				t.Fatal(err)
+			}
+			_, err := f.mv.Run(context.Background(), Request{Agent: "web", Mode: mode, To: "laptop"}, nil)
+			if !HasCode(err, CodeSessionMissing) || !strings.Contains(err.Error(), transcript) {
+				t.Fatalf("err = %v, want session_missing naming %s", err, transcript)
+			}
+			if f.log.has("stop ") || f.log.has("verb ") {
+				t.Fatalf("something ran before the refusal: %v", f.log.all())
 			}
 		})
 	}

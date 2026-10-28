@@ -80,6 +80,16 @@ func newMovePair(t *testing.T) *movePair {
 	return p
 }
 
+// seedTranscript gives the agent a conversation to move: the fake claude
+// writes none, and a move refuses an agent with nothing to resume.
+func (p *movePair) seedTranscript(t *testing.T, h *moveHost, name, ws string) {
+	t.Helper()
+	sid := pollAgentstoreSessionID(t, h.home, name, moveTimeout)
+	path := filepath.Join(p.claudeDir, "projects", session.ProjectSlug(ws), sid+".jsonl")
+	mustMkdir(t, filepath.Dir(path))
+	mustWrite(t, path, `{"type":"user","message":{"content":"hi"}}`+"\n", 0o600)
+}
+
 func (p *movePair) newHost(t *testing.T, name, peer, bin, peers, hooks string) *moveHost {
 	t.Helper()
 	h := &moveHost{name: name, home: filepath.Join(p.root, name), socket: fmt.Sprintf("leo-e2e-%s-%d", name, time.Now().UnixNano())}
@@ -316,6 +326,7 @@ func TestAgentMove(t *testing.T) {
 	p := newMovePair(t)
 	p.a.mustLeo(t, "agent", "spawn", "mv")
 	p.a.waitRunning(t, "mv")
+	p.seedTranscript(t, p.a, "mv", p.ws)
 	occupant := filepath.Join(p.ws, "notes.txt")
 	mustWrite(t, occupant, "n\n", 0o600)
 
@@ -371,6 +382,7 @@ func TestAgentMoveWorktree(t *testing.T) {
 	sib := p.a.spawnWorktree(t, "move-sib")
 	wt := filepath.Join(p.ws, ".worktrees", "repo", "move-wt")
 	sibWT := filepath.Join(p.ws, ".worktrees", "repo", "move-sib")
+	p.seedTranscript(t, p.a, name, wt)
 	dirty(t, wt)
 	mustWrite(t, filepath.Join(sibWT, "sib.txt"), "s\n", 0o600)
 	before, sibBefore := gitState(t, wt), gitState(t, sibWT)
@@ -429,6 +441,7 @@ func TestAgentMoveWorktreeSubmodule(t *testing.T) {
 	canonical := p.initRepo(t, true)
 	name := p.a.spawnWorktree(t, "move-wt")
 	wt := filepath.Join(p.ws, ".worktrees", "repo", "move-wt")
+	p.seedTranscript(t, p.a, name, wt)
 	gitIn(t, wt, "submodule", "update", "--init", "-q")
 	sub := filepath.Join(wt, "libs", "sub")
 	mustWrite(t, filepath.Join(sub, "lib.txt"), "lib\nlocal\n", 0o600)
@@ -523,6 +536,7 @@ func TestAgentMoveKeepsSymlinkedSessionStore(t *testing.T) {
 	}
 	p.a.mustLeo(t, "agent", "spawn", "mv")
 	p.a.waitRunning(t, "mv")
+	p.seedTranscript(t, p.a, "mv", p.ws)
 	p.a.mustLeo(t, "agent", "move", "mv", "--to", "host-b")
 	p.b.waitRunning(t, "mv")
 

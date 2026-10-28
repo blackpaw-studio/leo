@@ -149,9 +149,18 @@ func TestCopyMidTurnClaudeTruncates(t *testing.T) {
 func TestCopyMidTurnCodexRefused(t *testing.T) {
 	f := newMoveFixture(t)
 	f.rec.Harness = "codex"
+	f.rec.SessionID = "sid1"
 	if err := agentstore.Save(f.home, f.rec); err != nil {
 		t.Fatal(err)
 	}
+	codexHome := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(codexHome, "sessions"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(codexHome, "sessions", "rollout-2026-10-27T00-00-00-sid1.jsonl"), []byte("{}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	f.src.envs.env = map[string]string{"CODEX_HOME": codexHome}
 	f.prober.probe.Busy = true
 	if _, err := f.copy(t, Request{Agent: "web", Mode: ModeCopy, To: "laptop", Force: true}); !HasCode(err, CodeAgentBusy) {
 		t.Fatalf("copy of a busy codex agent = %v, want agent_busy even with force", err)

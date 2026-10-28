@@ -272,9 +272,28 @@ func (t *transfer) validate(ctx context.Context) error {
 	if t.env, err = t.mv.Agents.RuntimeEnv(rec); err != nil {
 		return problemf(CodeEnvironmentMissing, "%s's env cannot be resolved here: %v", rec.Name, err)
 	}
+	if err := t.checkTranscript(); err != nil {
+		return err
+	}
 	t.notePersistentTask()
 	if t.isCopy() {
 		return t.validateCopy(ctx, records)
+	}
+	return nil
+}
+
+// checkTranscript refuses an agent whose resume session has no transcript in
+// the source's store. Nothing has stopped yet, and without it the
+// destination could resume another session of the same workspace.
+func (t *transfer) checkTranscript() error {
+	loc, ok := t.adapter.(harness.TranscriptLocator)
+	root := t.adapter.SessionRoot(t.env)
+	id := t.m.SourceSessionID
+	if !ok || root == "" || id == "" {
+		return nil
+	}
+	if searched, found := loc.Transcript(root, t.rec.Workspace, id); !found {
+		return problemf(CodeSessionMissing, "%s's session %s has no transcript (looked for %s); there is nothing to resume, so it was not moved", t.rec.Name, id, searched)
 	}
 	return nil
 }

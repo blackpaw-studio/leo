@@ -18,9 +18,10 @@ import (
 const stageDir = "harness/claude"
 
 var (
-	_ harness.SessionMover   = Claude{}
-	_ harness.Forker         = Claude{}
-	_ harness.SnapshotCopier = Claude{}
+	_ harness.SessionMover      = Claude{}
+	_ harness.Forker            = Claude{}
+	_ harness.TranscriptLocator = Claude{}
+	_ harness.SnapshotCopier    = Claude{}
 )
 
 // SnapshotCopy: a copy takes the transcript up to its last completed turn
@@ -34,6 +35,13 @@ func (Claude) SessionRoot(env map[string]string) string {
 		return ""
 	}
 	return dir
+}
+
+// Transcript is <root>/projects/<slug>/<id>.jsonl.
+func (Claude) Transcript(root, workspace, id string) (string, bool) {
+	path := filepath.Join(root, "projects", session.ProjectSlug(workspace), id+".jsonl")
+	info, err := os.Stat(path)
+	return path, err == nil && info.Mode().IsRegular()
 }
 
 // SessionFiles is the workspace's whole project dir (every transcript, its

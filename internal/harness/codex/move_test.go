@@ -61,3 +61,23 @@ func TestCodexRefreshStripsForkAfterDiscovery(t *testing.T) {
 		t.Fatalf("recover = %v", got)
 	}
 }
+
+func TestCodexTranscriptFindsRolloutByID(t *testing.T) {
+	root := t.TempDir()
+	if _, ok := (Codex{}).Transcript(root, "", "aaa"); ok {
+		t.Fatal("found a rollout in an empty store")
+	}
+	p := filepath.Join(root, "sessions/2026/10/26/rollout-2026-10-26T10-00-00-aaa.jsonl")
+	if err := os.MkdirAll(filepath.Dir(p), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(p, []byte("{}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := (Codex{}).Transcript(root, "", "aaa"); !ok {
+		t.Fatal("rollout not found")
+	}
+	if _, ok := (Codex{}).Transcript(root, "", "bbb"); ok {
+		t.Fatal("found another session's rollout")
+	}
+}

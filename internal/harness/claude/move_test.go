@@ -136,3 +136,15 @@ func TestClaudeCopyStagesAndPlacesUnderNewSlug(t *testing.T) {
 		t.Fatalf("move staged %v", entries)
 	}
 }
+
+func TestClaudeTranscriptFindsOnlyThatSession(t *testing.T) {
+	root, ws := t.TempDir(), "/Users/me/ws"
+	touch(t, filepath.Join(root, "projects", session.ProjectSlug(ws), "other.jsonl"), "{}\n")
+	if path, ok := (Claude{}).Transcript(root, ws, "sid"); ok || !strings.HasSuffix(path, "sid.jsonl") {
+		t.Fatalf("Transcript = %q, %v; another session's file must not count", path, ok)
+	}
+	touch(t, filepath.Join(root, "projects", session.ProjectSlug(ws), "sid.jsonl"), "{}\n")
+	if _, ok := (Claude{}).Transcript(root, ws, "sid"); !ok {
+		t.Fatal("transcript not found")
+	}
+}

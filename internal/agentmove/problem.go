@@ -17,6 +17,7 @@ const (
 	CodeHarnessBinaryMissing = "harness_binary_missing"
 	CodeHarnessUnsupported   = "harness_unsupported"
 	CodeSessionRootMissing   = "session_root_missing"
+	CodeSessionMissing       = "session_missing"
 	CodeNameTaken            = "name_taken"
 	CodeWorkspaceInUse       = "workspace_in_use"
 	CodeWorkspaceExists      = "workspace_exists"

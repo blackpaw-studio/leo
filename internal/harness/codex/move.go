@@ -11,12 +11,19 @@ import (
 )
 
 var (
-	_ harness.SessionMover = Codex{}
-	_ harness.Forker       = Codex{}
+	_ harness.SessionMover      = Codex{}
+	_ harness.Forker            = Codex{}
+	_ harness.TranscriptLocator = Codex{}
 )
 
 // SessionRoot is $CODEX_HOME for env.
 func (Codex) SessionRoot(env map[string]string) string { return CodexHome(env) }
+
+// Transcript finds id's rollout under <root>/sessions.
+func (c Codex) Transcript(root, _, id string) (string, bool) {
+	rels, err := c.SessionFiles(root, "", []string{id})
+	return filepath.Join(root, "sessions"), err == nil && len(rels) > 0
+}
 
 // SessionFiles finds each id's rollout under sessions/ by file name
 // (rollout-<timestamp>-<id>.jsonl, possibly compressed). The global state
