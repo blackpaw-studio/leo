@@ -324,8 +324,8 @@ func pruneEnv(env, fresh map[string]string) map[string]string {
 // envLayers are the inputs to an agent launch's env, lowest precedence first.
 type envLayers struct {
 	harness   map[string]string // the harness adapter's own env overlay
-	named     map[string]string // merged named environments
-	literal   map[string]string // the template's literal env: map
+	named     config.EnvLayer   // merged named environments, secrets unresolved
+	literal   config.EnvLayer   // the template's literal env:, secrets unresolved
 	inherited map[string]string // a from-agent spawn's inherited layer, raw
 	spawn     map[string]string // the caller's explicit --env overrides
 }
@@ -333,11 +333,27 @@ type envLayers struct {
 // composeEnv layers an agent's env: harness < named environments < template
 // env < inherited (pruned of keys the harness env now owns) < spawn, then
 // normalizes LEO_PERMISSIONS from tmpl. It is the one place the layering
-// lives, so spawn, worktree spawn and restart cannot drift apart.
-func composeEnv(l envLayers, tmpl config.TemplateConfig) map[string]string {
-	env := mergeEnv(mergeEnv(l.harness, l.named), l.literal)
-	env = mergeEnv(env, pruneEnv(l.inherited, l.harness))
-	return applyPermissions(mergeEnv(env, l.spawn), tmpl)
+// lives, so spawn, worktree spawn and restart cannot drift apart. Secret
+// references resolve through x only once the layers merge, so one a higher
+// layer shadows never reaches its backend; a failure is a
+// *config.SecretResolutionError.
+func composeEnv(l envLayers, tmpl config.TemplateConfig, x config.Expander) (map[string]string, error) {
+	env, err := x.ResolveLayer(config.MergeLayers(
+		config.ValuesLayer(l.harness), l.named, l.literal,
+		config.ValuesLayer(pruneEnv(l.inherited, l.harness)), config.ValuesLayer(l.spawn),
+	))
+	if err != nil {
+		return nil, err
+	}
+	return applyPermissions(env, tmpl), nil
+}
+
+// templateEnvScope names a template's literal env in errors.
+func templateEnvScope(template string) string {
+	if template == "" {
+		return "env"
+	}
+	return "templates." + template + ".env"
 }
 
 // inheritedFromSource is the env a from-agent spawn inherits from src: the
@@ -353,12 +369,13 @@ func inheritedFromSource(src agentstore.Record) map[string]string {
 
 // resolveSpawnNamed resolves the named environments a spawn runs under: the
 // spec's override, else the template's, else defaults. Values are expanded by
-// x. Called before any name reservation or clone so an unknown name or an unset
-// variable fails with nothing to clean up.
-func resolveSpawnNamed(cfg *config.Config, tmpl config.TemplateConfig, spec SpawnSpec, x config.Expander) (map[string]string, error) {
-	named, err := cfg.ResolveNamed(cfg.EnvironmentNames(spec.Environments, tmpl.Environments), x)
+// x; secret references stay unresolved until composeEnv. Called before any
+// name reservation or clone so an unknown name or an unset variable fails
+// with nothing to clean up.
+func resolveSpawnNamed(cfg *config.Config, tmpl config.TemplateConfig, spec SpawnSpec, x config.Expander) (config.EnvLayer, error) {
+	named, err := cfg.NamedLayer(cfg.EnvironmentNames(spec.Environments, tmpl.Environments), x)
 	if err != nil {
-		return nil, err
+		return config.EnvLayer{}, err
 	}
 	return named, cfg.ValidateEnvironmentNames(spec.Environments)
 }
@@ -606,7 +623,7 @@ func (m *Manager) spawnShared(cfg *config.Config, tmpl config.TemplateConfig, sp
 	if err != nil {
 		return Record{}, err
 	}
-	literal, err := config.ExpandLiteral(tmpl.Env, m.env)
+	literal, err := m.env.LiteralLayer(templateEnvScope(spec.Template), tmpl.Env)
 	if err != nil {
 		return Record{}, fmt.Errorf("template %q: %w", spec.Template, err)
 	}
@@ -671,7 +688,10 @@ func (m *Manager) spawnShared(cfg *config.Config, tmpl config.TemplateConfig, sp
 		openingPrompt = spec.Prompt
 	}
 	webPort := strconv.Itoa(cfg.WebPort())
-	env := composeEnv(envLayers{harness: harnessEnv, named: named, literal: literal, spawn: spec.Env}, tmpl)
+	env, err := composeEnv(envLayers{harness: harnessEnv, named: named, literal: literal, spawn: spec.Env}, tmpl, m.env)
+	if err != nil {
+		return Record{}, err
+	}
 
 	idleStr := ""
 	if d := cfg.ResolveIdleSuspend(tmpl, spec.IdleSuspend); d > 0 {
@@ -898,7 +918,7 @@ func (m *Manager) spawnWorktreeCore(ctx context.Context, cfg *config.Config, tmp
 	if err != nil {
 		return Record{}, err
 	}
-	literal, err := config.ExpandLiteral(tmpl.Env, m.env)
+	literal, err := m.env.LiteralLayer(templateEnvScope(spec.Template), tmpl.Env)
 	if err != nil {
 		return Record{}, fmt.Errorf("template %q: %w", spec.Template, err)
 	}
@@ -998,7 +1018,11 @@ func (m *Manager) spawnWorktreeCore(ctx context.Context, cfg *config.Config, tmp
 	// --env overrides always win, including over harness env, matching
 	// spawnShared's layering (mergeEnv(harnessEnv, tmpl.Env) as the base,
 	// caller env as the top overlay).
-	env := composeEnv(envLayers{harness: harnessEnv, named: named, literal: literal, inherited: p.inheritEnv, spawn: spec.Env}, tmpl)
+	env, err := composeEnv(envLayers{harness: harnessEnv, named: named, literal: literal, inherited: p.inheritEnv, spawn: spec.Env}, tmpl, m.env)
+	if err != nil {
+		rollbackWorktree()
+		return Record{}, err
+	}
 
 	idleStr := ""
 	if d := cfg.ResolveIdleSuspend(tmpl, spec.IdleSuspend); d > 0 {
@@ -1697,11 +1721,11 @@ var errWiringNotBuilt = errors.New("building launch wiring failed")
 func resolveTemplateWiring(cfg *config.Config, rec agentstore.Record, tmpl config.TemplateConfig, webToken string, mcp leomcp.Server, policy envPolicy, x config.Expander) ([]string, map[string]string, error) {
 	// Named environments first: a name config no longer defines fails the
 	// whole resolve before any harness work or side effect.
-	named, err := cfg.ResolveNamed(cfg.EnvironmentNames(rec.Environments, tmpl.Environments), x)
+	named, err := cfg.NamedLayer(cfg.EnvironmentNames(rec.Environments, tmpl.Environments), x)
 	if err != nil {
 		return nil, nil, fmt.Errorf("agent %q: %w", rec.Name, err)
 	}
-	literal, err := config.ExpandLiteral(tmpl.Env, x)
+	literal, err := x.LiteralLayer(templateEnvScope(rec.Template), tmpl.Env)
 	if err != nil {
 		return nil, nil, fmt.Errorf("agent %q: template %q: %w", rec.Name, rec.Template, err)
 	}
@@ -1714,7 +1738,10 @@ func resolveTemplateWiring(cfg *config.Config, rec agentstore.Record, tmpl confi
 
 	var newEnv map[string]string
 	if policy == rebuildEnvFromTemplate || rec.EnvLayered || rec.SpawnEnv != nil || rec.InheritedEnv != nil || rec.Env == nil {
-		newEnv = composeEnv(envLayers{harness: newHarnessEnv, named: named, literal: literal, inherited: rec.InheritedEnv, spawn: rec.SpawnEnv}, tmpl)
+		newEnv, err = composeEnv(envLayers{harness: newHarnessEnv, named: named, literal: literal, inherited: rec.InheritedEnv, spawn: rec.SpawnEnv}, tmpl, x)
+		if err != nil {
+			return nil, nil, fmt.Errorf("agent %q: %w", rec.Name, err)
+		}
 	} else {
 		// Legacy record: leo can't tell which layer produced which stored key,
 		// so it layers rather than reconstructs. Every stored key survives
@@ -1730,7 +1757,10 @@ func resolveTemplateWiring(cfg *config.Config, rec agentstore.Record, tmpl confi
 		// config (expanded), so they are current by definition and shadow the
 		// stale stored keys too — a stored raw "~/x" must not outlive the
 		// expansion. Only unattributed keys survive from the stored env.
-		owned := mergeEnv(mergeEnv(newHarnessEnv, named), literal)
+		owned, err := x.ResolveLayer(config.MergeLayers(config.ValuesLayer(newHarnessEnv), named, literal))
+		if err != nil {
+			return nil, nil, fmt.Errorf("agent %q: %w", rec.Name, err)
+		}
 		newEnv = applyPermissions(mergeEnv(owned, pruneEnv(rec.Env, owned)), tmpl)
 	}
 

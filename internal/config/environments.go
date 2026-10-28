@@ -53,58 +53,58 @@ func (c *Config) MergeEnvironments(names []string) (EnvMap, error) {
 // ResolveNamed merges the named environments like MergeEnvironments, with
 // every value expanded by x. Each environment is expanded before merging, so
 // an unset variable in a key a later environment overrides still fails. An
-// *UnsetVariableError names the environment, key and variable.
+// *UnsetVariableError names the environment, key and variable. Secret
+// references are resolved after merging, so only the effective one of each
+// key reaches its backend.
 func (c *Config) ResolveNamed(names []string, x Expander) (map[string]string, error) {
 	if len(names) == 0 {
 		return nil, nil
 	}
-	merged := map[string]string{}
-	for _, name := range names {
-		env, err := c.LookupEnvironment(name)
-		if err != nil {
-			return nil, err
-		}
-		expanded, err := x.expandMap("environments."+name, env)
-		if err != nil {
-			return nil, err
-		}
-		maps.Copy(merged, expanded)
+	layer, err := c.NamedLayer(names, x)
+	if err != nil {
+		return nil, err
 	}
-	return merged, nil
+	return nonNil(x.ResolveLayer(layer))
 }
 
 // ExpandLiteral expands the values of a literal `env:` map (a template's or
-// task's) with x. The result is a new map; nil in, nil out.
+// task's) with x and resolves its secret references. The result is a new
+// map; nil in, nil out.
 func ExpandLiteral(literal EnvMap, x Expander) (map[string]string, error) {
 	if literal == nil {
 		return nil, nil
 	}
-	return x.expandMap("env", literal)
+	layer, err := x.LiteralLayer("env", literal)
+	if err != nil {
+		return nil, err
+	}
+	return nonNil(x.ResolveLayer(layer))
+}
+
+func nonNil(env map[string]string, err error) (map[string]string, error) {
+	if err == nil && env == nil {
+		env = map[string]string{}
+	}
+	return env, err
 }
 
 // ResolveEnv layers the final environment, lowest to highest precedence:
 // merged named environments, the literal `env:` map of a template or task,
 // then per-spawn `--env K=V` pairs. The named and literal layers are expanded
 // by x (see Expander); spawn pairs are passed through as given, since the
-// caller's shell has already had its say. Inputs are not mutated. Returns nil
-// when every layer is empty.
+// caller's shell has already had its say. Secret references resolve once the
+// layers merge, so a shadowed one never runs. Inputs are not mutated.
+// Returns nil when every layer is empty.
 func (c *Config) ResolveEnv(names []string, literal EnvMap, spawn map[string]string, x Expander) (map[string]string, error) {
-	named, err := c.ResolveNamed(names, x)
+	named, err := c.NamedLayer(names, x)
 	if err != nil {
 		return nil, err
 	}
-	lit, err := ExpandLiteral(literal, x)
+	lit, err := x.LiteralLayer("env", literal)
 	if err != nil {
 		return nil, err
 	}
-	if len(named) == 0 && len(lit) == 0 && len(spawn) == 0 {
-		return nil, nil
-	}
-	out := map[string]string{}
-	maps.Copy(out, named)
-	maps.Copy(out, lit)
-	maps.Copy(out, spawn)
-	return out, nil
+	return x.ResolveLayer(MergeLayers(named, lit, ValuesLayer(spawn)))
 }
 
 // validateEnvironments checks the top-level environments map and every
@@ -233,23 +233,19 @@ func (c *Config) DispatchEnvironmentNames(tmpl TemplateConfig, inherited []strin
 // inherited named environments layered on top, so the caller wins any key
 // both set. With no inherited names it equals TemplateEnv.
 func (c *Config) DispatchEnv(tmpl TemplateConfig, inherited []string, x Expander) (map[string]string, error) {
-	base, err := c.TemplateEnv(tmpl, x)
+	named, err := c.NamedLayer(c.EnvironmentNames(nil, tmpl.Environments), x)
 	if err != nil {
 		return nil, err
 	}
-	top, err := c.ResolveNamed(inherited, x)
+	lit, err := x.LiteralLayer("env", tmpl.Env)
 	if err != nil {
 		return nil, err
 	}
-	if len(top) == 0 {
-		return base, nil
+	top, err := c.NamedLayer(inherited, x)
+	if err != nil {
+		return nil, err
 	}
-	out := maps.Clone(base)
-	if out == nil {
-		out = map[string]string{}
-	}
-	maps.Copy(out, top)
-	return out, nil
+	return x.ResolveLayer(MergeLayers(named, lit, top))
 }
 
 // EnvironmentKeys lists, sorted, every variable a named environment or a

@@ -13,16 +13,18 @@ import (
 type LookupFunc func(name string) (string, bool)
 
 // Expander expands "$VAR", "${VAR}", a leading "~" or "~/", and "$$" in
-// environment values. The zero value reads the launching process's
-// environment (os.LookupEnv) and home directory (os.UserHomeDir); tests
-// inject both.
+// environment values, and resolves secret references. The zero value reads
+// the launching process's environment (os.LookupEnv) and home directory
+// (os.UserHomeDir) and resolves through this machine's secret stores
+// (secretenv.System); tests inject all three.
 //
-// Config structs hold raw values, so a web-UI save writes "${HOME}" back to
-// leo.yaml untouched. Expansion happens only when an environment is resolved
-// for a launch.
+// Config structs hold raw values and references, so a web-UI save writes
+// "${HOME}" or a reference back to leo.yaml untouched. Expansion and
+// resolution happen only when an environment is resolved for a launch.
 type Expander struct {
-	Lookup LookupFunc
-	Home   func() (string, error)
+	Lookup  LookupFunc
+	Home    func() (string, error)
+	Secrets SecretResolver
 }
 
 // UnsetVariableError reports a "$VAR" reference whose variable is not set.
@@ -187,25 +189,6 @@ func (e *SecretResolutionError) Error() string {
 		where = e.Scope + "." + e.Key
 	}
 	return fmt.Sprintf("%s: secret %s: %s", where, e.Ref, e.Reason)
-}
-
-// expandMap expands every value of env, naming scope and key in any error. It
-// returns a new map; env is untouched.
-func (x Expander) expandMap(scope string, env EnvMap) (map[string]string, error) {
-	out := make(map[string]string, len(env))
-	for _, k := range env.Keys() {
-		lit, ok := env[k].AsLiteral()
-		if !ok {
-			ref, _ := env[k].Ref()
-			return nil, &SecretResolutionError{Scope: scope, Key: k, Ref: ref, Reason: "not resolvable"}
-		}
-		expanded, err := x.Expand(lit)
-		if err != nil {
-			return nil, scoped(err, scope, k)
-		}
-		out[k] = expanded
-	}
-	return out, nil
 }
 
 func scoped(err error, scope, key string) error {

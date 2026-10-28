@@ -2,7 +2,6 @@ package config
 
 import (
 	"encoding/json"
-	"errors"
 	"reflect"
 	"strings"
 	"testing"
@@ -154,17 +153,5 @@ func TestValidateRejectsBadSecretRefs(t *testing.T) {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("error lacks %q:\n%v", want, err)
 		}
-	}
-}
-
-func TestExpandFailsClosedOnRefBeforeResolution(t *testing.T) {
-	ref := secretenv.Ref{Backend: secretenv.Keychain, Service: "S"}
-	_, err := ExpandLiteral(EnvMap{"TOK": Secret(ref)}, Expander{})
-	var se *SecretResolutionError
-	if !errors.As(err, &se) {
-		t.Fatalf("err = %v (%T), want *SecretResolutionError", err, err)
-	}
-	if se.Key != "TOK" || se.Ref.Service != "S" {
-		t.Errorf("err = %#v", se)
 	}
 }
