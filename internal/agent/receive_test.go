@@ -185,7 +185,7 @@ func TestArrivalEnvIsReceiveSpawnEnv(t *testing.T) {
 	rec := arriving(t.TempDir())
 	rec.InheritedEnv = map[string]string{"CLAUDE_CONFIG_DIR": "/inherited/claude"}
 	spec := ReceiveSpec{Record: rec, From: "studio", At: receiveAt}
-	env, err := m.ArrivalEnv(spec)
+	env, _, err := m.ArrivalEnv(spec)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -203,12 +203,12 @@ func TestRuntimeEnvIsRestartEnv(t *testing.T) {
 	m, _, _, _ := receiveManager(t)
 	rec := arriving(t.TempDir())
 	rec.InheritedEnv = map[string]string{"CLAUDE_CONFIG_DIR": "/inherited/claude"}
-	env, err := m.RuntimeEnv(rec)
+	env, _, err := m.RuntimeEnv(rec)
 	if err != nil || env["CLAUDE_CONFIG_DIR"] != "/inherited/claude" {
 		t.Fatalf("RuntimeEnv = %v, %v", env, err)
 	}
 	legacy := agentstore.Record{Name: "old", Template: "gone", Harness: "claude", Env: map[string]string{"CLAUDE_CONFIG_DIR": "/stored"}}
-	if env, err := m.RuntimeEnv(legacy); err != nil || env["CLAUDE_CONFIG_DIR"] != "/stored" {
+	if env, _, err := m.RuntimeEnv(legacy); err != nil || env["CLAUDE_CONFIG_DIR"] != "/stored" {
 		t.Fatalf("RuntimeEnv(legacy) = %v, %v", env, err)
 	}
 }

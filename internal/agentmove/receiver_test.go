@@ -16,19 +16,22 @@ import (
 	"github.com/blackpaw-studio/leo/internal/agentstore"
 	"github.com/blackpaw-studio/leo/internal/config"
 	"github.com/blackpaw-studio/leo/internal/git/gittest"
+	"github.com/blackpaw-studio/leo/internal/redact"
 	"github.com/blackpaw-studio/leo/internal/session"
 )
 
 type fakeAgents struct {
 	list, afterReceive []agent.Record
 	received, shadows  []agent.ReceiveSpec
+	shadowCauses       []error
 	receiveErr         error
 	shadowErr          error
 	envs               *configEnvs
 }
 
-func (f *fakeAgents) ArrivalEnv(spec agent.ReceiveSpec) (map[string]string, error) {
-	return f.envs.of(spec.Record)
+func (f *fakeAgents) ArrivalEnv(spec agent.ReceiveSpec) (map[string]string, *redact.Secrets, error) {
+	env, err := f.envs.of(spec.Record)
+	return env, redact.NewSecrets(f.envs.secrets), err
 }
 
 // configEnvs stands in for agent.Manager's runtime env resolver: an
@@ -37,6 +40,8 @@ type configEnvs struct {
 	cfg *config.Config
 	env map[string]string
 	err error
+	// secrets are the values of env's secret-sourced keys.
+	secrets map[string]string
 }
 
 func (c *configEnvs) of(rec agentstore.Record) (map[string]string, error) {
@@ -56,8 +61,9 @@ func (f *fakeAgents) Receive(_ context.Context, spec agent.ReceiveSpec) error {
 	f.list = f.afterReceive
 	return nil
 }
-func (f *fakeAgents) ShadowReceive(spec agent.ReceiveSpec, _ error) error {
+func (f *fakeAgents) ShadowReceive(spec agent.ReceiveSpec, err error) error {
 	f.shadows = append(f.shadows, spec)
+	f.shadowCauses = append(f.shadowCauses, err)
 	return f.shadowErr
 }
 

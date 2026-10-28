@@ -18,6 +18,7 @@ import (
 	"github.com/blackpaw-studio/leo/internal/config"
 	"github.com/blackpaw-studio/leo/internal/git"
 	"github.com/blackpaw-studio/leo/internal/harness"
+	"github.com/blackpaw-studio/leo/internal/redact"
 )
 
 // Destination verbs, served by `leo agent move-receive <verb>` over ssh (and
@@ -52,7 +53,7 @@ func StagingDir(homePath, name string) string {
 type ReceiveManager interface {
 	List() []agent.Record
 	// ArrivalEnv is the env Receive will start spec's agent with.
-	ArrivalEnv(spec agent.ReceiveSpec) (map[string]string, error)
+	ArrivalEnv(spec agent.ReceiveSpec) (map[string]string, *redact.Secrets, error)
 	Receive(ctx context.Context, spec agent.ReceiveSpec) error
 	ShadowReceive(spec agent.ReceiveSpec, cause error) error
 }
@@ -243,7 +244,7 @@ func (r *Receiver) facts(ctx context.Context, cfg *config.Config, host Host, m M
 			d.HarnessBinary = p
 		}
 		if mover, ok := h.(harness.SessionMover); ok && found && len(d.MissingEnvironments) == 0 {
-			env, err := r.Agents.ArrivalEnv(receiveSpec(m, r.Clock.Now()))
+			env, _, err := r.Agents.ArrivalEnv(receiveSpec(m, r.Clock.Now()))
 			if err != nil {
 				d.EnvError = err.Error()
 			} else if root := mover.SessionRoot(env); root != "" {
@@ -370,13 +371,15 @@ func (r *Receiver) Commit(ctx context.Context, m Manifest) (CommitResult, error)
 	phase(PhaseCommitting)
 	// Resolved before anything is placed: an env that cannot resolve here
 	// refuses the commit with nothing to undo.
-	env, err := r.Agents.ArrivalEnv(spec)
+	env, scrub, err := r.Agents.ArrivalEnv(spec)
 	if err != nil {
 		phase(PhaseFailed)
 		return CommitResult{}, err
 	}
 	// fail settles a failure; one it cannot settle keeps the last phase.
+	// Hook and harness output reaches err, so its secret values go first.
 	fail := func(err error) (CommitResult, error) {
+		err = redactError(scrub, err)
 		if m.IsCopy() && !r.hasRecord(spec.Record.Name) {
 			// No record owns the placed copy: hand it back to its partial,
 			// which the re-run resumes.
@@ -411,13 +414,13 @@ func (r *Receiver) Commit(ctx context.Context, m Manifest) (CommitResult, error)
 		}
 		// Receive leaves a failed start dormant itself.
 		phase(PhaseFailed)
-		return CommitResult{}, err
+		return CommitResult{}, redactError(scrub, err)
 	}
 	if err := r.confirm(ctx, spec.Record.Name); err != nil {
 		return fail(err)
 	}
 	phase(PhaseLive)
-	return CommitResult{Name: spec.Record.Name, Status: "running", Notes: notes}, nil
+	return CommitResult{Name: spec.Record.Name, Status: "running", Notes: redactProblems(scrub, notes)}, nil
 }
 
 // hasRecord reports whether an agent named name exists here, dormant or not.

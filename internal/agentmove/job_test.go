@@ -19,6 +19,7 @@ import (
 	"github.com/blackpaw-studio/leo/internal/config"
 	"github.com/blackpaw-studio/leo/internal/drain"
 	"github.com/blackpaw-studio/leo/internal/git/gittest"
+	"github.com/blackpaw-studio/leo/internal/redact"
 	"github.com/blackpaw-studio/leo/internal/session"
 )
 
@@ -62,8 +63,9 @@ type fakeSource struct {
 	markFails int
 }
 
-func (f *fakeSource) RuntimeEnv(rec agentstore.Record) (map[string]string, error) {
-	return f.envs.of(rec)
+func (f *fakeSource) RuntimeEnv(rec agentstore.Record) (map[string]string, *redact.Secrets, error) {
+	env, err := f.envs.of(rec)
+	return env, redact.NewSecrets(f.envs.secrets), err
 }
 
 func (f *fakeSource) BeginMove(name string, mode agent.MoveMode) (func(), error) {

@@ -52,7 +52,7 @@ There is no fallback to an empty string. `restart`, `reset` and `set-environment
 
 ## Output redaction
 
-A child that prints its own secret (a token echoed in an error, say) does not carry the value into what leo keeps or returns. Every resolved value of a task run or dispatch is replaced with `<secret KEY>` in the task log and history, the returned and notified error, the failure card, a dispatch's recording (`leo dispatch output`), its wait result, and an interactive dispatch's turn text. A headless follow-up that resolved a rotated value masks both the old and the new value.
+A child that prints its own secret (a token echoed in an error, say) does not carry the value into what leo keeps or returns. Every resolved value of a task run or dispatch is replaced with `<secret KEY>` in the task log and history, the returned and notified error, the failure card, a dispatch's recording (`leo dispatch output`), its wait result, an interactive dispatch's turn text, and an agent move or copy's job status and dormant-record reason (where a move hook or a harness's session export printed a value; each host masks its own resolved values). A headless follow-up that resolved a rotated value masks both the old and the new value.
 
 - **Threshold.** Values shorter than 4 bytes are never replaced: a PIN or `on` would match ordinary output everywhere and shred it. Keep secrets you want masked at 4 bytes or longer.
 - **Not covered.** Only literal occurrences are masked, not an encoded or split form (base64, URL-escaped). An interactive dispatch adopted after a daemon restart has no values to mask with, so its later turn text is not redacted. Output leo never stores is out of scope: a tmux pane's scrollback and the harness's own transcript files.

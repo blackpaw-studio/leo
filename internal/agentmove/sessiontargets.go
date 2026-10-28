@@ -28,7 +28,7 @@ func (r *Receiver) SessionTargets(m Manifest) (SessionTargetsResponse, error) {
 	if !ok {
 		return SessionTargetsResponse{}, problemf(CodeHarnessUnsupported, "%s agents cannot be moved", h.Name())
 	}
-	env, err := r.Agents.ArrivalEnv(receiveSpec(m, r.Clock.Now()))
+	env, _, err := r.Agents.ArrivalEnv(receiveSpec(m, r.Clock.Now()))
 	if err != nil {
 		return SessionTargetsResponse{}, problemf(CodeEnvironmentMissing, "the agent's env cannot be resolved here: %v", err)
 	}
