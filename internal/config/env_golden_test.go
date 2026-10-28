@@ -27,6 +27,9 @@ func TestEnvRoundTripGolden(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// HomePath is the checkout's absolute testdata dir, not part of what the
+	// golden pins.
+	cfg.HomePath = ""
 	var js bytes.Buffer
 	enc := json.NewEncoder(&js)
 	enc.SetIndent("", "  ")
