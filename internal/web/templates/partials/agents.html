@@ -49,6 +49,7 @@
             <div class="process-status">
                 <span class="status-dot {{statusColor .Status}}"></span>
                 {{.Status}}
+                {{if .MovedTo}}<span class="pill warn" title="This agent now lives on {{.MovedTo}}; start it there">moved &rarr; {{.MovedTo}}</span>{{end}}
             </div>
             <div class="process-meta">
                 {{if .Branch}}branch: {{.Branch}} &middot; {{end}}
@@ -69,7 +70,11 @@
                     <button type="submit" class="btn btn-sm">Set env</button>
                 </form>
                 {{if eq .Status "stopped"}}
+                {{if .MovedTo}}
+                <button class="btn btn-sm" disabled title="Moved to {{.MovedTo}}">Start</button>
+                {{else}}
                 <button class="btn btn-sm hot" hx-post="/web/agent/{{.Name}}/start" hx-target="#agents-content" hx-swap="outerHTML">Start</button>
+                {{end}}
                 <button class="btn btn-sm btn-danger" hx-delete="/web/agent/{{.Name}}" hx-target="#agents-content" hx-swap="outerHTML"
                         hx-confirm="{{deleteConfirmText .Name .Branch}}">Delete</button>
                 {{else}}

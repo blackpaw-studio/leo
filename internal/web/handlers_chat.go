@@ -141,6 +141,9 @@ func (d chatDeliverer) start(ctx context.Context, name, harnessName, prompt stri
 	if s.agentSvc == nil {
 		return fmt.Errorf("agent %s is not running", name)
 	}
+	if err := s.movedErr(name); err != nil {
+		return err
+	}
 	starting()
 	// Started by someone else since the live check: deliver all the same,
 	// through the readiness-aware path below, as it may still be booting.

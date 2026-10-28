@@ -271,6 +271,9 @@ type agentData struct {
 	// Environments is the agent's own override, comma-joined for the inline
 	// edit form; empty means the template's list applies.
 	Environments string
+	// MovedTo is the host a stopped agent was moved to: the row shows a
+	// badge and no live Start button.
+	MovedTo string
 }
 
 // handleWebAgentSpawn spawns an agent via the web UI (form post).

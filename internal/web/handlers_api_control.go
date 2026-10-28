@@ -74,7 +74,7 @@ func (s *Server) requireOperatorToken(h http.HandlerFunc) http.HandlerFunc {
 func writeAPIControl(w http.ResponseWriter, out controlOutcome) {
 	switch {
 	case out.err != "":
-		writeJSON(w, out.status, apiResponse{Error: out.err})
+		writeJSON(w, out.status, apiResponse{Error: out.err, Code: out.code})
 	case out.status == http.StatusAccepted:
 		writeJSON(w, out.status, apiResponse{OK: true, Data: map[string]bool{"queued": true}})
 	default:

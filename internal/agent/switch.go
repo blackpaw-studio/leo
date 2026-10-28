@@ -84,6 +84,9 @@ func (m *Manager) SwitchTemplate(name, template string) (SwitchResult, error) {
 	if !ok {
 		return SwitchResult{}, fmt.Errorf("no agentstore record for %q (cannot switch the template of an unpersisted agent)", name)
 	}
+	if err := m.checkMovable(rec); err != nil {
+		return SwitchResult{}, err
+	}
 
 	_, live := m.sup.EphemeralAgents()[name]
 	status := "running"
@@ -298,6 +301,12 @@ func switchResult(from, to agentstore.Record, status string) SwitchResult {
 		Resumed:      to.SessionID != "" && to.SessionID == from.SessionsByTemplate[to.Template],
 		Status:       status,
 	}
+}
+
+// PersistentTaskFor reports the first `runtime: persistent` task whose
+// target agent is name.
+func PersistentTaskFor(cfg *config.Config, name string) (string, bool) {
+	return persistentTaskFor(cfg, name)
 }
 
 // persistentTaskFor reports the first `runtime: persistent` task whose target

@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"sort"
 	"testing"
+	"time"
 
 	"github.com/blackpaw-studio/leo/internal/agentstore"
 	"github.com/blackpaw-studio/leo/internal/config"
@@ -195,6 +196,22 @@ func TestResolveHydratesStoreFields(t *testing.T) {
 	}
 	if rec.Restarts != 3 {
 		t.Errorf("restarts = %d, want 3", rec.Restarts)
+	}
+}
+
+// A moved agent resolves with where and when it moved, so `attach` can
+// refuse with the same agent_moved message as `start`.
+func TestResolveHydratesMove(t *testing.T) {
+	at := time.Date(2026, 10, 27, 21, 32, 20, 0, time.UTC)
+	mgr := newResolveManager(t, nil, map[string]agentstore.Record{
+		"web": {Name: "web", Template: "coding", Stopped: true, MovedTo: "laptop", MovedAt: &at},
+	})
+	rec, err := mgr.Resolve("web")
+	if err != nil {
+		t.Fatalf("resolve: %v", err)
+	}
+	if rec.MovedTo != "laptop" || rec.MovedAt == nil || !rec.MovedAt.Equal(at) {
+		t.Fatalf("moved = %q at %v, want laptop at %v", rec.MovedTo, rec.MovedAt, at)
 	}
 }
 

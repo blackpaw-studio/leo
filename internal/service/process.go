@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/blackpaw-studio/leo/internal/agent"
+	"github.com/blackpaw-studio/leo/internal/agentmove"
 	"github.com/blackpaw-studio/leo/internal/agentstore"
 	"github.com/blackpaw-studio/leo/internal/chat"
 	"github.com/blackpaw-studio/leo/internal/clienttools"
@@ -1103,6 +1104,9 @@ func defaultSupervisedExec(opts RunSupervisedOptions) error {
 	srv.SetFollower(followLoop)
 	stepDone()
 	stepDone = timer.Step("IPC listen")
+	// moveMover settles moves a previous daemon left fenced, once restore is
+	// done (nil when the IPC server failed to start).
+	var moveMover *agentmove.Mover
 	err = srv.Start()
 	stepDone()
 	if err != nil {
@@ -1125,6 +1129,13 @@ func defaultSupervisedExec(opts RunSupervisedOptions) error {
 		// reports "restoring" rather than "stopped".
 		agentMgr.SetReadiness(srv.Ready)
 		srv.SetAgentManager(agentMgr)
+		// `leo agent move` / `copy`: the destination verbs (move-receive)
+		// and the source jobs, which serve a local copy's verbs in-process.
+		moveReceiver := agentmove.NewReceiver(cfgLoader, agentMgr, opts.Version)
+		srv.SetMoveReceiver(moveReceiver)
+		moveProber := newDrainProber(supervisor, tmuxPath, nil, drainLogf)
+		moveMover = agentmove.NewMover(cfgLoader, agentMgr, moveProber, moveReceiver.Handle)
+		srv.SetMoveJobs(agentmove.NewJobs(moveMover))
 		// The ensure-exists task-delivery path (config.ResolveTaskTarget +
 		// runPersistent) needs the same agent.Manager to spawn/resume targets
 		// before injection. agentMgr already satisfies daemon.EnsureAgentManager
@@ -1185,6 +1196,11 @@ func defaultSupervisedExec(opts RunSupervisedOptions) error {
 	// before it is told to resume; the daemon owns this step, so it runs
 	// even if the CLI that restarted it died.
 	startPendingResume(ctx, srv, supervisor, bridgeHub, homePath)
+	// Best-effort and off the startup path: each fenced agent asks its
+	// destination over ssh how its move ended.
+	if moveMover != nil {
+		go moveMover.ReconcilePending(ctx, drainLogf)
+	}
 
 	// opencode has no per-invocation system-prompt flag, so Leo's nudge is
 	// delivered via opencode's global AGENTS.md instead. Only touch that

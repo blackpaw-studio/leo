@@ -79,6 +79,9 @@ func (m *Manager) SetEnvironments(name string, names []string) (SetEnvironmentsR
 	if !ok {
 		return SetEnvironmentsResult{}, fmt.Errorf("no agentstore record for %q (cannot set the environments of an unpersisted agent)", name)
 	}
+	if err := m.checkMovable(rec); err != nil {
+		return SetEnvironmentsResult{}, err
+	}
 	if task, bound := persistentTaskFor(cfg, name); bound {
 		return SetEnvironmentsResult{}, &PersistentTaskError{Agent: name, Task: task}
 	}

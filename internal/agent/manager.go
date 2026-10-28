@@ -147,6 +147,10 @@ type Manager struct {
 	// gone is told when an agent is stopped by an operator or deleted, so
 	// whatever was waiting on it can close. See SetGoneHook.
 	gone func(name string)
+	// moveMu guards moves, the in-flight move/copy locks by agent name (see
+	// BeginMove).
+	moveMu sync.Mutex
+	moves  map[string]MoveMode
 }
 
 // SetGoneHook sets a callback told the name of an agent that is gone: stopped
@@ -393,6 +397,11 @@ type Record struct {
 	// this agent again (an idle sweep, or a manual stop that requested it);
 	// false means it stays dormant until an operator runs Start explicitly.
 	WakeOnMessage bool `json:"wake_on_message,omitempty"`
+	// MovedTo mirrors agentstore.Record.MovedTo: the host a stopped agent was
+	// moved to. Its Status stays "stopped".
+	MovedTo string `json:"moved_to,omitempty"`
+	// MovedAt mirrors agentstore.Record.MovedAt: when MovedTo was set.
+	MovedAt *time.Time `json:"moved_at,omitempty"`
 	// Bridge is a live claude agent's leo bridge: BridgeConnected or
 	// BridgeAbsent. Empty for other harnesses and stopped agents.
 	Bridge string `json:"bridge,omitempty"`
@@ -586,7 +595,7 @@ func (m *Manager) Wakeable(name string) bool {
 		return false
 	}
 	rec, ok := stored[name]
-	return ok && rec.Stopped && rec.WakeOnMessage
+	return ok && rec.Stopped && rec.WakeOnMessage && !rec.Moved() && rec.MovePending == nil
 }
 
 // spawnShared is the non-worktree flow. Workspace resolution may do a network
@@ -1125,6 +1134,8 @@ func (m *Manager) List() []Record {
 			StartedAt:     rec.SpawnedAt,
 			StoppedReason: rec.StoppedReason,
 			WakeOnMessage: rec.WakeOnMessage,
+			MovedTo:       rec.MovedTo,
+			MovedAt:       rec.MovedAt,
 
 			ManualAppearance: rec.Appearance,
 		})
@@ -1268,6 +1279,9 @@ func (m *Manager) Start(name string) error {
 	if !ok {
 		return &ErrNotFound{Query: name}
 	}
+	if err := m.checkMovable(rec); err != nil {
+		return err
+	}
 	if !rec.Stopped {
 		if m.restoring() {
 			return fmt.Errorf("%w: %q", ErrDaemonRestoring, name)
@@ -1291,7 +1305,15 @@ func (m *Manager) Start(name string) error {
 		return fmt.Errorf("starting %q: %w", name, err)
 	}
 	args := resolvedArgs
-	if isClaude {
+	// A copy's first launch forks its source's conversation; every later
+	// one resumes the fork like any other agent.
+	forking := rec.ForkFromSession != ""
+	switch {
+	case forking:
+		if args, err = forkArgs(rec, resolvedArgs); err != nil {
+			return fmt.Errorf("starting %q: %w", name, err)
+		}
+	case isClaude:
 		args = ResumeArgs(resolvedArgs, resumeID)
 	}
 
@@ -1311,7 +1333,11 @@ func (m *Manager) Start(name string) error {
 	rec.Stopped = false
 	rec.StoppedReason = ""
 	rec.WakeOnMessage = false
-	rec.SessionID = resumeID
+	if forking {
+		rec.ForkFromSession = ""
+	} else {
+		rec.SessionID = resumeID
+	}
 	rec.SessionPinnedAt = nil
 	// Persist the re-resolved wiring, same as Restart: leaving the record
 	// describing wiring the agent is no longer running would make StaleAgents
@@ -1353,6 +1379,9 @@ func (m *Manager) Reset(name string) error {
 	rec, ok := stored[name]
 	if !ok {
 		return fmt.Errorf("no agentstore record for %q (cannot reset an unpersisted agent)", name)
+	}
+	if err := m.checkMovable(rec); err != nil {
+		return err
 	}
 
 	if _, live := m.sup.EphemeralAgents()[name]; live {
@@ -1461,6 +1490,9 @@ func (m *Manager) Restart(name string) error {
 			return fmt.Errorf("agent %q is not running", name)
 		}
 		return fmt.Errorf("no agentstore record for %q (cannot restart an unpersisted agent)", name)
+	}
+	if err := m.checkMovable(rec); err != nil {
+		return err
 	}
 
 	// A not-live record is only restartable when it was stopped BY THE
@@ -2046,6 +2078,9 @@ func (m *Manager) Rename(query, rawNewName string) (Record, error) {
 	records, err := agentstore.Load(agentstore.FilePath(cfg.HomePath))
 	if err != nil && !errors.Is(err, fs.ErrNotExist) {
 		return Record{}, fmt.Errorf("loading agent records: %w", err)
+	}
+	if err := m.checkMovable(records[oldName]); err != nil {
+		return Record{}, err
 	}
 	if _, exists := records[newName]; exists {
 		return Record{}, fmt.Errorf("%w: %q", ErrAgentNameTaken, newName)

@@ -89,6 +89,9 @@ type mockAgentService struct {
 	// wakeable — the safe default for an unknown or genuinely-stopped name.
 	wakeableNames map[string]bool
 
+	// movedErrs backs MovedErr: an agent moved to another host.
+	movedErrs map[string]error
+
 	restartAllCalled bool
 	restartAllResult agent.RestartResult
 
@@ -951,4 +954,10 @@ func TestAgentsPageShowsTheBridge(t *testing.T) {
 	if !strings.Contains(body, "bridge: absent, 2 pending") {
 		t.Fatalf("an absent bridge's queued commands are not shown in %q", body)
 	}
+}
+
+// MovedErr backs the optional moved-agent check: names in movedErrs report
+// that error, as agent.Manager does for an agent moved to another host.
+func (m *mockAgentService) MovedErr(name string) error {
+	return m.movedErrs[name]
 }

@@ -8,7 +8,7 @@ import (
 // ResumeArgs rewrites stored claude args so a restored or resumed agent rejoins
 // a prior session. Any existing `--session-id`/`--resume` pair is stripped
 // (defensive: never pass two session-selection flags) before appending
-// `--resume <sessionID>`. An empty sessionID returns the args with those flags
+// `--resume <sessionID>`. A `--fork-session` flag goes too. An empty sessionID returns the args with those flags
 // stripped — the caller has chosen a fresh spawn.
 func ResumeArgs(args []string, sessionID string) []string {
 	cleaned := make([]string, 0, len(args)+2)
@@ -18,6 +18,9 @@ func ResumeArgs(args []string, sessionID string) []string {
 				i++ // skip the value too
 			}
 			continue // drop the flag even if it has no value (never pass a naked flag)
+		}
+		if args[i] == "--fork-session" {
+			continue // a copy forks once; a resume rejoins the fork
 		}
 		cleaned = append(cleaned, args[i])
 	}

@@ -36,6 +36,8 @@ Permissions are applied in two places, from one policy:
 | `leo agent spawn` | `leo_spawn_agent` + `can_spawn` |
 | `leo agent worktree` | `leo_spawn_agent`, plus `can_spawn` when `--template` is given |
 | `leo agent stop` / `start` / `reset` / `restart` / `rename` | `leo_stop_agent` |
+| `leo agent move` | `leo_agent_move` |
+| `leo agent copy` | `leo_agent_copy` + `leo_spawn_agent` + `can_spawn` (the source agent's template) |
 | `leo run <task>` | `leo_run_task` |
 | `leo task enable` / `disable` | `leo_toggle_task` |
 | `leo service stop` / `restart` / `reparent` | `leo_stop_agent` |

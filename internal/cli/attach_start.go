@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/blackpaw-studio/leo/internal/agent"
 	"github.com/blackpaw-studio/leo/internal/daemon"
 	"github.com/blackpaw-studio/leo/internal/tmux"
 	"github.com/spf13/cobra"
@@ -115,6 +116,20 @@ func defaultAgentSessionReady(name string) bool {
 // TestEverySpawnRouteIsGated (permissions_test.go) statically scans every
 // source file that mentions daemon.AgentStart (via agentStartFn above) for
 // the literal substring gateCommand(cmd, "leo_stop_agent").
+// movedSessionError is the agent_moved refusal for a session that moved to
+// another host, nil otherwise. Attach checks it before ensureAgentRunning so
+// a moved agent says where it went instead of offering to start it here.
+func movedSessionError(s daemon.AgentSessionResponse) error {
+	if s.MovedTo == "" {
+		return nil
+	}
+	e := &agent.MovedError{Name: s.Name, To: s.MovedTo}
+	if s.MovedAt != nil {
+		e.At = *s.MovedAt
+	}
+	return e
+}
+
 func ensureAgentRunning(ctx context.Context, cmd *cobra.Command, homePath, name string, stopped bool) (bool, error) {
 	return ensureAgentRunningPrompt(ctx, cmd, homePath, name, stopped, true)
 }

@@ -331,6 +331,73 @@ func newRegistry(client *daemonClient, processName string, perms leotools.Permis
 	})
 
 	r.add(toolDef{
+		Name:        "leo_agent_move",
+		Description: "Hand an ephemeral agent off to another leo host (a client.hosts entry): its workspace, conversation and git state follow it and it resumes there. A busy agent is refused unless force, which cuts its turn off. Returns the move job at once; moving yourself ends this session, and the move finishes in the daemon.",
+		InputSchema: objectSchema(map[string]any{
+			"name":  map[string]any{"type": "string", "description": "Agent name (or shorthand) returned by leo_list_agents."},
+			"to":    map[string]any{"type": "string", "description": "Destination host, a client.hosts entry."},
+			"force": map[string]any{"type": "boolean", "description": "Move a busy agent anyway, cutting its turn off."},
+		}, "name", "to"),
+	}, func(args map[string]any) (string, error) {
+		name, err := stringArg(args, "name")
+		if err != nil {
+			return "", err
+		}
+		to, err := stringArg(args, "to")
+		if err != nil {
+			return "", err
+		}
+		force, _ := args["force"].(bool)
+		data, err := client.moveAgent(name, map[string]any{"mode": "move", "to": to, "force": force})
+		if err != nil {
+			return "", err
+		}
+		return string(data), nil
+	})
+
+	r.add(toolDef{
+		Name:        "leo_agent_copy",
+		Description: allowNote("Fork an ephemeral agent into an independent copy, on this host or another (to, a client.hosts entry): it starts from the same conversation and workspace state, in its own workspace and git branch, and the source keeps running. Returns the copy job at once. You may only copy agents whose template you may spawn.", "copy agents of these templates", perms.CanSpawn),
+		InputSchema: objectSchema(map[string]any{
+			"name":     map[string]any{"type": "string", "description": "Agent name (or shorthand) returned by leo_list_agents."},
+			"to":       map[string]any{"type": "string", "description": "Destination host, a client.hosts entry; omit to copy on this host."},
+			"new_name": map[string]any{"type": "string", "description": "The copy's name; default <name>-copy."},
+			"branch":   map[string]any{"type": "string", "description": "The copy's git branch; default <branch>-<copy name>. Required when HEAD is detached."},
+		}, "name"),
+	}, func(args map[string]any) (string, error) {
+		name, err := stringArg(args, "name")
+		if err != nil {
+			return "", err
+		}
+		body := map[string]any{"mode": "copy"}
+		for arg, field := range map[string]string{"to": "to", "new_name": "name", "branch": "branch"} {
+			v, err := optionalStringArg(args, arg)
+			if err != nil {
+				return "", err
+			}
+			if v != "" {
+				body[field] = v
+			}
+		}
+		template, err := client.agentTemplate(name)
+		if err != nil {
+			return "", err
+		}
+		// A copy is a spawn: a template denied leo_spawn_agent cannot copy.
+		if perms.DeniesTool("leo_spawn_agent") {
+			return "", errors.New("copying an agent is not permitted: this agent's template denies leo_spawn_agent")
+		}
+		if !perms.AllowsSpawn(template) {
+			return "", denialError("copy an agent from template", template, "templates", perms.CanSpawn)
+		}
+		data, err := client.moveAgent(name, body)
+		if err != nil {
+			return "", err
+		}
+		return string(data), nil
+	})
+
+	r.add(toolDef{
 		Name:        "leo_send_message",
 		Description: allowNote("Send a text message to another *running* Leo agent or process (see leo_list_agents). It arrives in the recipient's prompt as a new turn, prefixed with your name, and returns immediately without their reply. 'to' is the target's name; 'message' is the text. NOT for asking a different model a question — to consult a model by name (\"consult fable\", \"ask codex\"), use leo_consult instead; those names are templates, not agents.", "message", perms.CanMessage),
 		InputSchema: objectSchema(map[string]any{

@@ -276,6 +276,22 @@ Notes and limits:
 - Agents backing a `runtime: persistent` task are refused — those bind to their agent by name, so switching one would redirect a scheduled task's prompts into a template it was never configured for. Change `tasks.<name>.template` instead.
 - **Permissions:** a switch launches the target template, so it needs both `leo_stop_agent` and the `can_spawn` allowlist entry for that template. See [Permissions](../configuration/permissions.md).
 
+### `leo agent move <name> --to <host>`
+
+Hand an agent off to another Leo host: it stops here and resumes the same conversation and workspace state there, and this host keeps a dormant record marked `moved_to`. `--force` moves a busy agent, cutting its turn off. `--json` prints the finished job. See [Moving and copying agents](../configuration/agent-move.md) for host setup, hooks, git behaviour and recovery.
+
+```bash
+leo agent move web --to laptop
+```
+
+### `leo agent copy <name>`
+
+Fork an agent into an independent copy, here or on `--to <host>`, in `<workspace>-<copy name>` on branch `<branch>-<copy name>`. `--name` and `--branch` override those. The source keeps running. See [Moving and copying agents](../configuration/agent-move.md).
+
+```bash
+leo agent copy web --to laptop --name web-laptop
+```
+
 ### `leo agent delete <name>`
 
 Delete a stopped agent: removes its agentstore record, and for a worktree agent, its on-disk worktree too. Refuses a live agent — stop it first. Accepts shared-workspace agents as well as worktree agents (there is no lifecycle command left that can't act on a shared agent). Takes the canonical agent name — shorthand resolution only matches live agents, so `delete` requires the full name you saw in the last `leo agent list`.

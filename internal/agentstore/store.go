@@ -7,8 +7,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
+	"slices"
 	"sync"
 	"time"
 )
@@ -222,6 +224,60 @@ type Record struct {
 	// SetAppearance is its only writer: Save always keeps the stored value,
 	// so a respawn that builds a fresh record never wipes it.
 	Appearance *Appearance `json:"appearance,omitempty"`
+
+	// MovedTo marks a record whose agent now lives on another host: the
+	// client.hosts key it was moved to, or, on a destination whose receive
+	// failed, the source's hostname. A moved record is always Stopped with
+	// WakeOnMessage false, and nothing starts, wakes or delivers to it here.
+	// Save writes it as given, so a move back clears it.
+	MovedTo string `json:"moved_to,omitempty"`
+	// MovedAt is when MovedTo was set.
+	MovedAt *time.Time `json:"moved_at,omitempty"`
+	// MoveLog is the time of this agent's last move to or from each peer,
+	// keyed by the peer's hostname. It travels with the agent and feeds a
+	// move hook's LEO_MOVE_LAST.
+	MoveLog map[string]time.Time `json:"move_log,omitempty"`
+	// ForkFromSession is set on a copy until its first launch: the source
+	// session the copy's harness forks from.
+	ForkFromSession string `json:"fork_from_session,omitempty"`
+	// MovePending fences a source whose move's commit has begun and not
+	// settled: the agent may be live on To, so nothing starts, wakes,
+	// moves or rewires it here. Save keeps it; only Update lifts it.
+	MovePending *MovePending `json:"move_pending,omitempty"`
+}
+
+// MovePending is a move whose outcome the source does not know yet.
+type MovePending struct {
+	// To is the client.hosts key the agent was moving to.
+	To string `json:"to"`
+	// Peer is the destination's hostname, for the move log.
+	Peer string `json:"peer,omitempty"`
+	// RunID is the transfer's id, which the destination's status answers by.
+	RunID string    `json:"run_id"`
+	Since time.Time `json:"since"`
+}
+
+// Moved reports whether r's agent has been moved to another host.
+func (r Record) Moved() bool { return r.MovedTo != "" }
+
+// Portable is r as a move carries it between hosts: identity, workspace,
+// conversation and environment choices only. Launch args, env, web port,
+// attention and opening state, no_resume and the moved marker stay behind;
+// the destination rebuilds them from its own config.
+func (r Record) Portable() Record {
+	out := Record{
+		Name: r.Name, Template: r.Template, Repo: r.Repo, Workspace: r.Workspace,
+		Branch: r.Branch, CanonicalPath: r.CanonicalPath, Harness: r.Harness,
+		SessionID: r.SessionID, SessionsByTemplate: maps.Clone(r.SessionsByTemplate),
+		Environments: slices.Clone(r.Environments), SpawnEnv: maps.Clone(r.SpawnEnv),
+		InheritedEnv: maps.Clone(r.InheritedEnv), EnvLayered: r.EnvLayered,
+		IdleSuspendAfter: r.IdleSuspendAfter, MoveLog: maps.Clone(r.MoveLog),
+	}
+	if r.Appearance != nil {
+		a := *r.Appearance
+		out.Appearance = &a
+	}
+	return out
 }
 
 // Appearance is an agent's manual emoji and color; an empty field is unset
@@ -247,8 +303,8 @@ func FilePath(homePath string) string {
 }
 
 // Save persists an agent record to agents.json. The stored AttentionToken,
-// opening delivery state and Appearance are kept whatever record carries (see
-// their fields).
+// opening delivery state, Appearance and MovePending are kept whatever record
+// carries (see their fields).
 func Save(homePath string, record Record) error {
 	storeMu.Lock()
 	defer storeMu.Unlock()
@@ -260,6 +316,7 @@ func Save(homePath string, record Record) error {
 	record.OpeningAckedID = stored.OpeningAckedID
 	record.OpeningQueuedLaunch, record.OpeningQueuedID = stored.OpeningQueuedLaunch, stored.OpeningQueuedID
 	record.Appearance = stored.Appearance
+	record.MovePending = stored.MovePending
 	records[record.Name] = record
 	return write(path, records)
 }

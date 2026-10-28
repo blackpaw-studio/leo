@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/blackpaw-studio/leo/internal/agent"
+	"github.com/blackpaw-studio/leo/internal/agentmove"
 	"github.com/blackpaw-studio/leo/internal/agentstore"
 	"github.com/blackpaw-studio/leo/internal/bridge"
 	"github.com/blackpaw-studio/leo/internal/chat"
@@ -172,6 +173,10 @@ type Server struct {
 	// through, set by StartWeb.
 	drain         atomic.Pointer[drain.Manager]
 	drainNotifier atomic.Pointer[drainNotifierHolder]
+	// moveReceiver serves `leo agent move-receive` (see SetMoveReceiver).
+	moveReceiver atomic.Pointer[moveReceiverHolder]
+	// moveJobs runs `leo agent move` / `copy` from this host (SetMoveJobs).
+	moveJobs atomic.Pointer[moveJobsHolder]
 	// runningDispatches lists the web server's running dispatches for the
 	// drain (see RunningDispatches); set by StartWeb.
 	runningDispatches atomic.Pointer[func() []drain.Probe]
@@ -365,6 +370,16 @@ func New(sockPath, configPath string, processes ProcessStateProvider, opts ...Op
 	for _, verb := range controlVerbs {
 		mux.HandleFunc("POST /agents/{name}/"+verb, s.handleAgentControl)
 	}
+	// Destination side of `leo agent move` / `copy`, reached over ssh
+	// through the hidden `leo agent move-receive` command.
+	for _, verb := range agentmove.Verbs {
+		mux.HandleFunc("POST /agents/move/"+verb, s.handleMoveVerb(verb))
+	}
+	// Source side: a background job per transfer, polled by id.
+	mux.HandleFunc("POST /agents/{name}/move", s.handleMoveStart)
+	mux.HandleFunc("POST /agents/{name}/move/reconcile", s.handleMoveSettle(false))
+	mux.HandleFunc("POST /agents/{name}/move/abandon", s.handleMoveSettle(true))
+	mux.HandleFunc("GET /moves/{id}", s.handleMoveJob)
 
 	// Claude mod bridge: the mod's `leo bridge` process holds the command
 	// stream open and posts acks/events back. The 0600 socket is the auth,
@@ -559,6 +574,9 @@ func (s *Server) StartWeb(cfg *config.Config, agentSvc web.AgentService) error {
 	observeOpts = append(observeOpts, web.WithTurnObserver(s.observeAgentTurn))
 	if s.clientTools != nil {
 		observeOpts = append(observeOpts, web.WithClientTools(s.clientTools))
+	}
+	if h := s.moveJobs.Load(); h != nil {
+		observeOpts = append(observeOpts, web.WithMoveJobs(h.j))
 	}
 	stop := s.startup.Step("web.New")
 	s.webServer = web.New(s.configPath, &processAdapter{inner: s.processes}, s.scheduler, s, agentSvc, web.Options{

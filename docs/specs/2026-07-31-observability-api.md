@@ -109,6 +109,11 @@ envelope.
 - `appearance` — `{emoji?, color?, emoji_source?, color_source?}`, absent when neither is
   set; advertised by the `agent_appearance` feature. See
   [Agent appearance](#agent-appearance) below.
+- `moved_to`, `moved_at` — set on the dormant record an agent leaves behind when it is
+  moved to another host: `moved_to` is the `client.hosts` key it went to, `moved_at` the
+  RFC 3339 time it was marked. Both are absent for an agent that lives here, and `status`
+  stays `stopped`. Advertised by the `agent_move` feature; see
+  [Moving and copying agents](../configuration/agent-move.md).
 
 `agent_spawned`'s embedded `Agent` (see the event table below) is populated the same way,
 sourced from the agentstore record and the same model cascade — `template`, `repo`, and

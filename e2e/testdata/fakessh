@@ -2,10 +2,14 @@
 # fakessh stands in for ssh in the e2e tests. It appends its argv to
 # $FAKESSH_LOG (one argument per line, then a "--" line), fails like an
 # unreachable host (exit 255) while the file named by $FAKESSH_FAIL exists,
-# and otherwise runs the remote command with sh -c from $FAKESSH_HOME, the
-# remote leo home. Options are skipped before and after the destination, as
-# OpenSSH parses them.
-if [ -n "$FAKESSH_LOG" ]; then
+# skips options before and after the destination as OpenSSH parses them, and
+# otherwise runs the remote command with sh -c from the remote leo home:
+#   - $FAKESSH_HOME, one fixed remote (follow-lead), or
+#   - the dir $FAKESSH_PEERS maps the destination to (lines of "<host> <dir>";
+#     agent move, where both "hosts" are daemons on this machine). The dir's
+#     fakessh.env is loaded first, so a remote `leo` finds the peer's leo.yaml.
+# An unknown peer host fails like ssh, so nothing falls through to a real home.
+if [ -n "${FAKESSH_LOG:-}" ]; then
   { for arg in "$@"; do printf '%s\n' "$arg"; done; printf -- '--\n'; } >> "$FAKESSH_LOG"
 fi
 dest=
@@ -20,9 +24,27 @@ while [ $# -gt 0 ]; do
       ;;
   esac
 done
-if [ -n "$FAKESSH_FAIL" ] && [ -e "$FAKESSH_FAIL" ]; then
+if [ -n "${FAKESSH_FAIL:-}" ] && [ -e "$FAKESSH_FAIL" ]; then
   echo "ssh: connect to host $dest port 22: Connection refused" >&2
   exit 255
 fi
-cd "${FAKESSH_HOME:?FAKESSH_HOME is not set}" || exit 255
+if [ -z "$dest" ] || [ $# -eq 0 ]; then
+  echo "fakessh: need a host and a command" >&2
+  exit 255
+fi
+if [ -n "${FAKESSH_PEERS:-}" ]; then
+  dir=$(awk -v h="$dest" '$1 == h { print $2; exit }' "$FAKESSH_PEERS")
+  if [ -z "$dir" ]; then
+    echo "fakessh: unknown host $dest" >&2
+    exit 255
+  fi
+  cd "$dir" || exit 255
+  if [ -f fakessh.env ]; then
+    set -a
+    . ./fakessh.env
+    set +a
+  fi
+else
+  cd "${FAKESSH_HOME:?FAKESSH_HOME is not set}" || exit 255
+fi
 exec sh -c "$*"

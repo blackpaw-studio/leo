@@ -94,7 +94,8 @@ type PreLauncher interface {
 // calls it before every spawn to rewrite the launch argv from the currently
 // stored session id — adding resume tokens once a post-hoc-discovered id
 // exists, and stripping stale ones when the store was cleared. storedID ==
-// "" must return argv with no session tokens.
+// "" must return argv with no session tokens, except a copy's pending fork
+// tokens (see Forker), which stay until the fork's own id is stored.
 type SessionArgsRefresher interface {
 	RefreshSessionArgs(args []string, storedID string) []string
 }

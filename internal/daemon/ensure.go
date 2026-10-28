@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/blackpaw-studio/leo/internal/agent"
@@ -33,6 +34,9 @@ type EnsureAgentManager interface {
 	// Stopped reports whether name has a persisted, dormant record — of any
 	// WakeOnMessage value.
 	Stopped(name string) bool
+	// MovedErr returns the refusal for an agent moved to another host
+	// (an *agent.MovedError), nil otherwise.
+	MovedErr(name string) error
 	// Wakeable reports whether name has a persisted, dormant record with
 	// WakeOnMessage=true — the only dormant agents an inbound message is
 	// allowed to auto-start.
@@ -72,6 +76,13 @@ func NewAgentEnsurer(mgr EnsureAgentManager) AgentEnsurer {
 func (e *managerEnsurer) Ensure(ctx context.Context, spec EnsureSpec) error {
 	if e.mgr.Live(spec.Name) {
 		return nil
+	}
+	if err := e.mgr.MovedErr(spec.Name); err != nil {
+		var moved *agent.MovedError
+		if errors.As(err, &moved) {
+			return fmt.Errorf("agent %q moved to %s; task delivery refused on this host: %w", spec.Name, moved.To, err)
+		}
+		return err
 	}
 	if e.mgr.Wakeable(spec.Name) {
 		if err := e.mgr.Start(spec.Name); err != nil {

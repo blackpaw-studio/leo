@@ -20,6 +20,7 @@ import (
 	"github.com/blackpaw-studio/leo/internal/daemon"
 	"github.com/blackpaw-studio/leo/internal/picker"
 	"github.com/blackpaw-studio/leo/internal/prompt"
+	"github.com/blackpaw-studio/leo/internal/remote"
 	"github.com/spf13/cobra"
 )
 
@@ -74,6 +75,9 @@ so remote calls use your existing SSH setup.`,
 		newAgentRenameCmd(),
 		newAgentLogsCmd(),
 		newAgentSessionNameCmd(),
+		newAgentMoveCmd(),
+		newAgentCopyCmd(),
+		newAgentMoveReceiveCmd(),
 	)
 	return cmd
 }
@@ -107,15 +111,9 @@ func dispatch(flagHost string) (*config.Config, config.HostResolution, error) {
 }
 
 // buildSSHArgs returns a fresh slice of SSH argv so appends at the call site
-// cannot alias the config-loaded SSHArgs backing array.
+// cannot alias the config-loaded SSHArgs backing array; see remote.SSHArgv.
 func buildSSHArgs(res config.HostResolution, tail ...string) []string {
-	control := sshControlOpts(res)
-	args := make([]string, 0, 1+len(res.Host.SSHArgs)+len(control)+len(tail))
-	args = append(args, res.Host.SSH)
-	args = append(args, res.Host.SSHArgs...)
-	args = append(args, control...)
-	args = append(args, tail...)
-	return args
+	return remote.SSHArgv(res, false, tail...)
 }
 
 // runRemote executes `ssh <host> <leo_path> agent <subcmd args...>`.
@@ -178,7 +176,7 @@ func newAgentListCmd() *cobra.Command {
 			for _, r := range records {
 				fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%d\t%s\n",
 					r.Name, dashIfEmpty(r.Template), dashIfEmpty(r.Branch),
-					dashIfEmpty(r.Workspace), dashIfEmpty(r.Status), r.Restarts, dashIfEmpty(r.BridgeSummary()))
+					dashIfEmpty(r.Workspace), dashIfEmpty(listStatus(r)), r.Restarts, dashIfEmpty(r.BridgeSummary()))
 			}
 			return tw.Flush()
 		},
@@ -186,6 +184,15 @@ func newAgentListCmd() *cobra.Command {
 	addHostFlag(cmd, &host)
 	cmd.Flags().BoolVar(&asJSON, "json", false, "output as JSON")
 	return cmd
+}
+
+// listStatus is r's STATUS cell: moved→<host> for an agent whose live home is
+// now another host, else its status.
+func listStatus(r agent.Record) string {
+	if r.MovedTo != "" {
+		return "moved→" + r.MovedTo
+	}
+	return r.Status
 }
 
 // --- spawn ---
@@ -626,6 +633,9 @@ func attachLocal(ctx context.Context, cmd *cobra.Command, homePath, query string
 	// attach-spec lookup below. Shares ensureAgentRunning with the top-level
 	// `leo attach` door so the prompt behaves identically from either entry
 	// point.
+	if err := movedSessionError(session); err != nil {
+		return err
+	}
 	ok, err := ensureAgentRunningPrompt(ctx, cmd, homePath, session.Name, session.Stopped, !opts.cc)
 	if err != nil {
 		return err
@@ -780,6 +790,7 @@ func resolveRemoteSession(res config.HostResolution, query string) (string, erro
 
 func newAgentSessionNameCmd() *cobra.Command {
 	var host string
+	var asJSON bool
 	cmd := &cobra.Command{
 		Use:   "session-name <query>",
 		Short: "Print the tmux session name for an agent (supports shorthand)",
@@ -795,18 +806,47 @@ or any unambiguous suffix.`,
 				return err
 			}
 			if !res.Localhost {
-				return runRemote(res, []string{"session-name", query})
+				extra := []string{"session-name", query}
+				if asJSON {
+					extra = append(extra, "--json")
+				}
+				return runRemote(res, extra)
 			}
 			resolved, err := daemon.AgentResolve(cmd.Context(), cfg.HomePath, query)
 			if err != nil {
 				return fmt.Errorf("resolving agent: %w", err)
+			}
+			if asJSON {
+				return json.NewEncoder(agentStdout).Encode(resolved)
 			}
 			fmt.Fprintln(agentStdout, resolved.Session)
 			return nil
 		},
 	}
 	addHostFlag(cmd, &host)
+	cmd.Flags().BoolVar(&asJSON, "json", false, "print the resolved agent (name, session, repo, template) as JSON")
 	return cmd
+}
+
+// resolveRemoteAgent asks the remote daemon to resolve query, as
+// `leo agent session-name <query> --json` over ssh.
+func resolveRemoteAgent(res config.HostResolution, query string) (daemon.AgentResolveResponse, error) {
+	args := buildSSHArgs(res, res.Host.RemoteLeoPath(), "agent", "session-name", query, "--json")
+	cmd := agentExecCommand("ssh", args...)
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	out, err := cmd.Output()
+	if err != nil {
+		if msg := strings.TrimSpace(stderr.String()); msg != "" {
+			return daemon.AgentResolveResponse{}, fmt.Errorf("resolving remote agent %q: %w: %s", query, err, msg)
+		}
+		return daemon.AgentResolveResponse{}, fmt.Errorf("resolving remote agent %q: %w", query, err)
+	}
+	var resolved daemon.AgentResolveResponse
+	if err := json.Unmarshal(out, &resolved); err != nil {
+		return daemon.AgentResolveResponse{}, fmt.Errorf("resolving remote agent %q: decoding %q: %w", query, strings.TrimSpace(string(out)), err)
+	}
+	return resolved, nil
 }
 
 // --- delete-plan ---

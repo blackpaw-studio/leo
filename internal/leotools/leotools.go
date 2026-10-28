@@ -51,6 +51,8 @@ var Names = []string{
 	"leo_list_agents",
 	"leo_stop_agent",
 	"leo_set_agent_environments",
+	"leo_agent_move",
+	"leo_agent_copy",
 	"leo_send_message",
 	"leo_consult",
 	"leo_dispatch",

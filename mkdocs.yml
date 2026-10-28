@@ -87,6 +87,7 @@ nav:
       - Harnesses: configuration/harnesses.md
       - Environments: configuration/environments.md
       - Following a Lead Host: configuration/follow-lead.md
+      - Moving Agents: configuration/agent-move.md
       - Agent Appearance: configuration/appearance.md
       - Dispatches: configuration/dispatches.md
       - Delegation Profiles: configuration/delegation.md

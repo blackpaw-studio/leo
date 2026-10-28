@@ -1273,3 +1273,59 @@ func TestAgentListTableShowsTheBridge(t *testing.T) {
 		}
 	}
 }
+
+// TestAgentListShowsMovedTo: a moved agent's STATUS reads moved→<host>, and
+// --json keeps status "stopped" with moved_to beside it.
+func TestAgentListShowsMovedTo(t *testing.T) {
+	home := t.TempDir()
+	cfg := &config.Config{HomePath: home, Defaults: config.DefaultsConfig{Model: "sonnet", MaxTurns: 10}}
+	path := home + "/leo.yaml"
+	if err := config.Save(path, cfg); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	oldCfgFile := cfgFile
+	cfgFile = path
+	t.Cleanup(func() { cfgFile = oldCfgFile })
+	oldList := agentListFn
+	agentListFn = func(ctx context.Context, homePath string) ([]agent.Record, error) {
+		return []agent.Record{
+			{Name: "alpha", Status: "stopped", MovedTo: "laptop"},
+			{Name: "beta", Status: "stopped"},
+		}, nil
+	}
+	t.Cleanup(func() { agentListFn = oldList })
+	var buf bytes.Buffer
+	oldOut := agentStdout
+	agentStdout = &buf
+	t.Cleanup(func() { agentStdout = oldOut })
+
+	if err := newAgentListCmd().Execute(); err != nil {
+		t.Fatalf("execute: %v", err)
+	}
+	for _, line := range strings.Split(buf.String(), "\n") {
+		fields := strings.Fields(line)
+		if len(fields) == 0 {
+			continue
+		}
+		switch fields[0] {
+		case "alpha":
+			if !strings.Contains(line, "moved→laptop") {
+				t.Errorf("alpha row %q lacks moved→laptop", line)
+			}
+		case "beta":
+			if strings.Contains(line, "moved") {
+				t.Errorf("beta row %q says moved", line)
+			}
+		}
+	}
+
+	buf.Reset()
+	cmd := newAgentListCmd()
+	cmd.SetArgs([]string{"--json"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("execute --json: %v", err)
+	}
+	if !strings.Contains(buf.String(), `"status": "stopped"`) || !strings.Contains(buf.String(), `"moved_to": "laptop"`) {
+		t.Fatalf("json = %s", buf.String())
+	}
+}
