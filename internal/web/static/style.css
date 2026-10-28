@@ -242,6 +242,9 @@ select.form-input {
 .form-row { display: flex; align-items: center; gap: var(--sp-3); margin-bottom: var(--sp-2); }
 .form-row label { color: var(--dim); font-size: var(--fs-sm); min-width: 120px; flex-shrink: 0; }
 .form-help { font-size: var(--fs-xs); color: var(--dim); margin-top: 2px; line-height: 1.4; }
+.env-refs { list-style: none; margin: var(--sp-1) 0 0; padding: 0; font-size: var(--fs-sm); }
+.env-refs li { display: flex; gap: var(--sp-2); flex-wrap: wrap; overflow-wrap: anywhere; }
+.env-refs .env-ref { color: var(--dim); }
 .form-group { margin-bottom: var(--sp-3); }
 .form-group .form-row { margin-bottom: 2px; }
 textarea.form-textarea { min-height: 60px; resize: vertical; line-height: 1.5; }

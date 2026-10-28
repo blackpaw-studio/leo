@@ -132,6 +132,21 @@ clears the whole map. A client can therefore echo back what it read and change
 only what the user edited. (The web UI still shows env values in full; the
 redaction is the API's.)
 
+An entry that is a [secret reference](secret-env.md) reads as `{"set": true,
+"ref": {...}}` whatever its key, with the reference's mapping and never its
+value; nothing in the API resolves one:
+
+```json
+"env": {"OP_SERVICE_ACCOUNT_TOKEN": {"set": true, "ref": {"secret": "keychain", "service": "OP_SERVICE_ACCOUNT_TOKEN"}}}
+```
+
+In a patch, `{"set": true}` keeps a reference as it keeps a literal, and
+`{"ref": {...}}` sets one (`"set"` may ride along, so echoing a read back is a
+no-op). An invalid reference (unknown backend, a missing or unknown key) is a
+422 on `env`. A string replaces a reference with a literal. The web UI lists an
+entry's references read-only beneath its textarea of literals and keeps them on
+save; a `KEY=` line in the textarea replaces that reference with a literal.
+
 ### Validation errors (422)
 
 ```json

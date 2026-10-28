@@ -60,6 +60,12 @@
       </select>
     {{else if eq (kindName .Kind) "envmap"}}
       <textarea id="f-{{.Key}}" name="{{.Key}}" rows="3" placeholder="KEY=VALUE, one per line">{{.Value}}</textarea>
+      {{if .Refs}}
+      <ul class="env-refs">
+        {{range .Refs}}<li><code>{{.Key}}</code> <code class="env-ref">{{.Descriptor}}</code></li>{{end}}
+      </ul>
+      <div class="form-help">Secret references resolve at launch and are kept on save. Edit them in leo.yaml or the config API; a KEY= line above replaces one with a literal.</div>
+      {{end}}
     {{else if eq (kindName .Kind) "textarea"}}
       <textarea id="f-{{.Key}}" name="{{.Key}}" rows="3">{{.Value}}</textarea>
     {{else if eq (kindName .Kind) "cron"}}

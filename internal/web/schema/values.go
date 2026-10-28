@@ -30,6 +30,15 @@ type FieldValue struct {
 	Value     string // rendered current value ("" for unset)
 	Checked   bool   // KindBool only
 	Inherited string // effective default when Value is empty (placeholder)
+	// Refs lists a KindEnvMap field's secret references, shown read-only
+	// beside the textarea of literals. Never a value: only descriptors.
+	Refs []EnvRefView
+}
+
+// EnvRefView is one secret reference of an env field, as the form shows it.
+type EnvRefView struct {
+	Key        string
+	Descriptor string // e.g. "<secret keychain(service=X)>"
 }
 
 // Values renders every registered field of section against target (a pointer
@@ -59,7 +68,9 @@ func Values(target any, section Section, defaults any) []FieldValue {
 		case KindCSV:
 			fv.Value = strings.Join(val.Interface().([]string), ", ")
 		case KindEnvMap:
-			fv.Value = renderEnvMap(val.Interface().(config.EnvMap).Literals())
+			env := val.Interface().(config.EnvMap)
+			fv.Value = renderEnvMap(env.Literals())
+			fv.Refs = envRefViews(env)
 		default: // text-ish kinds
 			fv.Value = val.String()
 		}
@@ -126,7 +137,7 @@ func apply(target any, section Section, form url.Values, only map[string]bool) e
 			if err != nil {
 				return &FieldError{Key: f.Key, Err: fmt.Errorf("%s: %w", f.Key, err)}
 			}
-			val.Set(reflect.ValueOf(config.LiteralEnv(m)))
+			val.Set(reflect.ValueOf(withCarriedRefs(config.LiteralEnv(m), val.Interface().(config.EnvMap))))
 		default:
 			val.SetString(strings.TrimSpace(raw))
 		}
@@ -241,6 +252,37 @@ func parseEnvLines(raw string) (map[string]string, error) {
 		m[strings.TrimSpace(k)] = strings.TrimSpace(v)
 	}
 	return m, nil
+}
+
+// envRefViews lists env's secret references by key; nil when there are none.
+func envRefViews(env config.EnvMap) []EnvRefView {
+	var out []EnvRefView
+	for _, k := range env.Keys() {
+		if _, isRef := env[k].Ref(); isRef {
+			out = append(out, EnvRefView{Key: k, Descriptor: env[k].String()})
+		}
+	}
+	return out
+}
+
+// withCarriedRefs adds to literals (a form's textarea, which lists literals
+// only) every reference of current the textarea does not name: a form save
+// keeps references, and a KEY= line for one replaces it with a literal.
+func withCarriedRefs(literals, current config.EnvMap) config.EnvMap {
+	refs := current.Refs()
+	if len(refs) == 0 {
+		return literals
+	}
+	out := make(config.EnvMap, len(literals)+len(refs))
+	for k, v := range literals {
+		out[k] = v
+	}
+	for k, r := range refs {
+		if _, named := out[k]; !named {
+			out[k] = config.Secret(r)
+		}
+	}
+	return out
 }
 
 func renderEnvMap(m map[string]string) string {
