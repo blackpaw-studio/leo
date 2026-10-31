@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+
+	"github.com/blackpaw-studio/leo/internal/observe"
 )
 
 // ErrInvalidAgentName is returned (wrapped) by NormalizeAgentName for
@@ -26,7 +28,7 @@ var charsetRe = regexp.MustCompile(`^[a-z0-9-]+$`)
 // prefix is a tmux implementation detail the UI shouldn't force users to see or
 // retype. A name without the prefix (already display-form) is returned as-is.
 func DisplayName(name string) string {
-	return strings.TrimPrefix(name, agentNamePrefix)
+	return observe.DisplayName(name)
 }
 
 // NormalizeAgentName validates and canonicalizes a user-supplied agent name.

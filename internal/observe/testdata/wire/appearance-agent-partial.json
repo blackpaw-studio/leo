@@ -1,5 +1,6 @@
 {
   "name": "alfred-itunes-dj",
+  "display_name": "alfred-itunes-dj",
   "template": "assistant",
   "workspace": "/home/leo/workspace",
   "model": "sonnet",
