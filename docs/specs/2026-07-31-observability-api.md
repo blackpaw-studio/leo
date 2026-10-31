@@ -54,6 +54,7 @@ envelope.
 ```json
 {
   "name": "den",
+  "display_name": "den",
   "template": "fable",
   "repo": "blackpaw-studio/leo-den",
   "workspace": "/Users/alice/.leo/agents/leo-den",
@@ -70,6 +71,9 @@ envelope.
 }
 ```
 
+- `display_name` — `name` without the internal `leo-` prefix (`leo-home` → `home`), for
+  UIs to show. Additive: `name` stays the raw stored/tmux name and is the key for routes.
+  Present on every agent object (`/state`, `/events` `agent_spawned`).
 - `status` — lifecycle, from the agent record: `starting` | `running` | `stopped` |
   `restoring`. `restoring` is reported only while the daemon is still restoring agents at
   boot (before `/health` is ready) for a stored agent that is neither live nor deliberately

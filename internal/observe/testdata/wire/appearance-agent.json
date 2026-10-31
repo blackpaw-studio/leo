@@ -1,5 +1,6 @@
 {
   "name": "olympus",
+  "display_name": "olympus",
   "template": "ops",
   "workspace": "/home/leo/workspace",
   "model": "opus",

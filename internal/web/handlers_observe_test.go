@@ -1011,3 +1011,14 @@ func TestShutdownEndsOpenAPIEventStream(t *testing.T) {
 		t.Fatal("Shutdown still waiting on the open event stream after 2s")
 	}
 }
+
+func TestProjectedAgentJSONCarriesDisplayName(t *testing.T) {
+	agents := ProjectAgents([]agent.Record{{Name: "leo-home"}}, nil, AgentSources{}, nil)
+	b, err := json.Marshal(agents[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(b), `"name":"leo-home"`) || !strings.Contains(string(b), `"display_name":"home"`) {
+		t.Fatalf("agent json = %s", b)
+	}
+}
