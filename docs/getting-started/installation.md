@@ -60,6 +60,14 @@
 
     This builds with version info from git tags and installs to `$GOPATH/bin`.
 
+=== "Docker"
+
+    A multi-arch image is published to `ghcr.io/blackpaw-studio/leo`. See [Docker](docker.md) for the volume layout, env vars and extending it.
+
+    ```bash
+    docker run -d --name leo -v leo:/home/leo -p 8370:8370 ghcr.io/blackpaw-studio/leo
+    ```
+
 === "Manual Download"
 
     Download the archive for your platform from the [Releases page](https://github.com/blackpaw-studio/leo/releases/latest), extract it, and move the `leo` binary to a directory in your `PATH`. Verify the archive against `checksums.txt` from the same release before running it.
