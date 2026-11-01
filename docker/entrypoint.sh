@@ -5,6 +5,8 @@
 #      agents on Claude's first-run screens
 #      Codex has no env switch for its updater, so ~/.codex/config.toml is
 #      seeded the same way (only if missing) with the update check off
+#      On every start, ANTHROPIC_API_KEY is approved in ~/.claude.json, and
+#      OPENAI_API_KEY logs Codex in when it has no credentials yet
 #   3. run each executable in ~/.leo/init.d/ in lexical order, as this user;
 #      a non-zero exit aborts startup with that code
 #   4. exec `leo service` in the foreground
@@ -32,7 +34,7 @@ allowed_hosts_yaml() {
       log "invalid host in LEO_ALLOWED_HOSTS: '$host' (bare hostnames or IPs only, comma-separated)"
       exit 64
     fi
-    printf '    - %s\n' "$host"
+    printf '    - "%s"\n' "$host"
   done
 }
 
@@ -57,6 +59,37 @@ $hosts
 YAML
   mv "$tmp" "$CONFIG"
   log "wrote starter config $CONFIG"
+}
+
+# approve_anthropic_key marks ANTHROPIC_API_KEY as already approved so Claude
+# does not stall on its "use this API key?" dialog. Claude identifies a key by
+# its last 20 characters. Runs on every start; adds the entry once, never
+# removes others, never prints the key.
+approve_anthropic_key() {
+  local key=${ANTHROPIC_API_KEY:-} state="$HOME/.claude.json" tmp
+  [[ -n $key ]] || return 0
+  tmp=$(mktemp "$HOME/.claude.json.XXXXXX")
+  if jq --arg k "${key: -20}" '
+        .customApiKeyResponses = ((.customApiKeyResponses // {})
+          | .approved = ((.approved // []) as $a | if ($a | index($k)) then $a else $a + [$k] end))
+      ' "$state" >"$tmp" 2>/dev/null; then
+    mv "$tmp" "$state"
+  else
+    rm -f "$tmp"
+    log "could not update $state to approve ANTHROPIC_API_KEY; Claude may ask about the key"
+  fi
+}
+
+# login_codex_with_api_key logs Codex in from OPENAI_API_KEY, whose TUI ignores
+# the variable unless logged in. Existing credentials are never replaced and
+# nothing from the login (which could echo the key) reaches the logs.
+login_codex_with_api_key() {
+  [[ -n ${OPENAI_API_KEY:-} && ! -f $HOME/.codex/auth.json ]] || return 0
+  if printenv OPENAI_API_KEY | codex login --with-api-key >/dev/null 2>&1; then
+    log "logged Codex in with OPENAI_API_KEY"
+  else
+    log "codex login with OPENAI_API_KEY failed; run 'codex login' in the container"
+  fi
 }
 
 run_init_scripts() {
@@ -84,6 +117,8 @@ if [[ ! -f $CODEX_CONFIG ]]; then
   mkdir -p "$(dirname "$CODEX_CONFIG")"
   printf 'check_for_update_on_startup = false\n' >"$CODEX_CONFIG"
 fi
+approve_anthropic_key
+login_codex_with_api_key
 mkdir -p "$INIT_DIR"
 run_init_scripts
 

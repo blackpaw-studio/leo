@@ -5,8 +5,9 @@
 #   A  fresh uid-1000 volume: starter config, claude.json seed, init.d order,
 #      web port, tmux server, restart keeps config and re-runs init.d
 #   B  a failing init.d script stops startup with its exit code
-#   C  auth env (dummy values) reaches a spawned agent's process, and the
-#      workspace-trust dialog does not stall it
+#   C  auth env (dummy values) reaches a spawned agent's process, the
+#      workspace-trust dialog does not stall it, codex login is seeded once
+#   D  an API-key-only claude agent is not stalled by the key-approval dialog
 #
 # The daemon matches the Host header including its port, so requests use :8370.
 # SKIP_BUILD=1 reuses $IMAGE as-is.
@@ -83,15 +84,24 @@ wait_http() {
   fail "web port never answered 200 (last code: ${code:-none})"
 }
 
+# No installer piped into a shell anywhere in the image build.
+if grep -nE '(curl|wget)[^#]*\|[[:space:]]*([A-Za-z_]+=[^[:space:]]+[[:space:]]+)*(sudo[[:space:]]+)?(ba)?sh([[:space:]]|$)' "$ROOT/docker/Dockerfile"; then
+  fail "Dockerfile pipes a download into a shell; pin the artifact and verify its sha256"
+fi
+
 [[ ${SKIP_BUILD:-} == 1 ]] || build_image
 
 # ---------------------------------------------------------------- phase A
 log "phase A: fresh volume, uid 1000"
 VOL_A=$PREFIX-a
+# Claude identifies an API key by its last 20 characters.
+API_KEY=sk-ant-api03-smokeKEY0123456789abcdefghij
+KEY_TAIL=${API_KEY: -20}
 docker volume create "$VOL_A" >/dev/null
 seed_volume "$VOL_A" "$ROOT/docker/smoke/init.d" .leo/init.d
 docker run -d --name "$PREFIX-a" --user 1000:1000 -v "$VOL_A:/home/leo" \
-  -e LEO_ALLOWED_HOSTS=foo,localhost -p 127.0.0.1::8370 "$IMAGE" >/dev/null
+  -e LEO_ALLOWED_HOSTS=foo,localhost,2001:db8::1 -e ANTHROPIC_API_KEY="$API_KEY" \
+  -p 127.0.0.1::8370 "$IMAGE" >/dev/null
 wait_http "$PREFIX-a" localhost:8370
 
 exec_a() { docker exec "$PREFIX-a" "$@"; }
@@ -99,8 +109,9 @@ exec_a() { docker exec "$PREFIX-a" "$@"; }
 cfg=$(exec_a cat /home/leo/.leo/leo.yaml)
 grep -q 'bind: 0.0.0.0' <<<"$cfg" || fail "starter config lacks bind: 0.0.0.0"
 grep -q 'port: 8370' <<<"$cfg" || fail "starter config lacks port: 8370"
-grep -qE '^\s*-\s*foo\s*$' <<<"$cfg" || fail "allowed_hosts missing foo from LEO_ALLOWED_HOSTS"
-grep -qE '^\s*-\s*localhost\s*$' <<<"$cfg" || fail "allowed_hosts missing localhost"
+grep -qxF '    - "foo"' <<<"$cfg" || fail "allowed_hosts missing quoted foo from LEO_ALLOWED_HOSTS"
+grep -qxF '    - "localhost"' <<<"$cfg" || fail "allowed_hosts missing quoted localhost"
+grep -qxF '    - "2001:db8::1"' <<<"$cfg" || fail "IPv6 allowed_hosts entry is not a quoted YAML scalar"
 exec_a test -s /home/leo/.claude.json || fail "~/.claude.json was not seeded"
 exec_a grep -q '"hasCompletedOnboarding": *true' /home/leo/.claude.json || fail "seed lacks hasCompletedOnboarding"
 exec_a grep -q '"/home/leo"' /home/leo/.claude.json || fail "seed does not trust /home/leo"
@@ -122,11 +133,18 @@ done
 exec_a tmux -L leo ls >/dev/null || fail "tmux server (-L leo) is not up"
 exec_a sh -c 'test "$(id -u)" = 1000' || fail "exec user is not uid 1000"
 
+approved_count() { exec_a jq --arg k "$1" '[.customApiKeyResponses.approved[]? | select(. == $k)] | length' /home/leo/.claude.json; }
+[[ $(approved_count "$KEY_TAIL") == 1 ]] || fail "ANTHROPIC_API_KEY last 20 chars not approved in ~/.claude.json"
+exec_a sh -c "jq '.customApiKeyResponses.approved += [\"preexisting\"]' /home/leo/.claude.json > /home/leo/.cj.tmp && mv /home/leo/.cj.tmp /home/leo/.claude.json"
+
 sum_before=$(exec_a sha256sum /home/leo/.leo/leo.yaml)
 docker restart "$PREFIX-a" >/dev/null
 wait_http "$PREFIX-a" localhost:8370
 [[ $(exec_a sha256sum /home/leo/.leo/leo.yaml) == "$sum_before" ]] || fail "leo.yaml changed across restart"
 [[ $(exec_a sh -c 'wc -l < /home/leo/init-marker') -eq 2 ]] || fail "init.d did not run again after restart"
+[[ $(approved_count "$KEY_TAIL") == 1 ]] || fail "API key approval is not idempotent across restarts"
+[[ $(approved_count preexisting) == 1 ]] || fail "existing customApiKeyResponses.approved entry was removed"
+if docker logs "$PREFIX-a" 2>&1 | grep -qF "$API_KEY"; then fail "ANTHROPIC_API_KEY leaked into container logs"; fi
 log "phase A ok"
 
 # ---------------------------------------------------------------- phase B
@@ -176,5 +194,31 @@ done
 
 pane=$(docker exec "$PREFIX-c" tmux -L leo capture-pane -p -t "$(docker exec "$PREFIX-c" tmux -L leo list-panes -a -F '#{pane_id}' | head -1)" || true)
 ! grep -qi 'is this a project you created or one you trust' <<<"$pane" || fail "agent stalled on the workspace trust dialog"
+exec_c() { docker exec "$PREFIX-c" "$@"; }
+exec_c test -s /home/leo/.codex/auth.json || fail "OPENAI_API_KEY did not produce ~/.codex/auth.json"
+exec_c sh -c "echo '{\"sentinel\": true}' > /home/leo/.codex/auth.json"
+docker restart "$PREFIX-c" >/dev/null
+wait_http "$PREFIX-c" localhost:8370
+[[ $(exec_c cat /home/leo/.codex/auth.json) == '{"sentinel": true}' ]] || fail "existing codex credentials were overwritten on restart"
+if docker logs "$PREFIX-c" 2>&1 | grep -qF smoke-openai; then fail "OPENAI_API_KEY leaked into container logs"; fi
 log "phase C ok"
+
+# ---------------------------------------------------------------- phase D
+log "phase D: API-key-only claude agent does not stall on the key dialog"
+VOL_D=$PREFIX-d
+docker volume create "$VOL_D" >/dev/null
+seed_volume "$VOL_D" "$WORK/c" .
+docker run -d --name "$PREFIX-d" --user 1000:1000 -v "$VOL_D:/home/leo" \
+  -e ANTHROPIC_API_KEY="$API_KEY" -p 127.0.0.1::8370 "$IMAGE" >/dev/null
+wait_http "$PREFIX-d" localhost:8370
+docker exec "$PREFIX-d" leo agent spawn probe >/dev/null || fail "leo agent spawn probe failed (phase D)"
+state=waiting
+for ((i = 0; i < TIMEOUT; i++)); do
+  pane=$(docker exec "$PREFIX-d" tmux -L leo capture-pane -p -t "$(docker exec "$PREFIX-d" tmux -L leo list-panes -a -F '#{pane_id}' | head -1)" 2>/dev/null || true)
+  if grep -qi 'use this API key' <<<"$pane"; then state=dialog; break; fi
+  if grep -q 'Claude Code v' <<<"$pane"; then state=ready; break; fi
+  sleep 1
+done
+[[ $state == ready ]] || fail "API-key agent did not reach the prompt (state: $state)"
+log "phase D ok"
 log "all phases passed"

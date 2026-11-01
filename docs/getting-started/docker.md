@@ -68,8 +68,8 @@ Add templates and tasks through the web UI or by editing `leo.yaml`, the same as
 | --- | --- |
 | `LEO_ALLOWED_HOSTS` | Comma-separated hostnames/IPs the web UI accepts (default `localhost,127.0.0.1`). **Must include every host or IP you browse from**, such as a LAN IP. It is only read when the starter config is first written; afterwards edit `web.allowed_hosts` in `leo.yaml`. |
 | `CLAUDE_CODE_OAUTH_TOKEN` | Claude Pro/Max subscription token from `claude setup-token`. |
-| `ANTHROPIC_API_KEY` | Claude API billing instead of a subscription. |
-| `OPENAI_API_KEY` | Codex with an OpenAI API key. |
+| `ANTHROPIC_API_KEY` | Claude API billing instead of a subscription. On every start the entrypoint adds the key's last 20 characters to `customApiKeyResponses.approved` in `~/.claude.json` (nothing else is removed), so Claude does not stop on its "use this API key?" dialog. |
+| `OPENAI_API_KEY` | Codex with an OpenAI API key. Codex's TUI ignores the variable unless it is logged in, so when `~/.codex/auth.json` is missing the entrypoint runs `codex login --with-api-key` with the key (nothing is logged). Existing credentials are never replaced. |
 | opencode provider env | Whatever your opencode provider needs, per its documentation. |
 
 The daemon passes its environment to the tmux server, so every agent inherits these.
@@ -81,7 +81,7 @@ Pick one:
 - **Token:** run `claude setup-token` on any machine with a browser, then pass the result as `CLAUDE_CODE_OAUTH_TOKEN`.
 - **Interactive login:** `docker exec -it leo claude`, then `/login`. Credentials are stored in `~/.claude/.credentials.json` on the volume and survive restarts.
 
-For Codex, either set `OPENAI_API_KEY` or run `docker exec -it leo codex login`; the login is stored on the volume.
+For Codex, either set `OPENAI_API_KEY` (the entrypoint logs Codex in with it on first start, as described above) or run `docker exec -it leo codex login` for an interactive login. Both are stored in `~/.codex/auth.json` on the volume and survive restarts; a login already there is kept even if `OPENAI_API_KEY` is set.
 
 ## Init scripts and toolchains
 
