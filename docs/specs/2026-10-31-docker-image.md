@@ -28,7 +28,13 @@ Publish a generic, multi-arch image at `ghcr.io/blackpaw-studio/leo` so anyone c
 On every start:
 1. If `~/.leo/leo.yaml` is missing, write a starter config: `web.enabled: true`, `web.bind: 0.0.0.0`, `web.port: 8370`, `web.allowed_hosts` from `LEO_ALLOWED_HOSTS` (comma-separated; default `localhost,127.0.0.1`), no tasks/templates. Existing files are never touched.
 2. If `~/.claude.json` is missing, seed it with onboarding completed (same approach as `docs/demo/claude.seed.json`) so a fresh volume does not stall agents on first-run screens.
-3. `exec leo service` (foreground; never `start --daemon`).
+3. Run each executable file in `~/.leo/init.d/` in lexical order, as the `leo` user (non-executable files are skipped and named in a log line). A non-zero exit stops startup and the container exits with that code. Scripts run on every start, so they must be idempotent; installs into `$HOME` persist on the volume.
+4. `exec leo service` (foreground; never `start --daemon`).
+
+### User SDKs / toolchains
+
+- The image ships `mise`, configured to install under `$HOME` so tools persist on the volume. Users can add `mise use -g go@1.25` to an init script or run it once with `docker exec`. No root is needed.
+- System packages (`apt`) need root, so they belong in a `FROM` layer, not in init scripts. The docs say so explicitly. Init scripts never run as root.
 
 Workspace-trust: agent workspaces under `/home/leo` get `hasTrustDialogAccepted` on first spawn. If leo's existing pre-accept only runs for a non-default `CLAUDE_CONFIG_DIR`, the plan must close that gap for the image (either set `CLAUDE_CONFIG_DIR=/home/leo/.claude` in the image or extend the pre-accept) — whichever is the smaller change; no new user-facing config.
 
@@ -50,7 +56,7 @@ Workspace-trust: agent workspaces under `/home/leo` get `hasTrustDialogAccepted`
 
 ## Verification
 
-- CI smoke test (no credentials): build the image, run it with an empty volume, assert the starter `leo.yaml` is written, the web port answers, the tmux server is up, and a second start leaves the config untouched. It must also pass with uid 1000 on a fresh volume.
+- CI smoke test (no credentials): build the image, run it with an empty volume, assert the starter `leo.yaml` is written, an `init.d` script runs before the daemon (and a failing one stops startup), the web port answers, the tmux server is up, and a second start leaves the config untouched. It must also pass with uid 1000 on a fresh volume.
 - Live check before the first release (manual, with a real token): spawn a claude agent in the container, send it a message, and confirm it replies; restart the container and confirm the agent resumes its session with `--resume`; repeat once for codex.
 
 ## Acceptance
