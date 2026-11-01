@@ -51,8 +51,20 @@ RUN npm install -g \
  && npm cache clean --force
 
 # mise manages user toolchains; its data dir (~/.local/share/mise) lives on
-# the volume.
-RUN curl -fsSL https://mise.run | MISE_INSTALL_PATH=/usr/local/bin/mise sh
+# the volume. The release binary is pinned and verified against a checksum
+# recorded here (from the release's SHASUMS256.txt); no installer script runs.
+ARG MISE_VERSION=v2026.10.25
+ARG MISE_SHA256_AMD64=5d362ecc578dc7c146679b841dda949d6472cbf86ff5635db7afdca1b6b3fd87
+ARG MISE_SHA256_ARM64=bb09e88b13164ca90691a5cc042726d079f0ba26ab55527344cb173c2e83c998
+RUN case "$TARGETARCH" in \
+      amd64) arch=x64; sha="$MISE_SHA256_AMD64" ;; \
+      arm64) arch=arm64; sha="$MISE_SHA256_ARM64" ;; \
+      *) echo "unsupported TARGETARCH: $TARGETARCH" >&2; exit 1 ;; \
+    esac \
+ && curl -fsSL -o /usr/local/bin/mise \
+      "https://github.com/jdx/mise/releases/download/${MISE_VERSION}/mise-${MISE_VERSION}-linux-${arch}" \
+ && echo "${sha}  /usr/local/bin/mise" | sha256sum -c - \
+ && chmod 755 /usr/local/bin/mise
 
 RUN useradd --create-home --uid 1000 --user-group --shell /bin/bash leo
 
