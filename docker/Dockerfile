@@ -27,13 +27,27 @@ RUN ln -s ../lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm \
 
 # Harness CLIs. The release workflow resolves and passes exact versions so
 # both architectures match and the image labels record what was installed.
+#
+# opencode is installed with --ignore-scripts and its binary placed by hand:
+# its postinstall runs the binary to verify it, and that segfaults when this
+# layer is built under QEMU (the arm64 half of the release build runs on an
+# amd64 runner). The postinstall also picks the AVX2 or baseline x64 build from
+# the *build* host's CPU; an image has to run anywhere, so x64 uses baseline.
 ARG CLAUDE_VERSION=latest
 ARG CODEX_VERSION=latest
 ARG OPENCODE_VERSION=latest
+ARG TARGETARCH
 RUN npm install -g \
       "@anthropic-ai/claude-code@${CLAUDE_VERSION}" \
       "@openai/codex@${CODEX_VERSION}" \
-      "opencode-ai@${OPENCODE_VERSION}" \
+ && npm install -g --ignore-scripts "opencode-ai@${OPENCODE_VERSION}" \
+ && oc=/usr/local/lib/node_modules/opencode-ai \
+ && case "$TARGETARCH" in \
+      amd64) pkg=opencode-linux-x64-baseline ;; \
+      arm64) pkg=opencode-linux-arm64 ;; \
+      *) echo "unsupported TARGETARCH: $TARGETARCH" >&2; exit 1 ;; \
+    esac \
+ && install -m 755 "$oc/node_modules/$pkg/bin/opencode" "$oc/bin/opencode.exe" \
  && npm cache clean --force
 
 # mise manages user toolchains; its data dir (~/.local/share/mise) lives on

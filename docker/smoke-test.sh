@@ -116,6 +116,9 @@ code=$(curl -s -o /dev/null -w '%{http_code}' -H 'Host: foo:8370' "http://127.0.
 code=$(curl -s -o /dev/null -w '%{http_code}' -H 'Host: evil.example:8370' "http://127.0.0.1:$(host_port "$PREFIX-a")/login")
 [[ $code != 200 ]] || fail "unlisted Host header was accepted"
 
+for cli in claude codex opencode gh mise; do
+  exec_a "$cli" --version >/dev/null 2>&1 || fail "$cli --version failed in the image"
+done
 exec_a tmux -L leo ls >/dev/null || fail "tmux server (-L leo) is not up"
 exec_a sh -c 'test "$(id -u)" = 1000' || fail "exec user is not uid 1000"
 
