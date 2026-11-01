@@ -13,6 +13,9 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+      # packages: write lets goreleaser push the image to ghcr.io with the
+      # workflow's GITHUB_TOKEN.
+      packages: write
       # id-token: write is required so cosign can request an OIDC token
       # from GitHub and keyless-sign checksums.txt. The signing identity
       # encoded in the resulting Fulcio cert is this workflow, which is
@@ -36,6 +39,30 @@ jobs:
         with:
           go-version-file: go.mod
           cache: true
+
+      # Image build: QEMU for the arm64 half of the multi-arch build, buildx
+      # for the multi-platform push, and a GHCR login for goreleaser.
+      - uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
+
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      - uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4.7.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Resolve the harness CLI versions once so both image architectures
+      # install the same versions and the image labels record them
+      # (see dockers_v2 in .goreleaser.yaml).
+      - name: Resolve harness CLI versions
+        run: |
+          set -eu
+          {
+            echo "CLAUDE_VERSION=$(npm view @anthropic-ai/claude-code version)"
+            echo "CODEX_VERSION=$(npm view @openai/codex version)"
+            echo "OPENCODE_VERSION=$(npm view opencode-ai version)"
+          } | tee -a "$GITHUB_ENV"
 
       # v3.7.0 — released 2024-11-07.
       - name: Install cosign
