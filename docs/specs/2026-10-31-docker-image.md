@@ -40,7 +40,7 @@ Workspace-trust: agent workspaces under `/home/leo` get `hasTrustDialogAccepted`
 
 ## Auth
 
-- Claude: `CLAUDE_CODE_OAUTH_TOKEN` (from `claude setup-token`) or `ANTHROPIC_API_KEY`, passed as container env. Codex: `OPENAI_API_KEY` or the user's mounted login. opencode: provider env per its docs.
+- Claude, subscription (Pro/Max), either: (a) `CLAUDE_CODE_OAUTH_TOKEN` from `claude setup-token`, passed as container env; or (b) interactive `docker exec -it <ctr> claude` → `/login`, credentials persisted in `~/.claude/.credentials.json` on the volume. API billing: `ANTHROPIC_API_KEY`. Codex: `OPENAI_API_KEY` or the user's mounted login. opencode: provider env per its docs.
 - Must verify these reach agent processes (daemon env → tmux server → agent). If any does not, add it to leo's env forwarding (`internal/env`) with a test — this is the only expected Go change.
 
 ## Publishing
@@ -57,7 +57,7 @@ Workspace-trust: agent workspaces under `/home/leo` get `hasTrustDialogAccepted`
 ## Verification
 
 - CI smoke test (no credentials): build the image, run it with an empty volume, assert the starter `leo.yaml` is written, an `init.d` script runs before the daemon (and a failing one stops startup), the web port answers, the tmux server is up, and a second start leaves the config untouched. It must also pass with uid 1000 on a fresh volume.
-- Live check before the first release (manual, with a real token): spawn a claude agent in the container, send it a message, and confirm it replies; restart the container and confirm the agent resumes its session with `--resume`; repeat once for codex.
+- Live check before the first release (manual, with a real token): spawn a claude agent in the container, send it a message, and confirm it replies; restart the container and confirm the agent resumes its session with `--resume`; repeat once for codex. Exercise both Claude subscription paths (token env and in-container `/login` surviving a restart).
 
 ## Acceptance
 
