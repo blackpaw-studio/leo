@@ -77,6 +77,53 @@ signs:
     artifacts: checksum
     output: true
 
+# Multi-arch image for GHCR (one buildx build over both linux platforms; the
+# per-platform leo binary lands in the context at <os>/<arch>/leo). Stable
+# releases only: prerelease tags (v1.2.3-rc1) skip the image. The release
+# workflow resolves the harness CLI versions into the *_VERSION env vars so
+# both architectures install identical versions and the labels match.
+dockers_v2:
+  - id: leo-image
+    ids: [leo]
+    images:
+      - ghcr.io/blackpaw-studio/leo
+    dockerfile: docker/Dockerfile
+    platforms:
+      - linux/amd64
+      - linux/arm64
+    tags:
+      - "v{{ .Version }}"
+      - "v{{ .Major }}.{{ .Minor }}"
+      - latest
+    disable: '{{ if .Prerelease }}true{{ end }}'
+    extra_files:
+      - docker/entrypoint.sh
+      - docker/claude.seed.json
+    build_args:
+      CLAUDE_VERSION: '{{ envOrDefault "CLAUDE_VERSION" "latest" }}'
+      CODEX_VERSION: '{{ envOrDefault "CODEX_VERSION" "latest" }}'
+      OPENCODE_VERSION: '{{ envOrDefault "OPENCODE_VERSION" "latest" }}'
+    labels:
+      org.opencontainers.image.title: leo
+      org.opencontainers.image.source: https://github.com/blackpaw-studio/leo
+      org.opencontainers.image.version: "{{ .Version }}"
+      org.opencontainers.image.revision: "{{ .FullCommit }}"
+      org.opencontainers.image.licenses: MIT
+      studio.blackpaw.leo.claude-version: '{{ envOrDefault "CLAUDE_VERSION" "latest" }}'
+      studio.blackpaw.leo.codex-version: '{{ envOrDefault "CODEX_VERSION" "latest" }}'
+      studio.blackpaw.leo.opencode-version: '{{ envOrDefault "OPENCODE_VERSION" "latest" }}'
+
+# Keyless cosign signature on the image digest, same OIDC identity (the
+# release workflow) as the checksums signature. `artifacts` is left at its
+# default, which signs the images dockers_v2 pushed.
+docker_signs:
+  - cmd: cosign
+    args:
+      - sign
+      - "${artifact}@${digest}"
+      - "--yes"
+    output: true
+
 changelog:
   sort: asc
   filters:

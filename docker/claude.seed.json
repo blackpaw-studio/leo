@@ -1,0 +1,13 @@
+{
+  "numStartups": 5,
+  "installMethod": "npm-global",
+  "autoUpdates": false,
+  "hasCompletedOnboarding": true,
+  "lastOnboardingVersion": "2.1.116",
+  "theme": "dark-daltonized",
+  "bypassPermissionsModeAccepted": true,
+  "remoteDialogSeen": true,
+  "projects": {
+    "/home/leo": { "hasTrustDialogAccepted": true, "projectOnboardingSeenCount": 5 }
+  }
+}

@@ -65,6 +65,25 @@ jobs:
       - name: Run E2E tests
         run: go test -tags=e2e -v -count=1 ./e2e/...
 
+  docker-smoke:
+    name: Docker image smoke test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      # No credentials: the script builds the image for the runner's arch and
+      # exercises it inside throwaway containers. arm64 is built at release
+      # time only.
+      - name: Smoke test
+        run: bash docker/smoke-test.sh
+
   lint:
     name: Lint
     runs-on: ubuntu-latest
