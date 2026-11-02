@@ -133,6 +133,9 @@ type Server struct {
 	observeClock      httpapi.Clock
 	leoVersion        string
 	parentContext     context.Context
+	// bridgeStateInterval paces the web-less bridge state pusher (see
+	// startIdleBridgeState); zero means one second.
+	bridgeStateInterval time.Duration
 
 	// bridge is the claude mod bridge hub served on /api/bridge/*. Injected
 	// with WithBridge so the service can share it with the call sites that
@@ -517,6 +520,7 @@ func (a *processAdapter) States() map[string]web.ProcessStateInfo {
 type AgentSpawnSpec = agent.SpawnRequest
 
 // StartWeb starts the web UI on a TCP listener if web is enabled in config.
+// With web off it still starts the bridge state pusher (startIdleBridgeState).
 // agentSvc is the high-level agent.Manager used by web and daemon handlers; it
 // may be nil to disable agent UI features.
 //
@@ -525,6 +529,7 @@ type AgentSpawnSpec = agent.SpawnRequest
 // (0600) and readable by plugins running as the same Unix user.
 func (s *Server) StartWeb(cfg *config.Config, agentSvc web.AgentService) error {
 	if !cfg.Web.Enabled {
+		s.startIdleBridgeState()
 		return nil
 	}
 
