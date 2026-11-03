@@ -2,6 +2,8 @@ package consult
 
 import (
 	"encoding/json"
+	"fmt"
+	"os"
 	"regexp"
 	"slices"
 	"strings"
@@ -59,29 +61,73 @@ func taskStopID(p map[string]any) string {
 	return ""
 }
 
+// trackDecision is one keep-or-prune call the tracker made on a tracked
+// task, for the daemon log. It carries ids and a fixed reason only: never a
+// command, prompt, or error text.
+type trackDecision struct {
+	TaskID   string
+	Decision string // decisionKept or decisionPruned
+	Reason   string // one of the reason* constants
+}
+
+const (
+	decisionKept   = "kept"
+	decisionPruned = "pruned"
+
+	reasonStarted          = "started"
+	reasonStopOK           = "stop-ok"
+	reasonStopFailedGone   = "stop-failed-gone"
+	reasonStopFailedOther  = "stop-failed-other"
+	reasonTaskNotification = "task-notification"
+	reasonStopOmitted      = "stop-omitted"
+	reasonStopListed       = "stop-listed"
+	reasonAdopted          = "adopted"
+)
+
+func pruned(id, reason string) trackDecision {
+	return trackDecision{TaskID: id, Decision: decisionPruned, Reason: reason}
+}
+
+func kept(id, reason string) trackDecision {
+	return trackDecision{TaskID: id, Decision: decisionKept, Reason: reason}
+}
+
+// prunedCount is how many tracked tasks the decisions pruned.
+func prunedCount(decisions []trackDecision) int {
+	n := 0
+	for _, d := range decisions {
+		if d.Decision == decisionPruned {
+			n++
+		}
+	}
+	return n
+}
+
 // trackToolEvent returns tasks updated for one PostToolUse or
 // PostToolUseFailure payload: a Bash call that started background work adds
 // its task, a task-stopping call removes it, and so does one refused because
 // its task is already gone. tasks is never mutated.
-func trackToolEvent(tasks []BackgroundTask, event string, p map[string]any, now time.Time) []BackgroundTask {
+func trackToolEvent(tasks []BackgroundTask, event string, p map[string]any, now time.Time) ([]BackgroundTask, []trackDecision) {
 	tool := str(p, "tool_name")
 	if event == "posttoolusefailure" {
-		if slices.Contains(taskStopTools, tool) && taskGoneError(str(p, "error")) {
-			if id := taskStopID(p); id != "" {
-				return withoutTask(tasks, id)
-			}
+		id := taskStopID(p)
+		if !slices.Contains(taskStopTools, tool) || !isTracked(tasks, id) {
+			return tasks, nil
 		}
-		return tasks
+		if taskGoneError(str(p, "error")) {
+			return withoutTask(tasks, id), []trackDecision{pruned(id, reasonStopFailedGone)}
+		}
+		return tasks, []trackDecision{kept(id, reasonStopFailedOther)}
 	}
 	if event != "posttooluse" {
-		return tasks
+		return tasks, nil
 	}
 	switch {
 	case tool == "Bash":
 		resp, _ := p["tool_response"].(map[string]any)
 		id := str(resp, "backgroundTaskId")
-		if id == "" || slices.ContainsFunc(tasks, func(t BackgroundTask) bool { return t.ID == id }) || len(tasks) >= maxTrackedTasks {
-			return tasks
+		if id == "" || isTracked(tasks, id) || len(tasks) >= maxTrackedTasks {
+			return tasks, nil
 		}
 		input, _ := p["tool_input"].(map[string]any)
 		return append(slices.Clone(tasks), BackgroundTask{
@@ -89,33 +135,33 @@ func trackToolEvent(tasks []BackgroundTask, event string, p map[string]any, now 
 			ToolUseID: str(p, "tool_use_id"),
 			Command:   truncateRunes(str(input, "command"), maxTrackedCommandRunes),
 			StartedAt: now,
-		})
+		}), []trackDecision{kept(id, reasonStarted)}
 	case slices.Contains(taskStopTools, tool):
-		if id := taskStopID(p); id != "" {
-			return withoutTask(tasks, id)
+		if id := taskStopID(p); isTracked(tasks, id) {
+			return withoutTask(tasks, id), []trackDecision{pruned(id, reasonStopOK)}
 		}
 	}
-	return tasks
+	return tasks, nil
 }
 
 // trackPrompt returns tasks without the task a harness injection announces
 // as finished. A prompt a person typed is never a task ending, whatever it
 // quotes.
-func trackPrompt(tasks []BackgroundTask, prompt string) []BackgroundTask {
+func trackPrompt(tasks []BackgroundTask, prompt string) ([]BackgroundTask, []trackDecision) {
 	if len(tasks) == 0 || !isHarnessInjection(prompt) {
-		return tasks
+		return tasks, nil
 	}
 	m := notificationTaskID.FindStringSubmatch(prompt)
-	if m == nil {
-		return tasks
+	if m == nil || !isTracked(tasks, m[1]) {
+		return tasks, nil
 	}
-	return withoutTask(tasks, m[1])
+	return withoutTask(tasks, m[1]), []trackDecision{pruned(m[1], reasonTaskNotification)}
 }
 
 // trackStop returns tasks pruned to the ones a Stop payload lists. A payload
 // without a task list, or one with an entry that names no id (the bridge's
 // counts-only rendition), says nothing about which tasks ended.
-func trackStop(tasks []BackgroundTask, p map[string]any) []BackgroundTask {
+func trackStop(tasks []BackgroundTask, p map[string]any) ([]BackgroundTask, []trackDecision) {
 	return reconcileStop(tasks, p, time.Time{}, false)
 }
 
@@ -124,10 +170,10 @@ func trackStop(tasks []BackgroundTask, p map[string]any) []BackgroundTask {
 // Only the superseded shell Stop adopts: a Stop the dispatcher applies whole
 // already carries its own pending work, and adopting from it would keep a
 // task alive that only a notification clears.
-func reconcileStop(tasks []BackgroundTask, p map[string]any, now time.Time, adopt bool) []BackgroundTask {
+func reconcileStop(tasks []BackgroundTask, p map[string]any, now time.Time, adopt bool) ([]BackgroundTask, []trackDecision) {
 	listed, ok := p["background_tasks"].([]any)
 	if !ok || (len(tasks) == 0 && !adopt) {
-		return tasks
+		return tasks, nil
 	}
 	live := map[string]bool{}
 	var missing []BackgroundTask
@@ -135,19 +181,35 @@ func reconcileStop(tasks []BackgroundTask, p map[string]any, now time.Time, adop
 		entry, _ := raw.(map[string]any)
 		id := str(entry, "id")
 		if id == "" {
-			return tasks
+			return tasks, nil
 		}
 		live[id] = true
-		if adopt && isRunningShell(entry) && !slices.ContainsFunc(tasks, func(t BackgroundTask) bool { return t.ID == id }) {
+		if adopt && isRunningShell(entry) && !isTracked(tasks, id) && !isTracked(missing, id) {
 			missing = append(missing, BackgroundTask{ID: id, Command: truncateRunes(firstNonEmpty(str(entry, "command"), str(entry, "description")), maxTrackedCommandRunes), StartedAt: now})
 		}
 	}
-	kept := slices.DeleteFunc(slices.Clone(tasks), func(t BackgroundTask) bool { return !live[t.ID] })
-	kept = append(kept, missing[:min(len(missing), max(0, maxTrackedTasks-len(kept)))]...)
-	if len(kept) == 0 {
-		return nil
+	var decisions []trackDecision
+	for _, t := range tasks {
+		if live[t.ID] {
+			decisions = append(decisions, kept(t.ID, reasonStopListed))
+		} else {
+			decisions = append(decisions, pruned(t.ID, reasonStopOmitted))
+		}
 	}
-	return kept
+	keptTasks := slices.DeleteFunc(slices.Clone(tasks), func(t BackgroundTask) bool { return !live[t.ID] })
+	adopted := missing[:min(len(missing), max(0, maxTrackedTasks-len(keptTasks)))]
+	for _, t := range adopted {
+		decisions = append(decisions, kept(t.ID, reasonAdopted))
+	}
+	keptTasks = append(keptTasks, adopted...)
+	if len(keptTasks) == 0 {
+		return nil, decisions
+	}
+	return keptTasks, decisions
+}
+
+func isTracked(tasks []BackgroundTask, id string) bool {
+	return id != "" && slices.ContainsFunc(tasks, func(t BackgroundTask) bool { return t.ID == id })
 }
 
 // isRunningShell reports whether a Stop's task entry is in-flight shell work,
@@ -232,7 +294,8 @@ func (d *Dispatcher) ReportSupersededStop(id string, r HookReport) error {
 	if normalizeHookEvent(str(p, "hook_event_name")) != "stop" {
 		return nil
 	}
-	d.setTrackedLocked(s, reconcileStop(s.record.BackgroundTasks, p, d.now(), true))
+	tasks, decisions := reconcileStop(s.record.BackgroundTasks, p, d.now(), true)
+	d.setTrackedLocked(s, tasks, decisions, "stop")
 	s.hookStop = stashHookStop(pendingWorkFromStop(p), d.now())
 	return nil
 }
@@ -269,11 +332,45 @@ func (d *Dispatcher) takeHookStopWorkLocked(s *runState) *PendingWork {
 // for the bridge turn.complete it belongs to (see ReportSupersededStop).
 const hookStopFreshness = 10 * time.Second
 
-// setTrackedLocked replaces the run's tracked tasks, persisting a change.
-func (d *Dispatcher) setTrackedLocked(s *runState, tasks []BackgroundTask) {
+// setTrackedLocked replaces the run's tracked tasks, persisting a change,
+// and logs each decision the tracker made on the way for event.
+func (d *Dispatcher) setTrackedLocked(s *runState, tasks []BackgroundTask, decisions []trackDecision, event string) {
+	d.logTrackDecisionsLocked(s.record.ID, event, decisions)
 	if slices.EqualFunc(s.record.BackgroundTasks, tasks, func(a, b BackgroundTask) bool { return a == b }) {
 		return
 	}
 	s.record.BackgroundTasks = tasks
 	d.persistLocked(s, "")
+}
+
+// logTrackDecisionsLocked writes one daemon-log line per tracker decision.
+// Every field is an id, a hook event name, or a fixed word: nothing the model
+// or a person wrote reaches the log.
+func (d *Dispatcher) logTrackDecisionsLocked(id, event string, decisions []trackDecision) {
+	w := d.trackLog
+	if w == nil {
+		w = os.Stderr
+	}
+	for _, dec := range decisions {
+		fmt.Fprintf(w, "dispatch %s: tracker %s task=%s %s reason=%s\n", id, event, sanitizeTaskID(dec.TaskID), dec.Decision, dec.Reason)
+	}
+}
+
+// maxLoggedTaskIDRunes bounds a task id in the daemon log.
+const maxLoggedTaskIDRunes = 64
+
+// sanitizeTaskID is a task id safe for one daemon-log line: ids come from
+// hook payloads, so anything outside an id's alphabet becomes '?' and the
+// length is bounded.
+func sanitizeTaskID(id string) string {
+	r := []rune(id)
+	if len(r) > maxLoggedTaskIDRunes {
+		r = r[:maxLoggedTaskIDRunes]
+	}
+	return strings.Map(func(c rune) rune {
+		if c == '-' || c == '_' || c == '.' || (c >= '0' && c <= '9') || (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') {
+			return c
+		}
+		return '?'
+	}, string(r))
 }

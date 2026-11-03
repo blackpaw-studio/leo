@@ -55,6 +55,9 @@ func invalidf(format string, args ...any) error {
 }
 
 type Dispatcher struct {
+	// trackLog receives the background tracker's one-line decisions (ids
+	// and fixed reasons only); nil means the daemon log, os.Stderr.
+	trackLog io.Writer
 	// Env expands variables in environment values; the zero value reads the
 	// daemon's own process environment.
 	Env   config.Expander

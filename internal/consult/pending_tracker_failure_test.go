@@ -1,6 +1,7 @@
 package consult
 
 import (
+	"strings"
 	"testing"
 	"time"
 )
@@ -61,6 +62,39 @@ func TestFailedTaskStopOtherErrorKeepsTask(t *testing.T) {
 			)
 			if got := trackedIDs(idleRecord(t, d, id)); len(got) != 1 || got[0] != "b1" {
 				t.Fatalf("tracked after refused stop=%v", got)
+			}
+		})
+	}
+}
+
+// Every keep or prune the tracker decides leaves one daemon-log line naming
+// the run, the event, the task, the decision and a fixed reason, and never
+// the error, command or prompt behind it.
+func TestTrackerLogsDecisionWithoutContents(t *testing.T) {
+	const marker = "SECRET-MARKER-42"
+	cases := []struct {
+		name, errText, want string
+	}{
+		{"pruned", "No task found with ID: b1 " + marker, "pruned reason=stop-failed-gone"},
+		{"kept", "Task b1 is owned by " + marker, "kept reason=stop-failed-other"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			now := time.Date(2026, time.November, 3, 12, 0, 0, 0, time.UTC)
+			d, _, id := startClaudeInteractive(t, &now)
+			reportAll(t, d, id, bashStarted(t, "e1", "p-1", "tu-1", "b1", "echo "+marker))
+			var log strings.Builder
+			d.mu.Lock()
+			d.trackLog = &log
+			d.mu.Unlock()
+			reportAll(t, d, id, taskStopFailed(t, "e2", "TaskStop", "task_id", "b1", tc.errText))
+			lines := strings.Split(strings.TrimRight(log.String(), "\n"), "\n")
+			want := "dispatch " + id + ": tracker posttoolusefailure task=b1 " + tc.want
+			if len(lines) != 1 || lines[0] != want {
+				t.Fatalf("log=%q, want one line %q", log.String(), want)
+			}
+			if strings.Contains(log.String(), marker) {
+				t.Fatalf("log leaked tool contents: %q", log.String())
 			}
 		})
 	}
