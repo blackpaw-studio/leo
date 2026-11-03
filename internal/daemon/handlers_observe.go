@@ -206,6 +206,9 @@ func (s *Server) setWebSources(src web.AgentSources) {
 // web server's bridge feed and dispatch counts.
 func (s *Server) agentSources() web.AgentSources {
 	src := web.AgentSources{Activity: s.observeActivity, Attention: s.observeAttention}
+	if s.observeProgress != nil {
+		src.Tasks = s.observeProgress
+	}
 	if w := s.webSources.Load(); w != nil {
 		src.BridgeFeed, src.Dispatches = w.BridgeFeed, w.Dispatches
 	}

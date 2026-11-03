@@ -123,6 +123,21 @@ func (s *ProgressStore) Tasks(agent string) []AgentTask {
 	return s.tasksLocked(agent)
 }
 
+// AllTasks returns every agent's tasks keyed by agent name (agents without
+// tasks are absent), as copies.
+func (s *ProgressStore) AllTasks() map[string][]AgentTask {
+	if s == nil {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make(map[string][]AgentTask, len(s.agents))
+	for agent := range s.agents {
+		out[agent] = s.tasksLocked(agent)
+	}
+	return out
+}
+
 // Dismiss removes one failed task. ErrTaskNotFound for an unknown task,
 // ErrTaskNotFailed for any other state.
 func (s *ProgressStore) Dismiss(agent, id string) error {

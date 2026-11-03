@@ -198,6 +198,10 @@ type Server struct {
 	// It backs both the snapshot's attention field and the agent hook
 	// callback. nil leaves attention absent everywhere.
 	attention *observe.AttentionStore
+	// progress holds agents' advertised tasks, wired via WithProgress. It
+	// backs the snapshot's tasks field, the agent progress route and task
+	// dismissal. nil disables the feature.
+	progress *observe.ProgressStore
 	// turnObserver receives every turn hook of a supervised agent (see
 	// WithTurnObserver); nil drops them.
 	turnObserver func(agent string, turn AgentTurn)
@@ -336,6 +340,12 @@ func WithTurnObserver(fn func(agent string, turn AgentTurn)) Option {
 	return func(s *Server) { s.turnObserver = fn }
 }
 
+// WithProgress wires the task progress store read by GET /api/v1/state and
+// written by POST /api/agent/progress. Optional.
+func WithProgress(p *observe.ProgressStore) Option {
+	return func(s *Server) { s.progress = p }
+}
+
 // WithBridgeFeed wires the bridge feed GET /api/v1/state merges per-agent
 // usage, bridge state, and attention reasons from. Optional.
 func WithBridgeFeed(p bridgeFeedProvider) Option {
@@ -347,6 +357,9 @@ func WithBridgeFeed(p bridgeFeedProvider) Option {
 // /state) to merge the same way GET /api/v1/state does.
 func (s *Server) ObserveSources() AgentSources {
 	src := AgentSources{BridgeFeed: s.bridgeFeed}
+	if s.progress != nil {
+		src.Tasks = s.progress
+	}
 	if s.dispatches != nil {
 		src.Dispatches = s.dispatches
 	}

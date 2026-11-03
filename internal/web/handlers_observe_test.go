@@ -920,6 +920,42 @@ func TestProjectAgentsCarriesAttention(t *testing.T) {
 	}
 }
 
+func TestBuildSnapshotCarriesTasksOnlyForAgentsWithThem(t *testing.T) {
+	store := observe.NewProgressStore(nil, nil)
+	if _, err := store.Upsert("agent-a", observe.TaskUpdate{ID: "build", Title: &[]string{"Build"}[0]}); err != nil {
+		t.Fatal(err)
+	}
+	in := snapshotInput{
+		Records: []agent.Record{{Name: "agent-a", Status: "running"}, {Name: "agent-b", Status: "running"}},
+		Tasks:   store,
+		Now:     time.Now(),
+	}
+
+	snap := buildSnapshot(in)
+
+	a, b := snap.Agents[0], snap.Agents[1]
+	if len(a.Tasks) != 1 || a.Tasks[0].ID != "build" || a.Tasks[0].Title != "Build" {
+		t.Errorf("agent-a tasks = %+v", a.Tasks)
+	}
+	if b.Tasks != nil {
+		t.Errorf("agent-b tasks = %+v, want none", b.Tasks)
+	}
+}
+
+func TestProjectAgentsCarriesTasks(t *testing.T) {
+	store := observe.NewProgressStore(nil, nil)
+	title := "T"
+	if _, err := store.Upsert("agent-a", observe.TaskUpdate{ID: "t", Title: &title}); err != nil {
+		t.Fatal(err)
+	}
+
+	got := ProjectAgents([]agent.Record{{Name: "agent-a"}}, nil, AgentSources{Tasks: store}, nil)
+
+	if len(got[0].Tasks) != 1 {
+		t.Fatalf("tasks = %+v", got[0].Tasks)
+	}
+}
+
 // fakeDispatchProvider is a test double for dispatchProvider.
 type fakeDispatchProvider struct {
 	dispatches []observe.Dispatch

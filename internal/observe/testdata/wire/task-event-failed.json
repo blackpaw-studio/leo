@@ -1,0 +1,19 @@
+{
+  "seq": 814,
+  "at": "2026-11-03T19:30:00Z",
+  "agent": "alfred",
+  "id": "tests",
+  "task": {
+    "id": "tests",
+    "title": "Test sweep",
+    "mode": "determinate",
+    "percent": 80,
+    "status": "3 failures",
+    "state": "failed",
+    "stale": false,
+    "started_at": "2026-11-03T19:26:00Z",
+    "updated_at": "2026-11-03T19:31:00Z",
+    "ended_at": "2026-11-03T19:31:00Z",
+    "revision": 9
+  }
+}

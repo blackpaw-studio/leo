@@ -130,6 +130,7 @@ type Server struct {
 	observeMessageLog *observe.MessageLog
 	observeActivity   observe.ActivityProvider
 	observeAttention  *observe.AttentionStore
+	observeProgress   *observe.ProgressStore
 	observeClock      httpapi.Clock
 	leoVersion        string
 	parentContext     context.Context
@@ -265,6 +266,12 @@ func (s *Server) SetObservability(bus *observe.Bus, runLog *observe.RunLog, mess
 // view and, via StartWeb, the web API. Must be called before StartWeb.
 func (s *Server) SetAttention(a *observe.AttentionStore) {
 	s.observeAttention = a
+}
+
+// SetProgress wires the agent task progress store into the local /state view
+// and, via StartWeb, the web API. Must be called before StartWeb.
+func (s *Server) SetProgress(p *observe.ProgressStore) {
+	s.observeProgress = p
 }
 
 // ConfigWriter returns the process-wide leo.yaml write lock shared by the
@@ -567,6 +574,9 @@ func (s *Server) StartWeb(cfg *config.Config, agentSvc web.AgentService) error {
 	}
 	if s.observeAttention != nil {
 		observeOpts = append(observeOpts, web.WithAttention(s.observeAttention))
+	}
+	if s.observeProgress != nil {
+		observeOpts = append(observeOpts, web.WithProgress(s.observeProgress))
 	}
 	if s.leoVersion != "" {
 		observeOpts = append(observeOpts, web.WithVersion(s.leoVersion))

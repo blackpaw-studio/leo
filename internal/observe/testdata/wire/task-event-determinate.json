@@ -1,0 +1,20 @@
+{
+  "seq": 812,
+  "at": "2026-11-03T19:30:00Z",
+  "agent": "alfred",
+  "id": "build",
+  "task": {
+    "id": "build",
+    "title": "Xcode build",
+    "mode": "determinate",
+    "percent": 62,
+    "status": "Compiling 412/980",
+    "eta_at": "2026-11-03T19:40:00Z",
+    "state": "running",
+    "stale": false,
+    "started_at": "2026-11-03T19:26:00Z",
+    "updated_at": "2026-11-03T19:30:00Z",
+    "ended_at": null,
+    "revision": 7
+  }
+}

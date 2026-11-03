@@ -22,7 +22,8 @@
     "agent_status_restoring",
     "client_tools",
     "agent_appearance",
-    "agent_move"
+    "agent_move",
+    "agent_progress"
   ],
   "client_id": "ct_01JC8Z3K4M5N6P7Q8R9S0T1V2W"
 }
