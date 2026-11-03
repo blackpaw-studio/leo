@@ -1788,6 +1788,7 @@ func superviseProcess(ctx context.Context, tmuxPath, claudePath string, spec Pro
 		// restart is counted and no backoff is served.
 		if fellBack.Load() {
 			sv.endLaunchToken(homePath, id.Name(), spec.attentionToken)
+			sv.clearProgress(id.Name(), id)
 			forceLegacy = true
 			currentArgs = argsAfterBridgeFallback(currentArgs, spec.Env, spec.WorkDir)
 			id.setArgs(currentArgs)
@@ -1803,6 +1804,7 @@ func superviseProcess(ctx context.Context, tmuxPath, claudePath string, spec Pro
 			fmt.Fprintf(os.Stderr, "[%s] claude exited before its leo bridge connected; relaunching without the bridge\n", name)
 		}
 		sv.endLaunchToken(homePath, id.Name(), spec.attentionToken)
+		sv.clearProgress(id.Name(), id)
 		sv.markAttention(name, id, observe.AttentionErrored)
 		sv.setState(name, id, "restarting")
 		sv.incrementRestarts(name, id)

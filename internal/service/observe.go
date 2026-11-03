@@ -69,6 +69,19 @@ func (s *Supervisor) markAttention(name string, id *procIdentity, state observe.
 	s.attention.SetIfTracked(name, state)
 }
 
+// clearProgress removes name's advertised tasks when its launch ends
+// unexpectedly (the token they were reported under is revoked), but only
+// while id is still that name's registered live generation: a dying
+// goroutine must not wipe the tasks of the agent that replaced it.
+func (s *Supervisor) clearProgress(name string, id *procIdentity) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if cur, ok := s.identities[name]; !ok || cur != id {
+		return
+	}
+	s.progress.RemoveAgent(name)
+}
+
 // launchAttention sets name's initial attention on launch/adopt, for the
 // live generation only, and only while name has none: SpawnAgent's preset,
 // a hook that landed once the token was registered, or a restart's errored

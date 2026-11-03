@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/blackpaw-studio/leo/internal/observe"
 )
@@ -57,4 +58,55 @@ func (r *progressRecorder) sawNullFor(agent, id string) bool {
 		}
 	}
 	return false
+}
+
+func seedTask(t *testing.T, store *observe.ProgressStore, agent, id string) {
+	t.Helper()
+	title := "Build"
+	if _, err := store.Upsert(agent, observe.TaskUpdate{ID: id, Title: &title}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// A crash-restart revokes the launch's token, so the tasks it reported must
+// not survive into the replacement launch and eat its cap.
+func TestUnexpectedExitClearsTheLaunchsTasks(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	sv := NewSupervisor(ctx)
+	defer stopLoops(cancel, sv)
+	sv.SetAttention(observe.NewAttentionStore(nil))
+	store := observe.NewProgressStore(nil, nil)
+	sv.SetProgress(store)
+	seedTask(t, store, "crashy", "build")
+
+	spawnFakehook(t, sv, "crashy", true) // the session dies on its own: a crash-restart
+	defer func() { _ = sv.StopAgent("crashy", false) }()
+
+	deadline := time.Now().Add(5 * time.Second)
+	for len(store.Tasks("crashy")) != 0 {
+		if time.Now().After(deadline) {
+			t.Fatalf("tasks survived the crash-restart: %+v", store.Tasks("crashy"))
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
+// Only the live generation clears: a goroutine of a stopped launch must not
+// wipe the tasks of the agent that replaced it.
+func TestClearProgressOnlyForTheLiveGeneration(t *testing.T) {
+	sv := NewSupervisor(context.Background())
+	store := observe.NewProgressStore(nil, nil)
+	sv.SetProgress(store)
+	seedTask(t, store, "a", "build")
+	stale := newProcIdentity("a", nil)
+	live := addIdentity(sv, "a")
+
+	sv.clearProgress("a", stale)
+	if len(store.Tasks("a")) != 1 {
+		t.Fatal("a stale generation cleared the live agent's tasks")
+	}
+	sv.clearProgress("a", live)
+	if len(store.Tasks("a")) != 0 {
+		t.Fatal("the live generation must clear its tasks")
+	}
 }
