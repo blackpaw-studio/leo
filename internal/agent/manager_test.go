@@ -3,7 +3,6 @@ package agent
 import (
 	"context"
 	"errors"
-	"github.com/blackpaw-studio/leo/internal/observe"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -16,6 +15,7 @@ import (
 	"github.com/blackpaw-studio/leo/internal/agentstore"
 	"github.com/blackpaw-studio/leo/internal/config"
 	"github.com/blackpaw-studio/leo/internal/leomcp"
+	"github.com/blackpaw-studio/leo/internal/observe"
 )
 
 // TestRecordCarriesNoEnv guards a credential leak. Record is the payload of
