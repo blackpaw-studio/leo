@@ -77,12 +77,20 @@ func turnNotificationStatus(rec Record, key string) Status {
 			return StatusCanceled
 		case TurnRejected, TurnLost:
 			return StatusFailed
+		case TurnReleased:
+			return StatusReleased
 		}
 	}
 	return rec.Status
 }
 
 func (d *Dispatcher) completionCandidateLocked(s *runState, key string, status Status) bool {
+	return d.recordTurnNoticeLocked(s, key, status, false)
+}
+
+// recordTurnNoticeLocked records key's completion notice once, pending for
+// the caller unless suppress is set or nobody would receive it.
+func (d *Dispatcher) recordTurnNoticeLocked(s *runState, key string, status Status, suppress bool) bool {
 	if key == "" {
 		return true
 	}
@@ -97,7 +105,7 @@ func (d *Dispatcher) completionCandidateLocked(s *runState, key string, status S
 	snapshot.ActiveSeconds = snapshot.LiveActiveSeconds(now)
 	snapshot.RunningSince = nil
 	n := Notification{Message: completionNotification(snapshot, key, status)}
-	if !s.record.Notify || s.record.CallerPaneID == "" || s.record.CallerHarness == "" || d.waits[key] > 0 {
+	if suppress || !s.record.Notify || s.record.CallerPaneID == "" || s.record.CallerHarness == "" || d.waits[key] > 0 {
 		n.Disposition, n.SuppressedAt = NotificationSuppressed, now
 		if s.record.Notify && s.record.CallerPaneID != "" && s.record.CallerHarness == "" {
 			fmt.Fprintf(os.Stderr, "dispatch %s: suppressing notification %s: unknown caller harness\n", s.record.ID, key)

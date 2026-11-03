@@ -57,6 +57,9 @@ const (
 	TurnInterrupted TurnOutcome = "interrupted"
 	TurnLost        TurnOutcome = "lost"
 	TurnRejected    TurnOutcome = "rejected"
+	// TurnReleased ends a turn its run was released out from under before it
+	// produced a result: a turn waiting on background work that never woke.
+	TurnReleased TurnOutcome = "released"
 )
 
 type Turn struct {

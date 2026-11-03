@@ -1,11 +1,70 @@
 package consult
 
-import "fmt"
+import (
+	"fmt"
+	"time"
+)
 
 func (d *Dispatcher) Release(id string) (Record, error) {
 	unlock := d.serialLocks([]string{id})
 	defer unlock()
 	return d.releaseLocked(id, nil)
+}
+
+// releasable reports whether a run in status may be released: one with no
+// turn at work. A waiting run qualifies, since its background work may never
+// wake it; its open turns end on release (see endWaitingTurnsForReleaseLocked).
+func releasable(status Status) bool {
+	switch status {
+	case StatusIdle, StatusWaiting, StatusDone, StatusFailed, StatusCanceled, StatusTimeout, StatusClosed:
+		return true
+	}
+	return false
+}
+
+// releasedNoResultText is the result of a turn its run was released out from
+// under before it said anything.
+const releasedNoResultText = "released while waiting on background work, before the turn produced a result"
+
+// endWaitingTurnsForReleaseLocked ends every open turn of a waiting run its
+// caller is releasing, leaving the run idle for the release to finish: a turn
+// that said something before it paused keeps that as its result and
+// finishes; any other ends released. The caller asked for this, so no turn
+// notice goes out. The background work dies with the pane.
+func (d *Dispatcher) endWaitingTurnsForReleaseLocked(s *runState) {
+	boundary := d.now()
+	for i := range s.record.Turns {
+		t := &s.record.Turns[i]
+		if t.Outcome != "" {
+			continue
+		}
+		t.Outcome = TurnFinished
+		closing := ""
+		if len(t.WaitText) == 0 {
+			t.Outcome, closing = TurnReleased, releasedNoResultText
+		}
+		t.mergeWaitText(closing)
+		t.Pending = nil
+		t.EndedAt = boundary
+		if t.SlotHeld {
+			t.SlotHeld = false
+			d.slotsFor(s).Release()
+		}
+		if t.Queued {
+			t.Queued = false
+			d.dequeueSendLocked(s, t.TurnID)
+		}
+		if s.armedTurn == t.TurnID {
+			s.armedTurn, s.armedUntil = "", time.Time{}
+		}
+		d.recordTurnNoticeLocked(s, t.TurnID, turnNotificationStatus(s.record, t.TurnID), true)
+		d.persistTurnLocked(s, *t)
+	}
+	s.record.BackgroundTasks = nil
+	s.adoptWaits = nil
+	d.recomputeStatusLocked(s, boundary)
+	s.record.foldActive(boundary)
+	d.persistLocked(s, "status")
 }
 
 func (d *Dispatcher) releaseLocked(id string, layout func(string) error) (Record, error) {
@@ -19,9 +78,7 @@ func (d *Dispatcher) releaseLocked(id string, layout func(string) error) (Record
 	if rec.Status == StatusReleased {
 		return rec, nil
 	}
-	switch rec.Status {
-	case StatusIdle, StatusDone, StatusFailed, StatusCanceled, StatusTimeout, StatusClosed:
-	default:
+	if !releasable(rec.Status) {
 		return rec, invalidf("dispatch %s cannot be released while %s", id, rec.Status)
 	}
 	d.mu.Lock()
@@ -32,11 +89,13 @@ func (d *Dispatcher) releaseLocked(id string, layout func(string) error) (Record
 			d.mu.Unlock()
 			return rec, invalidf("dispatch %s is being released", id)
 		}
-		switch rec.Status {
-		case StatusIdle, StatusDone, StatusFailed, StatusCanceled, StatusTimeout, StatusClosed:
-		default:
+		if !releasable(rec.Status) {
 			d.mu.Unlock()
 			return rec, invalidf("dispatch %s cannot be released while %s", id, rec.Status)
+		}
+		if rec.Status == StatusWaiting {
+			d.endWaitingTurnsForReleaseLocked(state)
+			rec = cloneRecord(state.record)
 		}
 		state.releasing = true
 	}
