@@ -98,12 +98,15 @@ func (d *Dispatcher) waitCoversRunLocked(rec Record) bool {
 	return false
 }
 
-// closeNoticeReady reports whether item may be delivered now. A close notice
-// waits until every turn notice of its run is resolved, so the caller reads
-// the last result before the close, and is dropped if a wait on the run came
-// in since it was recorded.
-func (d *Dispatcher) closeNoticeReady(item pendingNotification) bool {
-	if !isCloseNoticeKey(item.record, item.key) {
+// runNoticeReady reports whether item may be delivered now. A waiting notice
+// is dropped once its quiet stretch is over and held back while a wait
+// covers the run (the wait may end at its ceiling with the run still
+// waiting). A close notice is dropped if a wait on the run came in since it
+// was recorded (the wait reports the close), and otherwise waits until every
+// turn notice of its run is resolved, so the caller reads the last result
+// before the close.
+func (d *Dispatcher) runNoticeReady(item pendingNotification) bool {
+	if !isRunNoticeKey(item.record, item.key) {
 		return true
 	}
 	d.mu.Lock()
@@ -113,18 +116,21 @@ func (d *Dispatcher) closeNoticeReady(item pendingNotification) bool {
 	if n.Disposition != NotificationPending {
 		return true
 	}
-	if d.waitCoversRunLocked(rec) {
+	if isWaitingNoticeKey(rec, item.key) && !waitingNoticeStale(item.state, item.key) && d.waitCoversRunLocked(rec) {
+		return false
+	}
+	if d.waitCoversRunLocked(rec) || (isWaitingNoticeKey(rec, item.key) && waitingNoticeStale(item.state, item.key)) {
 		n.Disposition, n.SuppressedAt = NotificationSuppressed, d.now()
 		item.state.record.Notifications[item.key] = n
 		_ = d.persistNotificationRecordLocked(item.state)
 		return false
 	}
-	return !hasUnresolvedTurnNotice(rec)
+	return !isCloseNoticeKey(rec, item.key) || !hasUnresolvedTurnNotice(rec)
 }
 
 func hasUnresolvedTurnNotice(rec Record) bool {
 	for key, n := range rec.Notifications {
-		if !isCloseNoticeKey(rec, key) && (n.Disposition == NotificationPending || n.Disposition == NotificationClaimed) {
+		if !isRunNoticeKey(rec, key) && (n.Disposition == NotificationPending || n.Disposition == NotificationClaimed) {
 			return true
 		}
 	}

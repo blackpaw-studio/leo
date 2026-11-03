@@ -42,6 +42,10 @@ func deliveryMessage(rec Record, key string, n Notification, transport string) s
 	if isCloseNoticeKey(rec, key) {
 		return closeNoticeMessage(rec, pointer)
 	}
+	if isWaitingNoticeKey(rec, key) {
+		// No turn has a result to carry: the notice is its header alone.
+		return pointer
+	}
 	return inlineNotification(rec, key, strings.TrimSuffix(pointer, pointerSuffix))
 }
 
@@ -177,7 +181,9 @@ func (d *Dispatcher) collectAcked(rec Record, key string) {
 // nothing. Both are judged under the run's serial lock, which a follow-up
 // also takes, so the two cannot interleave.
 func (d *Dispatcher) collectDelivered(ctx context.Context, item pendingNotification) {
-	if isCloseNoticeKey(item.record, item.key) {
+	// A run notice (close, waiting) is not a result delivered: collecting on
+	// one could release a run whose result the caller never received.
+	if isRunNoticeKey(item.record, item.key) {
 		return
 	}
 	unlock := d.serialLocks([]string{item.record.ID})

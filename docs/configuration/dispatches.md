@@ -406,9 +406,27 @@ When that work wakes the session (a task notification or the wakeup's
 prompt), the same turn continues, and its next Stop with nothing pending
 finishes it. The turn's result text is every message the turn stopped on while waiting, then the final one, joined by blank lines (empty or repeated messages skipped), so a summary written before pausing is not replaced by a terse wake reply. A `waiting` run is never idle-closed;
 it reads stalled only after two hours without hook activity (background work
-can end without waking the session), and is not finished on its own then. A
+can end without waking the session), and is not finished on its own then.
+After 30 minutes waiting with no hook activity, a caller with notifications
+on (and no `leo_wait` covering the run) gets one notice naming the run, what
+it waits on and how long it has been quiet, and pointing at `leo_release` /
+`leo_cancel`. It changes nothing about the run; hook activity or a fresh
+entry into `waiting` starts a new quiet stretch that can notify again. A
 pane that dies while waiting loses the turn, as a busy one does. A send to a
-waiting run is rejected like a send to a running one; cancel works as usual.
+waiting run is rejected, naming `leo_release` and `leo_cancel`; cancel works as
+usual. `leo_release` (and `leo dispatch release`) also accepts a waiting run:
+an open turn that stopped with text before pausing finishes with that text,
+one that said nothing ends `released`, no turn notification is sent (the
+caller asked), and the background work dies with the pane.
+
+A tracked background shell stops counting once Claude reports it ended: its
+task notification, a Stop that no longer lists it, a successful `TaskStop`,
+or a `TaskStop` that fails at run time because the task is already gone
+(`No task found`, `is not running`). Claude Code 2.1.317 usually refuses such
+a `TaskStop` before running it, and that refusal fires no hook, so the Stop
+or notification is what clears it then. A waiting turn left with nothing
+pending finishes as if the work had woken it. Each keep/prune decision logs one daemon-log line with
+the dispatch id, hook event, task id and a fixed reason.
 
 An interactive dispatch is bound to its caller's tmux session. It closes on
 cancel, TUI exit, one hour of empty-composer idle time, or the session timeout.

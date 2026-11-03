@@ -6,6 +6,18 @@ All notable user-visible changes to Leo are documented here.
 
 ### Added
 
+- **`released` turn outcome and release of waiting dispatches.** `leo_release`
+  and `leo dispatch release` now accept a dispatch that is `waiting` on
+  background work. An open turn that stopped with text before pausing finishes
+  with that text; one that said nothing ends with the new turn outcome
+  `released` (additive on `/api/v1` turn objects and wait entries; its
+  notification status is `released`). No turn notification is sent for a
+  release the caller asked for.
+- **Waiting notice.** A dispatch that sits `waiting` with no hook activity for
+  30 minutes sends its caller one notice per quiet stretch (when notify is on
+  and no `leo_wait` covers it), naming what it waits on and pointing at
+  `leo_release` / `leo_cancel`. It changes no run state.
+
 - **Agent appearance (`agent_appearance`).** Agents can carry an optional emoji
   and a palette color (`red`, `orange`, `yellow`, `green`, `teal`, `blue`,
   `indigo`, `purple`, `pink`, `gray`), set by hand per agent (stored on its
@@ -72,6 +84,15 @@ All notable user-visible changes to Leo are documented here.
   policies, OpenCode context, scheduler) instead of only the scheduler.
 
 ### Fixed
+
+- **Dispatches stuck `waiting` on a dead shell.** Any prune of the background
+  tracker (task notification, a Stop that omits the task, `TaskStop`, or a
+  `TaskStop`/`KillShell` that fails at run time because the task is gone) now
+  re-derives the waiting turns and run status, so a run whose only pending
+  shell is gone finishes instead of waiting forever. The
+  send rejection on a waiting run now names `leo_release` / `leo_cancel`, and
+  each tracker keep/prune decision logs one daemon-log line (ids and a fixed
+  reason only).
 
 - **Dispatch worktrees no longer leak.** Cleanup marked an interactive
   dispatch's worktree `kept` whenever its pane was alive or its liveness

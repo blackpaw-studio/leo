@@ -553,7 +553,7 @@ func (d *Dispatcher) closeTurnLocked(s *runState, id string, outcome TurnOutcome
 			continue
 		}
 		t.Outcome = outcome
-		t.Pending = nil
+		t.Pending, t.PendingTaskIDs = nil, nil
 		t.EndedAt = boundary
 		t.mergeWaitText(s.scrub.String(text))
 		if t.SlotHeld {
@@ -693,6 +693,9 @@ func (d *Dispatcher) recomputeStatusLocked(s *runState, boundary time.Time) {
 	if s.record.Status == StatusNeedsInput && len(s.permissions) > 0 && status != StatusIdle {
 		return
 	}
+	if status == StatusWaiting && s.record.Status != StatusWaiting {
+		s.waitingSince = boundary
+	}
 	s.record.Status = status
 }
 
@@ -709,7 +712,7 @@ func (d *Dispatcher) admitLocked(s *runState) {
 // clearPendingLocked ends every wait: each turn's and the run's.
 func clearPendingLocked(s *runState) {
 	for i := range s.record.Turns {
-		s.record.Turns[i].Pending = nil
+		s.record.Turns[i].Pending, s.record.Turns[i].PendingTaskIDs = nil, nil
 	}
 	s.record.PendingWork = nil
 }
@@ -752,7 +755,7 @@ func (d *Dispatcher) Send(ctx context.Context, id, message string) (SendResult, 
 	if s.record.Status == StatusWaiting {
 		pending := s.record.PendingWork.Summary()
 		d.mu.Unlock()
-		return SendResult{}, fmt.Errorf("dispatch is waiting on background work (%s) and will continue its turn when it finishes; leo_wait on it first", pending)
+		return SendResult{}, fmt.Errorf("dispatch is waiting on background work (%s), which may never wake it; leo_wait on it, or leo_release or leo_cancel it", pending)
 	}
 	if s.record.Status != StatusIdle {
 		st := s.record.Status
@@ -904,12 +907,18 @@ func (d *Dispatcher) Report(id string, r HookReport) error {
 	case "pretooluse", "posttooluse", "posttoolusefailure":
 		// Activity only: no turn is opened, closed, or attributed.
 		s.record.OpenTools = applyToolEvent(s.record.OpenTools, event, str(p, "tool_use_id"), s.lastHook)
-		d.setTrackedLocked(s, trackToolEvent(s.record.BackgroundTasks, event, p, s.lastHook))
+		before := pendingSnapshot(s)
+		tasks, decisions := trackToolEvent(s.record.BackgroundTasks, event, p, s.lastHook)
+		d.prunePendingLocked(s, before, d.trackLocked(s, event, tasks, decisions))
 	case "userpromptsubmit":
 		if s.record.Status == StatusSettling {
 			return nil
 		}
-		d.setTrackedLocked(s, trackPrompt(s.record.BackgroundTasks, str(p, "prompt")))
+		// The prune lands once the handler has placed the prompt: a wake
+		// carries its waiting turn on rather than finding it closed.
+		before := pendingSnapshot(s)
+		tasks, decisions := trackPrompt(s.record.BackgroundTasks, str(p, "prompt"))
+		defer d.prunePendingLocked(s, before, d.trackLocked(s, event, tasks, decisions))
 		if key := harnessKey(p); key != "" {
 			s.idMode = true
 			d.submitKeyedLocked(s, key, p)
@@ -976,7 +985,11 @@ func (d *Dispatcher) Report(id string, r HookReport) error {
 		}
 		text := str(p, "last_assistant_message")
 		if event == "stop" {
-			d.setTrackedLocked(s, trackStop(s.record.BackgroundTasks, p))
+			// The prune lands once the Stop has ended or paused its turn:
+			// a waiting turn the Stop adopts closes with the Stop's words.
+			before := pendingSnapshot(s)
+			tasks, decisions := trackStop(s.record.BackgroundTasks, p)
+			defer d.prunePendingLocked(s, before, d.trackLocked(s, event, tasks, decisions))
 		}
 		if key := harnessKey(p); key != "" {
 			s.idMode = true
@@ -1113,6 +1126,7 @@ func (d *Dispatcher) waitOnBackgroundLocked(s *runState, w *PendingWork, text st
 	old := s.record.Status
 	for _, t := range turns {
 		t.Pending = w
+		t.PendingTaskIDs = trackedTaskIDs(s.record.BackgroundTasks)
 		delete(s.adoptWaits, t.TurnID)
 		t.WaitText = appendStopText(t.WaitText, s.scrub.String(text))
 	}
@@ -1188,7 +1202,7 @@ func (d *Dispatcher) resumeWaitingLocked(s *runState) {
 // resumeTurnLocked continues t, a turn paused on background work, as the
 // wake that carries it on arrives. Other turns' waits stand.
 func (d *Dispatcher) resumeTurnLocked(s *runState, t *Turn) {
-	t.Pending = nil
+	t.Pending, t.PendingTaskIDs = nil, nil
 	d.settleResumedLocked(s)
 }
 
@@ -1346,6 +1360,7 @@ func (d *Dispatcher) Sweep(now time.Time) {
 			if s.record.Status == StatusSettling && !now.Before(s.settleDeadline) {
 				d.finishInteractiveLocked(s, s.settleStatus)
 			}
+			d.waitingNoticeLocked(s, now)
 		}
 		if s.killPending && s.record.PaneID != "" {
 			cleanups = append(cleanups, s)
