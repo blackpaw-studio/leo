@@ -904,14 +904,18 @@ func (d *Dispatcher) Report(id string, r HookReport) error {
 	case "pretooluse", "posttooluse", "posttoolusefailure":
 		// Activity only: no turn is opened, closed, or attributed.
 		s.record.OpenTools = applyToolEvent(s.record.OpenTools, event, str(p, "tool_use_id"), s.lastHook)
+		before := pendingSnapshot(s)
 		tasks, decisions := trackToolEvent(s.record.BackgroundTasks, event, p, s.lastHook)
-		d.setTrackedLocked(s, tasks, decisions, event)
+		d.prunePendingLocked(s, before, d.trackLocked(s, event, tasks, decisions))
 	case "userpromptsubmit":
 		if s.record.Status == StatusSettling {
 			return nil
 		}
+		// The prune lands once the handler has placed the prompt: a wake
+		// carries its waiting turn on rather than finding it closed.
+		before := pendingSnapshot(s)
 		tasks, decisions := trackPrompt(s.record.BackgroundTasks, str(p, "prompt"))
-		d.setTrackedLocked(s, tasks, decisions, event)
+		defer d.prunePendingLocked(s, before, d.trackLocked(s, event, tasks, decisions))
 		if key := harnessKey(p); key != "" {
 			s.idMode = true
 			d.submitKeyedLocked(s, key, p)
@@ -978,8 +982,11 @@ func (d *Dispatcher) Report(id string, r HookReport) error {
 		}
 		text := str(p, "last_assistant_message")
 		if event == "stop" {
+			// The prune lands once the Stop has ended or paused its turn:
+			// a waiting turn the Stop adopts closes with the Stop's words.
+			before := pendingSnapshot(s)
 			tasks, decisions := trackStop(s.record.BackgroundTasks, p)
-			d.setTrackedLocked(s, tasks, decisions, event)
+			defer d.prunePendingLocked(s, before, d.trackLocked(s, event, tasks, decisions))
 		}
 		if key := harnessKey(p); key != "" {
 			s.idMode = true

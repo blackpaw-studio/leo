@@ -294,8 +294,9 @@ func (d *Dispatcher) ReportSupersededStop(id string, r HookReport) error {
 	if normalizeHookEvent(str(p, "hook_event_name")) != "stop" {
 		return nil
 	}
+	before := pendingSnapshot(s)
 	tasks, decisions := reconcileStop(s.record.BackgroundTasks, p, d.now(), true)
-	d.setTrackedLocked(s, tasks, decisions, "stop")
+	d.prunePendingLocked(s, before, d.trackLocked(s, "stop", tasks, decisions))
 	s.hookStop = stashHookStop(pendingWorkFromStop(p), d.now())
 	return nil
 }
@@ -331,6 +332,13 @@ func (d *Dispatcher) takeHookStopWorkLocked(s *runState) *PendingWork {
 // hookStopFreshness is how long a superseded hook Stop's pending work waits
 // for the bridge turn.complete it belongs to (see ReportSupersededStop).
 const hookStopFreshness = 10 * time.Second
+
+// trackLocked applies one tracker update for event and returns how many
+// tracked tasks it pruned, for prunePendingLocked.
+func (d *Dispatcher) trackLocked(s *runState, event string, tasks []BackgroundTask, decisions []trackDecision) int {
+	d.setTrackedLocked(s, tasks, decisions, event)
+	return prunedCount(decisions)
+}
 
 // setTrackedLocked replaces the run's tracked tasks, persisting a change,
 // and logs each decision the tracker made on the way for event.
@@ -373,4 +381,81 @@ func sanitizeTaskID(id string) string {
 		}
 		return '?'
 	}, string(r))
+}
+
+// pendingSnapshot is each waiting turn's pending work before an event's
+// handler runs, so a prune afterwards lowers only the waits the event left
+// alone: one the event itself set (a Stop pausing a turn) already reflects
+// the pruned tracker.
+func pendingSnapshot(s *runState) map[string]*PendingWork {
+	var before map[string]*PendingWork
+	for _, t := range s.record.Turns {
+		if t.Outcome == "" && t.Pending != nil {
+			if before == nil {
+				before = map[string]*PendingWork{}
+			}
+			before[t.TurnID] = t.Pending
+		}
+	}
+	return before
+}
+
+// prunePendingLocked carries a tracker prune into the run's turns: each wait
+// the event left untouched loses the pruned shells, and a turn left with
+// nothing pending ends as its background work finishing would have ended
+// it, keeping what its Stops said. The run's status is re-derived.
+func (d *Dispatcher) prunePendingLocked(s *runState, before map[string]*PendingWork, pruned int) {
+	if pruned == 0 || len(before) == 0 || s.releasing || s.record.Status.Terminal() || s.record.Status == StatusSettling {
+		return
+	}
+	old := s.record.Status
+	var emptied []string
+	changed := false
+	for i := range s.record.Turns {
+		t := &s.record.Turns[i]
+		if t.Outcome != "" || t.Pending == nil || t.Pending != before[t.TurnID] {
+			continue
+		}
+		w := withoutShells(t.Pending, pruned)
+		if w == t.Pending {
+			continue
+		}
+		changed = true
+		if w == nil {
+			emptied = append(emptied, t.TurnID)
+			continue
+		}
+		t.Pending = w
+	}
+	if !changed {
+		return
+	}
+	for _, id := range emptied {
+		d.closeTurnLocked(s, id, TurnFinished, "")
+	}
+	d.recomputeStatusLocked(s, d.now())
+	if s.record.Status != old {
+		d.persistLocked(s, "status")
+	} else {
+		d.persistLocked(s, "")
+	}
+}
+
+// withoutShells returns w with n fewer shells (never below zero), nil when
+// nothing is left pending, or w itself when it counts no shells. w is never
+// mutated: turns may share it.
+func withoutShells(w *PendingWork, n int) *PendingWork {
+	if w == nil || w.Tasks["shell"] == 0 {
+		return w
+	}
+	lowered := clonePendingWork(w)
+	if left := w.Tasks["shell"] - n; left > 0 {
+		lowered.Tasks["shell"] = left
+	} else {
+		delete(lowered.Tasks, "shell")
+	}
+	if len(lowered.Tasks) == 0 && lowered.Wakeups == 0 {
+		return nil
+	}
+	return lowered
 }
