@@ -155,7 +155,7 @@ func trackPrompt(tasks []BackgroundTask, prompt string) ([]BackgroundTask, []tra
 		return tasks, nil
 	}
 	m := notificationTaskID.FindStringSubmatch(prompt)
-	if m == nil || !isTracked(tasks, m[1]) {
+	if len(m) < 2 || !isTracked(tasks, m[1]) {
 		return tasks, nil
 	}
 	return withoutTask(tasks, m[1]), []trackDecision{pruned(m[1], reasonTaskNotification)}
