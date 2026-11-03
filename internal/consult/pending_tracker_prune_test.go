@@ -2,6 +2,7 @@ package consult
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 )
@@ -92,4 +93,20 @@ func TestTaskNotificationPromptStillResumesTurn(t *testing.T) {
 			t.Fatalf("status=%s turns=%+v tracked=%v", rec.Status, rec.Turns, rec.BackgroundTasks)
 		}
 	})
+}
+
+// A send to a waiting run names the ways out instead of promising the turn
+// will carry on: the background work may never wake it.
+func TestSendToWaitingRunNamesReleaseAndCancel(t *testing.T) {
+	now := time.Date(2026, time.November, 3, 12, 0, 0, 0, time.UTC)
+	d, _, id := startClaudeInteractive(t, &now)
+	reportAll(t, d, id, claudeStop(t, "e1", "building", shellAndMonitor))
+	_, err := d.Send(context.Background(), id, "anything new?")
+	if err == nil {
+		t.Fatal("send to a waiting run was accepted")
+	}
+	msg := err.Error()
+	if !strings.Contains(msg, "leo_release") || !strings.Contains(msg, "leo_cancel") || !strings.Contains(msg, "1 shell · 1 monitor") || strings.Contains(msg, "will continue") {
+		t.Fatalf("rejection=%q", msg)
+	}
 }

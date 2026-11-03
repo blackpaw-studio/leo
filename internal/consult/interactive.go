@@ -752,7 +752,7 @@ func (d *Dispatcher) Send(ctx context.Context, id, message string) (SendResult, 
 	if s.record.Status == StatusWaiting {
 		pending := s.record.PendingWork.Summary()
 		d.mu.Unlock()
-		return SendResult{}, fmt.Errorf("dispatch is waiting on background work (%s) and will continue its turn when it finishes; leo_wait on it first", pending)
+		return SendResult{}, fmt.Errorf("dispatch is waiting on background work (%s), which may never wake it; leo_wait on it, or leo_release or leo_cancel it", pending)
 	}
 	if s.record.Status != StatusIdle {
 		st := s.record.Status
