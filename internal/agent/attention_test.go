@@ -143,3 +143,27 @@ func writeAgentSpill(t *testing.T, home, name string) string {
 	}
 	return path
 }
+
+func TestRenameMovesTasks(t *testing.T) {
+	home := t.TempDir()
+	_ = agentstore.Save(home, agentstore.Record{Name: "leo-old", Workspace: "/w", ClaudeArgs: []string{"--name", "leo-old"}})
+	sup := &fakeSupervisor{ephemeral: map[string]ProcessState{"leo-old": {Name: "leo-old", Status: "running"}}}
+	m := newTestManager(t, home, sup)
+	store := observe.NewProgressStore(nil, nil)
+	title := "Build"
+	if _, err := store.Upsert("leo-old", observe.TaskUpdate{ID: "build", Title: &title}); err != nil {
+		t.Fatal(err)
+	}
+	m.SetProgress(store)
+
+	if _, err := m.Rename("leo-old", "leo-new"); err != nil {
+		t.Fatalf("Rename: %v", err)
+	}
+
+	if got := store.Tasks("leo-old"); len(got) != 0 {
+		t.Errorf("old name still has tasks: %+v", got)
+	}
+	if got := store.Tasks("leo-new"); len(got) != 1 || got[0].ID != "build" {
+		t.Errorf("new name tasks = %+v", got)
+	}
+}

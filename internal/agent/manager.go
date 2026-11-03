@@ -133,6 +133,8 @@ type Manager struct {
 	// attention is the per-agent attention store. Delete drops an agent's
 	// entry and Rename carries it to the new name. nil-safe.
 	attention *observe.AttentionStore
+	// progress holds advertised tasks; a live rename re-keys them.
+	progress *observe.ProgressStore
 	// bridgeCapable reports whether a claude agent launched now would load
 	// the leo bridge, which delivers the opening prompt instead of argv.
 	// nil means never. See SetBridgeCapable.
@@ -222,6 +224,13 @@ func (m *Manager) openingPromptLimit() int {
 // production caller.
 func (m *Manager) SetAttention(a *observe.AttentionStore) {
 	m.attention = a
+}
+
+// SetProgress wires the agent task progress store, so a live rename takes
+// the agent's tasks along. Optional; daemon boot is the only production
+// caller.
+func (m *Manager) SetProgress(p *observe.ProgressStore) {
+	m.progress = p
 }
 
 // SetPublisher wires an observe.Publisher into the Manager, for lifecycle
@@ -2222,6 +2231,7 @@ func (m *Manager) Rename(query, rawNewName string) (Record, error) {
 			return Record{}, fmt.Errorf("persisting rename: %w", err)
 		}
 		m.attention.Move(oldName, newName)
+		m.progress.Move(oldName, newName)
 		// The supervisor announced the new name before the record moved, so
 		// its view carries no appearance; the record (manual values
 		// included) is filed under newName now.

@@ -39,6 +39,22 @@ func (s *Supervisor) attentionStore() *observe.AttentionStore {
 	return s.attention
 }
 
+// SetProgress wires the agent task progress store the supervisor clears when
+// an agent stops. Optional: nil disables the clearing.
+func (s *Supervisor) SetProgress(p *observe.ProgressStore) {
+	s.mu.Lock()
+	s.progress = p
+	s.mu.Unlock()
+}
+
+// progressStore returns the wired store (possibly nil; its methods are
+// nil-safe).
+func (s *Supervisor) progressStore() *observe.ProgressStore {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.progress
+}
+
 // markAttention transitions an already-tracked agent's attention, but only
 // while id is still that name's registered live generation. Unlike
 // isStaleLocked, a missing identity counts as stale here: StopAgent removes
