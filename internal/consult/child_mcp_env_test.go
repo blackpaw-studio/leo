@@ -95,7 +95,7 @@ func TestHeadlessCodexChildGetsLeoMCPBridgeAndEnv(t *testing.T) {
 	joined := strings.Join(args, "\x00")
 	for _, want := range []string{
 		"mcp_servers.leo.command=",
-		`mcp_servers.leo.env_vars=["LEO_PROCESS_NAME","LEO_WEB_PORT","LEO_API_TOKEN","LEO_DISPATCH_ID"]`,
+		`mcp_servers.leo.env_vars=["LEO_PROCESS_NAME","LEO_WEB_PORT","LEO_API_TOKEN","LEO_DISPATCH_ID","LEO_ATTENTION_TOKEN"]`,
 		"features.multi_agent=false",
 	} {
 		if !strings.Contains(joined, want) {
@@ -156,6 +156,8 @@ var ambientLeoEnv = map[string]string{
 	"LEO_PROCESS_NAME": "alpha",
 	"LEO_PERMISSIONS":  `{"deny_tools":["x"]}`,
 	"LEO_DISPATCH_ID":  "d-ambient",
+	// The caller's launch token, which a pane in its tmux session can see.
+	"LEO_ATTENTION_TOKEN": "ambient-attention",
 }
 
 func TestHeadlessChildDropsAmbientLeoCredentialsWhenLocalOnly(t *testing.T) {

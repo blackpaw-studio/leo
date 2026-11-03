@@ -48,7 +48,7 @@ func TestDispatchChildEnvForwardsTheTemplatePermissions(t *testing.T) {
 }
 
 func TestBridgeEnvNamesAddsPermissionsOnlyWhenRestricted(t *testing.T) {
-	base := []string{EnvProcessName, EnvWebPort, EnvAPIToken, EnvDispatchID}
+	base := []string{EnvProcessName, EnvWebPort, EnvAPIToken, EnvDispatchID, EnvAttentionToken}
 	if got := BridgeEnvNames(false); !reflect.DeepEqual(got, base) {
 		t.Fatalf("unrestricted = %v", got)
 	}
@@ -65,5 +65,15 @@ func TestWithoutReservedDropsEveryTrustedVariable(t *testing.T) {
 	got := WithoutReservedMap(map[string]string{"A": "1", "LEO_API_TOKEN": "x", "LEO_PERMISSIONS": "{}"})
 	if !reflect.DeepEqual(got, map[string]string{"A": "1"}) {
 		t.Fatalf("map = %v", got)
+	}
+}
+
+func TestAttentionTokenIsReservedSoADispatchChildNeverInheritsIt(t *testing.T) {
+	got := WithoutReserved([]string{"A=1", EnvAttentionToken + "=secret", "B=2"})
+	if !reflect.DeepEqual(got, []string{"A=1", "B=2"}) {
+		t.Fatalf("env = %v", got)
+	}
+	if _, ok := WithoutReservedMap(map[string]string{EnvAttentionToken: "secret", "A": "1"})[EnvAttentionToken]; ok {
+		t.Fatal("map form kept the attention token")
 	}
 }

@@ -97,6 +97,9 @@ Examples:
 // reportProgress sends one update with the agent's launch token, which is
 // all the daemon uses to decide whose task it is.
 func reportProgress(ctx context.Context, update map[string]any) error {
+	if id := os.Getenv("LEO_DISPATCH_ID"); id != "" {
+		return fmt.Errorf("leo progress is only for supervised Leo agents, not a leo_dispatch subagent (dispatch %s); report to your orchestrator instead", id)
+	}
 	token, port := os.Getenv("LEO_ATTENTION_TOKEN"), os.Getenv("LEO_WEB_PORT")
 	if token == "" || port == "" {
 		return exitCodeError{code: notInAgentExit, err: errors.New("not inside a Leo agent: LEO_ATTENTION_TOKEN and LEO_WEB_PORT are not set (run this from an agent's own session)")}

@@ -179,3 +179,17 @@ func TestProgressCmdRejectsABadPort(t *testing.T) {
 		t.Fatalf("err = %v", err)
 	}
 }
+
+// A dispatch pane sits in its caller's tmux session, so it can still see the
+// caller's token; it must not report progress as the caller.
+func TestProgressCmdRefusesADispatchSubagent(t *testing.T) {
+	port, last := progressDaemon(t, http.StatusOK, okReply)
+	insideAgent(t, port)
+	t.Setenv("LEO_DISPATCH_ID", "d-abc")
+
+	_, _, err := runProgress(t, "build", "--percent", "1")
+
+	if err == nil || !strings.Contains(err.Error(), "dispatch") || last().path != "" {
+		t.Fatalf("err = %v, daemon called = %v", err, last().path != "")
+	}
+}

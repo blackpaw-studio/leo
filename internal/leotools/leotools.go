@@ -69,6 +69,7 @@ var Names = []string{
 	"leo_chat_schedule",
 	"leo_chat_schedule_list",
 	"leo_chat_schedule_cancel",
+	"leo_progress",
 }
 
 // AppToolsTool and AppCallTool are the fixed tools that stand in for client

@@ -72,6 +72,9 @@ type registry struct {
 	// task and runID are LEO_TASK and LEO_RUN_ID, set only in a headless
 	// task run.
 	task, runID string
+	// attentionToken is the caller's LEO_ATTENTION_TOKEN: the identity
+	// leo_progress reports under. Empty outside a hook-launched agent.
+	attentionToken string
 	// clientTools is this agent's view of the daemon's client tools; nil in
 	// local-only mode, where there is no daemon to ask.
 	clientTools *clientToolsView
@@ -557,6 +560,7 @@ func newRegistry(client *daemonClient, processName string, perms leotools.Permis
 	})
 
 	r.registerChat(client, processName, objectSchema)
+	r.registerProgress(client, objectSchema)
 
 	r.addContext(toolDef{Name: "leo_delegation", Description: "Show active delegation routing.", InputSchema: emptyArgs}, func(ctx context.Context, _ map[string]any) (string, error) { return client.delegationStatus(ctx) })
 
