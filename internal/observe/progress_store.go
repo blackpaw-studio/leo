@@ -29,6 +29,14 @@ type taskEntry struct {
 	// stopTimer cancels the one armed now.
 	gen       uint64
 	stopTimer func() bool
+
+	// Publish coalescing: lastPublish is when the task last went out;
+	// pending marks a held-back write whose trailing publish is armed
+	// (stopFlush cancels it, flushGen voids one already firing).
+	lastPublish time.Time
+	pending     bool
+	stopFlush   func() bool
+	flushGen    uint64
 }
 
 // NewProgressStore creates an empty store. clock nil uses the wall clock;
@@ -49,6 +57,9 @@ const (
 	// StaleAfter is how long a running task may go without an update before
 	// it is flagged stale.
 	StaleAfter = 15 * time.Minute
+	// TaskPublishInterval is the minimum gap between one task's publishes
+	// (at most two per second); terminal states and removals ignore it.
+	TaskPublishInterval = 500 * time.Millisecond
 	// ExpireAfter is how long a succeeded or cancelled task lingers.
 	ExpireAfter = 10 * time.Minute
 )
@@ -93,7 +104,11 @@ func (s *ProgressStore) Upsert(agent string, raw TaskUpdate) (AgentTask, error) 
 	}
 	e.task = next
 	s.armLocked(e)
-	s.publishLocked(e)
+	if next.State.IsTerminal() {
+		s.flushLocked(e)
+	} else {
+		s.publishLocked(e)
+	}
 	s.enforceBoundLocked(agent, e)
 	return e.task.clone(), nil
 }
@@ -162,7 +177,7 @@ func (s *ProgressStore) Move(oldName, newName string) {
 		}
 		s.agents[newName][e.task.ID] = e
 		s.armLocked(e)
-		s.publishLocked(e)
+		s.flushLocked(e)
 	}
 }
 
@@ -356,6 +371,7 @@ func (s *ProgressStore) markStaleLocked(e *taskEntry) {
 // removeLocked deletes e and publishes its removal.
 func (s *ProgressStore) removeLocked(e *taskEntry) {
 	s.disarmLocked(e)
+	s.cancelPendingLocked(e)
 	delete(s.agents[e.agent], e.task.ID)
 	if len(s.agents[e.agent]) == 0 {
 		delete(s.agents, e.agent)
@@ -363,9 +379,46 @@ func (s *ProgressStore) removeLocked(e *taskEntry) {
 	s.emitLocked(e.agent, e.task.ID, nil)
 }
 
+// publishLocked announces e's current state, coalesced: the first write
+// after a quiet TaskPublishInterval goes out at once (leading edge); writes
+// inside the window collapse into one trailing publish of the latest state.
 func (s *ProgressStore) publishLocked(e *taskEntry) {
+	if e.pending {
+		return
+	}
+	wait := TaskPublishInterval - s.clock.Now().Sub(e.lastPublish)
+	if wait <= 0 {
+		s.flushLocked(e)
+		return
+	}
+	e.pending = true
+	e.flushGen++
+	gen := e.flushGen
+	e.stopFlush = s.clock.AfterFunc(wait, func() {
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		if e.pending && e.flushGen == gen {
+			s.flushLocked(e)
+		}
+	})
+}
+
+// flushLocked publishes e's current state now and cancels any held-back
+// trailing publish it supersedes.
+func (s *ProgressStore) flushLocked(e *taskEntry) {
+	s.cancelPendingLocked(e)
+	e.lastPublish = s.clock.Now()
 	t := e.task.clone()
 	s.emitLocked(e.agent, e.task.ID, &t)
+}
+
+func (s *ProgressStore) cancelPendingLocked(e *taskEntry) {
+	e.flushGen++
+	e.pending = false
+	if e.stopFlush != nil {
+		e.stopFlush()
+		e.stopFlush = nil
+	}
 }
 
 func (s *ProgressStore) emitLocked(agent, id string, task *AgentTask) {
