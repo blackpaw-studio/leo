@@ -62,6 +62,9 @@ var (
 	ErrTaskCap       = fmt.Errorf("too many running tasks (max %d); finish one first", MaxTasksPerClass)
 	ErrTaskNotFound  = errors.New("task not found")
 	ErrTaskNotFailed = errors.New("only failed tasks can be dismissed")
+	// ErrTaskUnauthorized: the caller's authority lapsed (its agent stopped)
+	// before the write applied. Maps to HTTP 403.
+	ErrTaskUnauthorized = errors.New("agent token is no longer valid")
 )
 
 // AgentTask is the wire shape of one advertised task. Optional values are

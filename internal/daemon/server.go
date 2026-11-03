@@ -370,6 +370,7 @@ func New(sockPath, configPath string, processes ProcessStateProvider, opts ...Op
 	mux.HandleFunc("POST /agents/{name}/environments", s.handleAgentSetEnvironment)
 	// The same handler serves /api/v1, so both answer with the same bytes.
 	mux.HandleFunc("PUT /agents/{name}/appearance", web.AgentAppearanceHandler(s.appearanceService))
+	mux.HandleFunc("DELETE /agents/{name}/tasks/{id}", s.handleTaskDismiss)
 	mux.HandleFunc("DELETE /agents/{name}", s.handleAgentDelete)
 	mux.HandleFunc("GET /agents/{name}/delete-plan", s.handleAgentDeletePlan)
 	mux.HandleFunc("POST /agents/{name}/rename", s.handleAgentRename)

@@ -71,6 +71,15 @@ var errProgressUnavailable = errors.New("task progress is not available")
 // task starts a fresh run that keeps only the title. The caller resolves
 // agent from the authenticated token, never from the report.
 func (s *ProgressStore) Upsert(agent string, raw TaskUpdate) (AgentTask, error) {
+	return s.UpsertGuarded(agent, raw, nil)
+}
+
+// UpsertGuarded is Upsert that first re-checks, under the store's lock,
+// that the caller may still write (valid non-nil): a stop that revokes the
+// caller's token and then calls RemoveAgent can then never be followed by a
+// late write that resurrects the agent's tasks. valid runs with the store
+// locked, so it must not call back into the store.
+func (s *ProgressStore) UpsertGuarded(agent string, raw TaskUpdate, valid func() bool) (AgentTask, error) {
 	if s == nil {
 		return AgentTask{}, errProgressUnavailable
 	}
@@ -80,6 +89,9 @@ func (s *ProgressStore) Upsert(agent string, raw TaskUpdate) (AgentTask, error) 
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if valid != nil && !valid() {
+		return AgentTask{}, ErrTaskUnauthorized
+	}
 	now := s.clock.Now()
 	e := s.agents[agent][u.ID]
 

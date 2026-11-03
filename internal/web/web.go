@@ -685,6 +685,7 @@ func New(configPath string, processes ProcessStateProvider, scheduler SchedulerP
 	apiMux.HandleFunc("POST /api/agent/{name}/environments", s.handleAPIAgentSetEnvironments)
 	apiMux.HandleFunc("POST /api/agent/{name}/move", s.handleAPIAgentMove)
 	apiMux.HandleFunc("POST /api/agent/hook", s.handleAPIAgentHook)
+	apiMux.HandleFunc("POST /api/agent/progress", s.handleAPIAgentProgress)
 	apiMux.HandleFunc("POST /api/agent/context", s.handleAPIAgentContext)
 	apiMux.HandleFunc("POST /api/agent/permission", s.handleAPIPermission)
 	apiMux.HandleFunc("POST /api/agent/{name}/chat/post", s.handleAgentChatPost)
@@ -733,6 +734,7 @@ func New(configPath string, processes ProcessStateProvider, scheduler SchedulerP
 	apiMux.HandleFunc("GET /api/v1/follow", s.requireOperatorToken(s.handleFollowStatusAPI))
 	apiMux.HandleFunc("POST /api/v1/agents/spawn", s.requireOperatorToken(s.handleAPIAgentSpawn))
 	apiMux.HandleFunc("POST /api/v1/agents/{name}/environments", s.requireOperatorToken(s.handleAPIAgentSetEnvironments))
+	apiMux.HandleFunc("DELETE /api/v1/agents/{name}/tasks/{id}", s.requireOperatorToken(s.handleAPIDismissTask))
 	apiMux.HandleFunc("PUT /api/v1/agents/{name}/appearance", s.requireOperatorToken(AgentAppearanceHandler(s.appearanceService)))
 	// JSON config API (docs/configuration/config-api.md): the same service the
 	// daemon serves on its socket, operator token only. The agent token passes

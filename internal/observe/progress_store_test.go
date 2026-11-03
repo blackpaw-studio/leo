@@ -330,3 +330,19 @@ func TestProgressStoreNilSafe(t *testing.T) {
 		t.Fatal("nil store cannot accept updates")
 	}
 }
+
+func TestProgressStoreUpsertGuardedRefusesWhenTheGuardFails(t *testing.T) {
+	h := newProgressHarness(t)
+
+	_, err := h.store.UpsertGuarded("a", TaskUpdate{ID: "t", Title: ptr("T")}, func() bool { return false })
+
+	if !errors.Is(err, ErrTaskUnauthorized) {
+		t.Fatalf("got %v", err)
+	}
+	if len(h.store.Tasks("a")) != 0 || len(h.pub.events) != 0 {
+		t.Fatal("a refused write must leave no trace")
+	}
+	if _, err := h.store.UpsertGuarded("a", TaskUpdate{ID: "t", Title: ptr("T")}, func() bool { return true }); err != nil {
+		t.Fatal(err)
+	}
+}
