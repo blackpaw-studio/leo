@@ -257,12 +257,12 @@ func (d *Dispatcher) SweepNotifications(ctx context.Context) {
 		}
 	}
 	d.mu.Unlock()
-	// A close notice follows the turn notices it summarises.
+	// A run notice (close, waiting) follows the turn notices before it.
 	sort.SliceStable(pending, func(i, j int) bool {
-		return !isCloseNoticeKey(pending[i].record, pending[i].key) && isCloseNoticeKey(pending[j].record, pending[j].key)
+		return !isRunNoticeKey(pending[i].record, pending[i].key) && isRunNoticeKey(pending[j].record, pending[j].key)
 	})
 	for _, item := range pending {
-		if !d.closeNoticeReady(item) {
+		if !d.runNoticeReady(item) {
 			continue
 		}
 		unlock := d.serialLocks([]string{item.record.CallerPaneID})

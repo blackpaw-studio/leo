@@ -10,7 +10,7 @@ import (
 // startNotifyingWaiting starts an interactive claude dispatch that notifies
 // a claude caller, whose opening turn starts background shell b1 and Stops
 // with text while it runs: the run is left waiting on 1 shell.
-func startNotifyingWaiting(t *testing.T, now *time.Time, text string) (*Dispatcher, *fakeInteractiveRuntime, *fakeNotificationDelivery, string) {
+func startNotifyingWaiting(t *testing.T, now *time.Time, text string, opts ...func(*Request)) (*Dispatcher, *fakeInteractiveRuntime, *fakeNotificationDelivery, string) {
 	t.Helper()
 	d := NewDispatcher(newFakeRecorder())
 	d.now = sharedClock(now)
@@ -18,7 +18,11 @@ func startNotifyingWaiting(t *testing.T, now *time.Time, text string) (*Dispatch
 	d.SetInteractiveRuntime(rt)
 	delivery := &fakeNotificationDelivery{ready: true}
 	d.SetNotificationDelivery(delivery)
-	started, err := d.Start(context.Background(), testConfig(), Request{Template: "claude", Prompt: "hello", Cwd: t.TempDir(), Mode: ModeInteractive, Kind: "dispatch", Name: "looper", CallerPaneID: "%9", CallerHarness: "claude", CallerSessionID: "$1"})
+	req := Request{Template: "claude", Prompt: "hello", Cwd: t.TempDir(), Mode: ModeInteractive, Kind: "dispatch", Name: "looper", CallerPaneID: "%9", CallerHarness: "claude", CallerSessionID: "$1"}
+	for _, opt := range opts {
+		opt(&req)
+	}
+	started, err := d.Start(context.Background(), testConfig(), req)
 	if err != nil {
 		t.Fatal(err)
 	}

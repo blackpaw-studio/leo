@@ -693,6 +693,9 @@ func (d *Dispatcher) recomputeStatusLocked(s *runState, boundary time.Time) {
 	if s.record.Status == StatusNeedsInput && len(s.permissions) > 0 && status != StatusIdle {
 		return
 	}
+	if status == StatusWaiting && s.record.Status != StatusWaiting {
+		s.waitingSince = boundary
+	}
 	s.record.Status = status
 }
 
@@ -1356,6 +1359,7 @@ func (d *Dispatcher) Sweep(now time.Time) {
 			if s.record.Status == StatusSettling && !now.Before(s.settleDeadline) {
 				d.finishInteractiveLocked(s, s.settleStatus)
 			}
+			d.waitingNoticeLocked(s, now)
 		}
 		if s.killPending && s.record.PaneID != "" {
 			cleanups = append(cleanups, s)

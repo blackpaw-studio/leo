@@ -184,6 +184,9 @@ type runState struct {
 	// the one working turn. Runs whose payloads carry no ids never set it.
 	idMode    bool
 	idleSince time.Time
+	// waitingSince is when the run last entered waiting (see
+	// waitingEpisodeLocked); zero after a restart, when HookActivity rules.
+	waitingSince time.Time
 	// closeReason is why the run is closing on its own (idle, a dead pane or
 	// session); its close notice says so once it ends.
 	closeReason string
