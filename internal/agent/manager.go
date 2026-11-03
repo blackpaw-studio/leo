@@ -2279,6 +2279,8 @@ func (m *Manager) Rename(query, rawNewName string) (Record, error) {
 		// After the announce, so consumers see the new name spawn before
 		// its carried attention arrives.
 		m.attention.Move(oldName, newName)
+		// Stopped agents keep failed tasks; they follow the rename too.
+		m.progress.Move(oldName, newName)
 	}
 
 	rec.Name = newName

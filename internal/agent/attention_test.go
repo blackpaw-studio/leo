@@ -167,3 +167,38 @@ func TestRenameMovesTasks(t *testing.T) {
 		t.Errorf("new name tasks = %+v", got)
 	}
 }
+
+func TestRenameStoppedAgentMovesFailedTasks(t *testing.T) {
+	home := t.TempDir()
+	_ = agentstore.Save(home, agentstore.Record{Name: "leo-old", Workspace: "/w", ClaudeArgs: []string{"--name", "leo-old"}})
+	m := newTestManager(t, home, &fakeSupervisor{})
+	store := observe.NewProgressStore(nil, nil)
+	title, failed := "Build", observe.TaskFailed
+	if _, err := store.Upsert("leo-old", observe.TaskUpdate{ID: "build", Title: &title, State: failed}); err != nil {
+		t.Fatal(err)
+	}
+	m.SetProgress(store)
+
+	if _, err := m.Rename("leo-old", "leo-new"); err != nil {
+		t.Fatalf("Rename: %v", err)
+	}
+
+	if got := store.Tasks("leo-old"); len(got) != 0 {
+		t.Errorf("old name still has tasks: %+v", got)
+	}
+	if got := store.Tasks("leo-new"); len(got) != 1 || got[0].ID != "build" {
+		t.Fatalf("new name tasks = %+v", got)
+	}
+	if err := store.Dismiss("leo-new", "build"); err != nil {
+		t.Errorf("Dismiss under new name: %v", err)
+	}
+	if _, err := store.Upsert("leo-new", observe.TaskUpdate{ID: "again", Title: &title, State: failed}); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.Delete(context.Background(), "leo-new", DeleteOptions{}); err != nil {
+		t.Fatalf("Delete: %v", err)
+	}
+	if got := store.Tasks("leo-new"); len(got) != 0 {
+		t.Errorf("Delete left tasks: %+v", got)
+	}
+}
