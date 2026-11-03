@@ -39,9 +39,12 @@ var taskStopIDFields = []string{"task_id", "shell_id"}
 var notificationTaskID = regexp.MustCompile(`<task-id>\s*([^<\s]+)\s*</task-id>`)
 
 // taskGoneErrors are the substrings of the errors Claude Code's TaskStop
-// refuses with when the task it names is no longer running (its
-// StopTaskError table): such a refusal says the task is over.
-var taskGoneErrors = []string{"no task found with id", "task not found", " is not running (status:"}
+// refuses with when the task it names is no longer running: "No task found
+// with ID: <id>[. Did you mean: …]" and "Task <id> is not running (status:
+// <s>)" (2.1.317). Claude checks both in validateInput too, and a refusal
+// there fires no hook at all; only one raised from the tool call itself (the
+// task ended in between) reaches leo, as PostToolUseFailure's error field.
+var taskGoneErrors = []string{"no task found with id", " is not running (status:"}
 
 // taskGoneError reports whether a task-stopping call's error says its task
 // is already gone, rather than that the stop was refused for a live task.

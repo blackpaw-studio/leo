@@ -421,9 +421,11 @@ caller asked), and the background work dies with the pane.
 
 A tracked background shell stops counting once Claude reports it ended: its
 task notification, a Stop that no longer lists it, a successful `TaskStop`,
-or a `TaskStop` refused because the task is already gone (`No task found`,
-`is not running`). A waiting turn left with nothing pending finishes as if
-the work had woken it. Each keep/prune decision logs one daemon-log line with
+or a `TaskStop` that fails at run time because the task is already gone
+(`No task found`, `is not running`). Claude Code 2.1.317 usually refuses such
+a `TaskStop` before running it, and that refusal fires no hook, so the Stop
+or notification is what clears it then. A waiting turn left with nothing
+pending finishes as if the work had woken it. Each keep/prune decision logs one daemon-log line with
 the dispatch id, hook event, task id and a fixed reason.
 
 An interactive dispatch is bound to its caller's tmux session. It closes on

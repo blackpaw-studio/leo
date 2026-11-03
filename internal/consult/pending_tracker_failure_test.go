@@ -24,8 +24,7 @@ func TestFailedTaskStopForGoneTaskPrunes(t *testing.T) {
 	gone := []string{
 		"No task found with ID: b1",
 		"No task found with ID: b1. Did you mean: b2?",
-		"b1 is not running (status: completed)",
-		"Task not found",
+		"Task b1 is not running (status: failed)",
 	}
 	stops := []struct{ tool, field string }{{"TaskStop", "task_id"}, {"KillShell", "shell_id"}}
 	for _, stop := range stops {
@@ -48,9 +47,10 @@ func TestFailedTaskStopForGoneTaskPrunes(t *testing.T) {
 // Any other refusal leaves the task running, so it stays tracked.
 func TestFailedTaskStopOtherErrorKeepsTask(t *testing.T) {
 	for _, errText := range []string{
-		"Task b1 is owned by another agent",
-		"A task cannot stop itself",
+		"Task b1 is owned by agent-1; agent agent-2 cannot stop it.",
+		"Observer b1 cannot stop itself; use the task UI or a main-session TaskStop.",
 		"Unsupported task type: monitor",
+		"Task not found",
 		"",
 	} {
 		t.Run(errText, func(t *testing.T) {

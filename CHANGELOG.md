@@ -85,10 +85,11 @@ All notable user-visible changes to Leo are documented here.
 
 ### Fixed
 
-- **Dispatches stuck `waiting` on a dead shell.** A `TaskStop`/`KillShell`
-  refused because the task is already gone now prunes it from the background
-  tracker, and any prune re-derives the waiting turns and run status, so a run
-  whose only pending shell is gone finishes instead of waiting forever. The
+- **Dispatches stuck `waiting` on a dead shell.** Any prune of the background
+  tracker (task notification, a Stop that omits the task, `TaskStop`, or a
+  `TaskStop`/`KillShell` that fails at run time because the task is gone) now
+  re-derives the waiting turns and run status, so a run whose only pending
+  shell is gone finishes instead of waiting forever. The
   send rejection on a waiting run now names `leo_release` / `leo_cancel`, and
   each tracker keep/prune decision logs one daemon-log line (ids and a fixed
   reason only).
