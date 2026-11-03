@@ -36,14 +36,47 @@ var taskStopIDFields = []string{"task_id", "shell_id"}
 
 var notificationTaskID = regexp.MustCompile(`<task-id>\s*([^<\s]+)\s*</task-id>`)
 
-// trackToolEvent returns tasks updated for one PostToolUse payload: a Bash
-// call that started background work adds its task, a task-stopping call
-// removes it. tasks is never mutated.
+// taskGoneErrors are the substrings of the errors Claude Code's TaskStop
+// refuses with when the task it names is no longer running (its
+// StopTaskError table): such a refusal says the task is over.
+var taskGoneErrors = []string{"no task found with id", "task not found", " is not running (status:"}
+
+// taskGoneError reports whether a task-stopping call's error says its task
+// is already gone, rather than that the stop was refused for a live task.
+func taskGoneError(msg string) bool {
+	lower := strings.ToLower(msg)
+	return slices.ContainsFunc(taskGoneErrors, func(s string) bool { return strings.Contains(lower, s) })
+}
+
+// taskStopID is the task id a task-stopping tool call names.
+func taskStopID(p map[string]any) string {
+	input, _ := p["tool_input"].(map[string]any)
+	for _, field := range taskStopIDFields {
+		if id := str(input, field); id != "" {
+			return id
+		}
+	}
+	return ""
+}
+
+// trackToolEvent returns tasks updated for one PostToolUse or
+// PostToolUseFailure payload: a Bash call that started background work adds
+// its task, a task-stopping call removes it, and so does one refused because
+// its task is already gone. tasks is never mutated.
 func trackToolEvent(tasks []BackgroundTask, event string, p map[string]any, now time.Time) []BackgroundTask {
+	tool := str(p, "tool_name")
+	if event == "posttoolusefailure" {
+		if slices.Contains(taskStopTools, tool) && taskGoneError(str(p, "error")) {
+			if id := taskStopID(p); id != "" {
+				return withoutTask(tasks, id)
+			}
+		}
+		return tasks
+	}
 	if event != "posttooluse" {
 		return tasks
 	}
-	switch tool := str(p, "tool_name"); {
+	switch {
 	case tool == "Bash":
 		resp, _ := p["tool_response"].(map[string]any)
 		id := str(resp, "backgroundTaskId")
@@ -58,11 +91,8 @@ func trackToolEvent(tasks []BackgroundTask, event string, p map[string]any, now 
 			StartedAt: now,
 		})
 	case slices.Contains(taskStopTools, tool):
-		input, _ := p["tool_input"].(map[string]any)
-		for _, field := range taskStopIDFields {
-			if id := str(input, field); id != "" {
-				return withoutTask(tasks, id)
-			}
+		if id := taskStopID(p); id != "" {
+			return withoutTask(tasks, id)
 		}
 	}
 	return tasks
