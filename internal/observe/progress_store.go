@@ -181,6 +181,22 @@ func (s *ProgressStore) RemoveAgent(agent string) {
 	}
 }
 
+// RemoveNonFailed drops agent's running, succeeded and cancelled tasks,
+// publishing a null for each. Failed tasks stay until dismissed (or the
+// agent is deleted), so a failure outlives a stop, suspend or crash-restart.
+func (s *ProgressStore) RemoveNonFailed(agent string) {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, e := range s.entriesLocked(agent) {
+		if e.task.State != TaskFailed {
+			s.removeLocked(e)
+		}
+	}
+}
+
 // Move re-keys oldName's tasks to newName after a rename, publishing a null
 // under the old name and the task under the new one.
 func (s *ProgressStore) Move(oldName, newName string) {

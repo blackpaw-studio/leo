@@ -217,3 +217,16 @@ func TestDismissTaskErrors(t *testing.T) {
 		t.Errorf("unknown agent: status = %d, want 404", w.Code)
 	}
 }
+
+// A failed task outlives its agent's stop, so dismissing must not need a
+// live launch token.
+func TestDismissTaskWorksWhileAgentIsStopped(t *testing.T) {
+	s := progressServer(t)
+	title := "T"
+	if _, err := s.progress.Upsert("sleeper", observe.TaskUpdate{ID: "bad", Title: &title, State: observe.TaskFailed}); err != nil {
+		t.Fatal(err)
+	}
+	if w := dismissTask(t, s, testAPIToken, "sleeper", "bad"); w.Code != http.StatusNoContent {
+		t.Fatalf("status = %d, body = %s", w.Code, w.Body.String())
+	}
+}

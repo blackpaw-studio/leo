@@ -187,3 +187,26 @@ func TestProgressLifecycleMoveRekeys(t *testing.T) {
 		t.Fatal("stale event must go out under the new name")
 	}
 }
+
+func TestProgressLifecycleRemoveNonFailedKeepsFailed(t *testing.T) {
+	h := newProgressHarness(t)
+	h.up("a", TaskUpdate{ID: "run", Title: ptr("T")})
+	h.up("a", TaskUpdate{ID: "ok", Title: ptr("T"), State: TaskSucceeded})
+	h.up("a", TaskUpdate{ID: "bad", Title: ptr("T"), State: TaskFailed})
+	h.up("b", TaskUpdate{ID: "run", Title: ptr("T")})
+
+	h.store.RemoveNonFailed("a")
+
+	got := h.store.Tasks("a")
+	if len(got) != 1 || got[0].ID != "bad" {
+		t.Fatalf("a = %+v, want only the failed task", got)
+	}
+	if len(h.store.Tasks("b")) != 1 {
+		t.Fatal("RemoveNonFailed must touch only that agent")
+	}
+	for _, id := range []string{"run", "ok"} {
+		if ev := h.lastEvent("a", id); ev == nil || ev.Task != nil {
+			t.Fatalf("no task:null published for %s", id)
+		}
+	}
+}

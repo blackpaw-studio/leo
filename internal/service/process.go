@@ -551,8 +551,9 @@ func (s *Supervisor) StopAgent(name string, wakeOnMessage bool) error {
 	// token) behind us. Unregister first so a late in-flight hook cannot
 	// overwrite unknown.
 	s.attentionStore().UnregisterAgent(name)
-	// Tasks die with the agent (a restart or reset is a stop too).
-	s.progressStore().RemoveAgent(name)
+	// Running work dies with the launch (a restart or reset is a stop too);
+	// failed tasks survive until dismissed or the agent is deleted.
+	s.progressStore().RemoveNonFailed(name)
 	// No launch is live any more, so no adopt may revive a token.
 	if err := agentstore.ClearAttentionToken(s.homePath, name, storedAttentionToken(s.homePath, name)); err != nil {
 		fmt.Fprintf(os.Stderr, "[%s] clearing attention token: %v\n", name, err)

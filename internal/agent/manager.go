@@ -2034,6 +2034,8 @@ func (m *Manager) Delete(ctx context.Context, name string, opts DeleteOptions) e
 		mail.DropAgentMail(name)
 	}
 	m.attention.Remove(name)
+	// Failed tasks outlive a stop; deletion is where they finally go.
+	m.progress.RemoveAgent(name)
 	removeSettingsSpill(cfg.HomePath, name)
 	// The agent is gone for good now, so the opening-prompt brief (if any) is
 	// removed here — the one path that actually deletes it (see Stop's

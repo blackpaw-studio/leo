@@ -79,7 +79,7 @@ func (s *Supervisor) clearProgress(name string, id *procIdentity) {
 	if cur, ok := s.identities[name]; !ok || cur != id {
 		return
 	}
-	s.progress.RemoveAgent(name)
+	s.progress.RemoveNonFailed(name)
 }
 
 // launchAttention sets name's initial attention on launch/adopt, for the

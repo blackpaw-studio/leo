@@ -110,3 +110,55 @@ func TestClearProgressOnlyForTheLiveGeneration(t *testing.T) {
 		t.Fatal("the live generation must clear its tasks")
 	}
 }
+
+func seedFailed(t *testing.T, store *observe.ProgressStore, agent, id string) {
+	t.Helper()
+	title := "Build"
+	if _, err := store.Upsert(agent, observe.TaskUpdate{ID: id, Title: &title, State: observe.TaskFailed}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// An idle-suspend is a stop: running work is dropped, but a failure stays
+// visible (and dismissable) while the agent sleeps.
+func TestStopAgentKeepsFailedTasks(t *testing.T) {
+	sv := NewSupervisor(context.Background())
+	sv.tmuxPath = "echo"
+	store := observe.NewProgressStore(nil, nil)
+	sv.SetProgress(store)
+	seedTask(t, store, "eph", "run")
+	seedFailed(t, store, "eph", "bad")
+	sv.mu.Lock()
+	sv.states["eph"] = &ProcessState{Name: "eph", Status: "running", Ephemeral: true}
+	sv.cancels["eph"] = func() {}
+	sv.mu.Unlock()
+
+	if err := sv.StopAgent("eph", true); err != nil {
+		t.Fatalf("StopAgent: %v", err)
+	}
+	got := store.Tasks("eph")
+	if len(got) != 1 || got[0].ID != "bad" {
+		t.Fatalf("tasks after idle-suspend = %+v, want only the failed one", got)
+	}
+}
+
+// Same for a crash-restart: the generation guard still applies.
+func TestClearProgressKeepsFailedTasks(t *testing.T) {
+	sv := NewSupervisor(context.Background())
+	store := observe.NewProgressStore(nil, nil)
+	sv.SetProgress(store)
+	seedTask(t, store, "a", "run")
+	seedFailed(t, store, "a", "bad")
+	stale := newProcIdentity("a", nil)
+	live := addIdentity(sv, "a")
+
+	sv.clearProgress("a", stale)
+	if len(store.Tasks("a")) != 2 {
+		t.Fatal("a stale generation cleared tasks")
+	}
+	sv.clearProgress("a", live)
+	got := store.Tasks("a")
+	if len(got) != 1 || got[0].ID != "bad" {
+		t.Fatalf("tasks after crash-restart = %+v, want only the failed one", got)
+	}
+}
