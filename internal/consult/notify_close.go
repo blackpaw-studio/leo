@@ -98,11 +98,13 @@ func (d *Dispatcher) waitCoversRunLocked(rec Record) bool {
 	return false
 }
 
-// runNoticeReady reports whether item may be delivered now. A run notice is
-// dropped if a wait on the run came in since it was recorded, and a waiting
-// notice also once its quiet stretch is over. A close notice waits until
-// every turn notice of its run is resolved, so the caller reads the last
-// result before the close.
+// runNoticeReady reports whether item may be delivered now. A waiting notice
+// is dropped once its quiet stretch is over and held back while a wait
+// covers the run (the wait may end at its ceiling with the run still
+// waiting). A close notice is dropped if a wait on the run came in since it
+// was recorded (the wait reports the close), and otherwise waits until every
+// turn notice of its run is resolved, so the caller reads the last result
+// before the close.
 func (d *Dispatcher) runNoticeReady(item pendingNotification) bool {
 	if !isRunNoticeKey(item.record, item.key) {
 		return true
@@ -113,6 +115,9 @@ func (d *Dispatcher) runNoticeReady(item pendingNotification) bool {
 	n := rec.Notifications[item.key]
 	if n.Disposition != NotificationPending {
 		return true
+	}
+	if isWaitingNoticeKey(rec, item.key) && !waitingNoticeStale(item.state, item.key) && d.waitCoversRunLocked(rec) {
+		return false
 	}
 	if d.waitCoversRunLocked(rec) || (isWaitingNoticeKey(rec, item.key) && waitingNoticeStale(item.state, item.key)) {
 		n.Disposition, n.SuppressedAt = NotificationSuppressed, d.now()

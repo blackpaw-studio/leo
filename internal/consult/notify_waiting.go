@@ -57,11 +57,17 @@ func (d *Dispatcher) waitingNoticeLocked(s *runState, now time.Time) {
 	if _, exists := s.record.Notifications[key]; exists {
 		return
 	}
+	// A leo_wait on the run holds the notice back rather than spending it:
+	// the wait returns still running at its ceiling, and the stretch's
+	// notice is then recorded by the next sweep.
+	if d.waitCoversRunLocked(s.record) {
+		return
+	}
 	if s.record.Notifications == nil {
 		s.record.Notifications = make(map[string]Notification)
 	}
 	n := Notification{Message: waitingNoticeMessage(s.record, now.Sub(episode)) + pointerSuffix}
-	if !s.record.Notify || s.record.CallerPaneID == "" || s.record.CallerHarness == "" || d.waitCoversRunLocked(s.record) {
+	if !s.record.Notify || s.record.CallerPaneID == "" || s.record.CallerHarness == "" {
 		n.Disposition, n.SuppressedAt = NotificationSuppressed, now
 	} else {
 		n.Disposition, n.PendingAt = NotificationPending, now

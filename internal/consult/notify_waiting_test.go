@@ -73,8 +73,7 @@ func TestWaitingNoticeRearmsAfterActivity(t *testing.T) {
 	}
 }
 
-// A caller that asked for no notifications, or is already blocked in a
-// leo_wait on the run, gets no waiting notice.
+// A caller that asked for no notifications gets no waiting notice.
 func TestWaitingNoticeSuppressedWithoutNotify(t *testing.T) {
 	t.Run("notify off", func(t *testing.T) {
 		start := time.Date(2026, time.November, 3, 12, 0, 0, 0, time.UTC)
@@ -82,21 +81,6 @@ func TestWaitingNoticeSuppressedWithoutNotify(t *testing.T) {
 		off := false
 		d, _, delivery, id := startNotifyingWaiting(t, &now, "the loop is running", func(r *Request) { r.Notify = &off })
 		sweepAt(d, &now, start.Add(waitingNoticeAfter))
-		requireSuppressedWaitingNotice(t, d, delivery, id)
-	})
-	t.Run("covered by a wait", func(t *testing.T) {
-		start := time.Date(2026, time.November, 3, 12, 0, 0, 0, time.UTC)
-		now := start
-		d, _, delivery, id := startNotifyingWaiting(t, &now, "the loop is running")
-		ctx, cancel := context.WithCancel(context.Background())
-		waited := make(chan struct{})
-		go func() { defer close(waited); d.Wait(ctx, []string{id}, time.Hour) }()
-		for !waitRegistered(d, id) {
-			runtime.Gosched()
-		}
-		sweepAt(d, &now, start.Add(waitingNoticeAfter))
-		cancel()
-		<-waited
 		requireSuppressedWaitingNotice(t, d, delivery, id)
 	})
 }
@@ -147,5 +131,31 @@ func TestWaitingNoticeDeliveredHeaderOnlyAndDoesNotRelease(t *testing.T) {
 	}
 	if rec := mustGet(t, d, id); rec.Status != StatusIdle || rt.killCount() != 0 {
 		t.Fatalf("a waiting notice's ack released the run: status=%s kills=%d", rec.Status, rt.killCount())
+	}
+}
+
+// A leo_wait covering the run when its quiet stretch reaches the window
+// holds the notice back rather than spending it: once the wait ends (at
+// leo_wait's own ceiling, say) the next sweep sends it, once.
+func TestWaitingNoticeHeldWhileAWaitCoversTheRun(t *testing.T) {
+	start := time.Date(2026, time.November, 3, 12, 0, 0, 0, time.UTC)
+	now := start
+	d, _, delivery, id := startNotifyingWaiting(t, &now, "the loop is running")
+	ctx, cancel := context.WithCancel(context.Background())
+	waited := make(chan struct{})
+	go func() { defer close(waited); d.Wait(ctx, []string{id}, time.Hour) }()
+	for !waitRegistered(d, id) {
+		runtime.Gosched()
+	}
+	sweepAt(d, &now, start.Add(waitingNoticeAfter))
+	if got := waitingNotices(t, d, id); len(got) != 0 || len(delivery.calls) != 0 {
+		t.Fatalf("notice while a wait covers the run: %v calls=%q", got, delivery.calls)
+	}
+	cancel()
+	<-waited
+	sweepAt(d, &now, start.Add(waitingNoticeAfter+stallSweepEvery))
+	sweepAt(d, &now, start.Add(waitingNoticeAfter+2*stallSweepEvery))
+	if got := waitingNotices(t, d, id); len(got) != 1 || len(delivery.calls) != 1 {
+		t.Fatalf("after the wait ended: notices=%v calls=%q", got, delivery.calls)
 	}
 }
