@@ -229,6 +229,8 @@ type Supervisor struct {
 	publisher observe.Publisher
 	// attention is the per-agent attention store — see SetAttention.
 	attention *observe.AttentionStore
+	// progress holds agents' advertised tasks — see SetProgress.
+	progress *observe.ProgressStore
 	// bridge is the claude mod bridge (nil: every launch is legacy) — see
 	// SetBridge.
 	bridge *supervisorBridge
@@ -549,6 +551,9 @@ func (s *Supervisor) StopAgent(name string, wakeOnMessage bool) error {
 	// token) behind us. Unregister first so a late in-flight hook cannot
 	// overwrite unknown.
 	s.attentionStore().UnregisterAgent(name)
+	// Running work dies with the launch (a restart or reset is a stop too);
+	// failed tasks survive until dismissed or the agent is deleted.
+	s.progressStore().RemoveNonFailed(name)
 	// No launch is live any more, so no adopt may revive a token.
 	if err := agentstore.ClearAttentionToken(s.homePath, name, storedAttentionToken(s.homePath, name)); err != nil {
 		fmt.Fprintf(os.Stderr, "[%s] clearing attention token: %v\n", name, err)
@@ -1275,6 +1280,8 @@ func wireObservability(ctx context.Context, sv *Supervisor, tmuxPath string) obs
 	// reading back for its own events, hence the post-construction setter.
 	attention := observe.NewAttentionStore(pub)
 	sv.SetAttention(attention)
+	progress := observe.NewProgressStore(nil, pub)
+	sv.SetProgress(progress)
 
 	// sv.SessionNames is the narrow accessor onto the live agent-name ->
 	// tmux-session-name mapping the tracker sweeps (see its doc comment for
@@ -1283,7 +1290,7 @@ func wireObservability(ctx context.Context, sv *Supervisor, tmuxPath string) obs
 	attention.SetActivityProvider(tracker)
 	go tracker.Start(ctx)
 
-	return observability{Bus: bus, RunLog: runLog, MessageLog: messageLog, Tracker: tracker, Attention: attention, Publisher: pub}
+	return observability{Bus: bus, RunLog: runLog, MessageLog: messageLog, Tracker: tracker, Attention: attention, Progress: progress, Publisher: pub}
 }
 
 // clientToolCeilingMargin is how far under the harness's tool-call ceiling
@@ -1328,6 +1335,7 @@ func openChat(homePath string) (*chat.Store, string) {
 func (o observability) wireDaemon(srv *daemon.Server, version string) {
 	srv.SetObservability(o.Bus, o.RunLog, o.MessageLog, o.Tracker, version)
 	srv.SetAttention(o.Attention)
+	srv.SetProgress(o.Progress)
 	if o.Chat != nil {
 		srv.SetChat(o.Chat, o.ChatAttachments, o.Publisher)
 	}
@@ -1342,6 +1350,7 @@ func (o observability) wireDaemon(srv *daemon.Server, version string) {
 func (o observability) wireManager(m *agent.Manager) {
 	m.SetPublisher(o.RunLog)
 	m.SetAttention(o.Attention)
+	m.SetProgress(o.Progress)
 }
 
 // observability bundles what wireObservability builds for daemon boot.
@@ -1351,6 +1360,7 @@ type observability struct {
 	MessageLog *observe.MessageLog
 	Tracker    *observe.Tracker
 	Attention  *observe.AttentionStore
+	Progress   *observe.ProgressStore
 	// Publisher is the full publish chain (push-wrapped when the daemon has
 	// a home), which Leo Chat events go through so chat messages push.
 	Publisher observe.Publisher
@@ -1779,6 +1789,7 @@ func superviseProcess(ctx context.Context, tmuxPath, claudePath string, spec Pro
 		// restart is counted and no backoff is served.
 		if fellBack.Load() {
 			sv.endLaunchToken(homePath, id.Name(), spec.attentionToken)
+			sv.clearProgress(id.Name(), id)
 			forceLegacy = true
 			currentArgs = argsAfterBridgeFallback(currentArgs, spec.Env, spec.WorkDir)
 			id.setArgs(currentArgs)
@@ -1794,6 +1805,7 @@ func superviseProcess(ctx context.Context, tmuxPath, claudePath string, spec Pro
 			fmt.Fprintf(os.Stderr, "[%s] claude exited before its leo bridge connected; relaunching without the bridge\n", name)
 		}
 		sv.endLaunchToken(homePath, id.Name(), spec.attentionToken)
+		sv.clearProgress(id.Name(), id)
 		sv.markAttention(name, id, observe.AttentionErrored)
 		sv.setState(name, id, "restarting")
 		sv.incrementRestarts(name, id)

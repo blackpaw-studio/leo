@@ -15,6 +15,7 @@ import (
 	"github.com/blackpaw-studio/leo/internal/agentstore"
 	"github.com/blackpaw-studio/leo/internal/config"
 	"github.com/blackpaw-studio/leo/internal/leomcp"
+	"github.com/blackpaw-studio/leo/internal/observe"
 )
 
 // TestRecordCarriesNoEnv guards a credential leak. Record is the payload of
@@ -2091,5 +2092,26 @@ func TestRecordBridgeSummary(t *testing.T) {
 		if got := tc.rec.BridgeSummary(); got != tc.want {
 			t.Errorf("BridgeSummary(%+v) = %q, want %q", tc.rec, got, tc.want)
 		}
+	}
+}
+
+// Deleting an agent drops every task it left behind, failed ones included.
+func TestDeleteDropsFailedProgressTasks(t *testing.T) {
+	home := t.TempDir()
+	cfg := &config.Config{HomePath: home}
+	_ = agentstore.Save(home, agentstore.Record{Name: "gone", Workspace: "/w", SessionID: "sid", Stopped: true})
+	m := New(func() (*config.Config, error) { return cfg, nil }, &capturingSupervisor{}, "", "tok")
+	store := observe.NewProgressStore(nil, nil)
+	m.SetProgress(store)
+	title := "Build"
+	if _, err := store.Upsert("gone", observe.TaskUpdate{ID: "bad", Title: &title, State: observe.TaskFailed}); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := m.Delete(context.Background(), "gone", DeleteOptions{}); err != nil {
+		t.Fatalf("Delete: %v", err)
+	}
+	if got := store.Tasks("gone"); len(got) != 0 {
+		t.Fatalf("failed task leaked past deletion: %+v", got)
 	}
 }

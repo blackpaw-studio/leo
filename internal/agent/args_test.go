@@ -294,7 +294,7 @@ func TestResolveTemplateLaunchCodexFillsLeoMCPBridge(t *testing.T) {
 	// LEO_DISPATCH_ID must be forwarded: codex passes the MCP server only
 	// the variables named here, and a dispatched run inherits its caller's
 	// LEO_PROCESS_NAME, so without it the server would pass for the caller.
-	wantEnvVars := []string{"LEO_PROCESS_NAME", "LEO_WEB_PORT", "LEO_API_TOKEN", "LEO_DISPATCH_ID"}
+	wantEnvVars := []string{"LEO_PROCESS_NAME", "LEO_WEB_PORT", "LEO_API_TOKEN", "LEO_DISPATCH_ID", "LEO_ATTENTION_TOKEN"}
 	if !reflect.DeepEqual(opts.LeoMCP.EnvVars, wantEnvVars) {
 		t.Errorf("LeoMCP.EnvVars = %v, want %v", opts.LeoMCP.EnvVars, wantEnvVars)
 	}
@@ -316,7 +316,7 @@ func TestResolveTemplateLaunchCodexFillsLeoMCPBridge(t *testing.T) {
 	if !strings.Contains(joined, "mcp_servers.leo.command=\"leo\"") {
 		t.Errorf("Args() = %v, want the leo MCP bridge config", args)
 	}
-	if !strings.Contains(joined, `mcp_servers.leo.env_vars=["LEO_PROCESS_NAME","LEO_WEB_PORT","LEO_API_TOKEN","LEO_DISPATCH_ID"]`) {
+	if !strings.Contains(joined, `mcp_servers.leo.env_vars=["LEO_PROCESS_NAME","LEO_WEB_PORT","LEO_API_TOKEN","LEO_DISPATCH_ID","LEO_ATTENTION_TOKEN"]`) {
 		t.Errorf("Args() = %v, want LEO_DISPATCH_ID forwarded to the leo MCP server", args)
 	}
 }

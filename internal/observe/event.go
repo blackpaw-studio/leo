@@ -47,6 +47,9 @@ const (
 	// appearance (null when nothing is set) after a manual set, a rules or
 	// config change, an environments or template change, or a rename.
 	EventAgentAppearanceChanged EventType = "agent_appearance_changed"
+	// EventAgentTaskChanged carries one advertised task's whole current
+	// record, or null once it is gone (FeatureAgentProgress).
+	EventAgentTaskChanged EventType = "agent_task_changed"
 )
 
 // Features are the optional capabilities this daemon's API offers,
@@ -102,11 +105,15 @@ const (
 	// `GET /api/agent/moves/{id}` polls the job, and an agent moved away
 	// carries moved_to and moved_at (docs/configuration/agent-move.md).
 	FeatureAgentMove = "agent_move"
+	// FeatureAgentProgress: agents advertise task progress (leo_progress,
+	// `leo progress`); /state agent rows carry tasks and agent_task_changed
+	// events follow them.
+	FeatureAgentProgress = "agent_progress"
 )
 
 // Features returns the hello's features list, a fresh copy each call.
 func Features() []string {
-	return []string{FeatureBridgeTurns, FeatureAttentionReason, FeatureDispatchTree, FeatureAgentUsage, FeatureAgentControl, FeatureDispatchAttach, FeatureDispatchRemoved, FeatureStateSeq, FeatureAttachDispatchPlacement, FeatureDispatchPlacementLive, FeatureAgentEnvironments, FeatureChatQuestions, FeatureMachineStats, FeatureConfigAPI, FeatureAgentStatusRestoring, FeatureClientTools, FeatureAgentAppearance, FeatureAgentMove}
+	return []string{FeatureBridgeTurns, FeatureAttentionReason, FeatureDispatchTree, FeatureAgentUsage, FeatureAgentControl, FeatureDispatchAttach, FeatureDispatchRemoved, FeatureStateSeq, FeatureAttachDispatchPlacement, FeatureDispatchPlacementLive, FeatureAgentEnvironments, FeatureChatQuestions, FeatureMachineStats, FeatureConfigAPI, FeatureAgentStatusRestoring, FeatureClientTools, FeatureAgentAppearance, FeatureAgentMove, FeatureAgentProgress}
 }
 
 // ActivityMinInterval is the most often agent_activity is published per
@@ -208,6 +215,16 @@ type AgentAppearanceChangedPayload struct {
 	Meta
 	Agent      string      `json:"agent"`
 	Appearance *Appearance `json:"appearance"`
+}
+
+// AgentTaskChangedPayload carries one task's whole current record. Task is
+// null (never absent) when the task is gone: expired, dismissed, dropped by
+// a bound, or its agent stopped.
+type AgentTaskChangedPayload struct {
+	Meta
+	Agent string     `json:"agent"`
+	ID    string     `json:"id"`
+	Task  *AgentTask `json:"task"`
 }
 
 // AgentActivityPayload reports the tracker's latest reading for one agent.

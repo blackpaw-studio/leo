@@ -39,6 +39,22 @@ func (s *Supervisor) attentionStore() *observe.AttentionStore {
 	return s.attention
 }
 
+// SetProgress wires the agent task progress store the supervisor clears when
+// an agent stops. Optional: nil disables the clearing.
+func (s *Supervisor) SetProgress(p *observe.ProgressStore) {
+	s.mu.Lock()
+	s.progress = p
+	s.mu.Unlock()
+}
+
+// progressStore returns the wired store (possibly nil; its methods are
+// nil-safe).
+func (s *Supervisor) progressStore() *observe.ProgressStore {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.progress
+}
+
 // markAttention transitions an already-tracked agent's attention, but only
 // while id is still that name's registered live generation. Unlike
 // isStaleLocked, a missing identity counts as stale here: StopAgent removes
@@ -51,6 +67,19 @@ func (s *Supervisor) markAttention(name string, id *procIdentity, state observe.
 		return
 	}
 	s.attention.SetIfTracked(name, state)
+}
+
+// clearProgress removes name's advertised tasks when its launch ends
+// unexpectedly (the token they were reported under is revoked), but only
+// while id is still that name's registered live generation: a dying
+// goroutine must not wipe the tasks of the agent that replaced it.
+func (s *Supervisor) clearProgress(name string, id *procIdentity) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if cur, ok := s.identities[name]; !ok || cur != id {
+		return
+	}
+	s.progress.RemoveNonFailed(name)
 }
 
 // launchAttention sets name's initial attention on launch/adopt, for the

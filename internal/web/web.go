@@ -198,6 +198,10 @@ type Server struct {
 	// It backs both the snapshot's attention field and the agent hook
 	// callback. nil leaves attention absent everywhere.
 	attention *observe.AttentionStore
+	// progress holds agents' advertised tasks, wired via WithProgress. It
+	// backs the snapshot's tasks field, the agent progress route and task
+	// dismissal. nil disables the feature.
+	progress *observe.ProgressStore
 	// turnObserver receives every turn hook of a supervised agent (see
 	// WithTurnObserver); nil drops them.
 	turnObserver func(agent string, turn AgentTurn)
@@ -336,6 +340,12 @@ func WithTurnObserver(fn func(agent string, turn AgentTurn)) Option {
 	return func(s *Server) { s.turnObserver = fn }
 }
 
+// WithProgress wires the task progress store read by GET /api/v1/state and
+// written by POST /api/agent/progress. Optional.
+func WithProgress(p *observe.ProgressStore) Option {
+	return func(s *Server) { s.progress = p }
+}
+
 // WithBridgeFeed wires the bridge feed GET /api/v1/state merges per-agent
 // usage, bridge state, and attention reasons from. Optional.
 func WithBridgeFeed(p bridgeFeedProvider) Option {
@@ -347,6 +357,9 @@ func WithBridgeFeed(p bridgeFeedProvider) Option {
 // /state) to merge the same way GET /api/v1/state does.
 func (s *Server) ObserveSources() AgentSources {
 	src := AgentSources{BridgeFeed: s.bridgeFeed}
+	if s.progress != nil {
+		src.Tasks = s.progress
+	}
 	if s.dispatches != nil {
 		src.Dispatches = s.dispatches
 	}
@@ -672,6 +685,7 @@ func New(configPath string, processes ProcessStateProvider, scheduler SchedulerP
 	apiMux.HandleFunc("POST /api/agent/{name}/environments", s.handleAPIAgentSetEnvironments)
 	apiMux.HandleFunc("POST /api/agent/{name}/move", s.handleAPIAgentMove)
 	apiMux.HandleFunc("POST /api/agent/hook", s.handleAPIAgentHook)
+	apiMux.HandleFunc("POST /api/agent/progress", s.handleAPIAgentProgress)
 	apiMux.HandleFunc("POST /api/agent/context", s.handleAPIAgentContext)
 	apiMux.HandleFunc("POST /api/agent/permission", s.handleAPIPermission)
 	apiMux.HandleFunc("POST /api/agent/{name}/chat/post", s.handleAgentChatPost)
@@ -720,6 +734,7 @@ func New(configPath string, processes ProcessStateProvider, scheduler SchedulerP
 	apiMux.HandleFunc("GET /api/v1/follow", s.requireOperatorToken(s.handleFollowStatusAPI))
 	apiMux.HandleFunc("POST /api/v1/agents/spawn", s.requireOperatorToken(s.handleAPIAgentSpawn))
 	apiMux.HandleFunc("POST /api/v1/agents/{name}/environments", s.requireOperatorToken(s.handleAPIAgentSetEnvironments))
+	apiMux.HandleFunc("DELETE /api/v1/agents/{name}/tasks/{id}", s.requireOperatorToken(s.handleAPIDismissTask))
 	apiMux.HandleFunc("PUT /api/v1/agents/{name}/appearance", s.requireOperatorToken(AgentAppearanceHandler(s.appearanceService)))
 	// JSON config API (docs/configuration/config-api.md): the same service the
 	// daemon serves on its socket, operator token only. The agent token passes

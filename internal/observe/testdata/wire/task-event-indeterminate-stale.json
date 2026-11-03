@@ -1,0 +1,17 @@
+{
+  "seq": 813,
+  "at": "2026-11-03T19:30:00Z",
+  "agent": "alfred",
+  "id": "deploy",
+  "task": {
+    "id": "deploy",
+    "title": "Deploy",
+    "mode": "indeterminate",
+    "state": "running",
+    "stale": true,
+    "started_at": "2026-11-03T19:26:00Z",
+    "updated_at": "2026-11-03T19:26:00Z",
+    "ended_at": null,
+    "revision": 2
+  }
+}

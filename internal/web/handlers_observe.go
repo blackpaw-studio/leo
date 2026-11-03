@@ -69,6 +69,7 @@ func (s *Server) handleAPIState(w http.ResponseWriter, r *http.Request) {
 			History:       s.loadHistory(cfg).All(),
 			Activity:      s.activity,
 			Attention:     s.attention,
+			Tasks:         s.progress,
 			RunLog:        s.runLog,
 			MessageLog:    s.messageLog,
 			BridgeFeed:    s.bridgeFeed,
@@ -113,6 +114,9 @@ type snapshotInput struct {
 	// Attention is the attention store's read seam. nil leaves every
 	// agent's attention absent.
 	Attention attentionProvider
+	// Tasks is the progress store's read seam. nil leaves every agent's
+	// tasks absent.
+	Tasks taskProvider
 	// RunLog is the run log's read seam (observe.RunLog satisfies it). It
 	// alone knows about in-flight runs, so it takes priority over History
 	// for the runs it holds; History only tops up older completed runs the
@@ -157,6 +161,7 @@ func buildSnapshot(in snapshotInput) observe.Snapshot {
 	agents := projectAgents(in.Records, in.ProcessStates, AgentSources{
 		Activity:   in.Activity,
 		Attention:  in.Attention,
+		Tasks:      in.Tasks,
 		BridgeFeed: in.BridgeFeed,
 		Dispatches: in.Dispatches,
 	}, in.Config)
@@ -220,6 +225,7 @@ func DispatchRows(src observe.DispatchCounter, now time.Time) []observe.Dispatch
 type agentViews struct {
 	activities  map[string]observe.AgentActivity
 	attention   map[string]observe.AgentAttention
+	tasks       map[string][]observe.AgentTask
 	bridge      map[string]observe.BridgeAgentState
 	dispatches  map[string]int
 	bridgeWired bool
@@ -228,6 +234,7 @@ type agentViews struct {
 func readAgentViews(src AgentSources) agentViews {
 	v := agentViews{
 		attention:   attentionSnapshot(src.Attention),
+		tasks:       tasksSnapshot(src.Tasks),
 		bridgeWired: src.BridgeFeed != nil,
 	}
 	if src.Activity != nil {
@@ -294,6 +301,7 @@ func buildAgent(rec agent.Record, states map[string]ProcessStateInfo, views agen
 		a.Attention = &att
 	}
 	mergeBridge(&a, views)
+	a.Tasks = views.tasks[rec.Name]
 
 	return a
 }
@@ -338,11 +346,25 @@ func attentionSnapshot(p attentionProvider) map[string]observe.AgentAttention {
 	return p.All()
 }
 
+// taskProvider is the narrow read seam onto observe.ProgressStore.
+type taskProvider interface {
+	AllTasks() map[string][]observe.AgentTask
+}
+
+// tasksSnapshot reads every agent's tasks once, nil-safe.
+func tasksSnapshot(p taskProvider) map[string][]observe.AgentTask {
+	if p == nil {
+		return nil
+	}
+	return p.AllTasks()
+}
+
 // AgentSources are the per-agent read seams an agent projection merges.
 // Every field is optional; a nil one leaves its fields absent.
 type AgentSources struct {
 	Activity   observe.ActivityProvider
 	Attention  attentionProvider
+	Tasks      taskProvider
 	BridgeFeed bridgeFeedProvider
 	Dispatches observe.DispatchCounter
 }

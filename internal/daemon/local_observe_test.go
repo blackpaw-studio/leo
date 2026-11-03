@@ -142,6 +142,37 @@ func TestLocalStateContainsWebAgentRowsWithoutHost(t *testing.T) {
 	}
 }
 
+func TestLocalStateCarriesAgentTasks(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "leo.yaml")
+	if err := config.Save(cfgPath, &config.Config{}); err != nil {
+		t.Fatal(err)
+	}
+	s := New(filepath.Join(dir, "leo.sock"), cfgPath, nil)
+	s.SetAgentManager(&fakeAgentManager{records: []agent.Record{{Name: "local", Status: "running"}}})
+	store := observe.NewProgressStore(nil, nil)
+	title := "Build"
+	if _, err := store.Upsert("local", observe.TaskUpdate{ID: "build", Title: &title}); err != nil {
+		t.Fatal(err)
+	}
+	s.SetProgress(store)
+	w := httptest.NewRecorder()
+
+	s.Handler().ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/state", nil))
+
+	var resp struct {
+		Data struct {
+			Agents []observe.Agent `json:"agents"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatal(err)
+	}
+	if len(resp.Data.Agents) != 1 || len(resp.Data.Agents[0].Tasks) != 1 || resp.Data.Agents[0].Tasks[0].ID != "build" {
+		t.Fatalf("/state agents = %s", w.Body.String())
+	}
+}
+
 // stubBridgeFeed is a fixed bridge feed reading.
 type stubBridgeFeed map[string]observe.BridgeAgentState
 

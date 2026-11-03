@@ -21,13 +21,16 @@ const (
 	EnvAPIToken    = "LEO_API_TOKEN" // #nosec G101 -- the variable name, not a credential
 	EnvDispatchID  = "LEO_DISPATCH_ID"
 	EnvPermissions = "LEO_PERMISSIONS"
+	// EnvAttentionToken is the launch's attention token, which leo_progress
+	// reports under. Only a hook-launched supervised agent has one.
+	EnvAttentionToken = "LEO_ATTENTION_TOKEN" // #nosec G101 -- the variable name, not a credential
 )
 
 // ReservedEnv are the variables `leo mcp-server` trusts for identity and
 // credentials. Leo alone sets them for a dispatch child: whatever the daemon's
 // environment, a template's env, or tmux's global environment carries for them
 // must not reach a child (see WithoutReserved).
-var ReservedEnv = []string{EnvAPIToken, EnvWebPort, EnvProcessName, EnvPermissions, EnvDispatchID}
+var ReservedEnv = []string{EnvAPIToken, EnvWebPort, EnvProcessName, EnvPermissions, EnvDispatchID, EnvAttentionToken}
 
 // WithoutReserved returns a copy of the KEY=VALUE entries without any
 // reserved variable.
@@ -63,11 +66,11 @@ const DispatchProcessPrefix = "dispatch:"
 
 // BridgeEnvNames returns the env-var *names* a codex bridge forwards into the
 // leo MCP server (codex forwards by name, so a variable missing here never
-// reaches the server). EnvDispatchID is always named: codex skips a named
+// reaches the server). EnvAttentionToken is named for leo_progress. EnvDispatchID is always named: codex skips a named
 // variable that is unset, so supervised agents are unaffected, and a codex run
 // inside a dispatch needs it for the dispatch-scoped tool restrictions.
 func BridgeEnvNames(restricted bool) []string {
-	names := []string{EnvProcessName, EnvWebPort, EnvAPIToken, EnvDispatchID}
+	names := []string{EnvProcessName, EnvWebPort, EnvAPIToken, EnvDispatchID, EnvAttentionToken}
 	if restricted {
 		names = append(names, EnvPermissions)
 	}

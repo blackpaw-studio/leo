@@ -98,7 +98,7 @@ func TestInteractiveCodexChildGetsLeoMCPBridgeAndTokenFreeArgv(t *testing.T) {
 	assertInteractiveMCPEnv(t, got, tokenFile)
 	for _, want := range []string{
 		"mcp_servers.leo.command=",
-		`mcp_servers.leo.env_vars=["LEO_PROCESS_NAME","LEO_WEB_PORT","LEO_API_TOKEN","LEO_DISPATCH_ID"]`,
+		`mcp_servers.leo.env_vars=["LEO_PROCESS_NAME","LEO_WEB_PORT","LEO_API_TOKEN","LEO_DISPATCH_ID","LEO_ATTENTION_TOKEN"]`,
 		"features.multi_agent=false",
 	} {
 		if !strings.Contains(got.command, want) {

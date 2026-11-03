@@ -77,6 +77,7 @@ func newRootCmd() *cobra.Command {
 		newWebCmd(),
 		newInternalCmd(),
 		newBridgeCmd(),
+		newProgressCmd(),
 	)
 
 	return cmd

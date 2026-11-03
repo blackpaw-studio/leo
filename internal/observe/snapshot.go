@@ -137,6 +137,10 @@ type Agent struct {
 	// Appearance is the agent's resolved emoji and color; absent when
 	// neither is set (FeatureAgentAppearance).
 	Appearance *Appearance `json:"appearance,omitempty"`
+
+	// Tasks are the agent's advertised tasks (FeatureAgentProgress), oldest
+	// run first; omitted when it has none.
+	Tasks []AgentTask `json:"tasks,omitempty"`
 }
 
 // Appearance is an agent's resolved emoji and color, each with where it came
