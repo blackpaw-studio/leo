@@ -2,6 +2,7 @@ package consult
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
 	"testing"
 	"time"
@@ -108,5 +109,54 @@ func TestSendToWaitingRunNamesReleaseAndCancel(t *testing.T) {
 	msg := err.Error()
 	if !strings.Contains(msg, "leo_release") || !strings.Contains(msg, "leo_cancel") || !strings.Contains(msg, "1 shell · 1 monitor") || strings.Contains(msg, "will continue") {
 		t.Fatalf("rejection=%q", msg)
+	}
+}
+
+// A prune lowers only the waits that own the pruned task: a later turn that
+// starts and stops its own shell leaves an earlier turn's wait on another
+// shell standing.
+func TestPruneLowersOnlyTheTurnThatOwnsTheTask(t *testing.T) {
+	d, rt, id := startBridgedIdle(t)
+	sent, err := d.Send(context.Background(), id, "watch X")
+	if err != nil {
+		t.Fatal(err)
+	}
+	reportAll(t, d, id,
+		bridgeStart(t, "e1", "t2", "watch X", rt.lastCommandID()),
+		bashStarted(t, "e2", "p-2", "tu-1", "bX", "watch x"),
+		bridgeStop(t, "e3", "t2", "X is running"),
+		bridgeStart(t, "e4", "t3", "[leo] dispatch d-child done", "notify-d-child-t3"),
+		bashStarted(t, "e5", "p-3", "tu-2", "bY", "watch y"),
+		taskStopped(t, "e6", "p-3", "tu-3", "bY"),
+	)
+	rec := idleRecord(t, d, id)
+	if got := turnByID(rec, sent.TurnID); got.Outcome != "" || got.Pending.Summary() != "1 shell" || rec.Status != StatusRunning {
+		t.Fatalf("stopping Y ended the wait on X: status=%s turn=%+v", rec.Status, got)
+	}
+	if ids := trackedIDs(rec); len(ids) != 1 || ids[0] != "bX" {
+		t.Fatalf("tracked=%v", ids)
+	}
+}
+
+// A waiting turn saved by an older leo carries no task ids: it loads as
+// before and no prune lowers it, as no prune did then.
+func TestPruneLeavesALegacyWaitAlone(t *testing.T) {
+	var legacy Turn
+	if err := json.Unmarshal([]byte(`{"turn_id":"d-1#1","source":"orchestrator","pending_work":{"tasks":{"shell":1}}}`), &legacy); err != nil || legacy.PendingTaskIDs != nil || legacy.Pending.Summary() != "1 shell" {
+		t.Fatalf("legacy turn=%+v err=%v", legacy, err)
+	}
+	now := time.Date(2026, time.November, 3, 12, 0, 0, 0, time.UTC)
+	d, _, id := startClaudeInteractive(t, &now)
+	reportAll(t, d, id,
+		bashStarted(t, "e1", "", "tu-1", "b1", "sleep 500"),
+		claudeStop(t, "e2", "waiting", map[string]any{"background_tasks": []any{map[string]any{"id": "b1", "type": "shell", "status": "running"}}, "session_crons": []any{}}),
+	)
+	d.mu.Lock()
+	d.runs[id].record.Turns[0].PendingTaskIDs = legacy.PendingTaskIDs
+	d.mu.Unlock()
+	reportAll(t, d, id, taskStopped(t, "e3", "", "tu-2", "b1"))
+	rec := idleRecord(t, d, id)
+	if rec.Status != StatusWaiting || rec.Turns[0].Outcome != "" || rec.PendingWork.Summary() != "1 shell" || len(rec.BackgroundTasks) != 0 {
+		t.Fatalf("status=%s turn=%+v tracked=%v", rec.Status, rec.Turns[0], rec.BackgroundTasks)
 	}
 }

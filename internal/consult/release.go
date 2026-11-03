@@ -44,7 +44,7 @@ func (d *Dispatcher) endWaitingTurnsForReleaseLocked(s *runState) {
 			t.Outcome, closing = TurnReleased, releasedNoResultText
 		}
 		t.mergeWaitText(closing)
-		t.Pending = nil
+		t.Pending, t.PendingTaskIDs = nil, nil
 		t.EndedAt = boundary
 		if t.SlotHeld {
 			t.SlotHeld = false

@@ -83,6 +83,11 @@ type Turn struct {
 	// turn is paused, not done, until that work wakes it. The run's
 	// PendingWork is the first open turn's, derived from the turns.
 	Pending *PendingWork `json:"pending_work,omitempty"`
+	// PendingTaskIDs are the tracked background tasks (see BackgroundTask)
+	// that were live when Pending was set: the ones whose end lowers this
+	// turn's wait. A turn without them (none were tracked, or an older leo
+	// saved it) is never lowered by a tracker prune.
+	PendingTaskIDs []string `json:"pending_task_ids,omitempty"`
 	// WaitText is what each Stop that paused this turn on background work
 	// said, in order; the turn's result leads with it so the closing Stop's
 	// reply does not replace it.

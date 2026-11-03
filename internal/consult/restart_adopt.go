@@ -383,7 +383,7 @@ func (d *Dispatcher) settleRestarted(rec Record, reason string) int {
 			rec.Turns[i].EndedAt = markedAt
 			rec.Turns[i].SlotHeld = false
 		}
-		rec.Turns[i].Pending = nil
+		rec.Turns[i].Pending, rec.Turns[i].PendingTaskIDs = nil, nil
 	}
 	rec.PendingWork = nil
 	if finished {

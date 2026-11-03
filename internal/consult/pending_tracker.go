@@ -95,15 +95,24 @@ func kept(id, reason string) trackDecision {
 	return trackDecision{TaskID: id, Decision: decisionKept, Reason: reason}
 }
 
-// prunedCount is how many tracked tasks the decisions pruned.
-func prunedCount(decisions []trackDecision) int {
-	n := 0
+// prunedIDs are the tracked tasks the decisions pruned.
+func prunedIDs(decisions []trackDecision) []string {
+	var ids []string
 	for _, d := range decisions {
 		if d.Decision == decisionPruned {
-			n++
+			ids = append(ids, d.TaskID)
 		}
 	}
-	return n
+	return ids
+}
+
+// trackedTaskIDs are the ids of tasks, nil when there are none.
+func trackedTaskIDs(tasks []BackgroundTask) []string {
+	var ids []string
+	for _, t := range tasks {
+		ids = append(ids, t.ID)
+	}
+	return ids
 }
 
 // trackToolEvent returns tasks updated for one PostToolUse or
@@ -336,11 +345,11 @@ func (d *Dispatcher) takeHookStopWorkLocked(s *runState) *PendingWork {
 // for the bridge turn.complete it belongs to (see ReportSupersededStop).
 const hookStopFreshness = 10 * time.Second
 
-// trackLocked applies one tracker update for event and returns how many
-// tracked tasks it pruned, for prunePendingLocked.
-func (d *Dispatcher) trackLocked(s *runState, event string, tasks []BackgroundTask, decisions []trackDecision) int {
+// trackLocked applies one tracker update for event and returns the tracked
+// tasks it pruned, for prunePendingLocked.
+func (d *Dispatcher) trackLocked(s *runState, event string, tasks []BackgroundTask, decisions []trackDecision) []string {
 	d.setTrackedLocked(s, tasks, decisions, event)
-	return prunedCount(decisions)
+	return prunedIDs(decisions)
 }
 
 // setTrackedLocked replaces the run's tracked tasks, persisting a change,
@@ -404,11 +413,12 @@ func pendingSnapshot(s *runState) map[string]*PendingWork {
 }
 
 // prunePendingLocked carries a tracker prune into the run's turns: each wait
-// the event left untouched loses the pruned shells, and a turn left with
-// nothing pending ends as its background work finishing would have ended
-// it, keeping what its Stops said. The run's status is re-derived.
-func (d *Dispatcher) prunePendingLocked(s *runState, before map[string]*PendingWork, pruned int) {
-	if pruned == 0 || len(before) == 0 || s.releasing || s.record.Status.Terminal() || s.record.Status == StatusSettling {
+// the event left untouched loses the shells it counted among the pruned
+// tasks, and a turn left with nothing pending ends as its background work
+// finishing would have ended it, keeping what its Stops said. The run's
+// status is re-derived.
+func (d *Dispatcher) prunePendingLocked(s *runState, before map[string]*PendingWork, pruned []string) {
+	if len(pruned) == 0 || len(before) == 0 || s.releasing || s.record.Status.Terminal() || s.record.Status == StatusSettling {
 		return
 	}
 	old := s.record.Status
@@ -419,11 +429,16 @@ func (d *Dispatcher) prunePendingLocked(s *runState, before map[string]*PendingW
 		if t.Outcome != "" || t.Pending == nil || t.Pending != before[t.TurnID] {
 			continue
 		}
-		w := withoutShells(t.Pending, pruned)
+		owned := slices.DeleteFunc(slices.Clone(t.PendingTaskIDs), func(id string) bool { return !slices.Contains(pruned, id) })
+		if len(owned) == 0 {
+			continue
+		}
+		t.PendingTaskIDs = slices.DeleteFunc(slices.Clone(t.PendingTaskIDs), func(id string) bool { return slices.Contains(owned, id) })
+		changed = true
+		w := withoutShells(t.Pending, len(owned))
 		if w == t.Pending {
 			continue
 		}
-		changed = true
 		if w == nil {
 			emptied = append(emptied, t.TurnID)
 			continue

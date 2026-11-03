@@ -553,7 +553,7 @@ func (d *Dispatcher) closeTurnLocked(s *runState, id string, outcome TurnOutcome
 			continue
 		}
 		t.Outcome = outcome
-		t.Pending = nil
+		t.Pending, t.PendingTaskIDs = nil, nil
 		t.EndedAt = boundary
 		t.mergeWaitText(s.scrub.String(text))
 		if t.SlotHeld {
@@ -712,7 +712,7 @@ func (d *Dispatcher) admitLocked(s *runState) {
 // clearPendingLocked ends every wait: each turn's and the run's.
 func clearPendingLocked(s *runState) {
 	for i := range s.record.Turns {
-		s.record.Turns[i].Pending = nil
+		s.record.Turns[i].Pending, s.record.Turns[i].PendingTaskIDs = nil, nil
 	}
 	s.record.PendingWork = nil
 }
@@ -1126,6 +1126,7 @@ func (d *Dispatcher) waitOnBackgroundLocked(s *runState, w *PendingWork, text st
 	old := s.record.Status
 	for _, t := range turns {
 		t.Pending = w
+		t.PendingTaskIDs = trackedTaskIDs(s.record.BackgroundTasks)
 		delete(s.adoptWaits, t.TurnID)
 		t.WaitText = appendStopText(t.WaitText, s.scrub.String(text))
 	}
@@ -1201,7 +1202,7 @@ func (d *Dispatcher) resumeWaitingLocked(s *runState) {
 // resumeTurnLocked continues t, a turn paused on background work, as the
 // wake that carries it on arrives. Other turns' waits stand.
 func (d *Dispatcher) resumeTurnLocked(s *runState, t *Turn) {
-	t.Pending = nil
+	t.Pending, t.PendingTaskIDs = nil, nil
 	d.settleResumedLocked(s)
 }
 

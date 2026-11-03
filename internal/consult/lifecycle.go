@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"maps"
 	"os"
+	"slices"
 	"time"
 )
 
@@ -35,6 +36,7 @@ func cloneRecord(record Record) Record {
 	record.BackgroundTasks = cloneBackgroundTasks(record.BackgroundTasks)
 	for i := range record.Turns {
 		record.Turns[i].Pending = clonePendingWork(record.Turns[i].Pending)
+		record.Turns[i].PendingTaskIDs = slices.Clone(record.Turns[i].PendingTaskIDs)
 	}
 	if record.RunningSince != nil {
 		runningSince := *record.RunningSince
