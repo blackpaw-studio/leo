@@ -25,6 +25,10 @@ type ProgressStore struct {
 type taskEntry struct {
 	agent string
 	task  AgentTask
+	// gen invalidates timers armed for an earlier state of the entry;
+	// stopTimer cancels the one armed now.
+	gen       uint64
+	stopTimer func() bool
 }
 
 // NewProgressStore creates an empty store. clock nil uses the wall clock;
@@ -39,6 +43,15 @@ func NewProgressStore(clock FeedClock, publisher Publisher) *ProgressStore {
 		agents:    make(map[string]map[string]*taskEntry),
 	}
 }
+
+// Lifecycle timings.
+const (
+	// StaleAfter is how long a running task may go without an update before
+	// it is flagged stale.
+	StaleAfter = 15 * time.Minute
+	// ExpireAfter is how long a succeeded or cancelled task lingers.
+	ExpireAfter = 10 * time.Minute
+)
 
 var errProgressUnavailable = errors.New("task progress is not available")
 
@@ -79,6 +92,7 @@ func (s *ProgressStore) Upsert(agent string, raw TaskUpdate) (AgentTask, error) 
 		s.agents[agent][u.ID] = e
 	}
 	e.task = next
+	s.armLocked(e)
 	s.publishLocked(e)
 	s.enforceBoundLocked(agent, e)
 	return e.task.clone(), nil
@@ -147,6 +161,7 @@ func (s *ProgressStore) Move(oldName, newName string) {
 			s.agents[newName] = make(map[string]*taskEntry)
 		}
 		s.agents[newName][e.task.ID] = e
+		s.armLocked(e)
 		s.publishLocked(e)
 	}
 }
@@ -296,8 +311,51 @@ func compareStrings(a, b string) int {
 	return 0
 }
 
+// armLocked (re)arms e's lifecycle timer for its current state: a running
+// task goes stale StaleAfter after its last update, a succeeded or
+// cancelled one is removed ExpireAfter after it ended, a failed one has no
+// timer.
+func (s *ProgressStore) armLocked(e *taskEntry) {
+	s.disarmLocked(e)
+	var deadline time.Time
+	var fire func(*taskEntry)
+	switch {
+	case e.task.State == TaskRunning:
+		deadline, fire = e.task.UpdatedAt.Add(StaleAfter), s.markStaleLocked
+	case isEndedOK(e.task):
+		deadline, fire = e.task.EndedAt.Add(ExpireAfter), s.removeLocked
+	default:
+		return
+	}
+	gen := e.gen
+	e.stopTimer = s.clock.AfterFunc(max(0, deadline.Sub(s.clock.Now())), func() {
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		if e.gen == gen {
+			fire(e)
+		}
+	})
+}
+
+// disarmLocked cancels e's timer and invalidates one already firing.
+func (s *ProgressStore) disarmLocked(e *taskEntry) {
+	e.gen++
+	if e.stopTimer != nil {
+		e.stopTimer()
+		e.stopTimer = nil
+	}
+}
+
+func (s *ProgressStore) markStaleLocked(e *taskEntry) {
+	e.task.Stale = true
+	e.task.Revision++
+	e.stopTimer = nil
+	s.publishLocked(e)
+}
+
 // removeLocked deletes e and publishes its removal.
 func (s *ProgressStore) removeLocked(e *taskEntry) {
+	s.disarmLocked(e)
 	delete(s.agents[e.agent], e.task.ID)
 	if len(s.agents[e.agent]) == 0 {
 		delete(s.agents, e.agent)
