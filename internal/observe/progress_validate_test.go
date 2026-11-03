@@ -43,8 +43,8 @@ func TestProgressValidateStrings(t *testing.T) {
 	t.Run("trims and strips control and format characters", func(t *testing.T) {
 		got, err := TaskUpdate{
 			ID:     "a",
-			Title:  ptr("  Xcode\x1b[31m build\n\t‮ "),
-			Status: ptr(" comp​iling\x00 "),
+			Title:  ptr("  Xcode\x1b[31m build\n\t\u202e "),
+			Status: ptr(" comp\u200biling\x00 "),
 		}.Normalize()
 		if err != nil {
 			t.Fatal(err)
