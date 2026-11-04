@@ -29,6 +29,13 @@ func (s *Server) resolveDispatchCaller(caller, pane, parentDispatchID string) (d
 		}
 		pane = strings.TrimSpace(string(out))
 	}
+	// Agent shells no longer carry TMUX_PANE, so a nested dispatch arrives with
+	// only its parent's id; the parent's recorded pane is the caller.
+	derived := false
+	if pane == "" && session == "" {
+		pane = s.parentDispatchPane(parentDispatchID)
+		derived = pane != ""
+	}
 	if pane == "" {
 		return dispatchCaller{}, nil
 	}
@@ -37,6 +44,11 @@ func (s *Server) resolveDispatchCaller(caller, pane, parentDispatchID string) (d
 	}
 	out, err := s.execCommand(s.tmuxPath(), tmux.Args("display-message", "-p", "-t", pane, "#{session_name} #{session_id} #{window_id}")...).Output()
 	if err != nil {
+		if derived {
+			// Not caller-asserted: a parent pane that has closed means a
+			// background launch, not a rejected dispatch.
+			return dispatchCaller{}, nil
+		}
 		return dispatchCaller{}, fmt.Errorf("caller_pane_id %q is not a live pane", pane)
 	}
 	fields := strings.Fields(string(out))
@@ -75,6 +87,19 @@ func (s *Server) resolveDispatchCaller(caller, pane, parentDispatchID string) (d
 		windowID = fields[2]
 	}
 	return dispatchCaller{PaneID: pane, SessionID: fields[1], WindowID: windowID, Harness: harness}, nil
+}
+
+// parentDispatchPane is the pane a parent dispatch recorded, or "" when the
+// parent is unknown or headless.
+func (s *Server) parentDispatchPane(parentDispatchID string) string {
+	if parentDispatchID == "" || s.consults == nil {
+		return ""
+	}
+	parent, err := s.consults.Get(parentDispatchID)
+	if err != nil {
+		return ""
+	}
+	return parent.PaneID
 }
 
 // parentDispatchHarness names the harness of the dispatch that owns pane. A

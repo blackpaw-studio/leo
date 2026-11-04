@@ -358,3 +358,87 @@ func TestDispatchReportHTTPMalformed(t *testing.T) {
 		t.Fatalf("status %d: %s", w.Code, w.Body.String())
 	}
 }
+
+func newParentDispatchServer(t *testing.T, parent consult.Record) *Server {
+	t.Helper()
+	state := t.TempDir()
+	recorder := consult.NewFileRecorder(state)
+	if err := os.MkdirAll(consult.Dir(state), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := recorder.PersistRecord(parent); err != nil {
+		t.Fatal(err)
+	}
+	s, _, _ := newTestServerWithAgents(t)
+	s.consults = consult.NewDispatcher(recorder)
+	return s
+}
+
+// An agent shell no longer carries TMUX_PANE, so a nested dispatch reaches the
+// daemon with only its parent's id: the parent's recorded pane is the caller.
+func TestResolveDispatchCallerDerivesPaneFromParentDispatch(t *testing.T) {
+	s := newParentDispatchServer(t, consult.Record{ID: "d-parent", Kind: "dispatch", Mode: consult.ModeInteractive, Status: consult.StatusRunning, Harness: "codex", PaneID: "%9"})
+	var calls [][]string
+	s.execCommand = func(_ string, args ...string) *exec.Cmd {
+		calls = append(calls, append([]string(nil), args...))
+		return exec.Command("printf", "leo-dispatch $5 @6\\n")
+	}
+	got, err := s.resolveDispatchCaller("", "", "d-parent")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != (dispatchCaller{PaneID: "%9", SessionID: "$5", WindowID: "@6", Harness: "codex"}) {
+		t.Fatalf("caller = %#v", got)
+	}
+	want := [][]string{{"-L", "leo", "display-message", "-p", "-t", "%9", "#{session_name} #{session_id} #{window_id}"}}
+	if !reflect.DeepEqual(calls, want) {
+		t.Fatalf("tmux argv = %#v, want %#v", calls, want)
+	}
+}
+
+// The parent's pane is derived, not asserted by the caller, so a pane that has
+// since closed degrades to a background launch instead of failing the dispatch.
+func TestResolveDispatchCallerParentPaneGoneDegrades(t *testing.T) {
+	s := newParentDispatchServer(t, consult.Record{ID: "d-parent", Kind: "dispatch", Mode: consult.ModeInteractive, Status: consult.StatusRunning, Harness: "claude", PaneID: "%9"})
+	s.execCommand = func(_ string, _ ...string) *exec.Cmd { return exec.Command("false") }
+	got, err := s.resolveDispatchCaller("", "", "d-parent")
+	if err != nil {
+		t.Fatalf("err = %v, want nil", err)
+	}
+	if got != (dispatchCaller{}) {
+		t.Fatalf("caller = %#v, want empty", got)
+	}
+}
+
+func TestResolveDispatchCallerHeadlessParentNoPane(t *testing.T) {
+	s := newParentDispatchServer(t, consult.Record{ID: "d-parent", Kind: "dispatch", Mode: consult.ModeHeadless, Status: consult.StatusRunning, Harness: "claude"})
+	s.execCommand = func(_ string, args ...string) *exec.Cmd {
+		t.Fatalf("unexpected tmux call %v", args)
+		return nil
+	}
+	got, err := s.resolveDispatchCaller("", "", "d-parent")
+	if err != nil || got != (dispatchCaller{}) {
+		t.Fatalf("caller = %#v, err = %v; want empty, nil", got, err)
+	}
+}
+
+func TestAPIDispatchNestedFromParentIDAloneRecordsParentPane(t *testing.T) {
+	s, rt, _ := newModeTestServer(t)
+	state := t.TempDir()
+	recorder := consult.NewFileRecorder(state)
+	if err := os.MkdirAll(consult.Dir(state), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := recorder.PersistRecord(consult.Record{ID: "d-parent", Kind: "dispatch", Mode: consult.ModeInteractive, Status: consult.StatusRunning, Harness: "claude", PaneID: "%9"}); err != nil {
+		t.Fatal(err)
+	}
+	s.consults = consult.NewDispatcher(recorder)
+	s.consults.SetInteractiveRuntime(rt)
+	s.execCommand = func(_ string, _ ...string) *exec.Cmd {
+		return exec.Command("printf", "leo-dispatch $5 @6\\n")
+	}
+	postDispatch(t, s, `{"template":"coding","prompt":"work","cwd":"/tmp","parent_dispatch_id":"d-parent"}`)
+	if rt.count() != 1 || rt.launches[0].CallerPaneID != "%9" {
+		t.Fatalf("launches = %+v, want caller pane %%9", rt.launches)
+	}
+}
