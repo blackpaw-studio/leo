@@ -141,6 +141,8 @@ func (js *Jobs) Start(ctx context.Context, req Request) (JobStatus, error) {
 		delete(js.active, req.Agent)
 		js.mu.Unlock()
 		j.finish(res, err)
+		// Must stay directly after finish: the test asserts the agent is
+		// already free once the terminal state is visible.
 		if js.afterFinish != nil {
 			js.afterFinish(req)
 		}
