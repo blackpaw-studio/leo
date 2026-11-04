@@ -1,0 +1,21 @@
+{
+ "session_id": "sess-redacted",
+ "prompt_id": "230976cc-eb69-4385-a002-72fc1d329810",
+ "permission_mode": "bypassPermissions",
+ "effort": {
+  "level": "medium"
+ },
+ "hook_event_name": "PostToolUse",
+ "tool_name": "TaskStop",
+ "tool_input": {
+  "task_id": "bz2cei057"
+ },
+ "tool_response": {
+  "message": "Successfully stopped task: bz2cei057 (python3 -c \"import time; time.sleep(120)\")",
+  "task_id": "bz2cei057",
+  "task_type": "local_bash",
+  "command": "python3 -c \"import time; time.sleep(120)\""
+ },
+ "tool_use_id": "toolu_01L9pJtwP3pnnb8hNVUeiCpz",
+ "duration_ms": 2
+}

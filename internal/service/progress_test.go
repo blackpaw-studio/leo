@@ -162,3 +162,84 @@ func TestClearProgressKeepsFailedTasks(t *testing.T) {
 		t.Fatalf("tasks after crash-restart = %+v, want only the failed one", got)
 	}
 }
+
+// manualTimers is an observe.FeedClock whose timers fire only when the test
+// says so.
+type manualTimers struct {
+	pending []*manualTimer
+}
+
+type manualTimer struct {
+	fn      func()
+	stopped bool
+}
+
+func (*manualTimers) Now() time.Time { return time.Date(2026, 11, 3, 12, 0, 0, 0, time.UTC) }
+
+func (c *manualTimers) AfterFunc(_ time.Duration, fn func()) func() bool {
+	t := &manualTimer{fn: fn}
+	c.pending = append(c.pending, t)
+	return func() bool { was := !t.stopped; t.stopped = true; return was }
+}
+
+func (c *manualTimers) fire() {
+	for _, t := range c.pending {
+		if !t.stopped {
+			t.stopped = true
+			t.fn()
+		}
+	}
+}
+
+// Stopping an agent drops its auto-command tracker launch: a command armed
+// before the stop must never surface, even if a later launch reuses the token
+// binding for that agent name.
+func TestStopAgentDropsTheAutoCommandLaunch(t *testing.T) {
+	sv := NewSupervisor(context.Background())
+	sv.tmuxPath = "echo"
+	attention := observe.NewAttentionStore(nil)
+	sv.SetAttention(attention)
+	store := observe.NewProgressStore(nil, nil)
+	sv.SetProgress(store)
+	clock := &manualTimers{}
+	auto := observe.NewAutoCommands(clock, store, attention.AgentForToken)
+	sv.SetAutoCommands(auto)
+	attention.RegisterToken("tok", "eph")
+	auto.Hook("tok", []byte(`{"hook_event_name":"PreToolUse","tool_name":"Bash","tool_use_id":"t1","tool_input":{"command":"make"}}`))
+	sv.mu.Lock()
+	sv.states["eph"] = &ProcessState{Name: "eph", Status: "running", Ephemeral: true}
+	sv.cancels["eph"] = func() {}
+	sv.mu.Unlock()
+
+	if err := sv.StopAgent("eph", false); err != nil {
+		t.Fatalf("StopAgent: %v", err)
+	}
+	attention.RegisterToken("tok", "eph") // the token resolves again
+	clock.fire()
+
+	if got := store.Tasks("eph"); len(got) != 0 {
+		t.Fatalf("a stopped launch's command surfaced: %+v", got)
+	}
+}
+
+// A crash-restart revokes the launch's token (endLaunchToken), which drops
+// the launch's tracker state with it.
+func TestEndLaunchTokenDropsTheAutoCommandLaunch(t *testing.T) {
+	sv := NewSupervisor(context.Background())
+	attention := observe.NewAttentionStore(nil)
+	sv.SetAttention(attention)
+	store := observe.NewProgressStore(nil, nil)
+	clock := &manualTimers{}
+	auto := observe.NewAutoCommands(clock, store, attention.AgentForToken)
+	sv.SetAutoCommands(auto)
+	attention.RegisterToken("tok", "a")
+	auto.Hook("tok", []byte(`{"hook_event_name":"PreToolUse","tool_name":"Bash","tool_use_id":"t1","tool_input":{"command":"make"}}`))
+
+	sv.endLaunchToken(t.TempDir(), "a", "tok")
+	attention.RegisterToken("tok", "a") // the token resolves again
+	clock.fire()
+
+	if got := store.Tasks("a"); len(got) != 0 {
+		t.Fatalf("the dead launch's command surfaced: %+v", got)
+	}
+}

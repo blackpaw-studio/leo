@@ -10,6 +10,7 @@ import (
 	"os"
 	"sync"
 
+	"github.com/blackpaw-studio/leo/internal/leomcp"
 	"github.com/blackpaw-studio/leo/internal/leotools"
 )
 
@@ -206,7 +207,7 @@ func dispatch(ctx context.Context, msg *jsonRPCMessage, reg *registry) (jsonRPCM
 		if reg.watching() {
 			tools["listChanged"] = true
 		}
-		resp.Result = map[string]any{
+		result := map[string]any{
 			"protocolVersion": protocolVersion,
 			"capabilities": map[string]any{
 				"tools": tools,
@@ -216,6 +217,10 @@ func dispatch(ctx context.Context, msg *jsonRPCMessage, reg *registry) (jsonRPCM
 				"version": "1",
 			},
 		}
+		if reg.reportsProgress() {
+			result["instructions"] = leomcp.ProgressGuidance
+		}
+		resp.Result = result
 	case "notifications/initialized":
 		// Notifications never get a response.
 		return resp, false

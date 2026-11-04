@@ -1,0 +1,25 @@
+{
+ "session_id": "sess-redacted",
+ "prompt_id": "260085b4-a3a2-411e-8548-99462525b692",
+ "permission_mode": "bypassPermissions",
+ "effort": {
+  "level": "medium"
+ },
+ "hook_event_name": "PostToolUse",
+ "tool_name": "Bash",
+ "tool_input": {
+  "command": "python3 -c \"import time; time.sleep(8)\"",
+  "description": "Bg sleeper",
+  "run_in_background": true
+ },
+ "tool_response": {
+  "stdout": "",
+  "stderr": "",
+  "interrupted": false,
+  "isImage": false,
+  "noOutputExpected": false,
+  "backgroundTaskId": "bgf8y9tgc"
+ },
+ "tool_use_id": "toolu_01QfrMuXgWuLzoviZz2S8kcG",
+ "duration_ms": 12
+}

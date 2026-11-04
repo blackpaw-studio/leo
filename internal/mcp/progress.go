@@ -124,3 +124,10 @@ func containsAny(values []any, s string) bool {
 	}
 	return false
 }
+
+// reportsProgress reports whether this server runs in an agent that can call
+// leo_progress: one Leo launched (it holds a launch token) and not a dispatch
+// run, which inherits its caller's token but cannot report.
+func (r *registry) reportsProgress() bool {
+	return r.attentionToken != "" && r.dispatchID == ""
+}

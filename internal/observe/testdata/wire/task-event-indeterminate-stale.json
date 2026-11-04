@@ -5,6 +5,7 @@
   "id": "deploy",
   "task": {
     "id": "deploy",
+    "source": "agent",
     "title": "Deploy",
     "mode": "indeterminate",
     "state": "running",

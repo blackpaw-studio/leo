@@ -1,0 +1,18 @@
+{
+ "session_id": "sess-redacted",
+ "prompt_id": "9c2d4415-686a-4780-921c-880be359dafb",
+ "permission_mode": "bypassPermissions",
+ "effort": {
+  "level": "medium"
+ },
+ "hook_event_name": "PostToolUseFailure",
+ "tool_name": "Bash",
+ "tool_input": {
+  "command": "false",
+  "description": "Run false to check exit status"
+ },
+ "tool_use_id": "toolu_01JNQ6phbvw9W7WXmakTzGud",
+ "error": "Exit code 1",
+ "is_interrupt": false,
+ "duration_ms": 40
+}

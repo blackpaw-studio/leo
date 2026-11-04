@@ -134,8 +134,12 @@ func (s *Server) setupConsultRuntime(opts Options, resolveCallerSession func(str
 	// reconciled every state tick (so one that ended between ticks is
 	// released). Only dispatches by a bridged caller count, by its key, so
 	// the count follows a rename.
-	dispatchObserver := consult.NewDispatchObserver(s.consults.RunRecords, s.publisher,
-		consult.WithDispatchOwner(s.dispatchCallerOwner))
+	observerOpts := []consult.DispatchObserverOption{consult.WithDispatchOwner(s.dispatchCallerOwner)}
+	if s.progress != nil {
+		// Every running dispatch is an auto task on its root caller's agent.
+		observerOpts = append(observerOpts, consult.WithDispatchTasks(s.progress, s.isSupervisedAgent))
+	}
+	dispatchObserver := consult.NewDispatchObserver(s.consults.RunRecords, s.publisher, observerOpts...)
 	s.attention.SetDispatchCounter(dispatchObserver)
 	if s.dispatches == nil {
 		s.dispatches = dispatchObserver
@@ -305,6 +309,16 @@ func (s *Server) agentForBridgeKey(router *bridge.Router) func(key string) (stri
 		}
 		return "", false
 	}
+}
+
+// isSupervisedAgent reports whether name is an agent leo knows, for callers
+// whose dispatches carry no bridge launch.
+func (s *Server) isSupervisedAgent(name string) bool {
+	if s.agentSvc == nil {
+		return false
+	}
+	_, _, ok := s.agentSvc.ResolveHandle(name)
+	return ok
 }
 
 // dispatchCallerOwner returns the agent whose live launch a dispatch

@@ -5,6 +5,7 @@
   "id": "build",
   "task": {
     "id": "build",
+    "source": "agent",
     "title": "Xcode build",
     "mode": "determinate",
     "percent": 62,

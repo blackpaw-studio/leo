@@ -229,3 +229,56 @@ func TestDispatchReportTurnEventRetriesAndFails(t *testing.T) {
 		t.Fatalf("attempts = %d, want %d", hits.Load(), reportAttempts)
 	}
 }
+
+// A supervised agent's tool hooks run on every tool call, so a dead daemon
+// costs one quick attempt, not the 5 s x 3 a turn event gets.
+func TestAttentionReportToolEventIsSingleAttempt(t *testing.T) {
+	for _, event := range []string{"PreToolUse", "PostToolUse", "PostToolUseFailure"} {
+		t.Run(event, func(t *testing.T) {
+			old := toolReportTimeout
+			toolReportTimeout = 500 * time.Millisecond // a retry after its 200ms backoff would still fit
+			t.Cleanup(func() { toolReportTimeout = old })
+			var hits atomic.Int32
+			release := make(chan struct{})
+			srv := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+				hits.Add(1)
+				<-release
+			}))
+			t.Cleanup(func() { close(release); srv.Close() })
+			_, port, _ := net.SplitHostPort(strings.TrimPrefix(srv.URL, "http://"))
+			clearReportEnv(t)
+			t.Setenv("LEO_ATTENTION_TOKEN", "launch-tok")
+			t.Setenv("LEO_WEB_PORT", port)
+
+			start := time.Now()
+			if err := runReport(t, `{"hook_event_name":"`+event+`","tool_use_id":"t1"}`); err != nil {
+				t.Fatalf("report: %v", err)
+			}
+			if elapsed := time.Since(start); elapsed > 2*time.Second {
+				t.Fatalf("took %v, want about the tool timeout", elapsed)
+			}
+			if hits.Load() != 1 {
+				t.Fatalf("attempts = %d, want 1", hits.Load())
+			}
+		})
+	}
+}
+
+func TestAttentionReportTurnEventStillRetries(t *testing.T) {
+	var hits atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		hits.Add(1)
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	t.Cleanup(srv.Close)
+	_, port, _ := net.SplitHostPort(strings.TrimPrefix(srv.URL, "http://"))
+	clearReportEnv(t)
+	t.Setenv("LEO_ATTENTION_TOKEN", "launch-tok")
+	t.Setenv("LEO_WEB_PORT", port)
+
+	_ = runReport(t, `{"hook_event_name":"Stop"}`)
+
+	if hits.Load() != reportAttempts {
+		t.Fatalf("attempts = %d, want %d", hits.Load(), reportAttempts)
+	}
+}

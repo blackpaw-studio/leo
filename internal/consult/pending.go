@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+
+	"github.com/blackpaw-studio/leo/internal/bgshell"
 )
 
 // StatusWaiting marks an interactive run whose harness ended its turn while
@@ -27,13 +29,6 @@ type PendingWork struct {
 // any other type follows, alphabetically.
 var pendingTaskOrder = []string{"shell", "monitor", "subagent", "workflow"}
 
-// settledTaskStatuses are background-task statuses that no longer wake the
-// session. Claude lists only in-flight work, so these are defensive.
-var settledTaskStatuses = map[string]bool{"completed": true, "failed": true, "killed": true, "stopped": true, "canceled": true, "cancelled": true}
-
-// maxPendingTypeLen bounds a task type taken from a hook payload.
-const maxPendingTypeLen = 32
-
 // pendingWorkFromStop reads a Stop payload's background_tasks and
 // session_crons: nil when neither lists anything pending (absent, as older
 // claude versions send, or malformed).
@@ -42,7 +37,7 @@ func pendingWorkFromStop(p map[string]any) *PendingWork {
 	tasks, _ := p["background_tasks"].([]any)
 	for _, raw := range tasks {
 		task, ok := raw.(map[string]any)
-		if !ok || settledTaskStatuses[strings.ToLower(str(task, "status"))] {
+		if !ok || bgshell.Settled(str(task, "status")) {
 			continue
 		}
 		kind := sanitizeTaskType(str(task, "type"))
@@ -63,24 +58,7 @@ func pendingWorkFromStop(p map[string]any) *PendingWork {
 	return &w
 }
 
-func sanitizeTaskType(kind string) string {
-	kind = strings.ToLower(strings.TrimSpace(kind))
-	var b strings.Builder
-	for _, r := range kind {
-		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '_' || r == '-' {
-			b.WriteRune(r)
-		} else if r == ' ' {
-			b.WriteByte('_')
-		}
-		if b.Len() >= maxPendingTypeLen {
-			break
-		}
-	}
-	if b.Len() == 0 {
-		return "other"
-	}
-	return b.String()
-}
+func sanitizeTaskType(kind string) string { return bgshell.SanitizeTaskType(kind) }
 
 // Summary is the compact form the roster and lists show, e.g.
 // "1 shell · 1 monitor · 2 wakeups".

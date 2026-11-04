@@ -1052,24 +1052,6 @@ func normalizePrompt(text string) string { return strings.Join(strings.Fields(te
 
 func str(p map[string]any, k string) string { v, _ := p[k].(string); return v }
 
-// harnessInjectionMarkers are the envelope tags of prompts the harness
-// submits on its own, which fire UserPromptSubmit like a typed prompt.
-var harnessInjectionMarkers = []string{
-	"task-notification", // Claude Code: a background task finished
-}
-
-// isHarnessInjection reports whether the whole prompt is one injection
-// envelope, so a human quoting a tag still counts as typing.
-func isHarnessInjection(prompt string) bool {
-	prompt = strings.TrimSpace(prompt)
-	for _, m := range harnessInjectionMarkers {
-		if strings.HasPrefix(prompt, "<"+m+">") && strings.HasSuffix(prompt, "</"+m+">") {
-			return true
-		}
-	}
-	return false
-}
-
 // matchSubmitLocked attributes a submit to a sent turn by prompt text. A
 // harness injection never claims a sent turn.
 func (d *Dispatcher) matchSubmitLocked(s *runState, prompt, hid string, injected bool) *Turn {

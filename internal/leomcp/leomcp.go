@@ -110,6 +110,13 @@ func LeoNudge(cfg *config.Config) string {
 	return leoSkillNudgeText
 }
 
+// ProgressGuidance tells a supervised agent when to report work with
+// leo_progress. The leo MCP server sends it as its `initialize` instructions
+// (which Claude Code adds to the system prompt); Leo also appends it to a
+// Codex agent's developer instructions, since Codex may not surface MCP
+// instructions.
+const ProgressGuidance = "For work you expect to take more than a minute or two (builds, deploys, test sweeps, migrations), report it with `leo_progress`: start it with a title, update percent or status at milestones, and always end it with succeeded, failed or cancelled. Long shell commands and dispatches already appear automatically; use `leo_progress` when you can say how far along you are."
+
 // Delimiters of the delegation block inside the nudge. A bridged claude
 // launch strips the block from its --append-system-prompt (the leo-bridge
 // mod carries delegation live instead), and the delimiters let it find the

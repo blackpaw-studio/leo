@@ -1,0 +1,7 @@
+{
+ "session_id": "sess-redacted",
+ "prompt_id": "06c3ced3-ecb3-4357-8b26-7f31949df91d",
+ "permission_mode": "bypassPermissions",
+ "hook_event_name": "UserPromptSubmit",
+ "prompt": "<task-notification>\n<task-id>bgf8y9tgc</task-id>\n<tool-use-id>toolu_01QfrMuXgWuLzoviZz2S8kcG</tool-use-id>\n<output-file>/tmp/redacted\n<status>completed</status>\n<summary>Background command \"Bg sleeper\" completed (exit code 0)</summary>\n</task-notification>"
+}

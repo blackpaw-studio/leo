@@ -1,0 +1,6 @@
+{
+ "session_id": "sess-redacted",
+ "prompt_id": "45fe79ad-c57f-42aa-b634-0af90772dd49",
+ "hook_event_name": "SessionEnd",
+ "reason": "prompt_input_exit"
+}

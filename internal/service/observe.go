@@ -55,6 +55,22 @@ func (s *Supervisor) progressStore() *observe.ProgressStore {
 	return s.progress
 }
 
+// SetAutoCommands wires the automatic-command tracker the supervisor drops an
+// agent's launch from when it stops. Optional: nil disables the dropping.
+func (s *Supervisor) SetAutoCommands(a *observe.AutoCommands) {
+	s.mu.Lock()
+	s.autoCmds = a
+	s.mu.Unlock()
+}
+
+// autoCommands returns the wired tracker (possibly nil; its methods are
+// nil-safe).
+func (s *Supervisor) autoCommands() *observe.AutoCommands {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.autoCmds
+}
+
 // markAttention transitions an already-tracked agent's attention, but only
 // while id is still that name's registered live generation. Unlike
 // isStaleLocked, a missing identity counts as stale here: StopAgent removes
@@ -150,6 +166,7 @@ func (s *Supervisor) endLaunchToken(homePath, name, token string) {
 	if token == "" {
 		return
 	}
+	s.autoCommands().Drop(token)
 	s.attentionStore().UnregisterToken(token)
 	if err := agentstore.ClearAttentionToken(homePath, name, token); err != nil {
 		fmt.Fprintf(os.Stderr, "[%s] clearing attention token: %v\n", name, err)

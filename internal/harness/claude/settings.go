@@ -17,6 +17,9 @@ import (
 // that block on the operator.
 const attentionNotificationMatcher = "permission_prompt|elicitation_dialog"
 
+// attentionPreToolMatcher limits the PreToolUse hook to shell commands.
+const attentionPreToolMatcher = "Bash"
+
 // AgentPermissionWait is the longest a supervised agent's PermissionRequest
 // hook waits for a Leo Chat answer (config.MaxChatPermissionTimeout). The
 // hook's own timeout adds permissionHookGrace, so the hook always exits on
@@ -45,7 +48,8 @@ var attentionReportEvents = []string{
 // attention, subagents and compaction through, and the hooks that add the
 // delegation context to its model.
 //
-// Each of attentionReportEvents, and a Notification group limited to the
+// A PreToolUse group limited to Bash (async) lets the daemon time long shell
+// commands. Each of attentionReportEvents, and a Notification group limited to the
 // prompts that block on the operator, runs the report command; the daemon
 // raises needs_input from a permission prompt or elicitation and clears it
 // once the prompt is answered.
@@ -66,6 +70,13 @@ func (c Claude) AttentionHooks(reportCmd []string) ([]string, error) {
 	report := []any{map[string]any{"type": "command", "command": harness.ShellCommand(reportCmd)}}
 	reportGroup := map[string]any{"hooks": report}
 	groups := map[string]any{
+		// Long shell commands become auto progress tasks. Async, so the hook
+		// never delays the command it announces; the daemon tolerates a late
+		// PreToolUse (it arrives after the PostToolUse of a short call).
+		"PreToolUse": []any{map[string]any{
+			"matcher": attentionPreToolMatcher,
+			"hooks":   []any{map[string]any{"type": "command", "command": harness.ShellCommand(reportCmd), "async": true}},
+		}},
 		"Notification": []any{map[string]any{
 			"matcher": attentionNotificationMatcher,
 			"hooks":   report,

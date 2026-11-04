@@ -1,0 +1,18 @@
+{
+  "seq": 816,
+  "at": "2026-11-03T19:30:00Z",
+  "agent": "alfred",
+  "id": "auto.cmd.3f9a0c1b2d4e",
+  "task": {
+    "id": "auto.cmd.3f9a0c1b2d4e",
+    "source": "auto",
+    "title": "Build the Mac app",
+    "mode": "indeterminate",
+    "state": "running",
+    "stale": false,
+    "started_at": "2026-11-03T19:26:00Z",
+    "updated_at": "2026-11-03T19:30:00Z",
+    "ended_at": null,
+    "revision": 1
+  }
+}

@@ -167,6 +167,7 @@ func (s *Server) handleAPIAgentHook(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if ours {
+		s.autoCmds.Hook(req.Token, req.Payload)
 		s.feedHook(name, payload)
 		s.chatHook(name, req.Payload)
 		if s.turnObserver != nil {

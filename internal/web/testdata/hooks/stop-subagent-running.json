@@ -1,0 +1,21 @@
+{
+ "session_id": "sess-redacted",
+ "prompt_id": "72a3995b-0ccb-4aff-b423-37477a1f65e2",
+ "permission_mode": "bypassPermissions",
+ "effort": {
+  "level": "medium"
+ },
+ "hook_event_name": "Stop",
+ "stop_hook_active": false,
+ "last_assistant_message": "The general-purpose agent is still running. I'll report when its completion notification arrives.",
+ "background_tasks": [
+  {
+   "id": "a2d5e1a057b4b05f8",
+   "type": "subagent",
+   "status": "running",
+   "description": "Echo hi and reply",
+   "agent_type": "general-purpose"
+  }
+ ],
+ "session_crons": []
+}

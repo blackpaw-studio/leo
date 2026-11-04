@@ -18,7 +18,7 @@ func (s *Server) handleTaskDismiss(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
 	case errors.Is(err, observe.ErrTaskNotFound):
 		writeError(w, http.StatusNotFound, err.Error())
-	case errors.Is(err, observe.ErrTaskRunning):
+	case errors.Is(err, observe.ErrTaskRunning), errors.Is(err, observe.ErrTaskNotDismissable):
 		writeError(w, http.StatusConflict, err.Error())
 	default:
 		writeError(w, http.StatusInternalServerError, err.Error())

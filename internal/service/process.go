@@ -231,6 +231,8 @@ type Supervisor struct {
 	attention *observe.AttentionStore
 	// progress holds agents' advertised tasks — see SetProgress.
 	progress *observe.ProgressStore
+	// autoCmds tracks agents' long shell commands — see SetAutoCommands.
+	autoCmds *observe.AutoCommands
 	// bridge is the claude mod bridge (nil: every launch is legacy) — see
 	// SetBridge.
 	bridge *supervisorBridge
@@ -550,6 +552,9 @@ func (s *Supervisor) StopAgent(name string, wakeOnMessage bool) error {
 	// goroutine can no longer mark this generation errored (or register a
 	// token) behind us. Unregister first so a late in-flight hook cannot
 	// overwrite unknown.
+	// The auto-command launch is dropped first, while its token still
+	// resolves to the agent.
+	s.autoCommands().DropAgent(name)
 	s.attentionStore().UnregisterAgent(name)
 	// Running work dies with the launch (a restart or reset is a stop too);
 	// failed tasks survive until dismissed or the agent is deleted.
@@ -1282,6 +1287,8 @@ func wireObservability(ctx context.Context, sv *Supervisor, tmuxPath string) obs
 	sv.SetAttention(attention)
 	progress := observe.NewProgressStore(nil, pub)
 	sv.SetProgress(progress)
+	autoCmds := observe.NewAutoCommands(nil, progress, attention.AgentForToken)
+	sv.SetAutoCommands(autoCmds)
 
 	// sv.SessionNames is the narrow accessor onto the live agent-name ->
 	// tmux-session-name mapping the tracker sweeps (see its doc comment for
@@ -1290,7 +1297,7 @@ func wireObservability(ctx context.Context, sv *Supervisor, tmuxPath string) obs
 	attention.SetActivityProvider(tracker)
 	go tracker.Start(ctx)
 
-	return observability{Bus: bus, RunLog: runLog, MessageLog: messageLog, Tracker: tracker, Attention: attention, Progress: progress, Publisher: pub}
+	return observability{Bus: bus, RunLog: runLog, MessageLog: messageLog, Tracker: tracker, Attention: attention, Progress: progress, AutoCommands: autoCmds, Publisher: pub}
 }
 
 // clientToolCeilingMargin is how far under the harness's tool-call ceiling
@@ -1336,6 +1343,7 @@ func (o observability) wireDaemon(srv *daemon.Server, version string) {
 	srv.SetObservability(o.Bus, o.RunLog, o.MessageLog, o.Tracker, version)
 	srv.SetAttention(o.Attention)
 	srv.SetProgress(o.Progress)
+	srv.SetAutoCommands(o.AutoCommands)
 	if o.Chat != nil {
 		srv.SetChat(o.Chat, o.ChatAttachments, o.Publisher)
 	}
@@ -1361,6 +1369,8 @@ type observability struct {
 	Tracker    *observe.Tracker
 	Attention  *observe.AttentionStore
 	Progress   *observe.ProgressStore
+	// AutoCommands turns agents' hooks into automatic command tasks.
+	AutoCommands *observe.AutoCommands
 	// Publisher is the full publish chain (push-wrapped when the daemon has
 	// a home), which Leo Chat events go through so chat messages push.
 	Publisher observe.Publisher

@@ -457,3 +457,49 @@ func TestResolveTemplateLaunchKindIsAgent(t *testing.T) {
 		t.Errorf("spec.Kind = %q, want %q", spec.Kind, harness.KindAgent)
 	}
 }
+
+// Codex may not surface MCP `instructions`, so Leo appends the progress
+// guidance to a codex agent's developer instructions itself; claude gets it
+// through the MCP server and its launch argv stays as it was.
+func TestResolveTemplateLaunchAddsProgressGuidanceForCodexOnly(t *testing.T) {
+	for _, tc := range []struct {
+		harness string
+		want    bool
+	}{{"codex", true}, {"claude", false}} {
+		t.Run(tc.harness, func(t *testing.T) {
+			cfg := &config.Config{HomePath: t.TempDir(), Web: config.WebConfig{Enabled: true}, Defaults: config.DefaultsConfig{Harness: tc.harness}}
+
+			h, spec, err := resolveTemplateLaunch(cfg, config.TemplateConfig{}, "agent-x", "/tmp/ws", "", "tok", leomcp.Server{})
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			has := strings.Contains(spec.SystemContext, leomcp.ProgressGuidance)
+			if has != tc.want {
+				t.Fatalf("SystemContext carries the guidance = %v, want %v:\n%s", has, tc.want, spec.SystemContext)
+			}
+			if tc.want {
+				args, err := h.Args(spec)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if joined := strings.Join(args, "\x00"); !strings.Contains(joined, "developer_instructions=") || !strings.Contains(joined, "leo_progress") {
+					t.Fatalf("codex argv lacks the guidance: %v", args)
+				}
+			}
+		})
+	}
+}
+
+func TestResolveTemplateLaunchSkipsProgressGuidanceWithoutTheDaemon(t *testing.T) {
+	cfg := &config.Config{HomePath: t.TempDir(), Defaults: config.DefaultsConfig{Harness: "codex"}}
+
+	_, spec, err := resolveTemplateLaunch(cfg, config.TemplateConfig{}, "agent-x", "/tmp/ws", "", "", leomcp.Server{})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if strings.Contains(spec.SystemContext, "leo_progress") {
+		t.Fatalf("leo_progress needs the daemon; SystemContext = %q", spec.SystemContext)
+	}
+}

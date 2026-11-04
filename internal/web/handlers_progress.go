@@ -59,6 +59,11 @@ func (s *Server) handleAPIAgentProgress(w http.ResponseWriter, r *http.Request) 
 		writeProgressError(w, err)
 		return
 	}
+	if task.State == observe.TaskRunning {
+		// The agent's own task is the richer view of the work its automatic
+		// command tasks show.
+		s.autoCmds.Suppress(name)
+	}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(progressResponse{OK: true, Task: task})
 }
@@ -80,7 +85,7 @@ func writeProgressError(w http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, observe.ErrTaskInvalid):
 		status = http.StatusBadRequest
-	case errors.Is(err, observe.ErrTaskCap), errors.Is(err, observe.ErrTaskRunning):
+	case errors.Is(err, observe.ErrTaskCap), errors.Is(err, observe.ErrTaskRunning), errors.Is(err, observe.ErrTaskNotDismissable):
 		status = http.StatusConflict
 	case errors.Is(err, observe.ErrTaskNotFound):
 		status = http.StatusNotFound
