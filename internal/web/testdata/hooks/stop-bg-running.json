@@ -1,0 +1,21 @@
+{
+ "session_id": "sess-redacted",
+ "prompt_id": "260085b4-a3a2-411e-8548-99462525b692",
+ "permission_mode": "bypassPermissions",
+ "effort": {
+  "level": "medium"
+ },
+ "hook_event_name": "Stop",
+ "stop_hook_active": false,
+ "last_assistant_message": "Started the 8-second background sleep (ID `bgf8y9tgc`). I'll be notified when it finishes.",
+ "background_tasks": [
+  {
+   "id": "bgf8y9tgc",
+   "type": "shell",
+   "status": "running",
+   "description": "Bg sleeper",
+   "command": "python3 -c \"import time; time.sleep(8)\""
+  }
+ ],
+ "session_crons": []
+}

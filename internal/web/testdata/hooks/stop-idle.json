@@ -1,0 +1,13 @@
+{
+ "session_id": "sess-redacted",
+ "prompt_id": "665ef8fa-3ac9-41aa-98cb-0901826b5a04",
+ "permission_mode": "bypassPermissions",
+ "effort": {
+  "level": "medium"
+ },
+ "hook_event_name": "Stop",
+ "stop_hook_active": false,
+ "last_assistant_message": "Not done. The harness blocked the command `sleep 25 ; false` before it ran, so neither the wait nor the `false` executed. I didn't try a workaround, since splitting the sleep would be the same pattern the block is meant to stop. If you still need the wait, I can use Monitor with an until-loop instead.",
+ "background_tasks": [],
+ "session_crons": []
+}

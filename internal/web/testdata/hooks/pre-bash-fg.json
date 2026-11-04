@@ -1,0 +1,15 @@
+{
+ "session_id": "sess-redacted",
+ "prompt_id": "c1df7e5b-b708-458a-b5f5-7533bcb2541e",
+ "permission_mode": "bypassPermissions",
+ "effort": {
+  "level": "medium"
+ },
+ "hook_event_name": "PreToolUse",
+ "tool_name": "Bash",
+ "tool_input": {
+  "command": "python3 -c \"import time; time.sleep(25)\"",
+  "description": "Wait a bit"
+ },
+ "tool_use_id": "toolu_014s53Cy5TdQXY4Ubz5t3xfk"
+}

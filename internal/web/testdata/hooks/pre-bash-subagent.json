@@ -1,0 +1,17 @@
+{
+ "session_id": "sess-redacted",
+ "prompt_id": "72a3995b-0ccb-4aff-b423-37477a1f65e2",
+ "permission_mode": "bypassPermissions",
+ "agent_id": "a2d5e1a057b4b05f8",
+ "agent_type": "general-purpose",
+ "effort": {
+  "level": "medium"
+ },
+ "hook_event_name": "PreToolUse",
+ "tool_name": "Bash",
+ "tool_input": {
+  "command": "echo hi",
+  "description": "Print hi"
+ },
+ "tool_use_id": "toolu_01KzbVTaKUq5MoS4YwWq3zg1"
+}

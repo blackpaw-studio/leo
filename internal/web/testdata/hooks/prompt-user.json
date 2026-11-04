@@ -1,0 +1,7 @@
+{
+ "session_id": "sess-redacted",
+ "prompt_id": "6eb02d19-2ba9-47a9-8fe0-b6c33fac24a9",
+ "permission_mode": "bypassPermissions",
+ "hook_event_name": "UserPromptSubmit",
+ "prompt": "ok, next: run Bash command: python3 -c \"import sys; sys.exit(3)\""
+}

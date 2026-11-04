@@ -1,0 +1,7 @@
+{
+ "session_id": "sess-redacted",
+ "prompt_id": "5ece4123-c849-45de-b599-1ec81757d41f",
+ "permission_mode": "bypassPermissions",
+ "hook_event_name": "UserPromptSubmit",
+ "prompt": "<task-notification>\n<task-id>b06wlrskx</task-id>\n<tool-use-id>toolu_012N2zXcW1HMUZD7EhtgCTbU</tool-use-id>\n<output-file>/tmp/redacted\n<status>failed</status>\n<summary>Background command \"Bg fail\" failed with exit code 3</summary>\n</task-notification>"
+}
