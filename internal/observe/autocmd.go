@@ -382,6 +382,12 @@ func (a *AutoCommands) armLocked(token string, l *cmdLaunch, c *cmdCall) {
 	}
 	c.startedAt = a.clock.Now()
 	l.calls[c.useID] = c
+	if agent, ok := a.agentFor(token); ok && a.store.HasRunningAgentTask(agent) {
+		// The agent already reports its own work: a command it starts now is
+		// part of that, so it is tracked (to ignore its end) but never shown.
+		c.skipped = true
+		return
+	}
 	gen := c.gen
 	c.stopTimer = a.clock.AfterFunc(AutoCommandDelay, func() {
 		a.mu.Lock()

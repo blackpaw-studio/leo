@@ -3,6 +3,7 @@ package observe
 import (
 	"path"
 	"regexp"
+	"slices"
 	"strings"
 )
 
@@ -10,39 +11,156 @@ import (
 const defaultAutoCmdTitle = "Shell command"
 
 // safeCmdWord is what may survive from a command line into a title: a plain
-// program or sub-command name. Anything else (flags, URLs, quoted strings,
-// substitutions) can carry a secret and is dropped.
+// program name. Anything else (flags, URLs, quoted strings, substitutions) can
+// carry a secret and is dropped.
 var safeCmdWord = regexp.MustCompile(`^[A-Za-z0-9._-]{1,32}$`)
+
+// safeVerb is the shape a sub-command verb must have to be considered.
+var safeVerb = regexp.MustCompile(`^[a-z][a-z0-9:-]{0,24}$`)
 
 // setupPrograms are shell builtins that prepare a command rather than being
 // it, skipped when they lead a `cd dir && make` style line.
 var setupPrograms = map[string]bool{"cd": true, "pushd": true, "export": true, "set": true, "source": true, "unset": true}
 
-// cmdSegmentSeparators split a command line into simple commands.
-var cmdSegmentSeparators = regexp.MustCompile(`&&|\|\||;|\||\n`)
+// wrapperPrograms run the command that follows them. They are skipped when
+// picking the program; their own arguments are never emitted.
+var wrapperPrograms = map[string]bool{"sudo": true, "env": true, "time": true, "nice": true, "nohup": true, "command": true}
+
+// wrapperFlags are the value-less flags a wrapper may carry. Any other flag
+// might take a value (sudo -p <prompt>), so the title gives up.
+var wrapperFlags = map[string]bool{"-S": true, "-E": true, "-n": true, "-H": true, "-b": true, "-k": true, "-i": true}
+
+// knownVerbs are the fixed sub-command verbs a title may append to a program.
+// Anything else in that position (a target, a path, a secret) is dropped.
+var knownVerbs = map[string][]string{
+	"make":       {"all", "build", "test", "lint", "install", "check", "clean", "release"},
+	"go":         {"build", "test", "run", "vet", "generate", "install", "mod"},
+	"npm":        {"install", "test", "run", "ci", "build", "publish"},
+	"pnpm":       {"install", "test", "run", "build", "publish"},
+	"yarn":       {"install", "test", "run", "build", "publish"},
+	"bun":        {"install", "test", "run", "build"},
+	"cargo":      {"build", "test", "run", "check", "clippy", "bench", "publish"},
+	"git":        {"clone", "fetch", "pull", "push", "rebase", "merge", "checkout", "submodule"},
+	"xcodebuild": {"build", "test", "archive", "clean"},
+	"docker":     {"build", "run", "compose", "pull", "push", "buildx"},
+	"swift":      {"build", "test", "run", "package"},
+	"zig":        {"build", "test", "run"},
+	"gradle":     {"build", "test", "assemble", "check", "clean"},
+	"mvn":        {"install", "test", "package", "verify", "clean", "compile"},
+}
+
+// cmdSeparatorAt is the length of the command separator at cmd[i] (0 if none).
+func cmdSeparatorAt(cmd string, i int) int {
+	switch {
+	case strings.HasPrefix(cmd[i:], "&&"), strings.HasPrefix(cmd[i:], "||"):
+		return 2
+	case cmd[i] == ';', cmd[i] == '|', cmd[i] == '\n':
+		return 1
+	}
+	return 0
+}
+
+// splitSegments splits a command line on unquoted separators. It reports false
+// when it cannot be trusted: an unbalanced quote, or a quote ahead of the
+// first separator (the quoted text may hide a secret in the program position).
+func splitSegments(cmd string) ([]string, bool) {
+	var (
+		segments           []string
+		quote              byte
+		seenQuote, seenSep bool
+		segStart           int
+	)
+	for i := 0; i < len(cmd); i++ {
+		c := cmd[i]
+		switch {
+		case quote != 0:
+			if c == '\\' && quote == '"' {
+				i++
+			} else if c == quote {
+				quote = 0
+			}
+		case c == '\\':
+			i++
+		case c == '\'' || c == '"':
+			quote, seenQuote = c, true
+		default:
+			n := cmdSeparatorAt(cmd, i)
+			if n == 0 {
+				continue
+			}
+			if seenQuote && !seenSep {
+				return nil, false
+			}
+			seenSep = true
+			segments = append(segments, cmd[segStart:i])
+			i += n - 1
+			segStart = i + 1
+		}
+	}
+	if quote != 0 {
+		return nil, false
+	}
+	return append(segments, cmd[segStart:]), true
+}
 
 // autoCmdTitle is the title of an auto command task: the tool's description
-// when it has one, else the program and its first argument, never the whole
-// command line (which can carry secrets).
+// when it has one, else the program name (plus a fixed sub-command verb for
+// known tools), never an argument or the command line (which can carry
+// secrets).
 func autoCmdTitle(description, command string) string {
 	if d := strings.TrimSpace(description); d != "" {
 		return d
 	}
-	for _, segment := range cmdSegmentSeparators.Split(command, -1) {
+	segments, ok := splitSegments(command)
+	if !ok {
+		return defaultAutoCmdTitle
+	}
+	for _, segment := range segments {
 		words := commandWords(segment)
 		if len(words) == 0 || setupPrograms[words[0]] {
 			continue
+		}
+		words, ok = unwrap(words)
+		if !ok || len(words) == 0 {
+			return defaultAutoCmdTitle
 		}
 		program := path.Base(words[0])
 		if !safeCmdWord.MatchString(program) {
 			return defaultAutoCmdTitle
 		}
-		if len(words) > 1 && !strings.HasPrefix(words[1], "-") && safeCmdWord.MatchString(words[1]) && !looksLikeSecret(words[1]) {
-			return program + " " + words[1]
+		if verb := knownVerb(program, words[1:]); verb != "" {
+			return program + " " + verb
 		}
 		return program
 	}
 	return defaultAutoCmdTitle
+}
+
+// unwrap drops leading wrapper programs, their value-less flags and any env
+// assignments after them, returning the words starting at the wrapped program.
+// It reports false for a wrapper flag it cannot account for.
+func unwrap(words []string) ([]string, bool) {
+	for len(words) > 0 && wrapperPrograms[path.Base(words[0])] {
+		words = words[1:]
+		for len(words) > 0 && (strings.HasPrefix(words[0], "-") || isEnvAssignment(words[0])) {
+			if strings.HasPrefix(words[0], "-") && !wrapperFlags[words[0]] {
+				return nil, false
+			}
+			words = words[1:]
+		}
+	}
+	return words, true
+}
+
+// knownVerb is the first argument when it is one of program's fixed verbs.
+func knownVerb(program string, args []string) string {
+	if len(args) == 0 || !safeVerb.MatchString(args[0]) {
+		return ""
+	}
+	if slices.Contains(knownVerbs[program], args[0]) {
+		return args[0]
+	}
+	return ""
 }
 
 // commandWords are a segment's whitespace-separated words after any leading
@@ -66,29 +184,4 @@ func isEnvAssignment(word string) bool {
 		}
 	}
 	return true
-}
-
-// secretLike is the alphabet of hex and base64-ish tokens (no path separator
-// or dot).
-var secretLike = regexp.MustCompile(`^[A-Za-z0-9_+=-]{16,}$`)
-
-// looksLikeSecret reports a long token of hex/base64-ish characters that
-// mixes in digits or both letter cases, as keys and tokens do. A plain
-// hyphenated word ("build-and-deploy-all") is not one.
-func looksLikeSecret(word string) bool {
-	if !secretLike.MatchString(word) {
-		return false
-	}
-	var digit, upper, lower bool
-	for _, r := range word {
-		switch {
-		case r >= '0' && r <= '9':
-			digit = true
-		case r >= 'A' && r <= 'Z':
-			upper = true
-		case r >= 'a' && r <= 'z':
-			lower = true
-		}
-	}
-	return digit || (upper && lower)
 }

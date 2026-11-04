@@ -641,3 +641,32 @@ func TestAutoCmdLogsWhenTheBackgroundShellLimitIsHit(t *testing.T) {
 		t.Fatalf("logged %d times: %v", len(lines), lines)
 	}
 }
+
+func TestAutoCmdCommandStartedAfterAnAgentReportIsSuppressed(t *testing.T) {
+	h := newAutoHarness(t)
+	h.up("alfred", TaskUpdate{ID: "build", Title: ptr("Build")}) // the agent reported its own task first
+
+	h.hook(pre("toolu_LATE", "Build", "make all"))
+	h.clock.Advance(AutoCommandDelay + time.Second)
+
+	if got := h.autoTasks("alfred"); len(got) != 0 {
+		t.Fatalf("a command started under an agent task must not publish: %+v", got)
+	}
+	h.hook(post("toolu_LATE"))
+	if got := h.autoTasks("alfred"); len(got) != 0 {
+		t.Fatalf("its end must stay silent: %+v", got)
+	}
+}
+
+func TestAutoCmdPublishesAgainOnceTheAgentTaskEnded(t *testing.T) {
+	h := newAutoHarness(t)
+	h.up("alfred", TaskUpdate{ID: "build", Title: ptr("Build")})
+	h.up("alfred", TaskUpdate{ID: "build", State: TaskSucceeded})
+
+	h.hook(pre("toolu_NEW", "Build", "make all"))
+	h.clock.Advance(AutoCommandDelay)
+
+	if got := h.only("alfred"); got.Title != "Build" {
+		t.Fatalf("got %+v", got)
+	}
+}

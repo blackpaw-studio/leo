@@ -138,6 +138,19 @@ func (s *ProgressStore) Tasks(agent string) []AgentTask {
 	return s.tasksLocked(agent)
 }
 
+// HasRunningAgentTask reports whether agent has a task it reported itself
+// (not an auto one) that is still running.
+func (s *ProgressStore) HasRunningAgentTask(agent string) bool {
+	if s == nil {
+		return false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return slices.ContainsFunc(s.entriesLocked(agent), func(e *taskEntry) bool {
+		return !isAuto(e.task) && isRunning(e.task)
+	})
+}
+
 // AllTasks returns every agent's tasks keyed by agent name (agents without
 // tasks are absent), as copies.
 func (s *ProgressStore) AllTasks() map[string][]AgentTask {
