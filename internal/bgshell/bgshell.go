@@ -24,9 +24,9 @@ type Task struct {
 }
 
 const (
-	// maxTrackedTasks bounds the tracker, which grows from model-driven tool
+	// MaxTrackedTasks bounds the tracker, which grows from model-driven tool
 	// calls.
-	maxTrackedTasks = 64
+	MaxTrackedTasks = 64
 	// maxTrackedCommandRunes bounds the command kept for display.
 	maxTrackedCommandRunes = 200
 )
@@ -139,7 +139,7 @@ func TrackToolEvent(tasks []Task, event string, p map[string]any, now time.Time)
 	case tool == "Bash":
 		resp, _ := p["tool_response"].(map[string]any)
 		id := str(resp, "backgroundTaskId")
-		if id == "" || IsTracked(tasks, id) || len(tasks) >= maxTrackedTasks {
+		if id == "" || IsTracked(tasks, id) || len(tasks) >= MaxTrackedTasks {
 			return tasks, nil
 		}
 		input, _ := p["tool_input"].(map[string]any)
@@ -210,7 +210,7 @@ func ReconcileStop(tasks []Task, p map[string]any, now time.Time, adopt bool) ([
 		}
 	}
 	keptTasks := slices.DeleteFunc(slices.Clone(tasks), func(t Task) bool { return !live[t.ID] })
-	adopted := missing[:min(len(missing), max(0, maxTrackedTasks-len(keptTasks)))]
+	adopted := missing[:min(len(missing), max(0, MaxTrackedTasks-len(keptTasks)))]
 	for _, t := range adopted {
 		decisions = append(decisions, kept(t.ID, ReasonAdopted))
 	}
@@ -259,8 +259,6 @@ func TruncateRunes(s string, limit int) string {
 	return strings.TrimSpace(s)
 }
 
-// ReportSupersededStop applies what a shell Stop hook says about background
-// tasks when a bridge owns the run's turn state and so drops that Stop's
 func str(p map[string]any, k string) string { v, _ := p[k].(string); return v }
 
 // Str is the string value of key k in a hook payload, or "".

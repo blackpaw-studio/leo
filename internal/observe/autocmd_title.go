@@ -37,7 +37,7 @@ func autoCmdTitle(description, command string) string {
 		if !safeCmdWord.MatchString(program) {
 			return defaultAutoCmdTitle
 		}
-		if len(words) > 1 && !strings.HasPrefix(words[1], "-") && safeCmdWord.MatchString(words[1]) {
+		if len(words) > 1 && !strings.HasPrefix(words[1], "-") && safeCmdWord.MatchString(words[1]) && !looksLikeSecret(words[1]) {
 			return program + " " + words[1]
 		}
 		return program
@@ -66,4 +66,29 @@ func isEnvAssignment(word string) bool {
 		}
 	}
 	return true
+}
+
+// secretLike is the alphabet of hex and base64-ish tokens (no path separator
+// or dot).
+var secretLike = regexp.MustCompile(`^[A-Za-z0-9_+=-]{16,}$`)
+
+// looksLikeSecret reports a long token of hex/base64-ish characters that
+// mixes in digits or both letter cases, as keys and tokens do. A plain
+// hyphenated word ("build-and-deploy-all") is not one.
+func looksLikeSecret(word string) bool {
+	if !secretLike.MatchString(word) {
+		return false
+	}
+	var digit, upper, lower bool
+	for _, r := range word {
+		switch {
+		case r >= '0' && r <= '9':
+			digit = true
+		case r >= 'A' && r <= 'Z':
+			upper = true
+		case r >= 'a' && r <= 'z':
+			lower = true
+		}
+	}
+	return digit || (upper && lower)
 }

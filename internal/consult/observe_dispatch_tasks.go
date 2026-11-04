@@ -111,6 +111,16 @@ func (o *DispatchObserver) taskAgent(rec Record, byID map[string]Record) (string
 	return "", false
 }
 
+// endAgent is the agent whose task a run's end applies to: the run's owner
+// now (a rename since the task was published moved it), else the agent it was
+// published under.
+func (o *DispatchObserver) endAgent(rec Record, byID map[string]Record, published string) string {
+	if agent, ok := o.taskAgent(rec, byID); ok {
+		return agent
+	}
+	return published
+}
+
 // syncTasksLocked sends the auto-task changes the records imply since the
 // last Tick: a run starting or changing phase upserts, a run ending ends its
 // task. A run first seen already over, or ending without ever having run
@@ -151,7 +161,7 @@ func (o *DispatchObserver) syncTaskLocked(rec Record, phase dispatchPhase, byID 
 	last, had := o.taskLast[rec.ID]
 	if !phase.running {
 		if had && last.running && !last.skipped {
-			o.endTask(last.agent, rec.ID, phase.end)
+			o.endTask(o.endAgent(rec, byID, last.agent), rec.ID, phase.end)
 		}
 		if had && !last.running {
 			return // already ended: an idle run released or closed changes nothing

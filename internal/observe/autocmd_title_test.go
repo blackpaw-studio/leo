@@ -15,6 +15,9 @@ func TestAutoCmdTitle(t *testing.T) {
 		{"first of a pipeline", "", "cat file | grep x", "cat file"},
 		{"empty", "", "   ", "Shell command"},
 		{"unsafe program", "", `"$(secret)" x`, "Shell command"},
+		{"a hex token is dropped", "", "deploy 3f9a0c1b2d4e5f60718293a4b5c6d7e8", "deploy"},
+		{"a base64-ish token is dropped", "", "login Zm9vYmFyOnBhc3N3b3Jk0123", "login"},
+		{"a long plain word is kept", "", "make build-and-deploy-all", "make build-and-deploy-all"},
 		{"whitespace description falls back", "  ", "make all", "make all"},
 	}
 	for _, tc := range cases {

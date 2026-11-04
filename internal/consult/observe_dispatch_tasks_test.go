@@ -278,3 +278,30 @@ func TestDispatchTaskSinkErrorsOtherThanCapDoNotBreakTheTick(t *testing.T) {
 		t.Fatal("dispatch events must still publish")
 	}
 }
+
+// A rename moves the task in the store (Move); the run's end must follow the
+// agent's current name, not the one the task was published under.
+func TestDispatchTaskEndFollowsARenameBetweenPublishAndEnd(t *testing.T) {
+	store := observe.NewProgressStore(nil, nil)
+	rec := agentDispatch("d1", "alpha", StatusRunning)
+	h := newObserveHarness(rec)
+	owner := "alpha"
+	h.obs = NewDispatchObserver(h.records.get, h.pub,
+		WithDispatchClock(func() time.Time { return h.now }),
+		WithDispatchOwner(func(string, string) (string, bool) { return owner, true }),
+		WithDispatchTasks(store, nil))
+	h.obs.Tick()
+
+	store.Move("alpha", "beta")
+	owner = "beta"
+	h.setStatus("d1", StatusDone)
+	h.obs.Tick()
+
+	tasks := store.Tasks("beta")
+	if len(tasks) != 1 || tasks[0].State != observe.TaskSucceeded {
+		t.Fatalf("beta tasks = %+v (alpha: %+v)", tasks, store.Tasks("alpha"))
+	}
+	if got := store.Tasks("alpha"); len(got) != 0 {
+		t.Fatalf("a task resurfaced under the old name: %+v", got)
+	}
+}

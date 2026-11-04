@@ -310,7 +310,7 @@ func TestAutoCmdStopCancelsMainLoopForegroundStraysOnly(t *testing.T) {
 	h.hook(bgPost("toolu_BG", "bg1"))
 	h.clock.Advance(AutoCommandDelay)
 
-	h.hook(stop(shellEntry("bg1")))
+	h.hook(stop(shellEntry("bg1"), map[string]any{"id": "ag1", "type": "subagent", "status": "running"}))
 
 	states := map[string]TaskState{}
 	for _, task := range h.autoTasks("alfred") {
@@ -569,5 +569,75 @@ func TestAutoCmdDropAgentCancelsPendingCommandsOfThatAgentOnly(t *testing.T) {
 
 	if len(h.autoTasks("alfred")) != 0 || len(h.autoTasks("bob")) != 1 {
 		t.Fatalf("alfred %+v bob %+v", h.autoTasks("alfred"), h.autoTasks("bob"))
+	}
+}
+
+func TestAutoCmdMainStopCancelsABackgroundCallWhoseShellNeverStarted(t *testing.T) {
+	h := newAutoHarness(t)
+	h.hook(bgPre("toolu_BG", "Lost post", "make")) // its PostToolUse was lost, so no task id is known
+	h.clock.Advance(AutoCommandDelay)
+
+	h.hook(stop())
+
+	if got := h.only("alfred"); got.State != TaskCancelled {
+		t.Fatalf("got %+v", got)
+	}
+}
+
+func TestAutoCmdMainStopCancelsCallsOfSubagentsThatAreGone(t *testing.T) {
+	h := newAutoHarness(t)
+	h.hook(pre("toolu_GONE", "Gone", "a", map[string]any{"agent_id": "ag-gone"}))
+	h.hook(pre("toolu_LIVE", "Live", "b", map[string]any{"agent_id": "ag-live"}))
+	h.clock.Advance(AutoCommandDelay)
+
+	h.hook(stop(map[string]any{"id": "ag-live", "type": "subagent", "status": "running"}))
+
+	states := map[string]TaskState{}
+	for _, task := range h.autoTasks("alfred") {
+		states[task.Title] = task.State
+	}
+	if states["Gone"] != TaskCancelled || states["Live"] != TaskRunning {
+		t.Fatalf("got %v", states)
+	}
+}
+
+func TestAutoCmdStopWithoutATaskListLeavesSubagentCallsAlone(t *testing.T) {
+	h := newAutoHarness(t)
+	h.hook(pre("toolu_S", "Sub", "a", map[string]any{"agent_id": "ag1"}))
+	h.clock.Advance(AutoCommandDelay)
+
+	h.hook(map[string]any{"hook_event_name": "Stop"})
+
+	if h.only("alfred").State != TaskRunning {
+		t.Fatal("a Stop that lists nothing says nothing about subagents")
+	}
+}
+
+func TestAutoCmdLogsOnceWhenTheOpenCallLimitIsHit(t *testing.T) {
+	h := newAutoHarness(t)
+	var lines []string
+	h.auto.logf = func(format string, args ...any) { lines = append(lines, fmt.Sprintf(format, args...)) }
+	for i := range maxOpenCalls + 5 {
+		h.hook(pre(fmt.Sprintf("toolu_%d", i), "c", "a"))
+	}
+	if len(lines) != 1 {
+		t.Fatalf("logged %d times: %v", len(lines), lines)
+	}
+	h.clock.Advance(autoLogInterval)
+	h.hook(pre("toolu_again", "c", "a"))
+	if len(lines) != 2 {
+		t.Fatalf("the log should repeat after its interval: %v", lines)
+	}
+}
+
+func TestAutoCmdLogsWhenTheBackgroundShellLimitIsHit(t *testing.T) {
+	h := newAutoHarness(t)
+	var lines []string
+	h.auto.logf = func(format string, args ...any) { lines = append(lines, fmt.Sprintf(format, args...)) }
+	for i := range 70 {
+		h.hook(bgPost(fmt.Sprintf("toolu_%d", i), fmt.Sprintf("bg%d", i)))
+	}
+	if len(lines) != 1 {
+		t.Fatalf("logged %d times: %v", len(lines), lines)
 	}
 }

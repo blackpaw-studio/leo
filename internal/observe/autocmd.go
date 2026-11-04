@@ -2,6 +2,7 @@ package observe
 
 import (
 	"encoding/json"
+	"log"
 	"regexp"
 	"slices"
 	"strings"
@@ -30,6 +31,9 @@ const (
 	// grows from model-driven tool calls.
 	maxOpenCalls  = 64
 	maxTombstones = 64
+	// autoLogInterval rate-limits the log lines about a launch hitting a
+	// bound (they would otherwise repeat on every tool call).
+	autoLogInterval = time.Minute
 )
 
 // autoCommandTools are the tool names whose calls are commands. Claude Code
@@ -49,6 +53,9 @@ type AutoCommands struct {
 	store    *ProgressStore
 	agentFor func(token string) (agent string, ok bool)
 	launches map[string]*cmdLaunch
+	// logf reports a launch hitting a bound; lastLog rate-limits it.
+	logf    func(format string, args ...any)
+	lastLog time.Time
 }
 
 // cmdLaunch is one launch's open calls and background shells.
@@ -92,7 +99,7 @@ func NewAutoCommands(clock FeedClock, store *ProgressStore, agentFor func(token 
 	if clock == nil {
 		clock = realFeedClock{}
 	}
-	return &AutoCommands{clock: clock, store: store, agentFor: agentFor, launches: map[string]*cmdLaunch{}}
+	return &AutoCommands{clock: clock, store: store, agentFor: agentFor, launches: map[string]*cmdLaunch{}, logf: log.Printf}
 }
 
 // hookEvent is the part of a hook payload the tracker reads.
@@ -203,13 +210,15 @@ func (a *AutoCommands) postLocked(token string, l *cmdLaunch, e hookEvent) {
 	// Background-shell bookkeeping runs for every tool event: a TaskStop call
 	// ends a shell, and a Bash call that started one adds it.
 	bg, decisions := bgshell.TrackToolEvent(l.bg, e.name, e.raw, a.clock.Now())
+	if len(bg) == len(l.bg) && len(bg) >= bgshell.MaxTrackedTasks && startsBackgroundShell(e) && !bgshell.IsTracked(bg, backgroundTaskID(e)) {
+		a.logBoundLocked("background shell limit (%d) reached; further shells are not tracked", bgshell.MaxTrackedTasks)
+	}
 	l.bg = bg
 	a.endDecisionsLocked(token, l, decisions, e)
 	if !e.isCommandTool() || e.useID == "" {
 		return
 	}
-	resp, _ := e.raw["tool_response"].(map[string]any)
-	if bgID := bgshell.Str(resp, "backgroundTaskId"); bgID != "" {
+	if bgID := backgroundTaskID(e); bgID != "" {
 		c := l.calls[e.useID]
 		if c == nil {
 			if a.tombstonedLocked(l, e.useID) {
@@ -236,11 +245,60 @@ func (a *AutoCommands) postLocked(token string, l *cmdLaunch, e hookEvent) {
 	}
 }
 
+// backgroundTaskID is the id of the background shell a Bash PostToolUse
+// started, "" for any other event.
+func backgroundTaskID(e hookEvent) string {
+	resp, _ := e.raw["tool_response"].(map[string]any)
+	return bgshell.Str(resp, "backgroundTaskId")
+}
+
+func startsBackgroundShell(e hookEvent) bool {
+	return e.name == "posttooluse" && e.tool == "Bash" && backgroundTaskID(e) != ""
+}
+
+// logBoundLocked logs that a launch hit a bound, at most once per
+// autoLogInterval. The text carries counts only, never a command or id.
+func (a *AutoCommands) logBoundLocked(format string, args ...any) {
+	now := a.clock.Now()
+	if !a.lastLog.IsZero() && now.Sub(a.lastLog) < autoLogInterval {
+		return
+	}
+	a.lastLog = now
+	a.logf("auto progress: "+format, args...)
+}
+
 func (a *AutoCommands) stopLocked(token string, l *cmdLaunch, e hookEvent) {
 	bg, decisions := bgshell.TrackStop(l.bg, e.raw)
 	l.bg = bg
 	a.endDecisionsLocked(token, l, decisions, e)
-	a.cancelWhereLocked(token, l, isMainLoopForeground)
+	goneSubagent := goneSubagents(e.raw)
+	a.cancelWhereLocked(token, l, func(c *cmdCall) bool {
+		switch {
+		case c.agentID != "":
+			return goneSubagent(c.agentID) // a subagent the Stop no longer lists is over
+		case c.background:
+			return c.bgID == "" // its PostToolUse never said a shell started
+		}
+		return true
+	})
+}
+
+// goneSubagents reports, for a Stop payload, whether a subagent is no longer
+// running: it is absent from background_tasks. A payload without the list says
+// nothing, so no subagent counts as gone.
+func goneSubagents(p map[string]any) func(agentID string) bool {
+	listed, ok := p["background_tasks"].([]any)
+	if !ok {
+		return func(string) bool { return false }
+	}
+	running := map[string]bool{}
+	for _, raw := range listed {
+		entry, _ := raw.(map[string]any)
+		if bgshell.Str(entry, "type") == "subagent" {
+			running[bgshell.Str(entry, "id")] = true
+		}
+	}
+	return func(id string) bool { return !running[id] }
 }
 
 func (a *AutoCommands) promptLocked(token string, l *cmdLaunch, e hookEvent) {
@@ -319,6 +377,7 @@ func mapValues(m map[string]*cmdCall) func(func(*cmdCall) bool) {
 // armLocked starts c's publish timer and records it.
 func (a *AutoCommands) armLocked(token string, l *cmdLaunch, c *cmdCall) {
 	if len(l.calls) >= maxOpenCalls {
+		a.logBoundLocked("open command limit (%d) reached; further commands are not tracked", maxOpenCalls)
 		return
 	}
 	c.startedAt = a.clock.Now()
