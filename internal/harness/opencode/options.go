@@ -117,11 +117,11 @@ func (Opencode) Env(spec harness.LaunchSpec) (map[string]string, error) {
 		}
 		permission["task"] = "deny"
 	}
-	plugin := turnPluginEntry(spec)
-	if opts.LeoMCP != nil || len(permission) > 0 || plugin != "" {
+	plugins := pluginEntries(spec)
+	if opts.LeoMCP != nil || len(permission) > 0 || len(plugins) > 0 {
 		cfg := map[string]any{}
-		if plugin != "" {
-			cfg["plugin"] = []string{plugin}
+		if len(plugins) > 0 {
+			cfg["plugin"] = plugins
 		}
 		if opts.LeoMCP != nil {
 			leo := map[string]any{
