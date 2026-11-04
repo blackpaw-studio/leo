@@ -66,6 +66,7 @@ type hookGroup struct {
 type hookCommand struct {
 	Command string
 	Timeout int
+	Async   bool
 }
 
 // decodeHooks returns the hooks of the one --settings in args, by event.
@@ -82,6 +83,7 @@ func decodeHooks(t *testing.T, args []string) map[string][]hookGroup {
 				Type    string `json:"type"`
 				Command string `json:"command"`
 				Timeout int    `json:"timeout"`
+				Async   bool   `json:"async"`
 			} `json:"hooks"`
 		} `json:"hooks"`
 	}
@@ -96,7 +98,7 @@ func decodeHooks(t *testing.T, args []string) map[string][]hookGroup {
 				if h.Type != "command" {
 					t.Fatalf("%s hook type = %q, want command", event, h.Type)
 				}
-				group.Commands = append(group.Commands, hookCommand{h.Command, h.Timeout})
+				group.Commands = append(group.Commands, hookCommand{h.Command, h.Timeout, h.Async})
 			}
 			out[event] = append(out[event], group)
 		}
@@ -117,16 +119,19 @@ func TestAttentionHooksCoverEveryEventTheBridgeUsedToReport(t *testing.T) {
 		"SessionEnd":         {report},
 		"PostToolUse":        {report},
 		"PostToolUseFailure": {report},
-		"PermissionDenied":   {report},
-		"Elicitation":        {report},
-		"SubagentStart":      {report},
-		"SubagentStop":       {report},
-		"PreCompact":         {report},
-		"PostCompact":        {report},
-		"Notification":       {{Matcher: "permission_prompt|elicitation_dialog", Commands: report.Commands}},
-		"PermissionRequest":  {report, permission},
-		"UserPromptSubmit":   {report, {Commands: []hookCommand{{Command: "/opt/leo dispatch context", Timeout: 10}}}},
-		"SessionStart":       {{Matcher: "startup|resume|clear|compact|fork", Commands: []hookCommand{{Command: "/opt/leo dispatch context", Timeout: 10}}}},
+		// Long shell commands become auto progress tasks. Async: the hook
+		// must not delay the command it announces.
+		"PreToolUse":        {{Matcher: "Bash", Commands: []hookCommand{{Command: "/opt/leo dispatch report", Async: true}}}},
+		"PermissionDenied":  {report},
+		"Elicitation":       {report},
+		"SubagentStart":     {report},
+		"SubagentStop":      {report},
+		"PreCompact":        {report},
+		"PostCompact":       {report},
+		"Notification":      {{Matcher: "permission_prompt|elicitation_dialog", Commands: report.Commands}},
+		"PermissionRequest": {report, permission},
+		"UserPromptSubmit":  {report, {Commands: []hookCommand{{Command: "/opt/leo dispatch context", Timeout: 10}}}},
+		"SessionStart":      {{Matcher: "startup|resume|clear|compact|fork", Commands: []hookCommand{{Command: "/opt/leo dispatch context", Timeout: 10}}}},
 	}
 	if hooks := decodeHooks(t, got); !reflect.DeepEqual(hooks, want) {
 		t.Fatalf("hooks =\n%#v\nwant\n%#v", hooks, want)

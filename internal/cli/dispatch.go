@@ -337,6 +337,11 @@ func reportAttention(stdin io.Reader, token, port string) error {
 		return err
 	}
 	path := fmt.Sprintf("http://127.0.0.1:%s/api/agent/hook", port)
+	if consult.IsToolActivityReport(payload) {
+		// Tool hooks run on every tool call: one quick attempt, so a dead
+		// daemon cannot stall each call by the full turn-event budget.
+		return postReport(path, os.Getenv("LEO_API_TOKEN"), body, time.Now().Add(toolReportTimeout), 1)
+	}
 	return postReport(path, os.Getenv("LEO_API_TOKEN"), body, deadline, reportAttempts)
 }
 
