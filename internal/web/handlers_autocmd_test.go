@@ -168,8 +168,11 @@ func TestProgressRouteRejectsTheReservedAutoPrefixAndDismissOfAutoTasks(t *testi
 		t.Fatalf("reserved prefix: status %d", w.Code)
 	}
 
-	r.progress.UpsertAuto("leo-a", observe.AutoTask{ID: "auto.cmd.abc", Title: "T", State: observe.TaskRunning})
-	r.progress.UpsertAuto("leo-a", observe.AutoTask{ID: "auto.cmd.abc", State: observe.TaskFailed})
+	for _, a := range []observe.AutoTask{{ID: "auto.cmd.abc", Title: "T", State: observe.TaskRunning}, {ID: "auto.cmd.abc", State: observe.TaskFailed}} {
+		if _, err := r.progress.UpsertAuto("leo-a", a); err != nil {
+			t.Fatal(err)
+		}
+	}
 	w = dismissTask(t, r.Server, testAPIToken, "leo-a", "auto.cmd.abc")
 	if w.Code != http.StatusConflict {
 		t.Fatalf("dismiss auto: status %d: %s", w.Code, w.Body.String())

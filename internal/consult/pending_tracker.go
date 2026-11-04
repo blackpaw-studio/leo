@@ -3,11 +3,12 @@ package consult
 import (
 	"encoding/json"
 	"fmt"
-	"github.com/blackpaw-studio/leo/internal/bgshell"
 	"os"
 	"slices"
 	"strings"
 	"time"
+
+	"github.com/blackpaw-studio/leo/internal/bgshell"
 )
 
 // BackgroundTask is a background Bash task a run started and has not seen

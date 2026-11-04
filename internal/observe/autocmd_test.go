@@ -393,7 +393,7 @@ func TestAutoCmdSuppressRemovesPublishedAndArmedButNotDispatchTasks(t *testing.T
 	h.hook(pre("toolu_PUB", "Published", "a"))
 	h.clock.Advance(AutoCommandDelay)
 	h.hook(pre("toolu_ARM", "Armed", "b"))
-	h.auto.store.UpsertAuto("alfred", AutoTask{ID: "auto.dispatch.d1", Title: "impl · implement"})
+	h.progressHarness.auto("alfred", AutoTask{ID: "auto.dispatch.d1", Title: "impl · implement"})
 
 	h.auto.Suppress("alfred")
 	h.clock.Advance(time.Minute)

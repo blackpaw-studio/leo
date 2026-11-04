@@ -2,9 +2,10 @@ package consult
 
 import (
 	"fmt"
-	"github.com/blackpaw-studio/leo/internal/bgshell"
 	"sort"
 	"strings"
+
+	"github.com/blackpaw-studio/leo/internal/bgshell"
 )
 
 // StatusWaiting marks an interactive run whose harness ended its turn while
