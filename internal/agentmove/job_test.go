@@ -654,6 +654,27 @@ func TestOneJobPerAgent(t *testing.T) {
 	}
 }
 
+// A job's terminal state is visible to Get and Wait, so the agent must be
+// startable the moment it is.
+func TestAgentFreeOnceJobTerminal(t *testing.T) {
+	f := newMoveFixture(t)
+	jobs := NewJobs(f.mv)
+	req := Request{Agent: "web", Mode: ModeMove, To: "laptop"}
+	f.ep.answer[VerbPreflight] = jsonAnswer(PreflightResponse{Protocol: Protocol, Host: laptopHost(), Problems: []Problem{{Code: CodeTemplateMissing, Message: "no template"}}})
+	restarted := make(chan error, 1)
+	jobs.afterFinish = func(r Request) {
+		jobs.afterFinish = nil
+		_, err := jobs.Start(context.Background(), r)
+		restarted <- err
+	}
+	if _, err := jobs.Start(context.Background(), req); err != nil {
+		t.Fatalf("first job: %v", err)
+	}
+	if err := <-restarted; err != nil {
+		t.Fatalf("Start right after the job turned terminal: %v", err)
+	}
+}
+
 func TestJobRecordsFailure(t *testing.T) {
 	f := newMoveFixture(t)
 	f.ep.answer[VerbPreflight] = jsonAnswer(PreflightResponse{Protocol: Protocol, Host: laptopHost(), Problems: []Problem{{Code: CodeTemplateMissing, Message: "no template"}}})
