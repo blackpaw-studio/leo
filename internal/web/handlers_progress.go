@@ -63,8 +63,8 @@ func (s *Server) handleAPIAgentProgress(w http.ResponseWriter, r *http.Request) 
 	_ = json.NewEncoder(w).Encode(progressResponse{OK: true, Task: task})
 }
 
-// handleAPIDismissTask removes one failed task. Operator only: agents
-// cannot dismiss their own failures.
+// handleAPIDismissTask removes one ended task. Operator only: agents
+// cannot dismiss their own tasks.
 // DELETE /api/v1/agents/{name}/tasks/{id}
 func (s *Server) handleAPIDismissTask(w http.ResponseWriter, r *http.Request) {
 	if err := s.progress.Dismiss(r.PathValue("name"), r.PathValue("id")); err != nil {
@@ -80,7 +80,7 @@ func writeProgressError(w http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, observe.ErrTaskInvalid):
 		status = http.StatusBadRequest
-	case errors.Is(err, observe.ErrTaskCap), errors.Is(err, observe.ErrTaskNotFailed):
+	case errors.Is(err, observe.ErrTaskCap), errors.Is(err, observe.ErrTaskRunning):
 		status = http.StatusConflict
 	case errors.Is(err, observe.ErrTaskNotFound):
 		status = http.StatusNotFound

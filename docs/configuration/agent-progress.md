@@ -42,6 +42,6 @@ Reports are upserts: omitted fields keep their value. Strings are trimmed and st
 ## API
 
 - `POST /api/agent/progress` (agent bearer): `{"token", "id", ...}` → `200 {"ok": true, "task": {...}}`. Errors are readable: `400` validation, `403` unknown or expired token, `409` too many running tasks.
-- `DELETE /api/v1/agents/{name}/tasks/{id}` (operator token) and `DELETE /agents/{name}/tasks/{id}` (socket) dismiss a failed task: `204`, `404` unknown, `409` if the task is not failed. Agents cannot dismiss.
+- `DELETE /api/v1/agents/{name}/tasks/{id}` (operator token) and `DELETE /agents/{name}/tasks/{id}` (socket) dismiss an ended (succeeded, failed or cancelled) task: `204`, `404` unknown, `409` if the task is still running. Agents cannot dismiss.
 - `GET /api/v1/state` agent rows carry `tasks` (omitted when empty); the `/events` stream carries `agent_task_changed` with the whole task, or `task: null` when it is gone. Publishes are coalesced to at most two per second per task, and a terminal state or removal goes out at once.
 - `hello.features` advertises `agent_progress`.

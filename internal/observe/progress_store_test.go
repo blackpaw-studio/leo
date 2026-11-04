@@ -273,6 +273,7 @@ func TestProgressStoreDismiss(t *testing.T) {
 	h.up("a", TaskUpdate{ID: "run", Title: ptr("T")})
 	h.up("a", TaskUpdate{ID: "bad", Title: ptr("T"), State: TaskFailed})
 	h.up("a", TaskUpdate{ID: "ok", Title: ptr("T"), State: TaskSucceeded})
+	h.up("a", TaskUpdate{ID: "off", Title: ptr("T"), State: TaskCancelled})
 
 	if err := h.store.Dismiss("a", "nope"); !errors.Is(err, ErrTaskNotFound) {
 		t.Fatalf("unknown: %v", err)
@@ -280,11 +281,17 @@ func TestProgressStoreDismiss(t *testing.T) {
 	if err := h.store.Dismiss("zed", "bad"); !errors.Is(err, ErrTaskNotFound) {
 		t.Fatalf("other agent: %v", err)
 	}
-	if err := h.store.Dismiss("a", "run"); !errors.Is(err, ErrTaskNotFailed) {
+	if err := h.store.Dismiss("a", "run"); !errors.Is(err, ErrTaskRunning) {
 		t.Fatalf("running: %v", err)
 	}
-	if err := h.store.Dismiss("a", "ok"); !errors.Is(err, ErrTaskNotFailed) {
-		t.Fatalf("succeeded: %v", err)
+	for _, id := range []string{"ok", "off"} {
+		if err := h.store.Dismiss("a", id); err != nil {
+			t.Fatalf("dismiss %s: %v", id, err)
+		}
+		events := h.taskEvents("a")
+		if last := events[len(events)-1]; last.ID != id || last.Task != nil {
+			t.Fatalf("dismiss %s must publish task:null, got %+v", id, last)
+		}
 	}
 	if err := h.store.Dismiss("a", "bad"); err != nil {
 		t.Fatalf("failed: %v", err)

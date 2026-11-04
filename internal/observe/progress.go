@@ -56,12 +56,12 @@ func (s TaskState) IsTerminal() bool {
 func (s TaskState) valid() bool { return s == TaskRunning || s.IsTerminal() }
 
 // Task errors. ErrTaskInvalid maps to HTTP 400, ErrTaskCap to 409,
-// ErrTaskNotFound to 404 and ErrTaskNotFailed to 409.
+// ErrTaskNotFound to 404 and ErrTaskRunning to 409.
 var (
-	ErrTaskInvalid   = errors.New("invalid task update")
-	ErrTaskCap       = fmt.Errorf("too many running tasks (max %d); finish one first", MaxTasksPerClass)
-	ErrTaskNotFound  = errors.New("task not found")
-	ErrTaskNotFailed = errors.New("only failed tasks can be dismissed")
+	ErrTaskInvalid  = errors.New("invalid task update")
+	ErrTaskCap      = fmt.Errorf("too many running tasks (max %d); finish one first", MaxTasksPerClass)
+	ErrTaskNotFound = errors.New("task not found")
+	ErrTaskRunning  = errors.New("running tasks cannot be dismissed")
 	// ErrTaskUnauthorized: the caller's authority lapsed (its agent stopped)
 	// before the write applied. Maps to HTTP 403.
 	ErrTaskUnauthorized = errors.New("agent token is no longer valid")
