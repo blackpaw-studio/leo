@@ -59,6 +59,11 @@ func (s *Server) handleAPIAgentProgress(w http.ResponseWriter, r *http.Request) 
 		writeProgressError(w, err)
 		return
 	}
+	if task.State == observe.TaskRunning {
+		// The agent's own task is the richer view of the work its automatic
+		// command tasks show.
+		s.autoCmds.Suppress(name)
+	}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(progressResponse{OK: true, Task: task})
 }

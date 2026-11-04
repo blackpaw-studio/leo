@@ -202,6 +202,10 @@ type Server struct {
 	// backs the snapshot's tasks field, the agent progress route and task
 	// dismissal. nil disables the feature.
 	progress *observe.ProgressStore
+	// autoCmds turns the hooks a supervised agent relays into automatic
+	// command tasks and drops them when the agent reports its own (see
+	// WithAutoCommands). Nil disables both.
+	autoCmds *observe.AutoCommands
 	// turnObserver receives every turn hook of a supervised agent (see
 	// WithTurnObserver); nil drops them.
 	turnObserver func(agent string, turn AgentTurn)
@@ -338,6 +342,13 @@ func WithAttention(a *observe.AttentionStore) Option {
 // the daemon completes persistent-task invocations from them. Optional.
 func WithTurnObserver(fn func(agent string, turn AgentTurn)) Option {
 	return func(s *Server) { s.turnObserver = fn }
+}
+
+// WithAutoCommands wires the tracker that publishes long shell commands as
+// auto tasks from POST /api/agent/hook, and that POST /api/agent/progress
+// tells when an agent reports its own task. Optional.
+func WithAutoCommands(a *observe.AutoCommands) Option {
+	return func(s *Server) { s.autoCmds = a }
 }
 
 // WithProgress wires the task progress store read by GET /api/v1/state and
