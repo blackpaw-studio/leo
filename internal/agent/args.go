@@ -5,6 +5,7 @@ import (
 	"log"
 	"path/filepath"
 	"strconv"
+	"strings"
 
 	"github.com/blackpaw-studio/leo/internal/config"
 	"github.com/blackpaw-studio/leo/internal/harness"
@@ -77,6 +78,11 @@ func resolveTemplateLaunch(cfg *config.Config, tmpl config.TemplateConfig, agent
 		DevChannels:   tmpl.DevChannels,
 		Prompt:        prompt,
 		SystemContext: leomcp.LeoNudge(cfg),
+	}
+
+	if h.Name() == "codex" && cfg.Web.Enabled {
+		// Codex may not surface MCP `instructions`, so say it here too.
+		spec.SystemContext = strings.TrimSpace(spec.SystemContext + "\n\n" + leomcp.ProgressGuidance)
 	}
 
 	switch opts := decoded.(type) {

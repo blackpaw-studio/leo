@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/blackpaw-studio/leo/internal/leomcp"
 	"github.com/blackpaw-studio/leo/internal/leotools"
 )
 
@@ -216,6 +217,45 @@ func TestInitializeReturnsServerInfo(t *testing.T) {
 	}
 	if _, ok := result["capabilities"].(map[string]any)["tools"]; !ok {
 		t.Errorf("expected tools capability")
+	}
+}
+
+func initializeInstructions(t *testing.T, reg *registry) (string, bool) {
+	t.Helper()
+	resp := runRequest(t, reg, map[string]any{"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": map[string]any{}})
+	result, _ := resp["result"].(map[string]any)
+	text, ok := result["instructions"].(string)
+	return text, ok
+}
+
+// An agent Leo launched (it has a launch token, and is no dispatch run) is
+// told how to report long work; Claude Code adds `instructions` to its system
+// prompt.
+func TestInitializeCarriesProgressGuidanceForAnAgent(t *testing.T) {
+	reg := newRegistry(newDaemonClient("0", ""), "test-process", leotools.Permissions{}, withAttentionToken("tok"))
+
+	got, ok := initializeInstructions(t, reg)
+
+	if !ok || got != leomcp.ProgressGuidance {
+		t.Fatalf("instructions = %q (present %v), want the progress guidance", got, ok)
+	}
+}
+
+func TestInitializeOmitsProgressGuidanceWithoutALaunchToken(t *testing.T) {
+	reg := newRegistry(newDaemonClient("0", ""), "test-process", leotools.Permissions{})
+
+	if got, ok := initializeInstructions(t, reg); ok {
+		t.Fatalf("instructions = %q, want none outside a launched agent", got)
+	}
+}
+
+// A dispatch run inherits its caller's launch token but cannot call
+// leo_progress, so it must not be told to.
+func TestInitializeOmitsProgressGuidanceInADispatchRun(t *testing.T) {
+	reg := newRegistry(newDaemonClient("0", ""), "test-process", leotools.Permissions{}, withAttentionToken("tok"), withDispatchID("d-1"))
+
+	if got, ok := initializeInstructions(t, reg); ok {
+		t.Fatalf("instructions = %q, want none in a dispatch run", got)
 	}
 }
 
