@@ -12,6 +12,7 @@ import (
 
 	"github.com/blackpaw-studio/leo/internal/agentstore"
 	"github.com/blackpaw-studio/leo/internal/bridge"
+	"github.com/blackpaw-studio/leo/internal/observe"
 )
 
 // toldFileName is the told-delegation store, under the config's state dir.
@@ -101,6 +102,7 @@ func (s *Server) handleAPIAgentContext(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) agentContext(token string, hook contextHook) string {
+	s.clearErroredOnSessionStart(token, hook)
 	if s.attention == nil || s.delegationCtx == nil || hook.AgentID != "" || hook.SessionID == "" {
 		return ""
 	}
@@ -115,6 +117,21 @@ func (s *Server) agentContext(token string, hook contextHook) string {
 		s.claimSession(agent, token, hook.SessionID)
 	}
 	return s.delegationCtx.contextFor(agent, hook)
+}
+
+// clearErroredOnSessionStart ends the errored attention a restart left once
+// the relaunched session proves it is up: its SessionStart hook reached the
+// daemon. This is the only per-launch "session is live" signal that does not
+// depend on the bridge (the mod may be absent or fall back to legacy). The
+// token is per launch and retired when the launch ends, so a late start from
+// the old launch resolves to nothing; only errored moves (to unknown, a
+// fresh launch's state), so a real needs_input or a finished turn is kept.
+// A relaunch that fails never starts a session, so its errored stands.
+func (s *Server) clearErroredOnSessionStart(token string, hook contextHook) {
+	if s.attention == nil || hook.Event != "SessionStart" || hook.AgentID != "" {
+		return
+	}
+	s.attention.SetByToken(token, observe.AttentionUnknown, observe.AttentionErrored)
 }
 
 func encodeContext(w http.ResponseWriter, context string) error {

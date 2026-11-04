@@ -506,3 +506,68 @@ func TestAgentHookSessionClaimIsScopedToTheLaunchToken(t *testing.T) {
 		t.Fatalf("subagents = %d, want the previous launch's claim dropped", got)
 	}
 }
+
+// A relaunched session's SessionStart is the proof it came back, so it
+// clears the errored the restart loop left; nothing else it finds is touched.
+func TestSessionStartClearsErroredAfterRelaunch(t *testing.T) {
+	start := `{"hook_event_name":"SessionStart","source":"startup","session_id":"sid-a"}`
+	for _, tc := range []struct {
+		name    string
+		prepare func(s *Server)
+		payload string
+		want    observe.AttentionState
+	}{
+		{"errored clears to the launch state", func(s *Server) { s.attention.Set("leo-a", observe.AttentionErrored) }, start, observe.AttentionUnknown},
+		{"no session start leaves errored", func(s *Server) { s.attention.Set("leo-a", observe.AttentionErrored) },
+			`{"hook_event_name":"UserPromptSubmit","session_id":"sid-a"}`, observe.AttentionErrored},
+		{"needs_input is kept", func(s *Server) {
+			s.attention.SetByTokenNeedsInput("tok-a", observe.AttentionReason{Kind: observe.AttentionReasonPermission})
+		}, start, observe.AttentionNeedsInput},
+		{"finished is kept", func(s *Server) { s.attention.Set("leo-a", observe.AttentionFinished) }, start, observe.AttentionFinished},
+		{"a subagent's start is ignored", func(s *Server) { s.attention.Set("leo-a", observe.AttentionErrored) },
+			`{"hook_event_name":"SessionStart","source":"startup","session_id":"sid-a","agent_id":"sub"}`, observe.AttentionErrored},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			policy := delegationOn
+			s := contextServer(t, &policy)
+			tc.prepare(s)
+
+			postContext(t, s, "tok-a", tc.payload)
+
+			if got, _ := s.attention.Get("leo-a"); got.State != tc.want {
+				t.Fatalf("state = %s, want %s", got.State, tc.want)
+			}
+		})
+	}
+}
+
+func TestSessionStartFromAnOldLaunchDoesNotClearTheNewOne(t *testing.T) {
+	policy := delegationOn
+	s := contextServer(t, &policy)
+	s.attention.UnregisterToken("tok-a") // old launch ended
+	s.attention.RegisterToken("tok-new", "leo-a")
+	s.attention.Set("leo-a", observe.AttentionErrored)
+
+	postContext(t, s, "tok-a", `{"hook_event_name":"SessionStart","source":"startup","session_id":"sid-a"}`)
+	if got, _ := s.attention.Get("leo-a"); got.State != observe.AttentionErrored {
+		t.Fatalf("stale start cleared: state = %s", got.State)
+	}
+
+	postContext(t, s, "tok-new", `{"hook_event_name":"SessionStart","source":"startup","session_id":"sid-a"}`)
+	if got, _ := s.attention.Get("leo-a"); got.State != observe.AttentionUnknown {
+		t.Fatalf("new launch's start: state = %s, want unknown", got.State)
+	}
+}
+
+func TestSessionStartClearPublishesAttentionChange(t *testing.T) {
+	policy := delegationOn
+	s := contextServer(t, &policy)
+	s.attention.Set("leo-a", observe.AttentionErrored)
+	before, _ := s.attention.Get("leo-a")
+
+	postContext(t, s, "tok-a", `{"hook_event_name":"SessionStart","source":"startup","session_id":"sid-a"}`)
+
+	if got, _ := s.attention.Get("leo-a"); got.Revision <= before.Revision {
+		t.Fatalf("revision %d did not advance past %d", got.Revision, before.Revision)
+	}
+}
