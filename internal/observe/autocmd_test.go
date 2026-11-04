@@ -557,3 +557,17 @@ func TestAutoCmdReplaysCapturedPayloads(t *testing.T) {
 		}
 	})
 }
+
+func TestAutoCmdDropAgentCancelsPendingCommandsOfThatAgentOnly(t *testing.T) {
+	h := newAutoHarness(t)
+	h.agents["tok-bob"] = "bob"
+	h.hook(pre("toolu_A", "Alfred", "a"))
+	h.send("tok-bob", pre("toolu_B", "Bob", "b"))
+
+	h.auto.DropAgent("alfred")
+	h.clock.Advance(AutoCommandDelay)
+
+	if len(h.autoTasks("alfred")) != 0 || len(h.autoTasks("bob")) != 1 {
+		t.Fatalf("alfred %+v bob %+v", h.autoTasks("alfred"), h.autoTasks("bob"))
+	}
+}

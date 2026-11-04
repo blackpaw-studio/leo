@@ -131,6 +131,7 @@ type Server struct {
 	observeActivity   observe.ActivityProvider
 	observeAttention  *observe.AttentionStore
 	observeProgress   *observe.ProgressStore
+	observeAutoCmds   *observe.AutoCommands
 	observeClock      httpapi.Clock
 	leoVersion        string
 	parentContext     context.Context
@@ -272,6 +273,13 @@ func (s *Server) SetAttention(a *observe.AttentionStore) {
 // and, via StartWeb, the web API. Must be called before StartWeb.
 func (s *Server) SetProgress(p *observe.ProgressStore) {
 	s.observeProgress = p
+}
+
+// SetAutoCommands wires the automatic-command tracker into the web API
+// (agent hooks feed it, leo_progress silences it). Must be called before
+// StartWeb.
+func (s *Server) SetAutoCommands(a *observe.AutoCommands) {
+	s.observeAutoCmds = a
 }
 
 // ConfigWriter returns the process-wide leo.yaml write lock shared by the
@@ -578,6 +586,9 @@ func (s *Server) StartWeb(cfg *config.Config, agentSvc web.AgentService) error {
 	}
 	if s.observeProgress != nil {
 		observeOpts = append(observeOpts, web.WithProgress(s.observeProgress))
+	}
+	if s.observeAutoCmds != nil {
+		observeOpts = append(observeOpts, web.WithAutoCommands(s.observeAutoCmds))
 	}
 	if s.leoVersion != "" {
 		observeOpts = append(observeOpts, web.WithVersion(s.leoVersion))

@@ -341,6 +341,7 @@ func (a *AutoCommands) publishLocked(token string, c *cmdCall) {
 	}
 	agent, ok := a.agentFor(token)
 	if !ok {
+		a.dropLocked(token) // the launch is gone: nothing of it should linger
 		return
 	}
 	_, err := a.store.UpsertAuto(agent, AutoTask{ID: c.key(), Title: c.title, State: TaskRunning, StartedAt: c.startedAt})
@@ -412,6 +413,22 @@ func (a *AutoCommands) Suppress(agent string) {
 		}
 	}
 	a.store.RemoveAutoRunning(agent, autoCmdIDPrefix)
+}
+
+// DropAgent forgets every launch that currently resolves to agent (it stopped
+// or crashed), cancelling their pending timers. Call it before the launch's
+// token is revoked, while it still resolves.
+func (a *AutoCommands) DropAgent(agent string) {
+	if a == nil {
+		return
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	for token := range a.launches {
+		if name, ok := a.agentFor(token); ok && name == agent {
+			a.dropLocked(token)
+		}
+	}
 }
 
 // Drop forgets a launch (its agent stopped), cancelling its pending timers.
