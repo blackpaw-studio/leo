@@ -67,8 +67,8 @@ journalctl --user -u leo --since "1 hour ago"
 The background mode wraps Claude in a tmux session so channel plugins that need a terminal (stdio MCP servers, bot runners, etc.) have one available.
 
 ```bash
-tmux ls                          # List sessions
-tmux attach -t leo-<pid>        # Attach to see live output (Ctrl+B D to detach)
+tmux -L leo ls                   # List sessions
+tmux -L leo attach -t leo-<pid> # Attach to see live output (Ctrl+B D to detach)
 ```
 
 ## Environment Variables

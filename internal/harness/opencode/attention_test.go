@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"testing"
 
 	"github.com/blackpaw-studio/leo/internal/harness"
@@ -55,15 +56,15 @@ func TestOpencodeAttentionLaunchInstallsTurnPlugin(t *testing.T) {
 		t.Fatal(err)
 	}
 	plugins := configPlugins(t, env)
-	if len(plugins) != 1 {
-		t.Fatalf("plugin = %#v, want exactly the leo turn plugin", plugins)
+	if len(plugins) != 2 {
+		t.Fatalf("plugin = %#v, want the shell env plugin then the leo turn plugin", plugins)
 	}
-	path, err := turnPluginPath()
+	path, err := pluginPath(turnPluginPrefix, turnPluginSource)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if filepath.Dir(path) != dir || plugins[0] != "file://"+path {
-		t.Fatalf("plugin = %q, want file://%s under %s", plugins[0], path, dir)
+	if filepath.Dir(path) != dir || plugins[1] != "file://"+path {
+		t.Fatalf("plugin = %q, want file://%s under %s", plugins[1], path, dir)
 	}
 	written, err := os.ReadFile(path)
 	if err != nil || !bytes.Equal(written, turnPluginSource) {
@@ -73,6 +74,10 @@ func TestOpencodeAttentionLaunchInstallsTurnPlugin(t *testing.T) {
 
 func TestOpencodeTurnPluginOnlyForSupervisedAgents(t *testing.T) {
 	useTurnPluginDir(t)
+	turnPath, err := pluginPath(turnPluginPrefix, turnPluginSource)
+	if err != nil {
+		t.Fatal(err)
+	}
 	for _, spec := range []harness.LaunchSpec{
 		{Kind: harness.KindTask, Options: Options{}},
 		{Kind: harness.KindAgent, Dispatched: true, Options: Options{}},
@@ -81,9 +86,77 @@ func TestOpencodeTurnPluginOnlyForSupervisedAgents(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if plugins := configPlugins(t, env); len(plugins) != 0 {
-			t.Errorf("kind=%s dispatched=%v: plugin = %#v, want none", spec.Kind, spec.Dispatched, plugins)
+		for _, plugin := range configPlugins(t, env) {
+			if plugin == "file://"+turnPath {
+				t.Errorf("kind=%s dispatched=%v: turn plugin installed", spec.Kind, spec.Dispatched)
+			}
 		}
+	}
+}
+
+// Agent and dispatch panes live in leo's tmux server, so a bare
+// `tmux kill-server` in their shell would target it. The shell env plugin is
+// installed for every agent launch, dispatched ones included, and for no task
+// (a oneshot task has no pane).
+func TestOpencodeShellEnvPluginForEveryAgentLaunch(t *testing.T) {
+	dir := useTurnPluginDir(t)
+	shellPath, err := pluginPath(shellEnvPluginPrefix, shellEnvPluginSource)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "file://" + shellPath
+	for _, tc := range []struct {
+		name string
+		spec harness.LaunchSpec
+		want bool
+	}{
+		{"agent", harness.LaunchSpec{Kind: harness.KindAgent, Options: Options{}}, true},
+		{"dispatched agent", harness.LaunchSpec{Kind: harness.KindAgent, Dispatched: true, Options: Options{}}, true},
+		{"task", harness.LaunchSpec{Kind: harness.KindTask, Options: Options{}}, false},
+	} {
+		env, err := Opencode{}.Env(tc.spec)
+		if err != nil {
+			t.Fatal(err)
+		}
+		got := slices.Contains(configPlugins(t, env), want)
+		if got != tc.want {
+			t.Errorf("%s: shell env plugin installed = %v, want %v (plugins %#v)", tc.name, got, tc.want, configPlugins(t, env))
+		}
+	}
+	if filepath.Dir(shellPath) != dir {
+		t.Errorf("plugin path %s not under %s", shellPath, dir)
+	}
+	written, err := os.ReadFile(shellPath)
+	if err != nil || !bytes.Equal(written, shellEnvPluginSource) {
+		t.Fatalf("plugin file at %s: err=%v, content matches=%v", shellPath, err, bytes.Equal(written, shellEnvPluginSource))
+	}
+}
+
+// opencode builds a shell command's env as {...process.env, ...hook env}, so
+// deleting a key from the hook's env strips nothing: the variables must be
+// overridden with empty strings. tmux ignores an empty TMUX, so the command
+// falls back to $TMUX_TMPDIR's default socket instead of leo's server.
+func TestOpencodeShellEnvPluginBlanksTmuxInTheShellEnvironment(t *testing.T) {
+	node, err := exec.LookPath("node")
+	if err != nil {
+		t.Skip("node not installed")
+	}
+	plugin := filepath.Join(t.TempDir(), "leo-shellenv.mjs")
+	if err := os.WriteFile(plugin, shellEnvPluginSource, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command(node, filepath.Join("testdata", "shell_env_plugin_harness.mjs"), plugin)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("plugin harness: %v\n%s", err, out)
+	}
+	var got map[string]string
+	if err := json.Unmarshal(out, &got); err != nil {
+		t.Fatalf("harness output is not JSON: %v\n%s", err, out)
+	}
+	want := map[string]string{"TMUX": "", "TMUX_PANE": "", "TMUX_TMPDIR": "/tmp/leo-tmux", "PATH": "/usr/bin"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("effective shell env = %#v, want %#v", got, want)
 	}
 }
 

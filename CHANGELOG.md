@@ -6,6 +6,15 @@ All notable user-visible changes to Leo are documented here.
 
 ### Added
 
+- **Agent shells no longer inherit `TMUX`/`TMUX_PANE`.** A bare `tmux`
+  command run by an agent can no longer reach leo's tmux server. This
+  happened on 2026-11-04, when an agent's bare `tmux kill-server` restarted
+  every agent. The harness process, hooks and MCP servers keep both
+  variables. For codex this sets `shell_environment_policy.exclude` and
+  replaces a user-set value for leo launches. A nested dispatch now finds
+  its caller's pane through its parent dispatch. See
+  `docs/configuration/harnesses.md`.
+
 - **`released` turn outcome and release of waiting dispatches.** `leo_release`
   and `leo dispatch release` now accept a dispatch that is `waiting` on
   background work. An open turn that stopped with text before pausing finishes

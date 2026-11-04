@@ -352,6 +352,28 @@ Other things to know:
 - **Messaging** goes through `leo_send_message`, same as codex —
   `SupportsChannels() == false`.
 
+## Agent shells don't see `TMUX`
+
+Supervised agents run inside panes of leo's tmux server, so `TMUX` and
+`TMUX_PANE` would otherwise reach every shell command an agent runs. A bare
+`tmux kill-server` would then stop leo's server and every agent with it.
+Leo keeps both variables for the harness process, its hooks and its MCP
+servers, and hides them from the agent's own shell commands:
+
+- **claude**: a SessionStart hook appends `unset TMUX TMUX_PANE` to
+  `$CLAUDE_ENV_FILE`, which claude runs before each Bash command.
+- **codex**: leo passes `-c shell_environment_policy.exclude=["TMUX","TMUX_PANE"]`.
+  That replaces any `shell_environment_policy.exclude` in your own
+  `config.toml` for leo-launched codex sessions.
+- **opencode**: a leo plugin sets both to empty strings in its `shell.env`
+  hook. opencode merges the hook's env over the process env, so deleting a
+  key would have no effect.
+
+A command that names its server (`tmux -L leo ...` or `tmux -S <path> ...`)
+still works. A bare `tmux` command now goes to the default server under
+`$TMUX_TMPDIR`. Agents that are already running pick this up the next time
+they launch.
+
 ## Leo MCP tool timeouts
 
 Every harness enforces its own per-tool MCP deadline, and every one of them is

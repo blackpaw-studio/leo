@@ -131,7 +131,10 @@ func TestAttentionHooksCoverEveryEventTheBridgeUsedToReport(t *testing.T) {
 		"Notification":      {{Matcher: "permission_prompt|elicitation_dialog", Commands: report.Commands}},
 		"PermissionRequest": {report, permission},
 		"UserPromptSubmit":  {report, {Commands: []hookCommand{{Command: "/opt/leo dispatch context", Timeout: 10}}}},
-		"SessionStart":      {{Matcher: "startup|resume|clear|compact|fork", Commands: []hookCommand{{Command: "/opt/leo dispatch context", Timeout: 10}}}},
+		"SessionStart": {
+			{Commands: []hookCommand{{Command: shellEnvStripCommand, Timeout: 5}}},
+			{Matcher: "startup|resume|clear|compact|fork", Commands: []hookCommand{{Command: "/opt/leo dispatch context", Timeout: 10}}},
+		},
 	}
 	if hooks := decodeHooks(t, got); !reflect.DeepEqual(hooks, want) {
 		t.Fatalf("hooks =\n%#v\nwant\n%#v", hooks, want)
@@ -145,8 +148,9 @@ func TestAttentionHooksWithoutAReportSuffixSkipTheDerivedCommands(t *testing.T) 
 	}
 
 	hooks := decodeHooks(t, got)
-	if _, ok := hooks["SessionStart"]; ok {
-		t.Fatalf("hooks = %#v, want no context hook without a report command to derive it from", hooks)
+	want := []hookGroup{{Commands: []hookCommand{{Command: shellEnvStripCommand, Timeout: 5}}}}
+	if !reflect.DeepEqual(hooks["SessionStart"], want) {
+		t.Fatalf("SessionStart = %#v, want only the TMUX strip group without a report command to derive the context hook from", hooks["SessionStart"])
 	}
 	if len(hooks["PermissionRequest"]) != 1 || hooks["PermissionRequest"][0].Commands[0].Command != "/opt/leo custom" {
 		t.Fatalf("PermissionRequest = %#v, want only the report command", hooks["PermissionRequest"])
@@ -166,7 +170,8 @@ func TestAttentionLaunchMergesSingleSettingsExactly(t *testing.T) {
 		t.Fatalf("argv = %#v, want the base flags then one trailing --settings", got)
 	}
 	hooks := decodeHooks(t, got[4:])
-	if len(hooks["SessionStart"]) != 1 || len(hooks["PostCompact"]) != 1 {
+	// SessionStart: the TMUX strip, then the delegation context group.
+	if len(hooks["SessionStart"]) != 2 || len(hooks["PostCompact"]) != 1 {
 		t.Fatalf("merged hooks = %#v, want the attention hooks", hooks)
 	}
 	var merged struct {
