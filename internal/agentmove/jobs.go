@@ -99,6 +99,9 @@ type Jobs struct {
 	order []string
 	// active maps an agent to its running job.
 	active map[string]string
+	// afterFinish is a test seam, called once a job's terminal state is
+	// visible to Get and Wait.
+	afterFinish func(Request)
 }
 
 // NewJobs returns an empty registry over mover.
@@ -132,10 +135,17 @@ func (js *Jobs) Start(ctx context.Context, req Request) (JobStatus, error) {
 
 	go func() {
 		res, err := js.mover.Run(context.WithoutCancel(ctx), req, j)
-		j.finish(res, err)
+		// Free the agent before the terminal state is visible: a caller
+		// that sees the job done may start the next one at once.
 		js.mu.Lock()
 		delete(js.active, req.Agent)
 		js.mu.Unlock()
+		j.finish(res, err)
+		// Must stay directly after finish: the test asserts the agent is
+		// already free once the terminal state is visible.
+		if js.afterFinish != nil {
+			js.afterFinish(req)
+		}
 	}()
 	return j.status(), nil
 }
