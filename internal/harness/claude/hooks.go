@@ -14,6 +14,16 @@ import (
 
 var prepareInteractiveMu sync.Mutex
 
+// shellEnvStripCommand makes every Bash/Monitor shell command claude runs
+// drop TMUX and TMUX_PANE: claude sources $CLAUDE_ENV_FILE before each one.
+// Idempotent, because SessionStart fires again on resume, clear and compact
+// and the file persists for the whole session. TMUX_TMPDIR is left alone.
+const shellEnvStripCommand = `[ -z "$CLAUDE_ENV_FILE" ] || grep -qxF 'unset TMUX TMUX_PANE' "$CLAUDE_ENV_FILE" 2>/dev/null || printf '%s\n' 'unset TMUX TMUX_PANE' >> "$CLAUDE_ENV_FILE"`
+
+// shellEnvStripTimeout is the SessionStart hook's budget in seconds; the
+// command is a grep and an append.
+const shellEnvStripTimeout = 5
+
 // TurnHooks adds Claude's native lifecycle hooks to its existing settings
 // document. The report command exits successfully unless dispatch launch
 // variables are present, so ordinary Claude sessions remain unaffected.
@@ -27,6 +37,8 @@ func (Claude) TurnHooks(reportCmd []string) ([]string, error) {
 	for _, event := range []string{"Stop", "UserPromptSubmit", "SessionEnd"} {
 		hooks[event] = []any{map[string]any{"hooks": []any{map[string]any{"type": "command", "command": command}}}}
 	}
+	// No matcher: the strip must re-apply on every session source.
+	hooks["SessionStart"] = []any{map[string]any{"hooks": []any{map[string]any{"type": "command", "command": shellEnvStripCommand, "timeout": shellEnvStripTimeout}}}}
 	encoded, err := json.Marshal(settings)
 	if err != nil {
 		return nil, fmt.Errorf("claude: encoding hook settings: %w", err)

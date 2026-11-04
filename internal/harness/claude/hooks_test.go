@@ -291,3 +291,78 @@ func TestPreLaunchIgnoresDaemonConfigDirWhenComparingToDefault(t *testing.T) {
 		}
 	}
 }
+
+// Agent shells run inside leo's production tmux server, so TMUX points at it:
+// a bare `tmux kill-server` there kills the fleet. Claude sources
+// $CLAUDE_ENV_FILE before every Bash command, so an `unset` line there strips
+// the variables from shell commands while the harness and its MCP server keep
+// them.
+func TestTurnHooksStripTmuxFromShellCommandsAtSessionStart(t *testing.T) {
+	got, err := (Claude{}).TurnHooks([]string{"/opt/leo", "dispatch", "report"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var settings struct {
+		Hooks map[string][]struct {
+			Matcher string
+			Hooks   []map[string]any
+		}
+	}
+	if err := json.Unmarshal([]byte(got[1]), &settings); err != nil {
+		t.Fatal(err)
+	}
+	groups := settings.Hooks["SessionStart"]
+	if len(groups) != 1 || groups[0].Matcher != "" {
+		t.Fatalf("SessionStart = %#v, want one group with no matcher (every source)", groups)
+	}
+	want := map[string]any{"type": "command", "command": shellEnvStripCommand, "timeout": float64(5)}
+	if len(groups[0].Hooks) != 1 || !reflect.DeepEqual(groups[0].Hooks[0], want) {
+		t.Fatalf("SessionStart hook = %#v, want %#v", groups[0].Hooks, want)
+	}
+}
+
+func TestShellEnvStripCommandAppendsOneUnsetLineToTheEnvFile(t *testing.T) {
+	envFile := filepath.Join(t.TempDir(), "sessionstart-hook-1.sh")
+	run := func(env ...string) {
+		t.Helper()
+		cmd := exec.Command("sh", "-c", shellEnvStripCommand)
+		cmd.Env = append([]string{"PATH=" + os.Getenv("PATH")}, env...)
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("strip command: %v\n%s", err, out)
+		}
+	}
+	run("CLAUDE_ENV_FILE=" + envFile)
+	run("CLAUDE_ENV_FILE=" + envFile)
+	got, err := os.ReadFile(envFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != "unset TMUX TMUX_PANE\n" {
+		t.Fatalf("env file = %q, want exactly one unset line after two runs", got)
+	}
+
+	// Sourced the way claude does, it removes both variables and leaves
+	// TMUX_TMPDIR (which other tooling uses to find the socket directory).
+	cmd := exec.Command("sh", "-c", `. "$1"; printf '%s|%s|%s' "${TMUX-unset}" "${TMUX_PANE-unset}" "${TMUX_TMPDIR-unset}"`, "sh", envFile)
+	cmd.Env = []string{"TMUX=/tmp/leo,1,0", "TMUX_PANE=%3", "TMUX_TMPDIR=/tmp/leo-tmux"}
+	sourced, err := cmd.Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(sourced) != "unset|unset|/tmp/leo-tmux" {
+		t.Fatalf("sourced env = %q", sourced)
+	}
+}
+
+func TestShellEnvStripCommandWithoutEnvFileIsANoOp(t *testing.T) {
+	dir := t.TempDir()
+	cmd := exec.Command("sh", "-c", shellEnvStripCommand)
+	cmd.Dir = dir
+	cmd.Env = []string{"PATH=" + os.Getenv("PATH")}
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("strip command without CLAUDE_ENV_FILE: %v\n%s", err, out)
+	}
+	if entries, _ := os.ReadDir(dir); len(entries) != 0 {
+		t.Fatalf("created files without CLAUDE_ENV_FILE: %v", entries)
+	}
+}

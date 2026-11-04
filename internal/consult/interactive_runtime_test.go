@@ -242,8 +242,12 @@ func TestInteractiveLaunchArgv(t *testing.T) {
 	}
 	// The delegation context hooks are an agent's: a dispatch's roster is
 	// blank by design, and its subagent and attention state have no consumer.
-	if got := launch[len(launch)-1]; containsAll(got, "dispatch context") || containsAll(got, "SessionStart") {
+	if got := launch[len(launch)-1]; containsAll(got, "dispatch context") {
 		t.Fatalf("a dispatch launch carries the agent-only context hooks: %q", got)
+	}
+	// Its shell commands still lose TMUX: the dispatch pane is in leo's tmux server too.
+	if got := launch[len(launch)-1]; !containsAll(got, "SessionStart", "unset TMUX TMUX_PANE") {
+		t.Fatalf("a dispatch launch is missing the TMUX strip hook: %q", got)
 	}
 }
 
@@ -531,10 +535,13 @@ func TestInteractiveClaudeDispatchLaunchProfile(t *testing.T) {
 	if !containsAll(command, "--strict-mcp-config", "--mcp-config", `{"mcpServers":{"leo":{"command":"leo","args":["mcp-server"]}}}`) {
 		t.Fatalf("profile flags missing from %q", command)
 	}
-	match := regexp.MustCompile(`'--settings' '([^']*)'`).FindStringSubmatch(command)
+	// The settings carry single quotes (the TMUX strip command), which the
+	// shell quoting spells '"'"'.
+	match := regexp.MustCompile(`'--settings' '((?:[^']|'"'"')*)'`).FindStringSubmatch(command)
 	if len(match) != 2 {
 		t.Fatalf("settings missing from %q", command)
 	}
+	match[1] = strings.ReplaceAll(match[1], `'"'"'`, `'`)
 	var settings map[string]any
 	if err := json.Unmarshal([]byte(match[1]), &settings); err != nil {
 		t.Fatal(err)

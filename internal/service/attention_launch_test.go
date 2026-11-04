@@ -344,10 +344,13 @@ func TestClaudeAgentLaunchCarriesOneMergedSettings(t *testing.T) {
 	if !strings.Contains(logged, "'--model' 'sonnet' '--settings' ") {
 		t.Fatalf("spawned command lacks the caller's args before one --settings:\n%s", logged)
 	}
-	m := regexp.MustCompile(`'--settings' '(\{[^']*\})'`).FindStringSubmatch(logged)
+	// The settings carry single quotes (the TMUX strip command), which the
+	// shell quoting spells '\''.
+	m := regexp.MustCompile(`'--settings' '(\{(?:[^']|'\\'')*\})'`).FindStringSubmatch(logged)
 	if m == nil {
 		t.Fatalf("no --settings JSON in the spawned command:\n%s", logged)
 	}
+	m[1] = strings.ReplaceAll(m[1], `'\''`, `'`)
 	var settings struct {
 		CrossSessionInbound string                       `json:"crossSessionInbound"`
 		Hooks               map[string][]json.RawMessage `json:"hooks"`
@@ -602,12 +605,17 @@ func TestAttentionLaunchArgsCarryContextHooksForClaude(t *testing.T) {
 			var starts []string
 			for _, g := range settings.Hooks["SessionStart"] {
 				for _, hook := range g.Hooks {
-					starts = append(starts, g.Matcher+" "+hook.Command)
+					command := hook.Command
+					if strings.Contains(command, "unset TMUX TMUX_PANE") {
+						command = "<tmux-strip>"
+					}
+					starts = append(starts, g.Matcher+" "+command)
 				}
 			}
-			want := []string{"startup|resume|clear|compact|fork /stable/leo dispatch context"}
+			// leo's TMUX strip sits between the operator's hooks and the context hook.
+			want := []string{" <tmux-strip>", "startup|resume|clear|compact|fork /stable/leo dispatch context"}
 			if tc.wantOperator != "" {
-				want = []string{" " + tc.wantOperator, want[0]}
+				want = append([]string{" " + tc.wantOperator}, want...)
 			}
 			if !reflect.DeepEqual(starts, want) {
 				t.Fatalf("SessionStart hooks = %#v, want %#v", starts, want)
