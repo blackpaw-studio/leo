@@ -335,10 +335,10 @@ func TestEnsureForegroundServerStartsFresh(t *testing.T) {
 	}
 }
 
-// TestStartForegroundServerMarksAndReleases proves a successful start polls
-// until the server answers, stamps the foreground marker, and returns a
-// released process handle without erroring.
-func TestStartForegroundServerMarksAndReleases(t *testing.T) {
+// TestStartForegroundServerMarksAndTracksExit proves a successful start polls
+// until the server answers, stamps the foreground marker, and returns the
+// process handle and begins tracking its exit, without erroring.
+func TestStartForegroundServerMarksAndTracksExit(t *testing.T) {
 	s := &stubServer{}
 	withStubServer(t, s)
 
