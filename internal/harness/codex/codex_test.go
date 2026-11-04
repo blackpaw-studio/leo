@@ -249,13 +249,46 @@ func TestArgs(t *testing.T) {
 	}
 }
 
-// withRoots splices sandboxWritableRootsArgs(ws) between before and after,
-// mirroring the insertion point Args() uses (after developer_instructions,
-// before the LeoMCP bridge / session args / prompt).
+// shellEnvPolicyExclude is the exact -c override that keeps TMUX and
+// TMUX_PANE out of codex's shell commands.
+var shellEnvPolicyExclude = []string{"-c", `shell_environment_policy.exclude=["TMUX","TMUX_PANE"]`}
+
+// withRoots splices sandboxWritableRootsArgs(ws) and the shell environment
+// policy between before and after, mirroring the insertion point Args() uses
+// (after developer_instructions, before the LeoMCP bridge / session args /
+// prompt).
 func withRoots(before []string, ws string, after []string) []string {
 	want := append([]string{}, before...)
 	want = append(want, sandboxWritableRootsArgs(ws)...)
+	want = append(want, shellEnvPolicyExclude...)
 	return append(want, after...)
+}
+
+// A codex shell command inherits TMUX from the agent's pane in leo's tmux
+// server; a bare `tmux kill-server` there would kill the fleet. The exclude
+// list is exact-name, so TMUX_TMPDIR (which tooling uses to find the socket
+// directory) survives, and the MCP servers codex starts keep their own env.
+func TestArgsExcludeTmuxFromShellEnvironmentForEveryLaunchKind(t *testing.T) {
+	for _, spec := range []harness.LaunchSpec{
+		{Kind: harness.KindAgent, Options: Options{}},
+		{Kind: harness.KindAgent, Dispatched: true, Options: Options{}},
+		{Kind: harness.KindTask, Prompt: "do it", Options: Options{}},
+	} {
+		spec.Workspace = t.TempDir()
+		got, err := Codex{}.Args(spec)
+		if err != nil {
+			t.Fatal(err)
+		}
+		count := 0
+		for i := 0; i+1 < len(got); i++ {
+			if got[i] == shellEnvPolicyExclude[0] && got[i+1] == shellEnvPolicyExclude[1] {
+				count++
+			}
+		}
+		if count != 1 {
+			t.Errorf("kind %v dispatched=%v: exclude override appears %d times in %#v, want once", spec.Kind, spec.Dispatched, count, got)
+		}
+	}
 }
 
 func TestArgsSessionKindsBuildTUIArgv(t *testing.T) {

@@ -103,6 +103,7 @@ func (c Codex) Args(spec harness.LaunchSpec) ([]string, error) {
 		args = append(args, developerInstructionsArgs(spec.SystemContext)...)
 		args = append(args, dispatchedArgs(spec.Dispatched)...)
 		args = append(args, sandboxWritableRootsArgs(spec.Workspace)...)
+		args = append(args, shellEnvPolicyArgs()...)
 		args = append(args, opts.LeoMCP.configArgs()...)
 		args = append(args, c.SessionArgs(spec.Session)...)
 		return append(args, spec.Prompt), nil
@@ -122,7 +123,18 @@ func (c Codex) Args(spec harness.LaunchSpec) ([]string, error) {
 	args = append(args, developerInstructionsArgs(spec.SystemContext)...)
 	args = append(args, dispatchedArgs(spec.Dispatched)...)
 	args = append(args, sandboxWritableRootsArgs(spec.Workspace)...)
+	args = append(args, shellEnvPolicyArgs()...)
 	return append(args, opts.LeoMCP.configArgs()...), nil
+}
+
+// shellEnvPolicyArgs keeps TMUX and TMUX_PANE out of the shell commands codex
+// runs. Agents run in panes of leo's tmux server, so a bare `tmux kill-server`
+// in an agent shell would otherwise target that server. The names are exact:
+// TMUX_TMPDIR survives, and MCP servers (which codex builds from its own
+// defaults plus env_vars) are unaffected. It replaces any
+// shell_environment_policy.exclude in the user's config.toml for leo launches.
+func shellEnvPolicyArgs() []string {
+	return []string{"-c", "shell_environment_policy.exclude=" + tomlStringArray([]string{"TMUX", "TMUX_PANE"})}
 }
 
 func dispatchedArgs(dispatched bool) []string {
