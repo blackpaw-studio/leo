@@ -80,7 +80,7 @@ func writeProgressError(w http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, observe.ErrTaskInvalid):
 		status = http.StatusBadRequest
-	case errors.Is(err, observe.ErrTaskCap), errors.Is(err, observe.ErrTaskRunning):
+	case errors.Is(err, observe.ErrTaskCap), errors.Is(err, observe.ErrTaskRunning), errors.Is(err, observe.ErrTaskNotDismissable):
 		status = http.StatusConflict
 	case errors.Is(err, observe.ErrTaskNotFound):
 		status = http.StatusNotFound

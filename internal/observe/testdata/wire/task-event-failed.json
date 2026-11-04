@@ -5,6 +5,7 @@
   "id": "tests",
   "task": {
     "id": "tests",
+    "source": "agent",
     "title": "Test sweep",
     "mode": "determinate",
     "percent": 80,

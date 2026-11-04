@@ -38,6 +38,19 @@ const (
 	TaskIndeterminate TaskMode = "indeterminate"
 )
 
+// TaskSource says who reported a task: the agent itself (leo_progress,
+// leo progress) or the daemon, from signals it already sees (auto).
+type TaskSource string
+
+const (
+	SourceAgent TaskSource = "agent"
+	SourceAuto  TaskSource = "auto"
+)
+
+// AutoIDPrefix reserves task ids for the daemon: an agent report whose id
+// starts with it is rejected, so an agent can never overwrite an auto task.
+const AutoIDPrefix = "auto."
+
 // TaskState is where a task is in its life.
 type TaskState string
 
@@ -62,6 +75,8 @@ var (
 	ErrTaskCap      = fmt.Errorf("too many running tasks (max %d); finish one first", MaxTasksPerClass)
 	ErrTaskNotFound = errors.New("task not found")
 	ErrTaskRunning  = errors.New("running tasks cannot be dismissed")
+	// ErrTaskNotDismissable: auto tasks clear themselves. Maps to HTTP 409.
+	ErrTaskNotDismissable = errors.New("auto tasks clear themselves")
 	// ErrTaskUnauthorized: the caller's authority lapsed (its agent stopped)
 	// before the write applied. Maps to HTTP 403.
 	ErrTaskUnauthorized = errors.New("agent token is no longer valid")
@@ -70,7 +85,9 @@ var (
 // AgentTask is the wire shape of one advertised task. Optional values are
 // omitted when unset; EndedAt is always present (null while running).
 type AgentTask struct {
-	ID        string     `json:"id"`
+	ID string `json:"id"`
+	// Source is who reported the task; the daemon always sends it.
+	Source    TaskSource `json:"source"`
 	Title     string     `json:"title"`
 	Mode      TaskMode   `json:"mode"`
 	Percent   *float64   `json:"percent,omitempty"`
@@ -106,6 +123,9 @@ var taskIDPattern = regexp.MustCompile(`^[a-z0-9._-]{1,64}$`)
 func (u TaskUpdate) Normalize() (TaskUpdate, error) {
 	if !taskIDPattern.MatchString(u.ID) {
 		return TaskUpdate{}, invalidTask("id must be 1-%d characters of [a-z0-9._-]", MaxTaskIDLen)
+	}
+	if strings.HasPrefix(u.ID, AutoIDPrefix) {
+		return TaskUpdate{}, invalidTask("ids starting with %q are reserved for the daemon", AutoIDPrefix)
 	}
 	if u.State != "" && !u.State.valid() {
 		return TaskUpdate{}, invalidTask("state must be running, succeeded, failed or cancelled")

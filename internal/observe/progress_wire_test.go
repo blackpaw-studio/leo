@@ -26,7 +26,7 @@ func TestAgentTaskChangedWire(t *testing.T) {
 	assertWire(t, "task-event-determinate.json", &AgentTaskChangedPayload{
 		Meta: Meta{Seq: 812, At: at}, Agent: "alfred", ID: "build",
 		Task: &AgentTask{
-			ID: "build", Title: "Xcode build", Mode: TaskDeterminate, Percent: ptr(62.0),
+			ID: "build", Source: SourceAgent, Title: "Xcode build", Mode: TaskDeterminate, Percent: ptr(62.0),
 			Status: "Compiling 412/980", EtaAt: &eta, State: TaskRunning,
 			StartedAt: started, UpdatedAt: at, Revision: 7,
 		},
@@ -34,16 +34,23 @@ func TestAgentTaskChangedWire(t *testing.T) {
 	assertWire(t, "task-event-indeterminate-stale.json", &AgentTaskChangedPayload{
 		Meta: Meta{Seq: 813, At: at}, Agent: "alfred", ID: "deploy",
 		Task: &AgentTask{
-			ID: "deploy", Title: "Deploy", Mode: TaskIndeterminate, State: TaskRunning, Stale: true,
+			ID: "deploy", Source: SourceAgent, Title: "Deploy", Mode: TaskIndeterminate, State: TaskRunning, Stale: true,
 			StartedAt: started, UpdatedAt: started, Revision: 2,
 		},
 	})
 	assertWire(t, "task-event-failed.json", &AgentTaskChangedPayload{
 		Meta: Meta{Seq: 814, At: at}, Agent: "alfred", ID: "tests",
 		Task: &AgentTask{
-			ID: "tests", Title: "Test sweep", Mode: TaskDeterminate, Percent: ptr(80.0),
+			ID: "tests", Source: SourceAgent, Title: "Test sweep", Mode: TaskDeterminate, Percent: ptr(80.0),
 			Status: "3 failures", State: TaskFailed,
 			StartedAt: started, UpdatedAt: ended, EndedAt: &ended, Revision: 9,
+		},
+	})
+	assertWire(t, "task-event-auto.json", &AgentTaskChangedPayload{
+		Meta: Meta{Seq: 816, At: at}, Agent: "alfred", ID: "auto.cmd.3f9a0c1b2d4e",
+		Task: &AgentTask{
+			ID: "auto.cmd.3f9a0c1b2d4e", Source: SourceAuto, Title: "Build the Mac app", Mode: TaskIndeterminate,
+			State: TaskRunning, StartedAt: started, UpdatedAt: at, Revision: 1,
 		},
 	})
 	assertWire(t, "task-event-null.json", &AgentTaskChangedPayload{

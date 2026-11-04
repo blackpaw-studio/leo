@@ -62,6 +62,9 @@ const (
 	TaskPublishInterval = 500 * time.Millisecond
 	// ExpireAfter is how long a succeeded or cancelled task lingers.
 	ExpireAfter = 10 * time.Minute
+	// AutoExpireAfter is how long an ended auto task lingers, whatever its
+	// end state: commands fail routinely, so a failure never persists.
+	AutoExpireAfter = 60 * time.Second
 )
 
 var errProgressUnavailable = errors.New("task progress is not available")
@@ -104,7 +107,7 @@ func (s *ProgressStore) UpsertGuarded(agent string, raw TaskUpdate, valid func()
 	}
 	next := applyUpdate(base, u, now)
 	if next.State == TaskRunning && (e == nil || e.task.State != TaskRunning) &&
-		s.countLocked(agent, isRunning) >= MaxTasksPerClass {
+		s.countLocked(agent, classAgentRunning) >= MaxTasksPerClass {
 		return AgentTask{}, ErrTaskCap
 	}
 	if e == nil {
@@ -162,6 +165,9 @@ func (s *ProgressStore) Dismiss(agent, id string) error {
 	if e == nil {
 		return ErrTaskNotFound
 	}
+	if isAuto(e.task) {
+		return ErrTaskNotDismissable
+	}
 	if !e.task.State.IsTerminal() {
 		return ErrTaskRunning
 	}
@@ -181,7 +187,7 @@ func (s *ProgressStore) RemoveAgent(agent string) {
 	}
 }
 
-// RemoveNonFailed drops agent's running, succeeded and cancelled tasks,
+// RemoveNonFailed drops agent's running, succeeded and cancelled tasks, and every auto task,
 // publishing a null for each. Failed tasks stay until dismissed (or the
 // agent is deleted), so a failure outlives a stop, suspend or crash-restart.
 func (s *ProgressStore) RemoveNonFailed(agent string) {
@@ -191,7 +197,7 @@ func (s *ProgressStore) RemoveNonFailed(agent string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for _, e := range s.entriesLocked(agent) {
-		if e.task.State != TaskFailed {
+		if e.task.State != TaskFailed || isAuto(e.task) {
 			s.removeLocked(e)
 		}
 	}
@@ -236,7 +242,7 @@ func baseTask(e *taskEntry, u TaskUpdate, now time.Time) (AgentTask, error) {
 	if e != nil && e.task.State == TaskRunning {
 		return e.task.clone(), nil
 	}
-	base := AgentTask{ID: u.ID, Mode: TaskIndeterminate, State: TaskRunning, StartedAt: now}
+	base := AgentTask{ID: u.ID, Source: SourceAgent, Mode: TaskIndeterminate, State: TaskRunning, StartedAt: now}
 	if e != nil {
 		base.Title = e.task.Title
 		base.Revision = e.task.Revision
@@ -285,27 +291,42 @@ func applyUpdate(base AgentTask, u TaskUpdate, now time.Time) AgentTask {
 }
 
 func isRunning(t AgentTask) bool { return t.State == TaskRunning }
-func isFailed(t AgentTask) bool  { return t.State == TaskFailed }
+func isAuto(t AgentTask) bool    { return t.Source == SourceAuto }
 func isEndedOK(t AgentTask) bool {
 	return t.State == TaskSucceeded || t.State == TaskCancelled
 }
 
-// classOf is the bound class (see MaxTasksPerClass) a task falls in.
-func classOf(t AgentTask) func(AgentTask) bool {
+// taskClass is a bound class (see MaxTasksPerClass). Agent and auto tasks
+// are counted apart, so neither source can crowd out the other.
+type taskClass int
+
+const (
+	classAgentRunning taskClass = iota
+	classAgentFailed
+	classAgentEndedOK
+	classAutoRunning
+	classAutoEnded
+)
+
+func classOf(t AgentTask) taskClass {
 	switch {
+	case isAuto(t) && isRunning(t):
+		return classAutoRunning
+	case isAuto(t):
+		return classAutoEnded
 	case isRunning(t):
-		return isRunning
-	case isFailed(t):
-		return isFailed
+		return classAgentRunning
+	case t.State == TaskFailed:
+		return classAgentFailed
 	default:
-		return isEndedOK
+		return classAgentEndedOK
 	}
 }
 
-func (s *ProgressStore) countLocked(agent string, in func(AgentTask) bool) int {
+func (s *ProgressStore) countLocked(agent string, class taskClass) int {
 	n := 0
 	for _, e := range s.agents[agent] {
-		if in(e.task) {
+		if classOf(e.task) == class {
 			n++
 		}
 	}
@@ -318,11 +339,11 @@ func (s *ProgressStore) enforceBoundLocked(agent string, keep *taskEntry) {
 	if isRunning(keep.task) {
 		return
 	}
-	in := classOf(keep.task)
-	for s.countLocked(agent, in) > MaxTasksPerClass {
+	class := classOf(keep.task)
+	for s.countLocked(agent, class) > MaxTasksPerClass {
 		var oldest *taskEntry
 		for _, e := range s.agents[agent] {
-			if e == keep || !in(e.task) {
+			if e == keep || classOf(e.task) != class {
 				continue
 			}
 			if oldest == nil || e.task.EndedAt.Before(*oldest.task.EndedAt) {
@@ -378,6 +399,10 @@ func (s *ProgressStore) armLocked(e *taskEntry) {
 	var deadline time.Time
 	var fire func(*taskEntry)
 	switch {
+	case isAuto(e.task) && isRunning(e.task):
+		return // auto tasks are never stale; their owner ends them
+	case isAuto(e.task):
+		deadline, fire = e.task.EndedAt.Add(AutoExpireAfter), s.removeLocked
 	case e.task.State == TaskRunning:
 		deadline, fire = e.task.UpdatedAt.Add(StaleAfter), s.markStaleLocked
 	case isEndedOK(e.task):
