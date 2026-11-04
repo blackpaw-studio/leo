@@ -203,6 +203,19 @@ func TestDismissTaskRequiresTheOperatorToken(t *testing.T) {
 	}
 }
 
+func TestDismissTaskAcceptsAnyEndedState(t *testing.T) {
+	s := progressServer(t)
+	for _, state := range []string{"succeeded", "cancelled"} {
+		postProgress(t, s, testAgentToken, `{"token":"tok-a","id":"`+state+`","title":"T","state":"`+state+`"}`)
+		if w := dismissTask(t, s, testAPIToken, "alpha", state); w.Code != http.StatusNoContent {
+			t.Errorf("dismiss %s: status = %d, body = %s", state, w.Code, w.Body.String())
+		}
+	}
+	if len(s.progress.Tasks("alpha")) != 0 {
+		t.Fatal("dismissed tasks still present")
+	}
+}
+
 func TestDismissTaskErrors(t *testing.T) {
 	s := progressServer(t)
 	postProgress(t, s, testAgentToken, `{"token":"tok-a","id":"running","title":"T"}`)

@@ -7,7 +7,7 @@ import (
 	"github.com/blackpaw-studio/leo/internal/observe"
 )
 
-// handleTaskDismiss removes one failed agent task. The socket's access is
+// handleTaskDismiss removes one ended agent task. The socket's access is
 // the operator's own, so this mirrors the web API's operator-only
 // DELETE /api/v1/agents/{name}/tasks/{id}.
 // DELETE /agents/{name}/tasks/{id}
@@ -18,7 +18,7 @@ func (s *Server) handleTaskDismiss(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
 	case errors.Is(err, observe.ErrTaskNotFound):
 		writeError(w, http.StatusNotFound, err.Error())
-	case errors.Is(err, observe.ErrTaskNotFailed):
+	case errors.Is(err, observe.ErrTaskRunning):
 		writeError(w, http.StatusConflict, err.Error())
 	default:
 		writeError(w, http.StatusInternalServerError, err.Error())

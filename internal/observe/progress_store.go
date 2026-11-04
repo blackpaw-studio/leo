@@ -150,8 +150,8 @@ func (s *ProgressStore) AllTasks() map[string][]AgentTask {
 	return out
 }
 
-// Dismiss removes one failed task. ErrTaskNotFound for an unknown task,
-// ErrTaskNotFailed for any other state.
+// Dismiss removes one ended (succeeded, failed or cancelled) task.
+// ErrTaskNotFound for an unknown task, ErrTaskRunning for a running one.
 func (s *ProgressStore) Dismiss(agent, id string) error {
 	if s == nil {
 		return ErrTaskNotFound
@@ -162,8 +162,8 @@ func (s *ProgressStore) Dismiss(agent, id string) error {
 	if e == nil {
 		return ErrTaskNotFound
 	}
-	if e.task.State != TaskFailed {
-		return ErrTaskNotFailed
+	if !e.task.State.IsTerminal() {
+		return ErrTaskRunning
 	}
 	s.removeLocked(e)
 	return nil
