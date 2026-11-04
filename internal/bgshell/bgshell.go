@@ -78,14 +78,14 @@ const (
 	DecisionKept   = "kept"
 	DecisionPruned = "pruned"
 
-	reasonStarted          = "started"
-	reasonStopOK           = "stop-ok"
-	reasonStopFailedGone   = "stop-failed-gone"
-	reasonStopFailedOther  = "stop-failed-other"
-	reasonTaskNotification = "task-notification"
-	reasonStopOmitted      = "stop-omitted"
-	reasonStopListed       = "stop-listed"
-	reasonAdopted          = "adopted"
+	ReasonStarted          = "started"
+	ReasonStopOK           = "stop-ok"
+	ReasonStopFailedGone   = "stop-failed-gone"
+	ReasonStopFailedOther  = "stop-failed-other"
+	ReasonTaskNotification = "task-notification"
+	ReasonStopOmitted      = "stop-omitted"
+	ReasonStopListed       = "stop-listed"
+	ReasonAdopted          = "adopted"
 )
 
 func pruned(id, reason string) Decision {
@@ -128,9 +128,9 @@ func TrackToolEvent(tasks []Task, event string, p map[string]any, now time.Time)
 			return tasks, nil
 		}
 		if taskGoneError(str(p, "error")) {
-			return WithoutTask(tasks, id), []Decision{pruned(id, reasonStopFailedGone)}
+			return WithoutTask(tasks, id), []Decision{pruned(id, ReasonStopFailedGone)}
 		}
-		return tasks, []Decision{kept(id, reasonStopFailedOther)}
+		return tasks, []Decision{kept(id, ReasonStopFailedOther)}
 	}
 	if event != "posttooluse" {
 		return tasks, nil
@@ -148,10 +148,10 @@ func TrackToolEvent(tasks []Task, event string, p map[string]any, now time.Time)
 			ToolUseID: str(p, "tool_use_id"),
 			Command:   TruncateRunes(str(input, "command"), maxTrackedCommandRunes),
 			StartedAt: now,
-		}), []Decision{kept(id, reasonStarted)}
+		}), []Decision{kept(id, ReasonStarted)}
 	case slices.Contains(taskStopTools, tool):
 		if id := taskStopID(p); IsTracked(tasks, id) {
-			return WithoutTask(tasks, id), []Decision{pruned(id, reasonStopOK)}
+			return WithoutTask(tasks, id), []Decision{pruned(id, ReasonStopOK)}
 		}
 	}
 	return tasks, nil
@@ -168,7 +168,7 @@ func TrackPrompt(tasks []Task, prompt string) ([]Task, []Decision) {
 	if len(m) < 2 || !IsTracked(tasks, m[1]) {
 		return tasks, nil
 	}
-	return WithoutTask(tasks, m[1]), []Decision{pruned(m[1], reasonTaskNotification)}
+	return WithoutTask(tasks, m[1]), []Decision{pruned(m[1], ReasonTaskNotification)}
 }
 
 // TrackStop returns tasks pruned to the ones a Stop payload lists. A payload
@@ -204,15 +204,15 @@ func ReconcileStop(tasks []Task, p map[string]any, now time.Time, adopt bool) ([
 	var decisions []Decision
 	for _, t := range tasks {
 		if live[t.ID] {
-			decisions = append(decisions, kept(t.ID, reasonStopListed))
+			decisions = append(decisions, kept(t.ID, ReasonStopListed))
 		} else {
-			decisions = append(decisions, pruned(t.ID, reasonStopOmitted))
+			decisions = append(decisions, pruned(t.ID, ReasonStopOmitted))
 		}
 	}
 	keptTasks := slices.DeleteFunc(slices.Clone(tasks), func(t Task) bool { return !live[t.ID] })
 	adopted := missing[:min(len(missing), max(0, maxTrackedTasks-len(keptTasks)))]
 	for _, t := range adopted {
-		decisions = append(decisions, kept(t.ID, reasonAdopted))
+		decisions = append(decisions, kept(t.ID, ReasonAdopted))
 	}
 	keptTasks = append(keptTasks, adopted...)
 	if len(keptTasks) == 0 {
