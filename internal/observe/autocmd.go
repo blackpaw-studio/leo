@@ -1,8 +1,6 @@
 package observe
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"regexp"
 	"slices"
@@ -28,7 +26,6 @@ const (
 	// autoCmdIDPrefix prefixes command task ids; the rest is a hash of the
 	// tool_use_id (which is mixed-case and fails the task id alphabet).
 	autoCmdIDPrefix = AutoIDPrefix + "cmd."
-	autoCmdIDHexLen = 12
 	// maxOpenCalls and maxTombstones bound one launch's tracker state, which
 	// grows from model-driven tool calls.
 	maxOpenCalls  = 64
@@ -85,8 +82,7 @@ func (c *cmdCall) key() string { return autoCmdKey(c.useID) }
 
 // autoCmdKey is the task id for a tool_use_id.
 func autoCmdKey(useID string) string {
-	sum := sha256.Sum256([]byte(useID))
-	return autoCmdIDPrefix + hex.EncodeToString(sum[:])[:autoCmdIDHexLen]
+	return autoCmdIDPrefix + hashID(useID)
 }
 
 // NewAutoCommands creates a tracker publishing into store. agentFor resolves a

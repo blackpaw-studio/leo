@@ -21,6 +21,12 @@ type DispatchObserver struct {
 	onOutstanding func(agent string, outstanding int)
 	owner         func(key, launch string) (agent string, ok bool)
 
+	// taskSink, isAgent and taskLast back the auto tasks (see
+	// WithDispatchTasks); taskLast is guarded by mu.
+	taskSink DispatchTaskSink
+	isAgent  func(name string) bool
+	taskLast map[string]sentTask
+
 	mu     sync.Mutex
 	last   map[string]observe.Dispatch
 	counts map[string]int
@@ -118,6 +124,7 @@ func (o *DispatchObserver) Tick() {
 	defer o.mu.Unlock()
 	o.publishChangesLocked(records, now)
 	o.notifyCountsLocked(o.outstandingCounts(records))
+	o.syncTasksLocked(records, now)
 }
 
 // publishChangesLocked announces each dispatch in /state whose record changed

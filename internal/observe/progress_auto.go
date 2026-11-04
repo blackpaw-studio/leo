@@ -1,6 +1,8 @@
 package observe
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"slices"
 	"strings"
 	"time"
@@ -164,4 +166,23 @@ func (a AutoTask) apply(e *taskEntry, now time.Time) (AgentTask, error) {
 	t.UpdatedAt = now
 	t.Revision++
 	return t, nil
+}
+
+// autoDispatchIDPrefix prefixes dispatch task ids.
+const autoDispatchIDPrefix = AutoIDPrefix + "dispatch."
+
+// AutoDispatchID is the auto task id of dispatch run dispatchID: the id
+// itself when it fits the task id alphabet, else a hash of it.
+func AutoDispatchID(dispatchID string) string {
+	id := autoDispatchIDPrefix + dispatchID
+	if taskIDPattern.MatchString(id) {
+		return id
+	}
+	return autoDispatchIDPrefix + hashID(dispatchID)
+}
+
+// hashID is the first 12 hex digits of the SHA-256 of s.
+func hashID(s string) string {
+	sum := sha256.Sum256([]byte(s))
+	return hex.EncodeToString(sum[:])[:12]
 }
