@@ -64,7 +64,7 @@ var foregroundSuperviseInterval = 2 * time.Second
 // ServerRunning reports whether a tmux server is currently listening on
 // leo's dedicated socket.
 func ServerRunning(tmuxPath string) bool {
-	return serverExecCommand(tmuxPath, Args("display-message", "-p", "#{pid}")...).Run() == nil
+	return probeServer(tmuxPath) == nil
 }
 
 // markerState reports whether the running server carries leo's foreground
@@ -136,18 +136,19 @@ func KillServer(tmuxPath string) error {
 // StartForegroundServer launches a long-lived tmux server in foreground mode
 // (`tmux -L leo -D`, run with no subcommand) as a direct child of the
 // calling process, waits for it to start answering, stamps it with leo's
-// foreground marker, then releases it from Go's process-tracking so it can
-// reparent cleanly to launchd once the caller exits.
+// foreground marker, then reaps it in a background goroutine (to log how it exited);
+// it still reparents cleanly to launchd if the caller exits.
 //
 // The server is intentionally NOT tied to any context: Setpgid puts it in
 // its own process group so a signal delivered to the daemon's group (e.g.
-// `leo update`'s SIGKILL) doesn't also kill it, and Release() detaches the
-// os.Process so nothing in this process waits on or reaps it. It must
+// `leo update`'s SIGKILL) doesn't also kill it, and a child outlives its
+// parent regardless of Wait. It must
 // outlive the daemon — agent sessions created on its socket depend on that
 // for the daemon-restart adoption behavior the supervisor already relies on.
 func StartForegroundServer(tmuxPath string) (*os.Process, error) {
 	cmd := startForegroundCommand(tmuxPath, Args("-D")...)
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	started := time.Now()
 	if err := cmd.Start(); err != nil {
 		return nil, fmt.Errorf("start foreground tmux server: %w", err)
 	}
@@ -177,23 +178,11 @@ func StartForegroundServer(tmuxPath string) (*os.Process, error) {
 		fmt.Fprintf(os.Stderr, "tmux: could not record server ownership: %v\n", err)
 	}
 
-	// Release() detaches the process from Go's tracking without Wait()ing on
-	// it, by design: the server must outlive this process (see the doc
-	// comment above). The accepted tradeoff is that if the server later
-	// crashes, that child becomes a zombie until this daemon process itself
-	// exits and init/launchd reaps it — bounded to at most one zombie per
-	// crash, not an accumulating leak, so it's not worth a manual Wait4 here.
-	proc := cmd.Process
-	pid := proc.Pid
-	if err := proc.Release(); err != nil {
-		return nil, fmt.Errorf("release foreground tmux server process: %w", err)
-	}
-	// On Unix, Release() zeroes Pid as part of marking the handle unusable
-	// for future Wait/Kill/Signal calls. Callers here only want Pid for
-	// logging (see EnsureForegroundServer), never process control post
-	// release, so restore it for that purpose.
-	proc.Pid = pid
-	return proc, nil
+	// Reap in the background to observe exit code/signal for the log. The
+	// server still outlives this process: Setpgid isolates it, and a child
+	// survives its parent's death whether or not anyone Waits on it.
+	trackServerExit(cmd, started)
+	return cmd.Process, nil
 }
 
 // waitForServer polls ServerRunning up to foregroundStartAttempts times,
@@ -298,7 +287,7 @@ func installViewerMenuBestEffort(tmuxPath string, menu []ViewerMenuBinding) {
 // foreground server if it ever exits unexpectedly, giving it
 // restart-on-crash behavior without tying its lifetime to ctx: cancelling
 // ctx stops this monitor loop but deliberately leaves a still-running server
-// alone (see StartForegroundServer's Setpgid + Release lifetime contract —
+// alone (see StartForegroundServer's Setpgid lifetime contract —
 // it must survive daemon shutdown, clean or SIGKILL).
 func SuperviseForegroundServer(ctx context.Context, tmuxPath string, menu ...ViewerMenuBinding) {
 	ticker := time.NewTicker(foregroundSuperviseInterval)
@@ -309,10 +298,11 @@ func SuperviseForegroundServer(ctx context.Context, tmuxPath string, menu ...Vie
 			return
 		case <-ticker.C:
 		}
-		if ServerRunning(tmuxPath) {
+		probeErr := probeServer(tmuxPath)
+		if probeErr == nil {
 			continue
 		}
-		fmt.Fprintln(os.Stderr, "tmux: foreground server exited; restarting")
+		fmt.Fprintf(os.Stderr, "%s; probe error: %v; restarting\n", describeServerDown(), probeErr)
 		if _, err := StartForegroundServer(tmuxPath); err != nil {
 			fmt.Fprintf(os.Stderr, "tmux: failed to restart foreground server: %v\n", err)
 		} else {
