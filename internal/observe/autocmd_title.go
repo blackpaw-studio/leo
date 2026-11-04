@@ -10,10 +10,20 @@ import (
 // defaultAutoCmdTitle names a command the daemon could not describe.
 const defaultAutoCmdTitle = "Shell command"
 
-// safeCmdWord is what may survive from a command line into a title: a plain
-// program name. Anything else (flags, URLs, quoted strings, substitutions) can
-// carry a secret and is dropped.
-var safeCmdWord = regexp.MustCompile(`^[A-Za-z0-9._-]{1,32}$`)
+// rawProgramToken is the only shape a program word may have before any path
+// handling. Substitutions, redirections, quotes and braces fail it, so nothing
+// but a plain (possibly path-qualified) name is ever reduced to a title.
+var rawProgramToken = regexp.MustCompile(`^[A-Za-z0-9._/-]+$`)
+
+// titlePrograms is the fixed set of programs a title may name. Any other
+// program is "Shell command": a name outside this list could be a secret.
+var titlePrograms = map[string]bool{
+	"make": true, "go": true, "npm": true, "pnpm": true, "yarn": true, "bun": true,
+	"npx": true, "cargo": true, "swift": true, "xcodebuild": true, "xcrun": true,
+	"docker": true, "git": true, "zig": true, "gradle": true, "mvn": true,
+	"pytest": true, "python": true, "python3": true, "node": true, "rsync": true,
+	"terraform": true, "nomad": true, "kubectl": true, "brew": true, "gh": true,
+}
 
 // safeVerb is the shape a sub-command verb must have to be considered.
 var safeVerb = regexp.MustCompile(`^[a-z][a-z0-9:-]{0,24}$`)
@@ -25,10 +35,6 @@ var setupPrograms = map[string]bool{"cd": true, "pushd": true, "export": true, "
 // wrapperPrograms run the command that follows them. They are skipped when
 // picking the program; their own arguments are never emitted.
 var wrapperPrograms = map[string]bool{"sudo": true, "env": true, "time": true, "nice": true, "nohup": true, "command": true}
-
-// wrapperFlags are the value-less flags a wrapper may carry. Any other flag
-// might take a value (sudo -p <prompt>), so the title gives up.
-var wrapperFlags = map[string]bool{"-S": true, "-E": true, "-n": true, "-H": true, "-b": true, "-k": true, "-i": true}
 
 // knownVerbs are the fixed sub-command verbs a title may append to a program.
 // Anything else in that position (a target, a path, a secret) is dropped.
@@ -124,8 +130,11 @@ func autoCmdTitle(description, command string) string {
 		if !ok || len(words) == 0 {
 			return defaultAutoCmdTitle
 		}
+		if !rawProgramToken.MatchString(words[0]) {
+			return defaultAutoCmdTitle
+		}
 		program := path.Base(words[0])
-		if !safeCmdWord.MatchString(program) {
+		if !titlePrograms[program] {
 			return defaultAutoCmdTitle
 		}
 		if verb := knownVerb(program, words[1:]); verb != "" {
@@ -136,14 +145,15 @@ func autoCmdTitle(description, command string) string {
 	return defaultAutoCmdTitle
 }
 
-// unwrap drops leading wrapper programs, their value-less flags and any env
-// assignments after them, returning the words starting at the wrapped program.
-// It reports false for a wrapper flag it cannot account for.
+// unwrap drops leading wrapper programs and any env assignments after them,
+// returning the words starting at the wrapped program. It reports false when a
+// wrapper carries any flag (it might take a secret as its value) or when a
+// wrapper word is not a plain program token.
 func unwrap(words []string) ([]string, bool) {
-	for len(words) > 0 && wrapperPrograms[path.Base(words[0])] {
+	for len(words) > 0 && rawProgramToken.MatchString(words[0]) && wrapperPrograms[path.Base(words[0])] {
 		words = words[1:]
 		for len(words) > 0 && (strings.HasPrefix(words[0], "-") || isEnvAssignment(words[0])) {
-			if strings.HasPrefix(words[0], "-") && !wrapperFlags[words[0]] {
+			if strings.HasPrefix(words[0], "-") {
 				return nil, false
 			}
 			words = words[1:]

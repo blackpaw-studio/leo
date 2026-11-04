@@ -474,7 +474,7 @@ func TestAutoCmdCodexShellToolsAreTrackedAndOthersAreNot(t *testing.T) {
 	h.clock.Advance(AutoCommandDelay)
 
 	got := h.only("alfred")
-	if got.Title != "bash" {
+	if got.Title != "Shell command" {
 		t.Fatalf("title = %q", got.Title)
 	}
 	h.hook(map[string]any{"hook_event_name": "PostToolUse", "tool_name": "shell", "tool_use_id": "c1"})
