@@ -9,7 +9,7 @@ import (
 )
 
 // AutoTask is one daemon-originated report (see TaskSource): a long shell
-// command or a dispatch run the daemon noticed. Auto tasks are indeterminate,
+// command the daemon noticed. Auto tasks are indeterminate,
 // never stale, and clear themselves AutoExpireAfter after they end.
 type AutoTask struct {
 	// ID must start with AutoIDPrefix.
@@ -166,19 +166,6 @@ func (a AutoTask) apply(e *taskEntry, now time.Time) (AgentTask, error) {
 	t.UpdatedAt = now
 	t.Revision++
 	return t, nil
-}
-
-// autoDispatchIDPrefix prefixes dispatch task ids.
-const autoDispatchIDPrefix = AutoIDPrefix + "dispatch."
-
-// AutoDispatchID is the auto task id of dispatch run dispatchID: the id
-// itself when it fits the task id alphabet, else a hash of it.
-func AutoDispatchID(dispatchID string) string {
-	id := autoDispatchIDPrefix + dispatchID
-	if taskIDPattern.MatchString(id) {
-		return id
-	}
-	return autoDispatchIDPrefix + hashID(dispatchID)
 }
 
 // hashID is the first 12 hex digits of the SHA-256 of s.

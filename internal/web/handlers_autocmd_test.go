@@ -126,11 +126,11 @@ func TestAgentHookForAStaleTokenOrOtherSessionTracksNothing(t *testing.T) {
 	}
 }
 
-func TestLeoProgressRunningSuppressesAutoCommandsButNotDispatchTasks(t *testing.T) {
+func TestLeoProgressRunningSuppressesAutoCommandsButNotOtherAutoTasks(t *testing.T) {
 	r := newAutoRouteServer(t)
 	r.hook(t, "tok-a", bashPre)
 	r.clock.Advance(observe.AutoCommandDelay)
-	if _, err := r.progress.UpsertAuto("leo-a", observe.AutoTask{ID: "auto.dispatch.d1", Title: "impl · implement"}); err != nil {
+	if _, err := r.progress.UpsertAuto("leo-a", observe.AutoTask{ID: "auto.other.d1", Title: "impl · implement"}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -140,7 +140,7 @@ func TestLeoProgressRunningSuppressesAutoCommandsButNotDispatchTasks(t *testing.
 	}
 
 	tasks := r.autoTasks("leo-a")
-	if len(tasks) != 1 || tasks[0].ID != "auto.dispatch.d1" {
+	if len(tasks) != 1 || tasks[0].ID != "auto.other.d1" {
 		t.Fatalf("auto tasks after the agent reported: %+v", tasks)
 	}
 	if len(r.progress.Tasks("leo-a")) != 2 {
