@@ -388,18 +388,18 @@ func (h *autoHarness) only3(title string) TaskState {
 	return ""
 }
 
-func TestAutoCmdSuppressRemovesPublishedAndArmedButNotDispatchTasks(t *testing.T) {
+func TestAutoCmdSuppressRemovesPublishedAndArmedButNotOtherAutoTasks(t *testing.T) {
 	h := newAutoHarness(t)
 	h.hook(pre("toolu_PUB", "Published", "a"))
 	h.clock.Advance(AutoCommandDelay)
 	h.hook(pre("toolu_ARM", "Armed", "b"))
-	h.progressHarness.auto("alfred", AutoTask{ID: "auto.dispatch.d1", Title: "impl · implement"})
+	h.progressHarness.auto("alfred", AutoTask{ID: "auto.other.d1", Title: "impl · implement"})
 
 	h.auto.Suppress("alfred")
 	h.clock.Advance(time.Minute)
 
 	tasks := h.autoTasks("alfred")
-	if len(tasks) != 1 || tasks[0].ID != "auto.dispatch.d1" {
+	if len(tasks) != 1 || tasks[0].ID != "auto.other.d1" {
 		t.Fatalf("got %+v", tasks)
 	}
 	h.hook(post("toolu_PUB"))

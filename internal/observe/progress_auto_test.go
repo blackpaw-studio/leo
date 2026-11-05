@@ -57,11 +57,11 @@ func TestAutoTaskCarriesSourceAndRealStart(t *testing.T) {
 
 func TestAutoTaskStatusUpdatesInPlace(t *testing.T) {
 	h := newProgressHarness(t)
-	h.auto("a", autoRunning("auto.dispatch.d1"))
+	h.auto("a", autoRunning("auto.other.d1"))
 
-	got := h.auto("a", AutoTask{ID: "auto.dispatch.d1", Status: "waiting on you", State: TaskRunning})
+	got := h.auto("a", AutoTask{ID: "auto.other.d1", Status: "waiting on you", State: TaskRunning})
 
-	if got.Status != "waiting on you" || got.Title != "Build auto.dispatch.d1" || got.Revision != 2 {
+	if got.Status != "waiting on you" || got.Title != "Build auto.other.d1" || got.Revision != 2 {
 		t.Fatalf("update must keep the title and bump revision: %+v", got)
 	}
 }
@@ -129,18 +129,18 @@ func TestAutoEndedTasksAreBoundedAtEight(t *testing.T) {
 
 func TestAutoTaskRestartsAfterEnding(t *testing.T) {
 	h := newProgressHarness(t)
-	h.auto("a", autoRunning("auto.dispatch.d1"))
-	h.auto("a", AutoTask{ID: "auto.dispatch.d1", State: TaskSucceeded})
+	h.auto("a", autoRunning("auto.other.d1"))
+	h.auto("a", AutoTask{ID: "auto.other.d1", State: TaskSucceeded})
 	h.clock.Advance(10 * time.Second)
 	restart := progressT0.Add(10 * time.Second)
 
-	got := h.auto("a", AutoTask{ID: "auto.dispatch.d1", State: TaskRunning, StartedAt: restart})
+	got := h.auto("a", AutoTask{ID: "auto.other.d1", State: TaskRunning, StartedAt: restart})
 
-	if got.State != TaskRunning || got.EndedAt != nil || !got.StartedAt.Equal(restart) || got.Title != "Build auto.dispatch.d1" {
+	if got.State != TaskRunning || got.EndedAt != nil || !got.StartedAt.Equal(restart) || got.Title != "Build auto.other.d1" {
 		t.Fatalf("fresh run expected: %+v", got)
 	}
 	h.clock.Advance(AutoExpireAfter)
-	if _, ok := h.task("a", "auto.dispatch.d1"); !ok {
+	if _, ok := h.task("a", "auto.other.d1"); !ok {
 		t.Fatal("a restarted task must not be removed by the old run's expiry")
 	}
 }
@@ -168,7 +168,7 @@ func TestAgentTaskRejectsReservedAutoPrefix(t *testing.T) {
 func TestRemoveAutoMatchingDropsOnlyMatches(t *testing.T) {
 	h := newProgressHarness(t)
 	h.auto("a", autoRunning("auto.cmd.1"))
-	h.auto("a", autoRunning("auto.dispatch.d1"))
+	h.auto("a", autoRunning("auto.other.d1"))
 	h.up("a", TaskUpdate{ID: "build", Title: ptr("B")})
 
 	removed := h.store.RemoveAutoRunning("a", "auto.cmd.")

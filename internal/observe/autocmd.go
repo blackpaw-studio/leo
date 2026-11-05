@@ -458,7 +458,7 @@ func (l *cmdLaunch) pruneTombsLocked(now time.Time) []tombstone {
 
 // Suppress removes every running auto command task of agent, published or
 // still armed, and silences those calls until they end: the agent reported its
-// own task for the same work. Dispatch tasks are never touched.
+// own task for the same work.
 func (a *AutoCommands) Suppress(agent string) {
 	if a == nil {
 		return

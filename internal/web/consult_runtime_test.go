@@ -13,7 +13,9 @@ import (
 	"github.com/blackpaw-studio/leo/internal/bridge"
 	"github.com/blackpaw-studio/leo/internal/config"
 	"github.com/blackpaw-studio/leo/internal/consult"
+	"github.com/blackpaw-studio/leo/internal/harness"
 	"github.com/blackpaw-studio/leo/internal/harness/claude/bridgemod"
+	"github.com/blackpaw-studio/leo/internal/observe"
 )
 
 func TestSetupConsultRuntimeUsesContextExecSeamForViewer(t *testing.T) {
@@ -190,5 +192,45 @@ func TestInteractiveLeoPath(t *testing.T) {
 				t.Fatalf("interactiveLeoPath = %q, want %q", got, tc.want)
 			}
 		})
+	}
+}
+
+func TestRunningDispatchCreatesNoProgressTaskOnItsCaller(t *testing.T) {
+	s := newTokenSplitServer(t)
+	s.agentSvc.(*mockAgentService).handles = map[string]resolvedHandle{
+		"leo-a": {harnessName: "claude", handle: harness.SessionHandle{Name: "leo-a", IDs: staticIDs("sid-a")}},
+	}
+	s.progress = observe.NewProgressStore(&manualClock{now: time.Date(2026, 11, 4, 12, 0, 0, 0, time.UTC)}, nil)
+	s.execCommandContext = func(ctx context.Context, _ string, _ ...string) *exec.Cmd {
+		return exec.CommandContext(ctx, "true")
+	}
+	s.attention = observe.NewAttentionStore(nil)
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	s.consultIntervals = consultLoopIntervals{bridgeState: time.Millisecond}
+	s.setupConsultRuntime(Options{ParentContext: ctx}, func(string) (string, bool) { return "leo-a", true })
+	t.Cleanup(func() {
+		if s.stopConsultLoop != nil {
+			s.stopConsultLoop()
+		}
+	})
+	s.consults.ExecCommandContext = func(ctx context.Context, _ string, _ ...string) *exec.Cmd {
+		return exec.CommandContext(ctx, "sh", "-c", "sleep 30")
+	}
+	cfg := &config.Config{Templates: map[string]config.TemplateConfig{"worker": {Harness: "claude", Model: "sonnet"}}}
+	if _, err := s.consults.Start(context.Background(), cfg, consult.Request{Caller: "leo-a", Template: "worker", Prompt: "go", Cwd: t.TempDir()}); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	if running := s.consults.RunRecords(); len(running) != 1 || running[0].Status.Terminal() {
+		t.Fatalf("setup: want one live dispatch, got %+v", running)
+	}
+
+	// The state loop ticks every millisecond; give it ample ticks to publish.
+	deadline := time.Now().Add(200 * time.Millisecond)
+	for time.Now().Before(deadline) {
+		if tasks := s.progress.Tasks("leo-a"); len(tasks) != 0 {
+			t.Fatalf("a running dispatch must not publish a task: %+v", tasks)
+		}
+		time.Sleep(5 * time.Millisecond)
 	}
 }
