@@ -31,3 +31,9 @@ func TestAgentMovedAtWire(t *testing.T) {
 		t.Fatalf("unmoved agent carries moved_at: %s", b)
 	}
 }
+
+func TestFeaturesIncludeAgentMoveFreshSession(t *testing.T) {
+	if !slices.Contains(Features(), FeatureAgentMoveFreshSession) || FeatureAgentMoveFreshSession != "agent_move_fresh_session" {
+		t.Fatalf("Features() = %v, want agent_move_fresh_session", Features())
+	}
+}

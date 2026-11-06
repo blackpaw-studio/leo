@@ -116,6 +116,53 @@ func TestAgentMoveFlagsToRequest(t *testing.T) {
 	}
 }
 
+// --fresh-session reaches the request of a move and of a copy, and is
+// forwarded to a remote host's leo.
+func TestAgentFreshSessionFlagToRequest(t *testing.T) {
+	for _, tc := range []struct {
+		args []string
+		want agentmove.Request
+	}{
+		{[]string{"agent", "move", "x", "--to", "laptop", "--fresh-session"}, agentmove.Request{Mode: agentmove.ModeMove, To: "laptop", FreshSession: true}},
+		{[]string{"agent", "copy", "x", "--fresh-session"}, agentmove.Request{Mode: agentmove.ModeCopy, FreshSession: true}},
+	} {
+		path, home := newAgentWorktreeTestConfig(t)
+		withStubStdio(t)
+		d := &moveDaemon{polls: []agentmove.JobStatus{{ID: "mv-1", State: agentmove.JobDone, Result: &agentmove.Result{Name: "leo-x", Host: "mbp", Workspace: "/w"}}}}
+		startMoveDaemon(t, home, d)
+		root := newRootCmd()
+		root.SetArgs(append([]string{"--config", path}, tc.args...))
+		if err := root.Execute(); err != nil {
+			t.Fatalf("%v: %v", tc.args, err)
+		}
+		if d.req != tc.want {
+			t.Fatalf("%v: request = %+v, want %+v", tc.args, d.req, tc.want)
+		}
+	}
+}
+
+func TestAgentFreshSessionForwardsToRemote(t *testing.T) {
+	for _, tc := range []struct {
+		args []string
+		want string
+	}{
+		{[]string{"agent", "move", "x", "--to", "laptop", "--fresh-session"}, "agent move x --to laptop --fresh-session"},
+		{[]string{"agent", "copy", "x", "--to", "laptop", "--fresh-session"}, "agent copy x --to laptop --fresh-session"},
+	} {
+		path := newAgentCLITestConfig(t)
+		stub := withStubExec(t)
+		withStubStdio(t)
+		root := newRootCmd()
+		root.SetArgs(append([]string{"--config", path}, tc.args...))
+		if err := root.Execute(); err != nil {
+			t.Fatalf("%v: %v", tc.args, err)
+		}
+		if joined := strings.Join(stub.calls[0], " "); !strings.Contains(joined, config.DefaultRemoteLeoPath+" "+tc.want) {
+			t.Fatalf("remote call = %s, want ...%s", joined, tc.want)
+		}
+	}
+}
+
 func TestAgentMoveNeedsTo(t *testing.T) {
 	path, _ := newAgentWorktreeTestConfig(t)
 	withStubStdio(t)

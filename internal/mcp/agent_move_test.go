@@ -109,3 +109,54 @@ func TestMCPAgentCopyRefusedWhenSpawnDenied(t *testing.T) {
 		}
 	}
 }
+
+// fresh_session reaches the move request on both tools.
+func TestMCPAgentMoveAndCopyForwardFreshSession(t *testing.T) {
+	for _, tc := range []struct {
+		tool string
+		args map[string]any
+	}{
+		{"leo_agent_move", map[string]any{"name": "scout-1", "to": "laptop", "fresh_session": true}},
+		{"leo_agent_copy", map[string]any{"name": "scout-1", "fresh_session": true}},
+	} {
+		d := moveDaemon(t, "codex")
+		reg := newRegistry(newDaemonClient(d.port(), ""), "primary", leotools.Permissions{})
+		if _, err := callTool(reg, tc.tool, tc.args); err != nil {
+			t.Fatalf("%s: %v", tc.tool, err)
+		}
+		var body map[string]any
+		if err := json.Unmarshal([]byte(lastPost(t, d).Body), &body); err != nil {
+			t.Fatal(err)
+		}
+		if body["fresh_session"] != true {
+			t.Fatalf("%s body = %v, want fresh_session true", tc.tool, body)
+		}
+	}
+	// Left out, it is not sent at all.
+	d := moveDaemon(t, "codex")
+	reg := newRegistry(newDaemonClient(d.port(), ""), "primary", leotools.Permissions{})
+	if _, err := callTool(reg, "leo_agent_move", map[string]any{"name": "scout-1", "to": "laptop"}); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(lastPost(t, d).Body, "fresh_session") {
+		t.Fatalf("body = %s, want no fresh_session by default", lastPost(t, d).Body)
+	}
+}
+
+// A refused start (the daemon's 409) reaches the caller as the plain
+// sentence, which says how to retry.
+func TestMCPAgentMoveSurfacesSessionMissing(t *testing.T) {
+	const sentence = "scout-1's saved session transcript no longer exists; retry with a fresh session"
+	d := newFakeDaemon(func(method, path string, _ []byte) (int, string) {
+		if method == "GET" {
+			return 200, `{"ok":true,"data":[{"name":"scout-1","template":"codex","status":"running"}]}`
+		}
+		return 409, `{"ok":false,"error":"` + sentence + `","code":"session_missing"}`
+	})
+	t.Cleanup(d.close)
+	reg := newRegistry(newDaemonClient(d.port(), ""), "primary", leotools.Permissions{})
+	_, err := callTool(reg, "leo_agent_move", map[string]any{"name": "scout-1", "to": "laptop"})
+	if err == nil || !strings.Contains(err.Error(), sentence) {
+		t.Fatalf("err = %v, want %q", err, sentence)
+	}
+}

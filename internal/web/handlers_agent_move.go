@@ -51,7 +51,7 @@ func (s *Server) handleAPIAgentMove(w http.ResponseWriter, r *http.Request) {
 		if code == agentmove.CodeBadRequest {
 			status = http.StatusBadRequest
 		}
-		writeJSON(w, status, apiResponse{Error: err.Error(), Code: code})
+		writeJSON(w, status, apiResponse{Error: agentmove.MessageOf(err), Code: code})
 		return
 	}
 	writeJSON(w, http.StatusAccepted, apiResponse{OK: true, Data: st})

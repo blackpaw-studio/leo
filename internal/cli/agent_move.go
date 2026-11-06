@@ -30,7 +30,7 @@ var (
 
 func newAgentMoveCmd() *cobra.Command {
 	var host, to string
-	var force, asJSON, reconcile, abandon, assumeYes bool
+	var force, asJSON, reconcile, abandon, assumeYes, fresh bool
 	cmd := &cobra.Command{
 		Use:   "move <name> --to <host>",
 		Short: "Hand an agent off to another leo host",
@@ -84,25 +84,28 @@ docs/configuration/agent-move.md.`,
 				return err
 			}
 			if !res.Localhost {
-				return runRemote(res, forwardFlags([]string{"move", args[0], "--to", to}, map[string]bool{"--force": force, "--json": asJSON}))
+				return runRemote(res, forwardFlags([]string{"move", args[0], "--to", to}, map[string]bool{"--force": force, "--fresh-session": fresh, "--json": asJSON}))
 			}
 			resolved, err := daemon.AgentResolve(cmd.Context(), cfg.HomePath, args[0])
 			if err != nil {
 				return fmt.Errorf("resolving agent: %w", err)
 			}
-			req := agentmove.Request{Mode: agentmove.ModeMove, To: to, Force: force}
+			req := agentmove.Request{Mode: agentmove.ModeMove, To: to, Force: force, FreshSession: fresh}
 			return runMoveJob(cmd.Context(), cfg.HomePath, resolved.Name, req, asJSON)
 		},
 	}
 	addHostFlag(cmd, &host)
 	cmd.Flags().StringVar(&to, "to", "", "destination host (a client.hosts entry)")
 	cmd.Flags().BoolVar(&force, "force", false, "move a busy agent anyway, cutting its turn off")
+	cmd.Flags().BoolVar(&fresh, "fresh-session", false, freshSessionUsage)
 	cmd.Flags().BoolVar(&asJSON, "json", false, "print the finished job as JSON instead of progress")
 	cmd.Flags().BoolVar(&reconcile, "reconcile", false, "settle a pending move (move_pending) by asking its destination how it ended")
 	cmd.Flags().BoolVar(&abandon, "abandon-remote", false, "lift a pending move's fence without asking its destination (risks two live copies)")
 	cmd.Flags().BoolVarP(&assumeYes, "yes", "y", false, "skip the --abandon-remote confirmation prompt")
 	return cmd
 }
+
+const freshSessionUsage = "start the destination in a new session instead of resuming the agent's (use when its saved transcript is gone)"
 
 // abandonWarning is what --abandon-remote risks.
 const abandonWarning = "if the agent is live on the destination, starting it here leaves two live copies of one conversation"
@@ -166,7 +169,7 @@ func printSettled(r agentmove.SettleResult) {
 
 func newAgentCopyCmd() *cobra.Command {
 	var host, to, name, branch string
-	var asJSON bool
+	var asJSON, fresh bool
 	cmd := &cobra.Command{
 		Use:   "copy <name>",
 		Short: "Fork an agent into an independent copy, here or on another host",
@@ -200,7 +203,7 @@ agent backing a persistent task is not wired to the task.`,
 						fwd = append(fwd, f[0], f[1])
 					}
 				}
-				return runRemote(res, forwardFlags(fwd, map[string]bool{"--json": asJSON}))
+				return runRemote(res, forwardFlags(fwd, map[string]bool{"--fresh-session": fresh, "--json": asJSON}))
 			}
 			resolved, err := daemon.AgentResolve(cmd.Context(), cfg.HomePath, args[0])
 			if err != nil {
@@ -209,7 +212,7 @@ agent backing a persistent task is not wired to the task.`,
 			if err := gateSpawnTemplate(cmd, resolved.Template); err != nil {
 				return err
 			}
-			req := agentmove.Request{Mode: agentmove.ModeCopy, To: to, Name: name, Branch: branch}
+			req := agentmove.Request{Mode: agentmove.ModeCopy, To: to, Name: name, Branch: branch, FreshSession: fresh}
 			return runMoveJob(cmd.Context(), cfg.HomePath, resolved.Name, req, asJSON)
 		},
 	}
@@ -217,6 +220,7 @@ agent backing a persistent task is not wired to the task.`,
 	cmd.Flags().StringVar(&to, "to", "", "destination host (a client.hosts entry); default this host")
 	cmd.Flags().StringVar(&name, "name", "", "the copy's name (default <name>-copy)")
 	cmd.Flags().StringVar(&branch, "branch", "", "the copy's git branch (default <branch>-<copy name>)")
+	cmd.Flags().BoolVar(&fresh, "fresh-session", false, freshSessionUsage)
 	cmd.Flags().BoolVar(&asJSON, "json", false, "print the finished job as JSON instead of progress")
 	return cmd
 }
@@ -244,7 +248,7 @@ func gateRemoteCopy(label string, res config.HostResolution, name string) error 
 
 // forwardFlags appends each set boolean flag, in a fixed order.
 func forwardFlags(args []string, flags map[string]bool) []string {
-	for _, f := range []string{"--force", "--json"} {
+	for _, f := range []string{"--force", "--fresh-session", "--json"} {
 		if flags[f] {
 			args = append(args, f)
 		}
