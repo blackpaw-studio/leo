@@ -69,6 +69,10 @@ type Request struct {
 	// Name and Branch override a copy's new name and branch.
 	Name   string `json:"name,omitempty"`
 	Branch string `json:"branch,omitempty"`
+	// FreshSession skips the transcript check and starts the destination in
+	// a new session instead of resuming (or, for a copy, forking) the
+	// agent's own.
+	FreshSession bool `json:"fresh_session,omitempty"`
 }
 
 // Result is a finished transfer: the agent's identity on the destination.
@@ -179,6 +183,41 @@ func (mv *Mover) Run(ctx context.Context, req Request, p Progress) (Result, erro
 	return res, redactError(t.scrub, err)
 }
 
+// CheckSession refuses req up front when its agent's resume transcript is
+// gone, so a caller hears it before any job exists. Anything else wrong
+// with the request is left to the job, which reports it with the rest of
+// validate's checks; Run repeats this one as a backstop.
+func (mv *Mover) CheckSession(req Request) error {
+	if req.FreshSession {
+		return nil
+	}
+	cfg, err := mv.Config()
+	if err != nil {
+		return nil //nolint:nilerr // the job reports an unreadable config
+	}
+	records, err := agentstore.Load(agentstore.FilePath(cfg.HomePath))
+	if err != nil {
+		return nil //nolint:nilerr // the job reports an unreadable agent store
+	}
+	rec, ok := records[req.Agent]
+	if !ok || rec.Moved() {
+		return nil
+	}
+	h, err := harness.Get(orClaude(rec.Harness))
+	if err != nil {
+		return nil //nolint:nilerr // validate refuses the harness
+	}
+	adapter, ok := h.(harness.SessionMover)
+	if !ok {
+		return nil
+	}
+	env, _, err := mv.Agents.RuntimeEnv(rec)
+	if err != nil {
+		return nil //nolint:nilerr // validate reports the unresolvable env
+	}
+	return checkTranscript(adapter, env, rec, agent.ResumeIDFor(rec))
+}
+
 // execute is Run past the move lock: every phase, in order.
 func (t *transfer) execute(ctx context.Context) (Result, error) {
 	if err := t.validate(ctx); err != nil {
@@ -281,7 +320,10 @@ func (t *transfer) validate(ctx context.Context) error {
 		return err
 	}
 	t.moveCfg = t.cfg.ResolveMove(rec.Template)
-	t.m = Manifest{Protocol: Protocol, Mode: t.req.Mode, From: t.host, Agent: rec.Portable(), SourceSessionID: agent.ResumeIDFor(rec), Transfer: session.NewID()}
+	t.m = Manifest{Protocol: Protocol, Mode: t.req.Mode, From: t.host, Agent: rec.Portable(), SourceSessionID: t.resumeID(rec), FreshSession: t.req.FreshSession, Transfer: session.NewID()}
+	if t.req.FreshSession {
+		t.m.Agent.SessionID = ""
+	}
 	if t.m.Git, err = t.git.Manifest(ctx, rec.Workspace, rec.Repo); err != nil {
 		return err
 	}
@@ -291,7 +333,7 @@ func (t *transfer) validate(ctx context.Context) error {
 	if err := t.checkTranscript(); err != nil {
 		return err
 	}
-	if t.m.SessionRels, err = t.sessionRels(sessionIDs(t.rec)); err != nil {
+	if t.m.SessionRels, err = t.sessionRels(t.sessionIDs()); err != nil {
 		return err
 	}
 	if err := checkSourceSymlinks(t.adapter.SessionRoot(t.env), t.m.SessionRels); err != nil {
@@ -306,18 +348,45 @@ func (t *transfer) validate(ctx context.Context) error {
 
 // checkTranscript refuses an agent whose resume session has no transcript in
 // the source's store. Nothing has stopped yet, and without it the
-// destination could resume another session of the same workspace.
+// destination could resume another session of the same workspace. A fresh
+// session has nothing to resume.
 func (t *transfer) checkTranscript() error {
-	loc, ok := t.adapter.(harness.TranscriptLocator)
-	root := t.adapter.SessionRoot(t.env)
-	id := t.m.SourceSessionID
+	if t.req.FreshSession {
+		return nil
+	}
+	return checkTranscript(t.adapter, t.env, t.rec, t.m.SourceSessionID)
+}
+
+// checkTranscript looks for session id's transcript in adapter's store.
+// Harnesses that cannot locate one, and agents with no session, pass.
+func checkTranscript(adapter harness.SessionMover, env map[string]string, rec agentstore.Record, id string) error {
+	loc, ok := adapter.(harness.TranscriptLocator)
+	root := adapter.SessionRoot(env)
 	if !ok || root == "" || id == "" {
 		return nil
 	}
-	if searched, found := loc.Transcript(root, t.rec.Workspace, id); !found {
-		return problemf(CodeSessionMissing, "%s's session %s has no transcript (looked for %s); there is nothing to resume, so it was not moved", t.rec.Name, id, searched)
+	if _, found := loc.Transcript(root, rec.Workspace, id); !found {
+		return problemf(CodeSessionMissing, "%s's saved session transcript no longer exists, so it cannot be resumed on the destination; retry with a fresh session (fresh_session, or --fresh-session) to start a new one there", rec.Name)
 	}
 	return nil
+}
+
+// resumeID is the session a transfer of rec resumes: none for a fresh one.
+func (t *transfer) resumeID(rec agentstore.Record) string {
+	if t.req.FreshSession {
+		return ""
+	}
+	return agent.ResumeIDFor(rec)
+}
+
+// sessionIDs are the session ids whose files travel: the resume session
+// (unless fresh) and the agent's other sessions.
+func (t *transfer) sessionIDs() []string {
+	ids := sessionIDs(t.rec)
+	if t.req.FreshSession {
+		return ids[1:]
+	}
+	return ids
 }
 
 func (t *transfer) notePersistentTask() {
@@ -607,8 +676,8 @@ func (t *transfer) finalSessions() ([]string, error) {
 	if rec, ok := records[t.rec.Name]; ok {
 		t.rec = rec
 	}
-	t.m.SourceSessionID = agent.ResumeIDFor(t.rec)
-	return sessionIDs(t.rec), nil
+	t.m.SourceSessionID = t.resumeID(t.rec)
+	return t.sessionIDs(), nil
 }
 
 // sessionIDs are rec's resume session first, then its other sessions.
@@ -651,6 +720,10 @@ func (t *transfer) prepareStaging(ctx context.Context, ids []string) (string, er
 		return "", err
 	}
 	mc := harness.MoveContext{Env: t.env, Workspace: t.rec.Workspace, SessionIDs: ids, Copy: t.isCopy(), Local: t.ep.Local()}
+	// A fresh session has no transcript to stage.
+	if t.req.FreshSession {
+		return stage, nil
+	}
 	if err := t.adapter.PrepareSend(ctx, mc, stage); err != nil {
 		return "", err
 	}

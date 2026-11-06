@@ -852,13 +852,10 @@ func TestMoveRefusesMissingSourceTranscript(t *testing.T) {
 	for _, mode := range []string{ModeMove, ModeCopy} {
 		t.Run(mode, func(t *testing.T) {
 			f := newMoveFixture(t)
-			transcript := filepath.Join(f.claude, "projects", session.ProjectSlug(f.ws), "sid-1.jsonl")
-			if err := os.Remove(transcript); err != nil {
-				t.Fatal(err)
-			}
+			f.removeTranscript(t)
 			_, err := f.mv.Run(context.Background(), Request{Agent: "web", Mode: mode, To: "laptop"}, nil)
-			if !HasCode(err, CodeSessionMissing) || !strings.Contains(err.Error(), transcript) {
-				t.Fatalf("err = %v, want session_missing naming %s", err, transcript)
+			if !HasCode(err, CodeSessionMissing) {
+				t.Fatalf("err = %v, want session_missing", err)
 			}
 			if f.log.has("stop ") || f.log.has("verb ") {
 				t.Fatalf("something ran before the refusal: %v", f.log.all())

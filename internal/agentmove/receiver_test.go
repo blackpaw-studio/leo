@@ -628,3 +628,30 @@ func TestPreflightReportsStoreSymlinks(t *testing.T) {
 		t.Fatalf("preflight created file-history: %v", err)
 	}
 }
+
+// A fresh-session move lands with no session: the source's stale record id
+// is dropped so the first launch has nothing to --resume.
+func TestReceiverFreshSessionMoveReceivesNoSession(t *testing.T) {
+	f := newReceiverFixture(t)
+	m := f.manifest()
+	m.SourceSessionID, m.FreshSession = "", true
+	if err := f.call(t, VerbCommit, m, nil); err != nil {
+		t.Fatalf("commit: %v", err)
+	}
+	if spec := f.agents.received[0]; spec.Record.SessionID != "" || spec.ForkFrom != "" {
+		t.Fatalf("spec = session %q, fork from %q; want none", spec.Record.SessionID, spec.ForkFrom)
+	}
+}
+
+// A fresh-session copy does not fork its source.
+func TestReceiverFreshSessionCopyDoesNotFork(t *testing.T) {
+	m := Manifest{
+		Protocol: Protocol, Mode: ModeCopy, FreshSession: true,
+		Agent: agentstore.Record{Name: "web", Workspace: "/ws/web", SessionID: "stale-sid"},
+		Copy:  &CopySpec{Name: "web-copy", Workspace: "/ws/web-copy"},
+	}
+	spec := receiveSpec(m, receiveTime)
+	if !spec.Copy || spec.ForkFrom != "" || spec.Record.SessionID != "" || spec.Record.Name != "web-copy" {
+		t.Fatalf("spec = %+v, want a copy with no fork source and no session", spec)
+	}
+}

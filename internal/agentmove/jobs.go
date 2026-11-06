@@ -115,6 +115,9 @@ func (js *Jobs) Start(ctx context.Context, req Request) (JobStatus, error) {
 	if req.Agent == "" {
 		return JobStatus{}, problemf(CodeBadRequest, "no agent named")
 	}
+	if err := js.mover.CheckSession(req); err != nil {
+		return JobStatus{}, err
+	}
 	id, err := newJobID()
 	if err != nil {
 		return JobStatus{}, err
