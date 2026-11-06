@@ -337,9 +337,10 @@ func newRegistry(client *daemonClient, processName string, perms leotools.Permis
 		Name:        "leo_agent_move",
 		Description: "Hand an ephemeral agent off to another leo host (a client.hosts entry): its workspace, conversation and git state follow it and it resumes there. A busy agent is refused unless force, which cuts its turn off. Returns the move job at once; moving yourself ends this session, and the move finishes in the daemon.",
 		InputSchema: objectSchema(map[string]any{
-			"name":  map[string]any{"type": "string", "description": "Agent name (or shorthand) returned by leo_list_agents."},
-			"to":    map[string]any{"type": "string", "description": "Destination host, a client.hosts entry."},
-			"force": map[string]any{"type": "boolean", "description": "Move a busy agent anyway, cutting its turn off."},
+			"name":          map[string]any{"type": "string", "description": "Agent name (or shorthand) returned by leo_list_agents."},
+			"to":            map[string]any{"type": "string", "description": "Destination host, a client.hosts entry."},
+			"force":         map[string]any{"type": "boolean", "description": "Move a busy agent anyway, cutting its turn off."},
+			"fresh_session": freshSessionSchema,
 		}, "name", "to"),
 	}, func(args map[string]any) (string, error) {
 		name, err := stringArg(args, "name")
@@ -351,7 +352,11 @@ func newRegistry(client *daemonClient, processName string, perms leotools.Permis
 			return "", err
 		}
 		force, _ := args["force"].(bool)
-		data, err := client.moveAgent(name, map[string]any{"mode": "move", "to": to, "force": force})
+		body := map[string]any{"mode": "move", "to": to, "force": force}
+		if fresh, _ := args["fresh_session"].(bool); fresh {
+			body["fresh_session"] = true
+		}
+		data, err := client.moveAgent(name, body)
 		if err != nil {
 			return "", err
 		}
@@ -362,10 +367,11 @@ func newRegistry(client *daemonClient, processName string, perms leotools.Permis
 		Name:        "leo_agent_copy",
 		Description: allowNote("Fork an ephemeral agent into an independent copy, on this host or another (to, a client.hosts entry): it starts from the same conversation and workspace state, in its own workspace and git branch, and the source keeps running. Returns the copy job at once. You may only copy agents whose template you may spawn.", "copy agents of these templates", perms.CanSpawn),
 		InputSchema: objectSchema(map[string]any{
-			"name":     map[string]any{"type": "string", "description": "Agent name (or shorthand) returned by leo_list_agents."},
-			"to":       map[string]any{"type": "string", "description": "Destination host, a client.hosts entry; omit to copy on this host."},
-			"new_name": map[string]any{"type": "string", "description": "The copy's name; default <name>-copy."},
-			"branch":   map[string]any{"type": "string", "description": "The copy's git branch; default <branch>-<copy name>. Required when HEAD is detached."},
+			"name":          map[string]any{"type": "string", "description": "Agent name (or shorthand) returned by leo_list_agents."},
+			"to":            map[string]any{"type": "string", "description": "Destination host, a client.hosts entry; omit to copy on this host."},
+			"new_name":      map[string]any{"type": "string", "description": "The copy's name; default <name>-copy."},
+			"branch":        map[string]any{"type": "string", "description": "The copy's git branch; default <branch>-<copy name>. Required when HEAD is detached."},
+			"fresh_session": freshSessionSchema,
 		}, "name"),
 	}, func(args map[string]any) (string, error) {
 		name, err := stringArg(args, "name")
@@ -373,6 +379,9 @@ func newRegistry(client *daemonClient, processName string, perms leotools.Permis
 			return "", err
 		}
 		body := map[string]any{"mode": "copy"}
+		if fresh, _ := args["fresh_session"].(bool); fresh {
+			body["fresh_session"] = true
+		}
 		for arg, field := range map[string]string{"to": "to", "new_name": "name", "branch": "branch"} {
 			v, err := optionalStringArg(args, arg)
 			if err != nil {
@@ -1074,3 +1083,6 @@ func stringArg(args map[string]any, key string) (string, error) {
 	}
 	return s, nil
 }
+
+// freshSessionSchema is the fresh_session param of the move and copy tools.
+var freshSessionSchema = map[string]any{"type": "boolean", "description": "Start the destination in a new session instead of resuming the agent's. Use it when the move is refused because the agent's saved session transcript no longer exists."}

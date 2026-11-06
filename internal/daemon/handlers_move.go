@@ -149,5 +149,5 @@ func writeMoveError(w http.ResponseWriter, err error) {
 	if agentmove.CodeOf(err) == agentmove.CodeBadRequest {
 		status = http.StatusBadRequest
 	}
-	writeJSON(w, status, agentmove.VerbError{Code: agentmove.CodeOf(err), Message: err.Error()})
+	writeJSON(w, status, agentmove.VerbError{Code: agentmove.CodeOf(err), Message: agentmove.MessageOf(err)})
 }

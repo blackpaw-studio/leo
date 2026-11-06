@@ -39,7 +39,7 @@ func (t *transfer) validateCopy(ctx context.Context, records map[string]agentsto
 			return problemf(CodeBadRequest, "%s's HEAD is detached; name the copy's branch with --branch", t.rec.Name)
 		}
 	}
-	if snapshotCopier(t.adapter) {
+	if snapshotCopier(t.adapter) && !t.req.FreshSession {
 		t.forkID = session.NewID()
 	}
 	if t.req.Name != "" {
@@ -129,7 +129,8 @@ func (t *transfer) checkCopyBranch(ctx context.Context) error {
 }
 
 func (t *transfer) checkCopyIdle(ctx context.Context) error {
-	if snapshotCopier(t.adapter) {
+	// A fresh copy takes no transcript, so a mid-turn agent is no obstacle.
+	if snapshotCopier(t.adapter) || t.req.FreshSession {
 		return nil
 	}
 	t.p.Stage(StageIdle)

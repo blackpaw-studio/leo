@@ -105,6 +105,11 @@ const (
 	// `GET /api/agent/moves/{id}` polls the job, and an agent moved away
 	// carries moved_to and moved_at (docs/configuration/agent-move.md).
 	FeatureAgentMove = "agent_move"
+	// FeatureAgentMoveFreshSession: a move or copy request may set
+	// fresh_session, which skips the transcript check and starts the
+	// destination in a new session. A missing transcript is refused up
+	// front with 409 session_missing.
+	FeatureAgentMoveFreshSession = "agent_move_fresh_session"
 	// FeatureAgentProgress: agents advertise task progress (leo_progress,
 	// `leo progress`); /state agent rows carry tasks and agent_task_changed
 	// events follow them.
@@ -113,7 +118,7 @@ const (
 
 // Features returns the hello's features list, a fresh copy each call.
 func Features() []string {
-	return []string{FeatureBridgeTurns, FeatureAttentionReason, FeatureDispatchTree, FeatureAgentUsage, FeatureAgentControl, FeatureDispatchAttach, FeatureDispatchRemoved, FeatureStateSeq, FeatureAttachDispatchPlacement, FeatureDispatchPlacementLive, FeatureAgentEnvironments, FeatureChatQuestions, FeatureMachineStats, FeatureConfigAPI, FeatureAgentStatusRestoring, FeatureClientTools, FeatureAgentAppearance, FeatureAgentMove, FeatureAgentProgress}
+	return []string{FeatureBridgeTurns, FeatureAttentionReason, FeatureDispatchTree, FeatureAgentUsage, FeatureAgentControl, FeatureDispatchAttach, FeatureDispatchRemoved, FeatureStateSeq, FeatureAttachDispatchPlacement, FeatureDispatchPlacementLive, FeatureAgentEnvironments, FeatureChatQuestions, FeatureMachineStats, FeatureConfigAPI, FeatureAgentStatusRestoring, FeatureClientTools, FeatureAgentAppearance, FeatureAgentMove, FeatureAgentMoveFreshSession, FeatureAgentProgress}
 }
 
 // ActivityMinInterval is the most often agent_activity is published per

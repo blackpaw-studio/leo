@@ -160,3 +160,30 @@ func TestMoveAbandonRoute(t *testing.T) {
 		t.Fatalf("abandon = %d %s (%v), settled %v", w.Code, w.Body, err, jobs.settled)
 	}
 }
+
+// fresh_session reaches the job request.
+func TestMoveStartForwardsFreshSession(t *testing.T) {
+	s := New(tmpSockPath(t, "f.sock"), "/nonexistent/leo.yaml", nil)
+	jobs := &fakeMoveJobs{}
+	s.SetMoveJobs(jobs)
+	w := moveRequest(s, "/agents/web/move", `{"mode":"copy","fresh_session":true}`)
+	if w.Code != http.StatusAccepted || len(jobs.reqs) != 1 || !jobs.reqs[0].FreshSession {
+		t.Fatalf("start = %d %s, requests %+v; want fresh_session forwarded", w.Code, w.Body, jobs.reqs)
+	}
+}
+
+// A refused start answers 409 with the code and the plain sentence: the
+// message does not repeat the code, and no job id is in the body.
+func TestMoveStartSessionMissingIsPlain(t *testing.T) {
+	s := New(tmpSockPath(t, "sm.sock"), "/nonexistent/leo.yaml", nil)
+	const sentence = "web's saved session transcript no longer exists; retry with a fresh session"
+	s.SetMoveJobs(&fakeMoveJobs{err: &agentmove.Problem{Code: agentmove.CodeSessionMissing, Message: sentence}})
+	w := moveRequest(s, "/agents/web/move", `{"mode":"move","to":"laptop"}`)
+	var env agentmove.VerbError
+	if err := json.Unmarshal(w.Body.Bytes(), &env); err != nil {
+		t.Fatal(err)
+	}
+	if w.Code != http.StatusConflict || env.Code != "session_missing" || env.Message != sentence {
+		t.Fatalf("refused start = %d %s, want 409 session_missing with the plain sentence", w.Code, w.Body)
+	}
+}

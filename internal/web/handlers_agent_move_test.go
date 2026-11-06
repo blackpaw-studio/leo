@@ -158,3 +158,37 @@ func TestMoveStatusRouteLeavesSiblingRoutesAlone(t *testing.T) {
 		t.Errorf("GET /api/agent/moves/client-tools = %d %q, want %d %q", got.Code, got.Body, want.Code, want.Body)
 	}
 }
+
+// fresh_session reaches the job request.
+func TestAPIAgentMoveForwardsFreshSession(t *testing.T) {
+	s, _, svc := newTestServerWithAgents(t)
+	svc.records = []agent.Record{{Name: "leo-coding-leo", Status: "running"}}
+	jobs := &fakeMoveJobs{}
+	s.moveJobs = jobs
+	if w := postJSON(t, s, "/api/agent/leo-coding-leo/move", `{"mode":"copy","fresh_session":true}`); w.Code != http.StatusAccepted {
+		t.Fatalf("status = %d: %s", w.Code, w.Body)
+	}
+	if len(jobs.reqs) != 1 || !jobs.reqs[0].FreshSession {
+		t.Fatalf("requests = %+v, want fresh_session forwarded", jobs.reqs)
+	}
+}
+
+// A missing transcript is a 409 with the code and the plain sentence, no job.
+func TestAPIAgentMoveSessionMissingIsPlain(t *testing.T) {
+	s, _, svc := newTestServerWithAgents(t)
+	svc.records = []agent.Record{{Name: "leo-coding-leo", Status: "running"}}
+	const sentence = "leo-coding-leo's saved session transcript no longer exists; retry with a fresh session"
+	s.moveJobs = &fakeMoveJobs{err: &agentmove.Problem{Code: agentmove.CodeSessionMissing, Message: sentence}}
+	w := postJSON(t, s, "/api/agent/leo-coding-leo/move", `{"mode":"move","to":"laptop"}`)
+	var refused struct {
+		OK    bool   `json:"ok"`
+		Error string `json:"error"`
+		Code  string `json:"code"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &refused); err != nil {
+		t.Fatal(err)
+	}
+	if w.Code != http.StatusConflict || refused.OK || refused.Code != "session_missing" || refused.Error != sentence {
+		t.Fatalf("refused = %d %s, want 409 session_missing with the plain sentence", w.Code, w.Body)
+	}
+}

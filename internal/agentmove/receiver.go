@@ -467,6 +467,10 @@ func (r *Receiver) finishHarness(ctx context.Context, cfg *config.Config, host H
 	if !ok {
 		return problemf(CodeHarnessUnsupported, "%s cannot receive a moved session", h.Name())
 	}
+	// A fresh session placed no transcript, so there is nothing to finish.
+	if m.FreshSession {
+		return nil
+	}
 	mc := harness.MoveContext{
 		Env: env, Workspace: m.TargetWorkspace(), SessionIDs: []string{m.SourceSessionID},
 		Copy: m.IsCopy(), Local: m.From.Hostname == host.Hostname,
@@ -496,6 +500,12 @@ func (r *Receiver) hookEnv(cfg *config.Config, host Host, m Manifest, env map[st
 func receiveSpec(m Manifest, at time.Time) agent.ReceiveSpec {
 	rec := m.Agent.Portable()
 	spec := agent.ReceiveSpec{Record: rec, From: m.From.Hostname, At: at}
+	if m.FreshSession {
+		// No session travels: drop the source's id so the first launch has
+		// nothing to resume or fork.
+		spec.Record.SessionID = ""
+		m.SourceSessionID = ""
+	}
 	if !m.IsCopy() {
 		if m.SourceSessionID != "" {
 			spec.Record.SessionID = m.SourceSessionID

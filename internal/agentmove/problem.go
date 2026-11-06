@@ -128,6 +128,20 @@ type VerbError struct {
 
 func (e *VerbError) Error() string { return e.Code + ": " + e.Message }
 
+// MessageOf is err's text without its problem code, for a reply that carries
+// the code in its own field. Errors without a code keep their full text.
+func MessageOf(err error) string {
+	var p *Problem
+	if errors.As(err, &p) {
+		return p.Message
+	}
+	var ve *VerbError
+	if errors.As(err, &ve) {
+		return ve.Message
+	}
+	return err.Error()
+}
+
 // CodeDaemonUnreachable is `move-receive`'s refusal when it could not reach
 // its own daemon: the verb may or may not have run there.
 const CodeDaemonUnreachable = "daemon_unreachable"

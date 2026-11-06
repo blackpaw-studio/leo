@@ -60,6 +60,7 @@ Every path that rsync or git sees must match `^/[A-Za-z0-9._@%+=,/-]+$`, because
 |---|---|
 | `--to <host>` | Destination, a `client.hosts` entry. Required. |
 | `--force` | Move a busy agent anyway, cutting its turn off. Without it, an agent mid-turn is refused (`agent_busy`). |
+| `--fresh-session` | Start the destination in a new session instead of resuming the agent's. See [A missing transcript](#a-missing-transcript). |
 | `--json` | Print the finished job as JSON instead of progress. |
 | `--host <host>` | Run the move from another Leo host (the usual remote-CLI flag). |
 
@@ -70,6 +71,7 @@ Every path that rsync or git sees must match `^/[A-Za-z0-9._@%+=,/-]+$`, because
 | `--to <host>` | Destination. Omit it to copy on this host, which uses no ssh. |
 | `--name <name>` | The copy's name. Defaults to `<name>-copy`, then `-copy-2` and so on, skipping names either host already has. |
 | `--branch <branch>` | The copy's git branch. Defaults to `<current branch>-<copy name>`. Required when HEAD is detached. |
+| `--fresh-session` | The copy starts its own conversation instead of forking the source's. See [A missing transcript](#a-missing-transcript). |
 | `--json`, `--host` | As for move. |
 
 The move runs as a job in the source daemon, so interrupting the command does not stop it. The command prints each stage as it starts (`validate`, `preflight`, `stop`, `pre-send`, `rsync-workspace`, …, `commit`, `mark`), then any notes, then where the agent now lives:
@@ -84,12 +86,16 @@ attach with: leo --host laptop agent attach web
 
 Each rsync stage (`rsync-workspace`, `rsync-sessions`, `rsync-staging`, `rsync-modules`) reports how many changes it made. With `--json` the result carries them in `rsync`, one entry per stage in the order they ran: `{"stage", "total", "lines", "truncated"}`. `lines` are rsync's `--itemize-changes` lines (including deletions), capped at 200 per stage; `truncated` counts the rest.
 
+### A missing transcript
+
+Claude Code deletes transcripts after 30 days. A move or copy of an agent whose saved session transcript is gone is refused when you ask for it, before any job exists and before anything stops: the HTTP routes answer `409 {"error": "session_missing", "message": "..."}` and the CLI and MCP tools print the same sentence. Retry with `--fresh-session` (`fresh_session` in the JSON body and the MCP tools) to move the workspace and git state anyway and start a new conversation on the destination. A fresh copy does not fork: it has no conversation history. The flag also works when the transcript exists, and then ignores it. A fresh-session copy needs a destination on the same Leo version.
+
 ### MCP and HTTP
 
-- `leo_agent_move {name, to, force?}` and `leo_agent_copy {name, to?, new_name?, branch?}` start the job and return it at once. An agent that moves itself loses its MCP server partway through, and the daemon finishes the move anyway.
-- The same job starts from `POST /api/agent/{name}/move` with `{"mode": "move"|"copy", "to", "force", "name", "branch"}`. It answers 202 with the job, or 409 with an error `code`.
+- `leo_agent_move {name, to, force?, fresh_session?}` and `leo_agent_copy {name, to?, new_name?, branch?, fresh_session?}` start the job and return it at once. An agent that moves itself loses its MCP server partway through, and the daemon finishes the move anyway.
+- The same job starts from `POST /api/agent/{name}/move` with `{"mode": "move"|"copy", "to", "force", "name", "branch", "fresh_session"}`. It answers 202 with the job, or 409 with an error `code` and a plain `error` sentence (no code prefix).
 - `GET /api/agent/moves/{id}` polls that job and answers `{ok, data: <job>}` with the same job shape, for a copy as well as a move. An unknown id, or one pruned after the job finished (the registry keeps the 64 most recent finished jobs), is a 404. It takes the same tokens as the POST, a paired device's included.
-- A daemon that has both advertises the `agent_move` feature on the event stream's `hello` and in `/version` capabilities. `/api/v1/state` carries `moved_to` and `moved_at` (RFC 3339) on the dormant source record of a moved agent, and neither on an agent that lives here.
+- A daemon that has both advertises the `agent_move` feature on the event stream's `hello` and in `/version` capabilities. `agent_move_fresh_session` says it honors `fresh_session`. `/api/v1/state` carries `moved_to` and `moved_at` (RFC 3339) on the dormant source record of a moved agent, and neither on an agent that lives here.
 
 ### Permissions
 
@@ -230,7 +236,7 @@ If the destination is gone for good (wiped, decommissioned, never coming back), 
 | `harness_mismatch`, `harness_binary_missing` | The destination's template uses another harness, or its binary is missing. |
 | `harness_unsupported` | The harness cannot move (or, for a copy, fork) a session. |
 | `session_root_missing` | The destination lacks the harness's config dir. |
-| `session_missing` | The source has no transcript for the agent's resume session (the message names the path searched). Nothing was stopped; the destination would otherwise resume another session of the same workspace. |
+| `session_missing` | The source has no transcript for the agent's resume session. Refused when the request is made, with no job; nothing was stopped. The destination would otherwise resume another session of the same workspace. Retry with `--fresh-session`. |
 | `name_taken`, `workspace_in_use`, `workspace_exists` | The destination already has that name or path. |
 | `unsafe_path`, `unsafe_ref` | A path or ref outside the safe character set. |
 | `canonical_missing`, `canonical_mismatch` | No usable canonical clone on the destination. |

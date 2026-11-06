@@ -212,3 +212,33 @@ func TestRuntimeEnvIsRestartEnv(t *testing.T) {
 		t.Fatalf("RuntimeEnv(legacy) = %v, %v", env, err)
 	}
 }
+
+// A record that arrives with no session (fresh_session) launches a new
+// conversation: no --resume, no fork, even over an older transcript in the
+// workspace.
+func TestReceiveWithoutSessionStartsFresh(t *testing.T) {
+	for _, copyMode := range []bool{false, true} {
+		m, sup, home, b := receiveManager(t)
+		ws := t.TempDir()
+		plantTranscript(t, b, ws, "stale-other")
+		old := time.Now().Add(-time.Hour)
+		if err := os.Chtimes(filepath.Join(b, "projects", session.ProjectSlug(ws), "stale-other.jsonl"), old, old); err != nil {
+			t.Fatal(err)
+		}
+		rec := arriving(ws)
+		rec.SessionID = ""
+		if copyMode {
+			rec.Name = "leo-x-copy"
+		}
+		if err := m.Receive(context.Background(), ReceiveSpec{Record: rec, From: "studio", At: time.Now(), Copy: copyMode}); err != nil {
+			t.Fatal(err)
+		}
+		args := sup.spawnCall.ClaudeArgs
+		if containsFlag(args, "--resume") || containsFlag(args, "--fork-session") || containsFlag(args, "--session-id") {
+			t.Fatalf("copy=%v: launch args %v must not resume or fork", copyMode, args)
+		}
+		if stored := loadRec(t, home, rec.Name); stored.SessionID != "" {
+			t.Fatalf("copy=%v: SessionID = %q", copyMode, stored.SessionID)
+		}
+	}
+}
