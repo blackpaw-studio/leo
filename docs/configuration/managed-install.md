@@ -77,7 +77,8 @@ live daemon. The managed daemon therefore starts without either:
 - **No config.** When the marker is valid and the default config
   (`~/.leo/leo.yaml`) does not exist, the daemon writes the setup wizard's
   default config (an `assistant` template and the default model and turn
-  limit) before loading it, and logs `managed install: no leo.yaml found;
+  limit, and `web: {enabled: true, bind: 127.0.0.1}` so agents' `leo_*` tools
+  and hooks can reach the daemon on port 8370) before loading it, and logs `managed install: no leo.yaml found;
   created default config at …`. The file is `0600` and a missing `~/.leo` is
   created `0700`. The write is atomic and never replaces a file: an existing
   config, or one that appears concurrently, is used as is. Unmanaged installs

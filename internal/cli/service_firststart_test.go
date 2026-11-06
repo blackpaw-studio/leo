@@ -54,6 +54,9 @@ func TestLoadDaemonConfigManagedCreatesDefaultConfig(t *testing.T) {
 	if !strings.Contains(log.String(), path) {
 		t.Errorf("log = %q, want it to name %s", log.String(), path)
 	}
+	if !cfg.Web.Enabled || cfg.Web.Bind != "127.0.0.1" || cfg.WebPort() != 8370 {
+		t.Errorf("web = %+v (port %d), want enabled on 127.0.0.1:8370", cfg.Web, cfg.WebPort())
+	}
 }
 
 func TestLoadDaemonConfigUnmanagedKeepsNoConfigError(t *testing.T) {
@@ -91,6 +94,9 @@ func TestLoadDaemonConfigManagedLeavesExistingConfigUntouched(t *testing.T) {
 	}
 	if data, _ := os.ReadFile(path); string(data) != body {
 		t.Errorf("config rewritten: %q", data)
+	}
+	if cfg.Web.Enabled {
+		t.Errorf("existing config without web: was switched on: %+v", cfg.Web)
 	}
 	if log.Len() != 0 {
 		t.Errorf("logged %q for an existing config", log.String())
