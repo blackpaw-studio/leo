@@ -222,10 +222,14 @@ func parseUserProfile(path string) templates.UserProfileData {
 }
 
 // DefaultConfig is the config a fresh install starts from, without prompting:
-// what the wizard writes when nothing exists yet, rooted at leoHome.
+// what the wizard writes when nothing exists yet, rooted at leoHome, plus the
+// web listener enabled on loopback. Only the managed first start uses it.
 func DefaultConfig(leoHome string) *config.Config {
 	cfg := buildConfig(filepath.Join(leoHome, "workspace"), nil)
 	cfg.HomePath = leoHome
+	// Agents' leo_* MCP tools and hooks reach the daemon over the web
+	// listener, so a fresh managed config must have it on. Loopback only.
+	cfg.Web = config.WebConfig{Enabled: true, Bind: "127.0.0.1"}
 	return cfg
 }
 

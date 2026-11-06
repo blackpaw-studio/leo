@@ -4,6 +4,14 @@ All notable user-visible changes to Leo are documented here.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Managed installs now start with the web listener on.** The default
+  `leo.yaml` created on a managed (Leo.app) first start had no `web:`
+  section, so nothing listened on `127.0.0.1:8370` and every agent's `leo_*`
+  tools and attention hooks failed with "connection refused". It now seeds
+  `web: {enabled: true, bind: 127.0.0.1}`. Existing configs are not changed.
+
 ### Added
 
 - **Agent shells no longer inherit `TMUX`/`TMUX_PANE`.** A bare `tmux`
