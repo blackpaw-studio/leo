@@ -6,6 +6,14 @@ All notable user-visible changes to Leo are documented here.
 
 ### Added
 
+- **`fresh_session` for agent move and copy.** `leo agent move` and
+  `leo agent copy` take `--fresh-session` (`fresh_session` in the HTTP body and
+  the `leo_agent_move` / `leo_agent_copy` tools): the transcript check is
+  skipped and the destination starts a new session, and a copy does not fork.
+  Advertised as the `agent_move_fresh_session` feature. A fresh-session copy
+  needs a destination on the same Leo version. See
+  `docs/configuration/agent-move.md`.
+
 - **Agent shells no longer inherit `TMUX`/`TMUX_PANE`.** A bare `tmux`
   command run by an agent can no longer reach leo's tmux server. This
   happened on 2026-11-04, when an agent's bare `tmux kill-server` restarted
@@ -91,6 +99,12 @@ All notable user-visible changes to Leo are documented here.
 
 - The socket's `POST /config/reload` now runs the full config reload (client
   policies, OpenCode context, scheduler) instead of only the scheduler.
+- **A missing transcript now fails a move or copy at request time.** An agent
+  whose saved session transcript is gone (Claude Code deletes them after 30
+  days) is refused with `409 session_missing` before any job is created, with a
+  plain message that suggests a fresh session. Refused move and copy starts
+  now carry the bare message in `message` / `error`, without the code prefix
+  (the code stays in its own field).
 
 ### Fixed
 
