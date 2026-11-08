@@ -282,7 +282,7 @@ func TestRunChannelInitRetryCountsOncePerFiring(t *testing.T) {
 
 	initFailed := `{"type":"system","subtype":"init","mcp_servers":[{"name":"plugin:blackpaw-telegram:blackpaw-telegram","status":"failed"}]}`
 	result := func(id string) string {
-		return fmt.Sprintf(`{"type":"result","subtype":"success","is_error":false,"num_turns":1,"session_id":"%s","result":"ok"}`, id)
+		return fmt.Sprintf(`{"type":"result","subtype":"success","is_error":false,"num_turns":1,"session_id":%q,"result":"ok"}`, id)
 	}
 	n := 0
 	execCommand = func(name string, args ...string) *exec.Cmd {
