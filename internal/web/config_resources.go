@@ -30,6 +30,9 @@ const (
 type configSub struct {
 	Key     string
 	Section schema.Section
+	// LiveApplied marks a section read at use time, so a patch that touches
+	// only live-applied sections needs no agent restart.
+	LiveApplied bool
 	// of returns a pointer to the nested struct inside the parent target.
 	of func(target any) any
 }
@@ -75,6 +78,24 @@ func (r *configResource) flag(c *ConfigService) *atomic.Bool {
 	return nil
 }
 
+// patchFlag is flag(c), or nil when every key in values is a live-applied
+// subsection (the write takes effect without restarting anything).
+func (r *configResource) patchFlag(c *ConfigService, values map[string]any) *atomic.Bool {
+	if len(values) == 0 {
+		return r.flag(c)
+	}
+	for key := range values {
+		live := false
+		for _, sub := range r.Subs {
+			live = live || (sub.Key == key && sub.LiveApplied)
+		}
+		if !live {
+			return r.flag(c)
+		}
+	}
+	return nil
+}
+
 func (r *configResource) has(action string) bool {
 	for _, a := range r.Actions {
 		if a == action {
@@ -105,7 +126,7 @@ var configResources = []*configResource{
 		Subs: []configSub{
 			{Key: "push", Section: schema.SectionPushDefaults,
 				of: func(t any) any { return &t.(*config.DefaultsConfig).Push }},
-			{Key: "dispatch_viewer", Section: schema.SectionDispatchViewer,
+			{Key: "dispatch_viewer", Section: schema.SectionDispatchViewer, LiveApplied: true,
 				of: func(t any) any { return &t.(*config.DefaultsConfig).Dispatch.Viewer }},
 		},
 		locate: func(cfg *config.Config, _ string) (any, bool) { return &cfg.Defaults, true },

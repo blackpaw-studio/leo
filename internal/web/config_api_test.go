@@ -956,3 +956,44 @@ func TestPutDefaultsDispatchViewerRejectsUnknownPlacement(t *testing.T) {
 		t.Error("an invalid write changed leo.yaml")
 	}
 }
+
+func TestPutDefaultsDispatchViewerOnlyNeedsNoAgentRestart(t *testing.T) {
+	cases := []struct {
+		name   string
+		values map[string]any
+		agents bool
+	}{
+		{"viewer only", map[string]any{"dispatch_viewer": map[string]any{"placement": "window"}}, false},
+		{"viewer plus model", map[string]any{"dispatch_viewer": map[string]any{"placement": "window"}, "model": "haiku"}, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newAPIHarness(t)
+			res := h.put("/config/defaults", tc.values)
+			wantStatus(t, res, http.StatusOK)
+			rr := res.data()["restart_required"].(map[string]any)
+			if rr["agents"] != tc.agents {
+				t.Errorf("restart_required.agents = %v, want %v", rr["agents"], tc.agents)
+			}
+		})
+	}
+}
+
+func TestPutDefaultsPlacementPreservesViewerSiblings(t *testing.T) {
+	h := newAPIHarness(t)
+	cfg := h.loadConfig()
+	panes, height := 6, 30
+	cfg.Defaults.Dispatch.Viewer.MaxPanes = &panes
+	cfg.Defaults.Dispatch.Viewer.MainPaneHeight = &height
+	if err := config.Save(h.path, cfg); err != nil {
+		t.Fatal(err)
+	}
+	wantStatus(t, h.put("/config/defaults", map[string]any{"dispatch_viewer": map[string]any{"placement": "window"}}), http.StatusOK)
+	v := h.loadConfig().Defaults.Dispatch.Viewer
+	if v.Placement != "window" || v.MaxPanes == nil || *v.MaxPanes != 6 || v.MainPaneHeight == nil || *v.MainPaneHeight != 30 {
+		t.Fatalf("viewer = %+v", v)
+	}
+	if got := h.fileBytes(); !strings.Contains(got, "max_panes: 6") || !strings.Contains(got, "main_pane_height: 30") {
+		t.Errorf("siblings lost from file:\n%s", got)
+	}
+}

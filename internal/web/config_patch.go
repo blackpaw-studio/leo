@@ -20,7 +20,7 @@ import (
 // ApplyPatch is ApplyValues for a JSON body. values is the decoded
 // {"values": ...} object (numbers as json.Number).
 func (c *ConfigService) ApplyPatch(ifMatch string, res *configResource, name string, values map[string]any) (WriteResult, error) {
-	opts := mutateOpts{IfMatch: ifMatch, Scope: validationScope{Resource: res.Key, Name: name}, Flag: res.flag(c), Item: c.itemOf(res, name)}
+	opts := mutateOpts{IfMatch: ifMatch, Scope: validationScope{Resource: res.Key, Name: name}, Flag: res.patchFlag(c, values), Item: c.itemOf(res, name)}
 	return c.Mutate(opts, func(cfg *config.Config) error {
 		target, ok := res.locate(cfg, name)
 		if !ok {
