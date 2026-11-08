@@ -59,3 +59,22 @@ tasks:
 2. **A `leo doctor` / `leo validate` warning when a persisted task session is large.** Same blocker.
 3. **Fresh-per-firing for persistent tasks.** For example, `/clear` before injection, implicit agents only.
 4. **Defaulting high-frequency tasks to `fresh`.** Rejected: it's implicit, and it breaks the external users who rely on resume.
+
+## Addendum (2026-11-07): global defaults
+
+Evan wants `fresh` to be the global default, so defaults gain `defaults.session` and `defaults.session_rotate_after`.
+
+**How a task's effective setting is resolved**
+- A task-level value wins over the default, so `session: resume` on a task opts it back out.
+- An unset value falls through to the defaults. With no default either, it falls back to the built-in `resume` / `0`.
+
+**Persistent tasks never inherit either default.** The defaults apply to oneshot tasks only. A default never makes a persistent task fail `Validate()`. Explicit task-level values on persistent tasks are still rejected, as before.
+
+**Conflicts across levels are resolved, not rejected.** If the effective `session` is `fresh`, any effective rotation is ignored. For example, a task with `session: fresh` under `defaults.session_rotate_after: 20` just runs fresh. It is still an error to set both fields together on the same level, task or defaults. A negative value is rejected at either level.
+
+**Wiring**
+- The `DefaultsConfig` fields.
+- The defaults-section validation.
+- The web schema for defaults, in the same groups as the task fields.
+- The config API.
+- The docs, both config-reference and the defaults cascade.
