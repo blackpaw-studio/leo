@@ -1361,7 +1361,7 @@ func TestValidateTaskSession(t *testing.T) {
 	tests := []struct {
 		name    string
 		task    TaskConfig
-		wantErr string // substring; empty = valid
+		wantErr string // expected error substring; "" means the config is valid
 	}{
 		{"default", TaskConfig{}, ""},
 		{"resume", TaskConfig{Session: "resume"}, ""},
