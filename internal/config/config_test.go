@@ -1393,3 +1393,69 @@ func TestValidateTaskSession(t *testing.T) {
 		})
 	}
 }
+
+func TestValidateDefaultsSession(t *testing.T) {
+	tests := []struct {
+		name     string
+		defaults DefaultsConfig
+		task     TaskConfig
+		wantErr  string
+	}{
+		{"fresh", DefaultsConfig{Session: "fresh"}, TaskConfig{}, ""},
+		{"resume with rotate", DefaultsConfig{Session: "resume", SessionRotateAfter: 5}, TaskConfig{}, ""},
+		{"unknown", DefaultsConfig{Session: "sometimes"}, TaskConfig{}, "defaults.session"},
+		{"negative rotate", DefaultsConfig{SessionRotateAfter: -1}, TaskConfig{}, "defaults.session_rotate_after"},
+		{"fresh and rotate", DefaultsConfig{Session: "fresh", SessionRotateAfter: 3}, TaskConfig{}, "defaults.session_rotate_after"},
+		{"fresh default, persistent task", DefaultsConfig{Session: "fresh"}, TaskConfig{Runtime: "persistent"}, ""},
+		{"rotate default, persistent task", DefaultsConfig{SessionRotateAfter: 3}, TaskConfig{Runtime: "persistent"}, ""},
+		{"fresh task under rotate default", DefaultsConfig{SessionRotateAfter: 3}, TaskConfig{Session: "fresh"}, ""},
+		{"rotate task under fresh default", DefaultsConfig{Session: "fresh"}, TaskConfig{SessionRotateAfter: 3}, ""},
+		{"explicit fresh persistent still rejected", DefaultsConfig{}, TaskConfig{Runtime: "persistent", Session: "fresh"}, "tasks.t.session"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			task := tc.task
+			task.Schedule = "0 * * * *"
+			task.PromptFile = "x.md"
+			cfg := &Config{Defaults: tc.defaults, Tasks: map[string]TaskConfig{"t": task}}
+			err := cfg.Validate()
+			if tc.wantErr == "" {
+				if err != nil {
+					t.Fatalf("Validate() = %v, want nil", err)
+				}
+				return
+			}
+			if err == nil || !contains(err.Error(), tc.wantErr) {
+				t.Fatalf("Validate() = %v, want error containing %q", err, tc.wantErr)
+			}
+		})
+	}
+}
+
+func TestTaskSessionCascade(t *testing.T) {
+	cfg := &Config{Defaults: DefaultsConfig{Session: "fresh", SessionRotateAfter: 4}}
+	tests := []struct {
+		name       string
+		task       TaskConfig
+		wantMode   string
+		wantRotate int
+	}{
+		{"fresh default", TaskConfig{}, SessionFresh, 0},
+		{"task resume overrides, inherits rotate", TaskConfig{Session: "resume"}, SessionResume, 4},
+		{"task rotate overrides", TaskConfig{Session: "resume", SessionRotateAfter: 2}, SessionResume, 2},
+		{"persistent never inherits", TaskConfig{Runtime: "persistent"}, SessionResume, 0},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := cfg.TaskSession(tc.task); got != tc.wantMode {
+				t.Errorf("TaskSession = %q, want %q", got, tc.wantMode)
+			}
+			if got := cfg.TaskSessionRotateAfter(tc.task); got != tc.wantRotate {
+				t.Errorf("TaskSessionRotateAfter = %d, want %d", got, tc.wantRotate)
+			}
+		})
+	}
+	if got := (&Config{}).TaskSession(TaskConfig{}); got != SessionResume {
+		t.Errorf("built-in = %q, want resume", got)
+	}
+}

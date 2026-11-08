@@ -23,7 +23,9 @@
       "Finished": null,
       "Errored": null,
       "Chat": null
-    }
+    },
+    "Session": "",
+    "SessionRotateAfter": 0
   },
   "Web": {
     "Enabled": false,

@@ -318,6 +318,46 @@
               "advanced": false,
               "constraints": {},
               "default": null,
+              "group": "Execution",
+              "help": "default for oneshot tasks that set no session: resume continues the stored session, fresh starts a new one every run; empty = resume",
+              "key": "session",
+              "label": "Session",
+              "options": [
+                {
+                  "label": "resume (built-in)",
+                  "value": ""
+                },
+                {
+                  "label": "resume",
+                  "value": "resume"
+                },
+                {
+                  "label": "fresh",
+                  "value": "fresh"
+                }
+              ],
+              "restart": "agents",
+              "type": "enum",
+              "warning": ""
+            },
+            {
+              "advanced": false,
+              "constraints": {
+                "min": 0
+              },
+              "default": null,
+              "group": "Execution",
+              "help": "default for oneshot tasks: start a fresh session after this many runs; 0 = never (ignored when the effective session is fresh)",
+              "key": "session_rotate_after",
+              "label": "Rotate session after",
+              "restart": "agents",
+              "type": "int",
+              "warning": ""
+            },
+            {
+              "advanced": false,
+              "constraints": {},
+              "default": null,
               "group": "Behavior",
               "help": "Named environments (see the Environments page), comma-separated; merged left to right, later wins",
               "key": "environments",
@@ -922,12 +962,16 @@
             {
               "advanced": false,
               "constraints": {},
-              "default": "resume",
+              "default": null,
               "group": "Execution",
-              "help": "resume continues the task's stored session; fresh starts a new one every run (oneshot only)",
+              "help": "inherit uses defaults.session (built-in resume); resume continues the task's stored session; fresh starts a new one every run (oneshot only)",
               "key": "session",
               "label": "Session",
               "options": [
+                {
+                  "label": "inherit",
+                  "value": ""
+                },
                 {
                   "label": "resume",
                   "value": "resume"
@@ -948,7 +992,7 @@
               },
               "default": null,
               "group": "Execution",
-              "help": "start a fresh session after this many runs; 0 = never (oneshot, session: resume)",
+              "help": "start a fresh session after this many runs; 0 = inherit default (never if no default) (oneshot, session: resume)",
               "key": "session_rotate_after",
               "label": "Rotate session after",
               "restart": "none",

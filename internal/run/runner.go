@@ -122,8 +122,8 @@ func resolveTask(cfg *config.Config, taskName string) (config.TaskConfig, error)
 // store, or a stored session that has reached session_rotate_after yields an
 // empty ID (start a new session). The stored key is never deleted here: it is
 // ignored for fresh tasks and overwritten once a rotated run completes.
-func resolveTaskSession(task config.TaskConfig, taskName string, sessions *session.Store) (string, int) {
-	if sessions == nil || task.Session == config.SessionFresh {
+func resolveTaskSession(cfg *config.Config, task config.TaskConfig, taskName string, sessions *session.Store) (string, int) {
+	if sessions == nil || cfg.TaskSession(task) == config.SessionFresh {
 		return "", 0
 	}
 	entry, _, err := sessions.Lookup("task:" + taskName)
@@ -131,7 +131,7 @@ func resolveTaskSession(task config.TaskConfig, taskName string, sessions *sessi
 		fmt.Fprintf(os.Stderr, "warning: could not read session store: %v\n", err)
 		return "", 0
 	}
-	if task.SessionRotateAfter > 0 && entry.Runs >= task.SessionRotateAfter {
+	if rotate := cfg.TaskSessionRotateAfter(task); rotate > 0 && entry.Runs >= rotate {
 		return "", 0
 	}
 	return entry.SessionID, entry.Runs
@@ -157,7 +157,7 @@ func Preview(cfg *config.Config, taskName string, sessions *session.Store, mcp l
 		return "", nil, fmt.Errorf("assembling prompt: %w", err)
 	}
 
-	sessionID, _ := resolveTaskSession(task, taskName, sessions)
+	sessionID, _ := resolveTaskSession(cfg, task, taskName, sessions)
 
 	leoEnv := leoMCPEnv(cfg, taskName, "")
 
@@ -267,8 +267,8 @@ func RunWith(cfg *config.Config, taskName string, sessions *session.Store, mcp l
 		return fmt.Errorf("assembling prompt: %w", err)
 	}
 
-	sessionID, sessionRuns := resolveTaskSession(task, taskName, sessions)
-	freshSession := task.Session == config.SessionFresh
+	sessionID, sessionRuns := resolveTaskSession(cfg, task, taskName, sessions)
+	freshSession := cfg.TaskSession(task) == config.SessionFresh
 
 	timeout := cfg.TaskTimeout(task)
 	taskWorkspace := meta.Workspace
