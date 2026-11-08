@@ -4,6 +4,9 @@
       "effective_harness": "claude",
       "revision": "sha256:d1e5ba28f778048557b354bff517f7ba525088d0ef619dbdaa4f1b36f87f9f08",
       "values": {
+        "dispatch_viewer": {
+          "placement": ""
+        },
         "environments": [
           "base"
         ],

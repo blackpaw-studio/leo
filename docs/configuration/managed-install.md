@@ -60,6 +60,7 @@ to run.
 | `leo update` | Refuses: `leo is managed by Leo.app; update the app (Leo ▸ Check for Updates)`. This includes `--check`. Independently of the marker, a leo binary inside `*.app/Contents/` never replaces itself, since editing a signed bundle breaks its code signature. |
 | `leo service start`, `stop` (and `--daemon`) | Refuse, naming Leo.app and the launchd label. The app owns registration, and its `KeepAlive` would undo a CLI stop. |
 | `leo service restart` | Runs `launchctl kickstart -k gui/<uid>/<launchd_label>`, never touching `com.blackpaw.leo`. The web UI's restart button and `leo web enable` go through the same path. |
+| Dispatch viewers | An unset `defaults.dispatch.viewer.placement` is `window` rather than `pane`, so viewers stay out of the user's own tmux window. Any explicit value wins. Leo.app sets it through `PUT /config/defaults` (`dispatch_viewer.placement`), not by editing `leo.yaml`. |
 | `leo setup` | Skips the daemon install with an info line. |
 | `leo status` | Reports the manager and the label, and the status of that job. |
 | `leo doctor` | Reports the managed state, the job, `self_path` and where its symlink points, `tmux_path` against the version its directory claims, the tmux resolution (including a pending upgrade), and a loaded `com.blackpaw.leo` job that would race the managed daemon. |

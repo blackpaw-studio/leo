@@ -387,6 +387,42 @@
               ],
               "key": "push",
               "section": "push_defaults"
+            },
+            {
+              "fields": [
+                {
+                  "advanced": false,
+                  "constraints": {},
+                  "default": null,
+                  "group": "Dispatch viewer",
+                  "help": "Where interactive dispatch viewers open; unset is pane, or window on a Leo.app-managed install",
+                  "key": "placement",
+                  "label": "Placement",
+                  "options": [
+                    {
+                      "label": "default",
+                      "value": ""
+                    },
+                    {
+                      "label": "pane",
+                      "value": "pane"
+                    },
+                    {
+                      "label": "window",
+                      "value": "window"
+                    },
+                    {
+                      "label": "background",
+                      "value": "background"
+                    }
+                  ],
+                  "restart": "agents",
+                  "type": "enum",
+                  "warning": ""
+                }
+              ],
+              "key": "dispatch_viewer",
+              "section": "dispatch_viewer"
             }
           ]
         },

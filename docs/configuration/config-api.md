@@ -79,7 +79,7 @@ effective_harness?}`, or a collection's `{revision, items: [{name, values,
 ...}]}`. `GET /config/{resource}/{name}` returns one item. Values are typed
 (`null` is "unset, inherit"). `inherited` holds what an empty field falls back
 to from `defaults`. Subsections nest under their key (`values.permissions`,
-`values.push`); harness options under `values.harness_options`. Secrets are
+`values.push`, `values.dispatch_viewer`); harness options under `values.harness_options`. Secrets are
 write-only: they read as `{"set": true|false}`.
 
 ### Writes
@@ -98,7 +98,7 @@ clears it, a key you omit is left exactly as it is (it is not re-parsed or
 re-trimmed, so a list item that contains a comma survives a write of another
 field). Sending a field the schema does not define is 400;
 a bad value is 422. Nested
-objects (`permissions`, `push`, `harness_options`) merge the same way: a key
+objects (`permissions`, `push`, `dispatch_viewer`, `harness_options`) merge the same way: a key
 inside them replaces, `null` clears just that key, an omitted key is kept, and
 `"harness_options": null` clears every option. Changing `harness` drops the old
 harness's options (they belong to it, as in the browser form), so a switch

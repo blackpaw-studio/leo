@@ -131,6 +131,9 @@ type Config struct {
 
 	// Set at load time from the config file path, not serialized.
 	HomePath string `yaml:"-"`
+	// managedInstall is set by Load from the managed marker (see
+	// managed_install.go); it only moves defaults, never explicit values.
+	managedInstall bool
 
 	// shared records the loaded templates_file; nil when the key is unset.
 	shared *sharedTemplates
@@ -371,6 +374,10 @@ func IsDispatchViewerPlacement(p string) bool {
 func (c *Config) DispatchViewerPlacement() string {
 	if c.Defaults.Dispatch.Viewer.Placement != "" {
 		return c.Defaults.Dispatch.Viewer.Placement
+	}
+	if c.managedInstall {
+		// Leo.app installs keep viewers out of the user's own tmux window.
+		return "window"
 	}
 	return "pane"
 }
@@ -993,6 +1000,7 @@ func parseWith(path string, data []byte, expand bool) (*Config, error) {
 		return nil, fmt.Errorf("resolving config path: %w", err)
 	}
 	cfg.HomePath = filepath.Dir(absPath)
+	cfg.managedInstall = managedProbe(cfg.StatePath())
 
 	// Expand ~ in all workspace and path fields
 	if expand {
