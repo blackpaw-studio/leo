@@ -303,3 +303,70 @@ func TestRunChannelInitRetryCountsOncePerFiring(t *testing.T) {
 		t.Errorf("stored = %+v, want sess-2 with 3 runs (prior 2 + one firing)", got)
 	}
 }
+
+func TestRunDefaultFreshAppliesToOneshotTask(t *testing.T) {
+	r := newSessionRig(t, config.TaskConfig{})
+	r.cfg.Defaults.Session = "fresh"
+	if err := r.sessions.SetRuns("task:mytask", "old-session", 2); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 2; i++ {
+		if err := r.run(); err != nil {
+			t.Fatalf("run %d: %v", i+1, err)
+		}
+	}
+	for i, id := range r.spawns {
+		if id != "" {
+			t.Errorf("spawn %d resumed %q, want a fresh start", i+1, id)
+		}
+	}
+	_, args, err := Preview(r.cfg, "mytask", r.sessions, leomcp.Server{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(strings.Join(args, " "), "--resume") {
+		t.Errorf("preview args contain --resume: %v", args)
+	}
+}
+
+func TestRunTaskResumeOverridesDefaultFresh(t *testing.T) {
+	r := newSessionRig(t, config.TaskConfig{Session: "resume"})
+	r.cfg.Defaults.Session = "fresh"
+	if err := r.sessions.SetRuns("task:mytask", "old-session", 1); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.run(); err != nil {
+		t.Fatal(err)
+	}
+	if len(r.spawns) != 1 || r.spawns[0] != "old-session" {
+		t.Errorf("spawns = %v, want resume of old-session", r.spawns)
+	}
+}
+
+func TestRunDefaultRotationAppliesToUnsetTask(t *testing.T) {
+	r := newSessionRig(t, config.TaskConfig{})
+	r.cfg.Defaults.SessionRotateAfter = 2
+	if err := r.sessions.SetRuns("task:mytask", "old-session", 2); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.run(); err != nil {
+		t.Fatal(err)
+	}
+	if len(r.spawns) != 1 || r.spawns[0] != "" {
+		t.Errorf("spawns = %v, want a rotated fresh start", r.spawns)
+	}
+}
+
+func TestRunTaskFreshIgnoresDefaultRotation(t *testing.T) {
+	r := newSessionRig(t, config.TaskConfig{Session: "fresh"})
+	r.cfg.Defaults.SessionRotateAfter = 20
+	if err := r.cfg.Validate(); err != nil {
+		t.Fatalf("Validate: %v", err)
+	}
+	if err := r.run(); err != nil {
+		t.Fatal(err)
+	}
+	if len(r.spawns) != 1 || r.spawns[0] != "" {
+		t.Errorf("spawns = %v, want fresh", r.spawns)
+	}
+}

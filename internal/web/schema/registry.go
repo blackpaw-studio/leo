@@ -112,6 +112,10 @@ var registry = map[Section][]Field{
 		{Key: "max_turns", Label: "Max turns", Group: "Limits", Constraints: Constraints{Min: intp(0)}},
 		{Key: "idle_suspend_after", Label: "Idle suspend after", Kind: KindDuration, Group: "Behavior", Advanced: true,
 			Help: "Auto-suspend idle ephemeral agents, e.g. \"2h\"; empty disables"},
+		{Key: "session", Label: "Session", Kind: KindSelect, Options: "task_sessions", Group: "Execution",
+			Help: "default for oneshot tasks that set no session: resume continues the stored session, fresh starts a new one every run; empty = resume"},
+		{Key: "session_rotate_after", Label: "Rotate session after", Group: "Execution", Constraints: Constraints{Min: intp(0)},
+			Help: "default for oneshot tasks: start a fresh session after this many runs; 0 = never (ignored when the effective session is fresh)"},
 		fEnvironments("Behavior", false),
 	},
 

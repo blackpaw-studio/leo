@@ -21,7 +21,9 @@
             "errored": true,
             "finished": true,
             "needs_input": true
-          }
+          },
+          "session": "",
+          "session_rotate_after": null
         }
       },
       "restart_required": {

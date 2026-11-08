@@ -278,6 +278,11 @@ type DefaultsConfig struct {
 	// Push chooses which attention transitions push to paired iOS devices.
 	// Unset states push.
 	Push PushConfig `yaml:"push,omitempty"`
+	// Session and SessionRotateAfter are the default for oneshot tasks that
+	// leave their own unset; persistent tasks never inherit them. See
+	// TaskConfig.Session.
+	Session            string `yaml:"session,omitempty"`
+	SessionRotateAfter int    `yaml:"session_rotate_after,omitempty"`
 }
 
 type DispatchConfig struct {
@@ -572,6 +577,31 @@ func (c *Config) TemplateMaxTurns(t TemplateConfig) int {
 	return DefaultMaxTurns
 }
 
+// TaskSession returns the effective session mode for a task: task → defaults →
+// resume. Persistent tasks never inherit the default.
+func (c *Config) TaskSession(t TaskConfig) string {
+	switch {
+	case t.Session != "":
+		return t.Session
+	case t.Runtime != "persistent" && c.Defaults.Session != "":
+		return c.Defaults.Session
+	}
+	return SessionResume
+}
+
+// TaskSessionRotateAfter returns the effective rotation threshold for a task:
+// task → defaults → 0. It is 0 whenever the effective session is fresh, and
+// persistent tasks never inherit the default.
+func (c *Config) TaskSessionRotateAfter(t TaskConfig) int {
+	if c.TaskSession(t) == SessionFresh {
+		return 0
+	}
+	if t.SessionRotateAfter > 0 || t.Runtime == "persistent" {
+		return t.SessionRotateAfter
+	}
+	return c.Defaults.SessionRotateAfter
+}
+
 // TaskMCPConfigPath returns the MCP config path for a task.
 func (c *Config) TaskMCPConfigPath(t TaskConfig) string {
 	ws := c.TaskWorkspace(t)
@@ -632,6 +662,7 @@ func (c *Config) validateDefaults(hr harnessResolver) []string {
 		}
 	}
 
+	errs = append(errs, validateDefaultsSession(c.Defaults)...)
 	errs = append(errs, c.validateEnvironmentList("defaults.environments", c.Defaults.Environments)...)
 	return errs
 }
@@ -1536,6 +1567,26 @@ func validateTaskSession(name string, task TaskConfig) []string {
 		errs = append(errs, fmt.Sprintf("tasks.%s.session_rotate_after has no effect with session: fresh", name))
 	case task.SessionRotateAfter > 0 && task.Runtime == "persistent":
 		errs = append(errs, fmt.Sprintf("tasks.%s.session_rotate_after is not supported with runtime: persistent", name))
+	}
+	return errs
+}
+
+// validateDefaultsSession checks defaults.session and
+// defaults.session_rotate_after. A default is never an error for a task it
+// does not apply to: persistent tasks ignore it, and a task's effective fresh
+// session ignores an inherited rotation.
+func validateDefaultsSession(d DefaultsConfig) []string {
+	var errs []string
+	switch d.Session {
+	case "", SessionResume, SessionFresh:
+	default:
+		errs = append(errs, fmt.Sprintf("defaults.session %q is not valid (use \"resume\" or \"fresh\")", d.Session))
+	}
+	switch {
+	case d.SessionRotateAfter < 0:
+		errs = append(errs, "defaults.session_rotate_after must not be negative")
+	case d.SessionRotateAfter > 0 && d.Session == SessionFresh:
+		errs = append(errs, "defaults.session_rotate_after has no effect with defaults.session: fresh")
 	}
 	return errs
 }
