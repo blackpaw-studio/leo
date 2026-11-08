@@ -41,6 +41,8 @@ func (o OptionSources) TryFor(name string) []Option {
 			{"dontAsk", "dontAsk"}, {"plan", "plan"}}
 	case "runtimes":
 		return []Option{{"oneshot", "oneshot"}, {"persistent", "persistent"}}
+	case "task_sessions":
+		return []Option{{"resume", "resume"}, {"fresh", "fresh"}}
 	case "dispatch_placements":
 		return []Option{{"", "default"}, {"pane", "pane"}, {"window", "window"}, {"background", "background"}}
 	case "isolations":

@@ -128,6 +128,8 @@ leo agent reset daily
 | `template`  | string | `<name>` references `templates:`. Optional — omit for an implicit agent synthesized from this task's own fields. |
 | `queue_max` | int    | Max queued firings per target agent (default 5; overflow rejected with "queue full").           |
 
+`session: fresh` and `session_rotate_after` are oneshot-only: `leo validate` rejects them on a `runtime: persistent` task, because a persistent task's session lives on an agent that may be shared through `template:`. Use `leo agent reset <name>` to start that conversation over.
+
 See [Config Reference → `tasks`](config-reference.md#tasks) for the full field list and [Config Reference → `templates`](config-reference.md#templates) for what an explicit binding target looks like.
 
 ## How it works

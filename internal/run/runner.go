@@ -117,6 +117,34 @@ func resolveTask(cfg *config.Config, taskName string) (config.TaskConfig, error)
 	return config.TaskConfig{}, fmt.Errorf("task %q not found in config", taskName)
 }
 
+// resolveTaskSession picks the session a oneshot task run should resume and
+// the run count already recorded against it. A "fresh" task, an unreadable
+// store, or a stored session that has reached session_rotate_after yields an
+// empty ID (start a new session). The stored key is never deleted here: it is
+// ignored for fresh tasks and overwritten once a rotated run completes.
+func resolveTaskSession(task config.TaskConfig, taskName string, sessions *session.Store) (string, int) {
+	if sessions == nil || task.Session == config.SessionFresh {
+		return "", 0
+	}
+	entry, _, err := sessions.Lookup("task:" + taskName)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "warning: could not read session store: %v\n", err)
+		return "", 0
+	}
+	if task.SessionRotateAfter > 0 && entry.Runs >= task.SessionRotateAfter {
+		return "", 0
+	}
+	return entry.SessionID, entry.Runs
+}
+
+// nextSessionRuns returns the run count to store after a completed attempt.
+func nextSessionRuns(resumed bool, prior int) int {
+	if resumed {
+		return prior + 1
+	}
+	return 1
+}
+
 // Preview returns the assembled prompt and CLI args without executing.
 func Preview(cfg *config.Config, taskName string, sessions *session.Store, mcp leomcp.Server) (string, []string, error) {
 	task, err := resolveTask(cfg, taskName)
@@ -129,14 +157,7 @@ func Preview(cfg *config.Config, taskName string, sessions *session.Store, mcp l
 		return "", nil, fmt.Errorf("assembling prompt: %w", err)
 	}
 
-	var sessionID string
-	if sessions != nil {
-		sid, _, getErr := sessions.Get("task:" + taskName)
-		if getErr != nil {
-			fmt.Fprintf(os.Stderr, "warning: could not read session store: %v\n", getErr)
-		}
-		sessionID = sid
-	}
+	sessionID, _ := resolveTaskSession(task, taskName, sessions)
 
 	leoEnv := leoMCPEnv(cfg, taskName, "")
 
@@ -246,14 +267,8 @@ func RunWith(cfg *config.Config, taskName string, sessions *session.Store, mcp l
 		return fmt.Errorf("assembling prompt: %w", err)
 	}
 
-	var sessionID string
-	if sessions != nil {
-		sid, _, getErr := sessions.Get("task:" + taskName)
-		if getErr != nil {
-			fmt.Fprintf(os.Stderr, "warning: could not read session store: %v\n", getErr)
-		}
-		sessionID = sid
-	}
+	sessionID, sessionRuns := resolveTaskSession(task, taskName, sessions)
+	freshSession := task.Session == config.SessionFresh
 
 	timeout := cfg.TaskTimeout(task)
 	taskWorkspace := meta.Workspace
@@ -282,6 +297,7 @@ func RunWith(cfg *config.Config, taskName string, sessions *session.Store, mcp l
 			// failure starts consuming the task's own retry budget.
 			if !errors.Is(lastErr, errChannelMCPInit) {
 				sessionID = ""
+				sessionRuns = 0
 			}
 		}
 		isChannelInitRetry = false
@@ -309,8 +325,13 @@ func RunWith(cfg *config.Config, taskName string, sessions *session.Store, mcp l
 		interrupted := errors.Is(ar.execErr, errInterrupted)
 
 		// Store session ID for next run
-		if !interrupted && sessions != nil && ar.result.SessionID != "" {
-			if setErr := sessions.Set("task:"+taskName, ar.result.SessionID); setErr != nil {
+		if !interrupted && !freshSession && sessions != nil && ar.result.SessionID != "" {
+			// A run that resumed extends the count read before this firing
+			// (sessionRuns is never advanced here, so channel-init retries
+			// that resume the same session count once); one that started
+			// fresh (retry clear, stale recovery, rotation) begins at 1.
+			runs := nextSessionRuns(ar.resumed, sessionRuns)
+			if setErr := sessions.SetRuns("task:"+taskName, ar.result.SessionID, runs); setErr != nil {
 				fmt.Fprintf(os.Stderr, "warning: failed to store session ID: %v\n", setErr)
 			}
 		}
@@ -408,6 +429,9 @@ type attemptResult struct {
 	output  []byte
 	execErr error
 	result  harness.Result
+	// resumed is true when the attempt's final spawn continued an existing
+	// session; false for a fresh start, including stale-session recovery.
+	resumed bool
 }
 
 // runTaskAttempt spawns the resolved harness for one attempt of the task,
@@ -430,6 +454,8 @@ func runTaskAttempt(cfg *config.Config, task config.TaskConfig, taskName, prompt
 	output, execErr := executeCommand(ctx, h.Binary(), taskWorkspace, args, task.Channels, task.DevChannels, spawnEnv, channelPrefixes)
 	result, _ := h.ParseEvents(bytes.NewReader(output))
 
+	resumed := sessionID != ""
+
 	// If session-resume failed with a stale session, retry without it.
 	if execErr != nil && sessionID != "" && isSessionError(result, output) {
 		if sessions != nil {
@@ -438,13 +464,14 @@ func runTaskAttempt(cfg *config.Config, task config.TaskConfig, taskName, prompt
 			}
 		}
 
+		resumed = false
 		args, harnessEnv = buildArgs(cfg, task, taskName, prompt, "", leoEnv, mcp)
 		spawnEnv = mergeEnvMaps(harnessEnv, taskEnv, leoEnv)
 		output, execErr = executeCommand(ctx, h.Binary(), taskWorkspace, args, task.Channels, task.DevChannels, spawnEnv, channelPrefixes)
 		result, _ = h.ParseEvents(bytes.NewReader(output))
 	}
 
-	return attemptResult{output: output, execErr: execErr, result: result}
+	return attemptResult{output: output, execErr: execErr, result: result, resumed: resumed}
 }
 
 // notifyFailure spawns a short, bounded claude invocation that asks the agent

@@ -415,6 +415,13 @@ type TaskConfig struct {
 	QueueMax       int            `yaml:"queue_max,omitempty"` // 0 → use default (5)
 	Harness        string         `yaml:"harness,omitempty"`
 	HarnessOptions map[string]any `yaml:"harness_options,omitempty"`
+	// Session selects how a oneshot task treats its stored session:
+	// "resume" (default) continues it, "fresh" starts a new one every run.
+	Session string `yaml:"session,omitempty"`
+	// SessionRotateAfter starts a fresh session once the stored one has
+	// completed this many runs (0 = never). Only valid with session: resume
+	// on a oneshot task.
+	SessionRotateAfter int `yaml:"session_rotate_after,omitempty"`
 	// Owner is the agent whose Leo Chat thread receives this task's output
 	// (leo_chat_post from a run). Validated as a name only; resolved when a
 	// message is posted. Empty defaults: a persistent task's own agent,
@@ -860,6 +867,7 @@ func (c *Config) Validate() error {
 		if task.Runtime != "" && task.Runtime != "oneshot" && task.Runtime != "persistent" {
 			errs = append(errs, fmt.Sprintf("tasks.%s.runtime %q is not valid (use \"oneshot\" or \"persistent\")", name, task.Runtime))
 		}
+		errs = append(errs, validateTaskSession(name, task)...)
 		if task.Runtime != "persistent" && task.Template != "" {
 			errs = append(errs, fmt.Sprintf("tasks.%s.template is only valid when runtime: persistent", name))
 		}
@@ -1497,5 +1505,37 @@ func validatePermissions(name string, p leotools.Permissions, templates map[stri
 	checkTemplates("can_spawn", p.CanSpawn)
 	checkTemplates("can_consult", p.CanConsult)
 
+	return errs
+}
+
+// Task session modes (TaskConfig.Session).
+const (
+	SessionResume = "resume"
+	SessionFresh  = "fresh"
+)
+
+// validateTaskSession checks session and session_rotate_after. Both only make
+// sense for oneshot tasks: a persistent task's session lives on an agent that
+// may be shared through template:, so clearing it per firing is a separate
+// design.
+func validateTaskSession(name string, task TaskConfig) []string {
+	var errs []string
+	switch task.Session {
+	case "", SessionResume:
+	case SessionFresh:
+		if task.Runtime == "persistent" {
+			errs = append(errs, fmt.Sprintf("tasks.%s.session: fresh is not supported with runtime: persistent (the session belongs to the agent)", name))
+		}
+	default:
+		errs = append(errs, fmt.Sprintf("tasks.%s.session %q is not valid (use \"resume\" or \"fresh\")", name, task.Session))
+	}
+	switch {
+	case task.SessionRotateAfter < 0:
+		errs = append(errs, fmt.Sprintf("tasks.%s.session_rotate_after must not be negative", name))
+	case task.SessionRotateAfter > 0 && task.Session == SessionFresh:
+		errs = append(errs, fmt.Sprintf("tasks.%s.session_rotate_after has no effect with session: fresh", name))
+	case task.SessionRotateAfter > 0 && task.Runtime == "persistent":
+		errs = append(errs, fmt.Sprintf("tasks.%s.session_rotate_after is not supported with runtime: persistent", name))
+	}
 	return errs
 }

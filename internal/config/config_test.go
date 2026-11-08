@@ -1356,3 +1356,40 @@ func TestValidateTemplateIsolation(t *testing.T) {
 		})
 	}
 }
+
+func TestValidateTaskSession(t *testing.T) {
+	tests := []struct {
+		name    string
+		task    TaskConfig
+		wantErr string // expected error substring; "" means the config is valid
+	}{
+		{"default", TaskConfig{}, ""},
+		{"resume", TaskConfig{Session: "resume"}, ""},
+		{"fresh", TaskConfig{Session: "fresh"}, ""},
+		{"unknown value", TaskConfig{Session: "sometimes"}, "tasks.t.session"},
+		{"fresh persistent", TaskConfig{Session: "fresh", Runtime: "persistent"}, "tasks.t.session"},
+		{"rotate with resume", TaskConfig{Session: "resume", SessionRotateAfter: 3}, ""},
+		{"rotate with default", TaskConfig{SessionRotateAfter: 3}, ""},
+		{"negative rotate", TaskConfig{SessionRotateAfter: -1}, "tasks.t.session_rotate_after"},
+		{"rotate with fresh", TaskConfig{Session: "fresh", SessionRotateAfter: 3}, "tasks.t.session_rotate_after"},
+		{"rotate with persistent", TaskConfig{Runtime: "persistent", SessionRotateAfter: 3}, "tasks.t.session_rotate_after"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			task := tc.task
+			task.Schedule = "0 * * * *"
+			task.PromptFile = "x.md"
+			cfg := &Config{Tasks: map[string]TaskConfig{"t": task}}
+			err := cfg.Validate()
+			if tc.wantErr == "" {
+				if err != nil {
+					t.Fatalf("Validate() = %v, want nil", err)
+				}
+				return
+			}
+			if err == nil || !contains(err.Error(), tc.wantErr) {
+				t.Fatalf("Validate() = %v, want error containing %q", err, tc.wantErr)
+			}
+		})
+	}
+}

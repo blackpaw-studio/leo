@@ -25,6 +25,8 @@
           "retries": null,
           "runtime": "",
           "schedule": "0 9 * * 1",
+          "session": "",
+          "session_rotate_after": null,
           "silent": false,
           "template": "",
           "timeout": "",

@@ -63,6 +63,8 @@
       "QueueMax": 0,
       "Harness": "",
       "HarnessOptions": null,
+      "Session": "",
+      "SessionRotateAfter": 0,
       "Owner": ""
     }
   },
