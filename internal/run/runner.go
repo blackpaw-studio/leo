@@ -326,10 +326,12 @@ func RunWith(cfg *config.Config, taskName string, sessions *session.Store, mcp l
 
 		// Store session ID for next run
 		if !interrupted && !freshSession && sessions != nil && ar.result.SessionID != "" {
-			// A run that resumed extends the stored session's count; one that
-			// started fresh (retry clear, stale recovery, rotation) begins at 1.
-			sessionRuns = nextSessionRuns(ar.resumed, sessionRuns)
-			if setErr := sessions.SetRuns("task:"+taskName, ar.result.SessionID, sessionRuns); setErr != nil {
+			// A run that resumed extends the count read before this firing
+			// (sessionRuns is never advanced here, so channel-init retries
+			// that resume the same session count once); one that started
+			// fresh (retry clear, stale recovery, rotation) begins at 1.
+			runs := nextSessionRuns(ar.resumed, sessionRuns)
+			if setErr := sessions.SetRuns("task:"+taskName, ar.result.SessionID, runs); setErr != nil {
 				fmt.Fprintf(os.Stderr, "warning: failed to store session ID: %v\n", setErr)
 			}
 		}

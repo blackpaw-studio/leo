@@ -30,7 +30,7 @@ tasks:
 - **Why an enum and not a bool:** it leaves room for later modes, such as rotation, without a second field.
 - **Harnesses:** works on all three. Each one already starts fresh when `SessionArgs` gets an empty ID.
 - **Rotation:** `session_rotate_after: N` (integer, default 0 = never) applies only with `session: resume`.
-  - The runner keeps a count of completed runs for the stored session, next to the `task:<name>` entry in the session store.
+  - The runner keeps a count of uses of the stored session (any non-interrupted attempt that returns a session ID counts, successful or not; a firing counts once even across channel-init retries), next to the `task:<name>` entry in the session store.
   - Before a run, if the count is at least N, the run starts fresh. Its new session ID is then stored with a count of 1.
   - Otherwise the run resumes the stored session, and the count goes up by one when the run completes.
   - Interrupted attempts don't count, matching today's skip of `Set`.

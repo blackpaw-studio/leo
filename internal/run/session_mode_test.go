@@ -267,3 +267,39 @@ func TestRunInterruptedAttemptDoesNotCountTowardRotation(t *testing.T) {
 		t.Errorf("stored after interrupt = %+v, want untouched seed/2", got)
 	}
 }
+
+func TestRunChannelInitRetryCountsOncePerFiring(t *testing.T) {
+	r := newSessionRig(t, config.TaskConfig{
+		SessionRotateAfter: 5,
+		Channels:           []string{"plugin:blackpaw-telegram@blackpaw-studio/claude-plugins"},
+	})
+	origBackoff := channelInitBackoff
+	channelInitBackoff = 0
+	t.Cleanup(func() { channelInitBackoff = origBackoff })
+	if err := r.sessions.SetRuns("task:mytask", "seed", 2); err != nil {
+		t.Fatal(err)
+	}
+
+	initFailed := `{"type":"system","subtype":"init","mcp_servers":[{"name":"plugin:blackpaw-telegram:blackpaw-telegram","status":"failed"}]}`
+	result := func(id string) string {
+		return fmt.Sprintf(`{"type":"result","subtype":"success","is_error":false,"num_turns":1,"session_id":"%s","result":"ok"}`, id)
+	}
+	n := 0
+	execCommand = func(name string, args ...string) *exec.Cmd {
+		n++
+		if n == 1 {
+			return exec.Command("sh", "-c", "printf '%s\\n' \"$0\" \"$1\"; sleep 5", initFailed, result("sess-1"))
+		}
+		return exec.Command("sh", "-c", "printf '%s\\n' \"$0\"", result("sess-2"))
+	}
+
+	if err := r.run(); err != nil {
+		t.Fatal(err)
+	}
+	if n != 2 {
+		t.Fatalf("spawns = %d, want 2", n)
+	}
+	if got := r.stored(); got.SessionID != "sess-2" || got.Runs != 3 {
+		t.Errorf("stored = %+v, want sess-2 with 3 runs (prior 2 + one firing)", got)
+	}
+}
