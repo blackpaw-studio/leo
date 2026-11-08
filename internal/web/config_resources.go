@@ -102,8 +102,12 @@ var configResources = []*configResource{
 	{
 		Key: "defaults", Label: "Defaults", Noun: "Defaults",
 		Section: schema.SectionDefaults, HarnessOptions: true, Restart: restartAgents,
-		Subs: []configSub{{Key: "push", Section: schema.SectionPushDefaults,
-			of: func(t any) any { return &t.(*config.DefaultsConfig).Push }}},
+		Subs: []configSub{
+			{Key: "push", Section: schema.SectionPushDefaults,
+				of: func(t any) any { return &t.(*config.DefaultsConfig).Push }},
+			{Key: "dispatch_viewer", Section: schema.SectionDispatchViewer,
+				of: func(t any) any { return &t.(*config.DefaultsConfig).Dispatch.Viewer }},
+		},
 		locate: func(cfg *config.Config, _ string) (any, bool) { return &cfg.Defaults, true },
 		put:    func(*config.Config, string, any) {}, // &cfg.Defaults is the live field
 		setHarnessOptions: func(t any, o map[string]any) {

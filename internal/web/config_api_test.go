@@ -925,3 +925,34 @@ func TestWriteResponseRevisionsAgree(t *testing.T) {
 		t.Error(e)
 	}
 }
+
+func TestPutDefaultsDispatchViewer(t *testing.T) {
+	h := newAPIHarness(t)
+	res := h.put("/config/defaults", map[string]any{
+		"dispatch_viewer": map[string]any{"placement": "background"},
+	})
+	wantStatus(t, res, http.StatusOK)
+	v := h.loadConfig().Defaults.Dispatch.Viewer
+	if v.Placement != "background" || v.MaxPanes != nil {
+		t.Fatalf("viewer = %+v", v)
+	}
+	got := h.do(http.MethodGet, "/config/defaults", "", nil).data()["values"].(map[string]any)
+	if viewer, _ := got["dispatch_viewer"].(map[string]any); viewer["placement"] != "background" {
+		t.Errorf("dispatch_viewer read = %v", got["dispatch_viewer"])
+	}
+	wantStatus(t, h.put("/config/defaults", map[string]any{"dispatch_viewer": map[string]any{"placement": nil}}), http.StatusOK)
+	if p := h.loadConfig().Defaults.Dispatch.Viewer.Placement; p != "" {
+		t.Errorf("null placement left %q", p)
+	}
+}
+
+func TestPutDefaultsDispatchViewerRejectsUnknownPlacement(t *testing.T) {
+	h := newAPIHarness(t)
+	before := h.fileBytes()
+	res := h.put("/config/defaults", map[string]any{"dispatch_viewer": map[string]any{"placement": "floating"}})
+	wantStatus(t, res, http.StatusUnprocessableEntity)
+	wantCode(t, res, CodeInvalid)
+	if h.fileBytes() != before {
+		t.Error("an invalid write changed leo.yaml")
+	}
+}

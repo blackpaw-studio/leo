@@ -34,6 +34,10 @@ var Excluded = map[Section][]string{
 		// push is a nested struct rendered from SectionPushDefaults as an extra
 		// field group (see handleDefaultsPage), like permissions on templates.
 		"push"},
+	// max_panes and main_pane_height are *int: the schema has no optional-int
+	// kind, so they stay on the dispatch settings endpoint
+	// (POST /dispatch/viewer/default).
+	SectionDispatchViewer: {"max_panes", "main_pane_height"},
 	SectionTask: {"harness_options", "provider",
 		"permission_mode", "allowed_tools", "disallowed_tools", "append_system_prompt"},
 	// permissions is a nested struct, not a flat field: it is rendered from
@@ -172,6 +176,11 @@ var registry = map[Section][]Field{
 	SectionPushDefaults: fPush(KindBool),
 	// Templates show inherit/on/off; inherit removes the key.
 	SectionPushTemplate: fPush(KindTriBool),
+
+	SectionDispatchViewer: {
+		{Key: "placement", Label: "Placement", Kind: KindSelect, Options: "dispatch_placements", Group: "Dispatch viewer",
+			Help: "Where interactive dispatch viewers open; unset is pane, or window on a Leo.app-managed install"},
+	},
 
 	SectionEnvironment: {
 		{Key: "env", Label: "Variables", Kind: KindEnvMap, Group: "General",

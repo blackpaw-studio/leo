@@ -14,6 +14,16 @@ All notable user-visible changes to Leo are documented here.
 
 ### Added
 
+- **Managed installs default dispatch viewers to `window`.** On a Leo.app
+  install (valid `state/managed.json`), an unset
+  `defaults.dispatch.viewer.placement` is now `window` instead of `pane`.
+  Explicit values, including one a follower pulls from its lead, still win;
+  unmanaged installs are unchanged. The setting is also writable through the
+  config API: `PUT /config/defaults` with
+  `{"dispatch_viewer": {"placement": "pane|window|background"}}` (unknown
+  values are 422; `null` clears it). `max_panes` and `main_pane_height` stay
+  on `POST /dispatch/viewer/default`.
+
 - **`fresh_session` for agent move and copy.** `leo agent move` and
   `leo agent copy` take `--fresh-session` (`fresh_session` in the HTTP body and
   the `leo_agent_move` / `leo_agent_copy` tools): the transcript check is

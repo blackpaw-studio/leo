@@ -55,6 +55,10 @@ const (
 	// those forms, like SectionPermissions.
 	SectionPushDefaults Section = "push_defaults"
 	SectionPushTemplate Section = "push_template"
+	// SectionDispatchViewer is defaults.dispatch.viewer (JSON key
+	// dispatch_viewer under defaults). API-only: the dispatch settings menu has
+	// its own endpoint, so no form renders it.
+	SectionDispatchViewer Section = "dispatch_viewer"
 	// SectionEnvironment is one entry of the top-level environments map. The
 	// map's values are bare env maps, so the form edits them through
 	// EnvironmentEntry.
@@ -74,7 +78,7 @@ func AllSections() []Section {
 		SectionDefaults, SectionTask, SectionTemplate,
 		SectionClientHost, SectionWeb,
 		SectionClient, SectionPermissions, SectionPushDefaults, SectionPushTemplate,
-		SectionEnvironment,
+		SectionDispatchViewer, SectionEnvironment,
 	}
 }
 
@@ -97,6 +101,8 @@ func StructFor(s Section) reflect.Type {
 		return reflect.TypeOf(leotools.Permissions{})
 	case SectionPushDefaults, SectionPushTemplate:
 		return reflect.TypeOf(config.PushConfig{})
+	case SectionDispatchViewer:
+		return reflect.TypeOf(config.DispatchViewerConfig{})
 	case SectionEnvironment:
 		return reflect.TypeOf(EnvironmentEntry{})
 	}

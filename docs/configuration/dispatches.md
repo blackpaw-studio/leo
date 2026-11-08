@@ -13,6 +13,11 @@ Dispatch viewers open in panes below the caller by default, using tmux's
 (default `3`), and `main_pane_height: 20..90` (default `60`). Leo falls back to
 a separate window when the cap is reached or a split fails. Session options
 `@leo_viewer_placement` and `@leo_viewer_max_panes` override the config.
+On a [Leo.app-managed install](managed-install.md) an unset `placement`
+defaults to `window` instead of `pane`; any explicit value, including one
+inherited from a lead by [follow-lead](follow-lead.md), wins. The JSON config
+API edits it as `values.dispatch_viewer.placement` on `/config/defaults`
+(`max_panes` and `main_pane_height` stay on the settings-menu endpoint).
 Release an idle or finished interactive pane with `leo dispatch release <id>`.
 
 `background` never touches the caller's tmux session: every dispatch (headless
