@@ -150,3 +150,54 @@ func TestApplyDefaultOnPointerBool(t *testing.T) {
 		t.Fatalf("checked toggle must clear the key: %+v", p)
 	}
 }
+
+// A browser select submits its selected option, so an unset session only
+// stays unset if the select offers a blank option and the field declares no
+// effective default that would pre-select "resume". Saving through the form
+// must not write session: resume, which would override defaults.session.
+func TestUnsetSessionRoundTripsAsUnset(t *testing.T) {
+	cases := []struct {
+		section Section
+		target  any
+	}{
+		{SectionTask, &config.TaskConfig{}},
+		{SectionDefaults, &config.DefaultsConfig{}},
+	}
+	for _, tc := range cases {
+		t.Run(string(tc.section), func(t *testing.T) {
+			var field Field
+			for _, f := range FieldsFor(tc.section) {
+				if f.Key == "session" {
+					field = f
+				}
+			}
+			if field.Key == "" {
+				t.Fatal("no session field")
+			}
+			if field.Default != nil {
+				t.Errorf("session Default = %v, want nil so unset stays unset", field.Default)
+			}
+			blank := false
+			for _, o := range (OptionSources{Cfg: &config.Config{}}).For(field.Options) {
+				blank = blank || o.Value == ""
+			}
+			if !blank {
+				t.Fatalf("options %q have no blank value; the browser would submit resume", field.Options)
+			}
+			form := renderToForm(Values(tc.target, tc.section, nil))
+			if err := Apply(tc.target, tc.section, form); err != nil {
+				t.Fatal(err)
+			}
+			var got string
+			switch v := tc.target.(type) {
+			case *config.TaskConfig:
+				got = v.Session
+			case *config.DefaultsConfig:
+				got = v.Session
+			}
+			if got != "" {
+				t.Errorf("session after round trip = %q, want unset", got)
+			}
+		})
+	}
+}

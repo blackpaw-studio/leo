@@ -42,7 +42,9 @@ func (o OptionSources) TryFor(name string) []Option {
 	case "runtimes":
 		return []Option{{"oneshot", "oneshot"}, {"persistent", "persistent"}}
 	case "task_sessions":
-		return []Option{{"resume", "resume"}, {"fresh", "fresh"}}
+		return []Option{{"", "inherit"}, {"resume", "resume"}, {"fresh", "fresh"}}
+	case "default_sessions":
+		return []Option{{"", "resume (built-in)"}, {"resume", "resume"}, {"fresh", "fresh"}}
 	case "dispatch_placements":
 		return []Option{{"", "default"}, {"pane", "pane"}, {"window", "window"}, {"background", "background"}}
 	case "isolations":

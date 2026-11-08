@@ -324,6 +324,10 @@
               "label": "Session",
               "options": [
                 {
+                  "label": "resume (built-in)",
+                  "value": ""
+                },
+                {
                   "label": "resume",
                   "value": "resume"
                 },
@@ -958,12 +962,16 @@
             {
               "advanced": false,
               "constraints": {},
-              "default": "resume",
+              "default": null,
               "group": "Execution",
-              "help": "resume continues the task's stored session; fresh starts a new one every run (oneshot only)",
+              "help": "inherit uses defaults.session (built-in resume); resume continues the task's stored session; fresh starts a new one every run (oneshot only)",
               "key": "session",
               "label": "Session",
               "options": [
+                {
+                  "label": "inherit",
+                  "value": ""
+                },
                 {
                   "label": "resume",
                   "value": "resume"
