@@ -992,7 +992,7 @@
               },
               "default": null,
               "group": "Execution",
-              "help": "start a fresh session after this many runs; 0 = never (oneshot, session: resume)",
+              "help": "start a fresh session after this many runs; 0 = inherit default (never if no default) (oneshot, session: resume)",
               "key": "session_rotate_after",
               "label": "Rotate session after",
               "restart": "none",

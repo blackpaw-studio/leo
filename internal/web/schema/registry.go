@@ -133,7 +133,7 @@ var registry = map[Section][]Field{
 		{Key: "session", Label: "Session", Kind: KindSelect, Options: "task_sessions", Group: "Execution",
 			Help: "inherit uses defaults.session (built-in resume); resume continues the task's stored session; fresh starts a new one every run (oneshot only)"},
 		{Key: "session_rotate_after", Label: "Rotate session after", Group: "Execution", Constraints: Constraints{Min: intp(0)},
-			Help: "start a fresh session after this many runs; 0 = never (oneshot, session: resume)"},
+			Help: "start a fresh session after this many runs; 0 = inherit default (never if no default) (oneshot, session: resume)"},
 		{Key: "runtime", Label: "Runtime", Kind: KindSelect, Options: "runtimes", Group: "Execution", Default: "oneshot",
 			Help: "persistent delivers into a supervised agent instead of spawning claude -p"},
 		{Key: "template", Label: "Template", Kind: KindSelect, Options: "templates", Group: "Execution",
