@@ -922,6 +922,42 @@
             {
               "advanced": false,
               "constraints": {},
+              "default": "resume",
+              "group": "Execution",
+              "help": "resume continues the task's stored session; fresh starts a new one every run (oneshot only)",
+              "key": "session",
+              "label": "Session",
+              "options": [
+                {
+                  "label": "resume",
+                  "value": "resume"
+                },
+                {
+                  "label": "fresh",
+                  "value": "fresh"
+                }
+              ],
+              "restart": "none",
+              "type": "enum",
+              "warning": ""
+            },
+            {
+              "advanced": false,
+              "constraints": {
+                "min": 0
+              },
+              "default": null,
+              "group": "Execution",
+              "help": "start a fresh session after this many runs; 0 = never (oneshot, session: resume)",
+              "key": "session_rotate_after",
+              "label": "Rotate session after",
+              "restart": "none",
+              "type": "int",
+              "warning": ""
+            },
+            {
+              "advanced": false,
+              "constraints": {},
               "default": "oneshot",
               "group": "Execution",
               "help": "persistent delivers into a supervised agent instead of spawning claude -p",
