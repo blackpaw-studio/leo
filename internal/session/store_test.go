@@ -166,3 +166,51 @@ func TestNewID(t *testing.T) {
 		t.Fatalf("expected UUID length 36, got %d: %q", len(id1), id1)
 	}
 }
+
+func TestStoreLookupReadsRunCount(t *testing.T) {
+	store := NewStore(t.TempDir())
+
+	if err := store.SetRuns("task:a", "sess-1", 4); err != nil {
+		t.Fatalf("SetRuns: %v", err)
+	}
+	entry, found, err := store.Lookup("task:a")
+	if err != nil || !found {
+		t.Fatalf("Lookup = found %v, err %v", found, err)
+	}
+	if entry.SessionID != "sess-1" || entry.Runs != 4 {
+		t.Errorf("entry = %+v, want sess-1 with 4 runs", entry)
+	}
+
+	// Plain Set stores no count.
+	if err := store.Set("task:a", "sess-2"); err != nil {
+		t.Fatalf("Set: %v", err)
+	}
+	entry, _, _ = store.Lookup("task:a")
+	if entry.Runs != 0 {
+		t.Errorf("Runs after Set = %d, want 0", entry.Runs)
+	}
+
+	if _, found, err := store.Lookup("task:missing"); err != nil || found {
+		t.Errorf("Lookup(missing) = found %v, err %v", found, err)
+	}
+}
+
+func TestStoreLegacyEntryWithoutRunsReadsZero(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "state", "sessions.json")
+	if err := os.MkdirAll(filepath.Dir(path), 0o750); err != nil {
+		t.Fatal(err)
+	}
+	legacy := `{"task:old":{"session_id":"legacy-id","updated_at":"2026-01-02T03:04:05Z"}}`
+	if err := os.WriteFile(path, []byte(legacy), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	entry, found, err := NewStore(dir).Lookup("task:old")
+	if err != nil || !found {
+		t.Fatalf("Lookup = found %v, err %v", found, err)
+	}
+	if entry.SessionID != "legacy-id" || entry.Runs != 0 {
+		t.Errorf("entry = %+v, want legacy-id with 0 runs", entry)
+	}
+}

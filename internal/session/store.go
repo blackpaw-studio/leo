@@ -13,6 +13,9 @@ import (
 type Entry struct {
 	SessionID string    `json:"session_id"`
 	UpdatedAt time.Time `json:"updated_at"`
+	// Runs counts completed runs against SessionID, for tasks that rotate
+	// their session. Entries written before the field existed read as 0.
+	Runs int `json:"runs,omitempty"`
 }
 
 // Store manages session ID persistence in a JSON file.
@@ -40,8 +43,25 @@ func (s *Store) Get(key string) (string, bool, error) {
 	return entry.SessionID, true, nil
 }
 
-// Set stores a session ID for the given key.
+// Lookup returns the full stored entry (session ID and run count) for the
+// given key.
+func (s *Store) Lookup(key string) (Entry, bool, error) {
+	entries, err := s.load()
+	if err != nil {
+		return Entry{}, false, err
+	}
+	entry, ok := entries[key]
+	return entry, ok, nil
+}
+
+// Set stores a session ID for the given key, with no run count.
 func (s *Store) Set(key string, sessionID string) error {
+	return s.SetRuns(key, sessionID, 0)
+}
+
+// SetRuns stores a session ID together with the number of runs completed
+// against it.
+func (s *Store) SetRuns(key string, sessionID string, runs int) error {
 	entries, err := s.load()
 	if err != nil {
 		return err
@@ -49,6 +69,7 @@ func (s *Store) Set(key string, sessionID string) error {
 	entries[key] = Entry{
 		SessionID: sessionID,
 		UpdatedAt: time.Now().UTC(),
+		Runs:      runs,
 	}
 	return s.save(entries)
 }
