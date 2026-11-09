@@ -95,3 +95,39 @@ func TestServeClient_ListAgentsNoRecords(t *testing.T) {
 		t.Fatalf("status %d: %s", w.Code, w.Body)
 	}
 }
+
+// Real agents are stored under canonical names (leo-rocket) while policies and
+// docs use display names (rocket). Discovery must match either form and hand
+// back a name the policy permits, so it can be passed straight back to send.
+func TestServeClient_ListAgentsCanonicalAndDisplayNames(t *testing.T) {
+	records := []agent.Record{
+		{Name: "leo-rocket", Status: "running", Workspace: "/secret/ws"},
+		{Name: "leo-scout-1", Status: "running"},
+		{Name: "leo-infra", Status: "running"},
+		{Name: "leo-canon-only", Status: "stopped"},
+	}
+	cases := []struct {
+		name       string
+		canMessage []string
+		want       string
+	}{
+		{"display-name policy", []string{"rocket", "scout-*"}, `[{"name":"rocket","status":"running"},{"name":"scout-1","status":"running"}]`},
+		{"canonical-name policy", []string{"leo-rocket"}, `[{"name":"leo-rocket","status":"running"}]`},
+		{"canonical glob", []string{"leo-scout-*"}, `[{"name":"leo-scout-1","status":"running"}]`},
+		{"both forms permitted: canonical wins", []string{"rocket", "leo-rocket"}, `[{"name":"leo-rocket","status":"running"}]`},
+		{"nothing matches either form", []string{"nobody"}, `[]`},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			s := newClientAgentsServer(t, records)
+			s.SetClients([]ClientPolicy{{Name: "dionysus", Token: listClientToken, CanMessage: tc.canMessage}})
+			w := requestAs(t, s, "GET", "/web/client/agents", listClientToken, "")
+			var env struct {
+				Data json.RawMessage `json:"data"`
+			}
+			if w.Code != http.StatusOK || json.Unmarshal(w.Body.Bytes(), &env) != nil || string(env.Data) != tc.want {
+				t.Fatalf("status %d data %s, want %s", w.Code, env.Data, tc.want)
+			}
+		})
+	}
+}

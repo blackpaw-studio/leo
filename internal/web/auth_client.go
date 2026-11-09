@@ -13,6 +13,7 @@ import (
 
 	"github.com/blackpaw-studio/leo/internal/chat"
 	"github.com/blackpaw-studio/leo/internal/leotools"
+	"github.com/blackpaw-studio/leo/internal/observe"
 )
 
 // ClientPolicy is one external API client: an agent Leo does not supervise
@@ -242,6 +243,21 @@ func (s *Server) serveClient(w http.ResponseWriter, r *http.Request, policy Clie
 	s.serveClientMessage(w, r, policy, next)
 }
 
+// messageableName is the form of an agent's stored name that policy may
+// message, so the name discovery returns can be passed straight to send.
+// Agents are stored canonically (leo-rocket) while policies usually use the
+// display form (rocket); either may match. When both do, the canonical name
+// wins: it is the exact string the daemon keys agents by.
+func (c ClientPolicy) messageableName(stored string) (string, bool) {
+	if c.allowsMessage(stored) {
+		return stored, true
+	}
+	if display := observe.DisplayName(stored); display != stored && c.allowsMessage(display) {
+		return display, true
+	}
+	return "", false
+}
+
 // clientAgent is the whole of what a client learns about an agent: enough to
 // address it and tell whether it is up, nothing about where or how it runs.
 type clientAgent struct {
@@ -256,8 +272,8 @@ func (s *Server) serveClientAgents(w http.ResponseWriter, policy ClientPolicy) {
 	out := []clientAgent{}
 	if s.agentSvc != nil {
 		for _, rec := range s.agentSvc.List() {
-			if policy.allowsMessage(rec.Name) {
-				out = append(out, clientAgent{Name: rec.Name, Status: rec.Status})
+			if name, ok := policy.messageableName(rec.Name); ok {
+				out = append(out, clientAgent{Name: name, Status: rec.Status})
 			}
 		}
 	}
