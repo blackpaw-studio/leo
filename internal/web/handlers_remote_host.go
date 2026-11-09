@@ -10,14 +10,14 @@ import (
 	"github.com/blackpaw-studio/leo/internal/config"
 )
 
-// requireAgentOrOperatorToken refuses, with 403, any caller that is not the
-// operator or a Leo agent. The /api/* mux also admits paired device tokens
-// and (through the proxy) SSO identities; a route that returns a credential
-// narrows that to the two tokens that already hold the machine's config.
+// requireAgentOrOperatorToken refuses, with 403, any caller that does not hold
+// the agent token or the operator's api.token. Unlike requireOperatorToken it
+// does not accept a paired device's token (the /api/* mux admits those, and a
+// route that returns a peer's credential must not) nor a trusted proxy's SSO
+// identity.
 func (s *Server) requireAgentOrOperatorToken(h http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		bearer := extractBearer(r.Header.Get("Authorization"))
-		if !matchesAnyToken(bearer, []string{s.apiToken, s.agentToken}) && !s.isOperatorBearer(bearer) {
+		if !matchesAnyToken(extractBearer(r.Header.Get("Authorization")), []string{s.apiToken, s.agentToken}) {
 			writeJSON(w, http.StatusForbidden, apiResponse{Error: "agent or operator token required"})
 			return
 		}

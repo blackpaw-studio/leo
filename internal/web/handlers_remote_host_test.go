@@ -8,7 +8,9 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/blackpaw-studio/leo/internal/devices"
 	"github.com/blackpaw-studio/leo/internal/secretenv"
 )
 
@@ -45,7 +47,7 @@ func (s *stubSecretResolver) Resolve(r secretenv.Ref) (string, error) {
 	return s.value, s.err
 }
 
-func newRemoteHostServer(t *testing.T, res *stubSecretResolver) *Server {
+func newRemoteHostServer(t *testing.T, res *stubSecretResolver, extra ...func(*Options)) *Server {
 	t.Helper()
 	dir := t.TempDir()
 	cfgPath := filepath.Join(dir, "leo.yaml")
@@ -55,12 +57,16 @@ func newRemoteHostServer(t *testing.T, res *stubSecretResolver) *Server {
 	if err := os.MkdirAll(filepath.Join(dir, "state"), 0o750); err != nil {
 		t.Fatal(err)
 	}
-	s := New(cfgPath, &mockProcesses{states: map[string]ProcessStateInfo{}}, nil, nil, &mockAgentService{}, Options{
+	opts := Options{
 		Port:       testPort,
 		APIToken:   testAPIToken,
 		AgentToken: testAgentToken,
 		Clients:    []ClientPolicy{{Name: "docker-scout", Token: testClientToken, CanMessage: []string{"scout-*"}}},
-	})
+	}
+	for _, fn := range extra {
+		fn(&opts)
+	}
+	s := New(cfgPath, &mockProcesses{states: map[string]ProcessStateInfo{}}, nil, nil, &mockAgentService{}, opts)
 	s.secretResolver = res
 	s.hostname = func() (string, error) { return "Dionysus.local", nil }
 	return s
@@ -168,5 +174,27 @@ func TestRemoteHostRoute_HostnameUnavailable(t *testing.T) {
 	// An explicit api_client does not need the hostname at all.
 	if w := requestAs(t, s, "GET", "/api/remote-host/laptop", testAgentToken, ""); w.Code != http.StatusOK {
 		t.Fatalf("explicit api_client: status %d", w.Code)
+	}
+}
+
+// A paired device's token is operator-equivalent on most routes, but this one
+// returns a peer's credential: only the agent and operator API tokens may read it.
+func TestRemoteHostRoute_PairedDeviceTokenRefused(t *testing.T) {
+	store := devices.NewStore(t.TempDir(), time.Now)
+	s := newRemoteHostServer(t, &stubSecretResolver{}, func(o *Options) { o.Devices = store })
+	phone := pairDevice(t, s, store, "phone")
+
+	w := doRequest(s, http.MethodGet, "/api/remote-host/laptop", phone.Token, "")
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("status %d, want 403: %s", w.Code, w.Body)
+	}
+	if strings.Contains(w.Body.String(), remoteTokenValue) {
+		t.Fatalf("response leaks the peer token: %s", w.Body)
+	}
+	// The same server still serves the legitimate callers.
+	for _, tok := range []string{testAgentToken, testAPIToken} {
+		if w := doRequest(s, http.MethodGet, "/api/remote-host/laptop", tok, ""); w.Code != http.StatusOK {
+			t.Errorf("token %q: status %d", tok, w.Code)
+		}
 	}
 }
