@@ -173,7 +173,24 @@ func (p Permissions) DeniesTool(name string) bool {
 // recipient. Note that the daemon resolves shorthand agent names but this
 // check runs against the literal argument, so an allowlist of ["rocket"]
 // rejects "rock" — fail-closed, with the allowed list surfaced in the error.
+//
+// A remote target ("agent@host") is matched only by entries that themselves
+// contain '@'. path.Match's * crosses '@', so without this a local glob such
+// as "coder-*" would silently authorize "coder-x@laptop". An empty list is
+// still unrestricted.
 func (p Permissions) AllowsMessage(target string) bool {
+	if strings.Contains(target, "@") && len(p.CanMessage) > 0 {
+		var remote []string
+		for _, entry := range p.CanMessage {
+			if strings.Contains(entry, "@") {
+				remote = append(remote, entry)
+			}
+		}
+		if len(remote) == 0 {
+			return false
+		}
+		return allows(remote, target)
+	}
 	return allows(p.CanMessage, target)
 }
 
