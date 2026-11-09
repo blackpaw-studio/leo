@@ -63,6 +63,9 @@ func (s *Server) handleAPIRemoteHost(w http.ResponseWriter, r *http.Request) {
 	expander := config.Expander{Secrets: s.secretResolver}
 	token, err := expander.ResolveValue("client.hosts."+name, "api_token", *host.APIToken)
 	if err != nil {
+		// #nosec G706 -- name matched a client.hosts key above, and %q quotes
+		// it; err is a *config.SecretResolutionError naming the reference,
+		// never the value.
 		log.Printf("web: resolving api_token for host %q: %v", name, err)
 		writeJSON(w, http.StatusBadGateway, apiResponse{Error: fmt.Sprintf("resolving api_token for host %q: %v", name, err)})
 		return
