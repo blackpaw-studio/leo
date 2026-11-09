@@ -29,6 +29,10 @@ type ClientPolicy struct {
 	Token      string
 	CanMessage []string
 	CanPost    []string
+	// Peer marks a client that is another Leo host: its messages read
+	// "[message from <agent>@<name>]", the address a reply goes to. Set only
+	// by the receiver's config, never by the client.
+	Peer bool
 }
 
 // allowsMessage reports whether this client may message target.
@@ -68,6 +72,21 @@ func (c ClientPolicy) allowsFrom(from string) bool {
 		return false
 	}
 	return validSessionSuffix(strings.TrimPrefix(from, prefix))
+}
+
+// senderLabel is how a validated `from` reads in the delivered message. A peer
+// host's agents render as "<agent>@<host>" so the recipient can reply to that
+// exact string; every other client keeps "<name>#<suffix>". A name containing
+// '@' would make the peer form ambiguous, so it stays plain.
+func (c ClientPolicy) senderLabel(from string) string {
+	if !c.Peer || strings.Contains(c.Name, "@") {
+		return from
+	}
+	suffix, found := strings.CutPrefix(from, c.Name+"#")
+	if !found {
+		return from
+	}
+	return suffix + "@" + c.Name
 }
 
 // maxSessionSuffix bounds the session id a client may claim. Real ids are ~30
@@ -308,7 +327,7 @@ func (s *Server) serveClientMessage(w http.ResponseWriter, r *http.Request, poli
 	// another sender to the receiving agent. The authenticated identity is
 	// stamped on here, and only the two fields the handler reads survive.
 	rewritten, err := json.Marshal(map[string]string{
-		"text": fmt.Sprintf(leotools.MessagePrefixFormat, payload.From, sanitizeClientText(payload.Text)),
+		"text": fmt.Sprintf(leotools.MessagePrefixFormat, policy.senderLabel(payload.From), sanitizeClientText(payload.Text)),
 		"from": payload.From,
 	})
 	if err != nil {

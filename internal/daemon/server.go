@@ -696,6 +696,7 @@ func clientPolicies(cfg *config.Config) []web.ClientPolicy {
 			Token:      token,
 			CanMessage: client.CanMessage,
 			CanPost:    client.CanPost,
+			Peer:       client.Peer,
 		})
 	}
 	return clients
