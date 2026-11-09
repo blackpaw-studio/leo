@@ -75,6 +75,8 @@ type registry struct {
 	// attentionToken is the caller's LEO_ATTENTION_TOKEN: the identity
 	// leo_progress reports under. Empty outside a hook-launched agent.
 	attentionToken string
+	// remote reaches peer hosts' api_clients routes for agent@host messaging.
+	remote *remoteClient
 	// clientTools is this agent's view of the daemon's client tools; nil in
 	// local-only mode, where there is no daemon to ask.
 	clientTools *clientToolsView
@@ -118,6 +120,7 @@ func newRegistry(client *daemonClient, processName string, perms leotools.Permis
 		contextualHandlers: make(map[string]func(context.Context, map[string]any) (string, error)),
 		denied:             make(map[string]bool),
 		perms:              perms,
+		remote:             newRemoteClient(),
 	}
 	for _, opt := range opts {
 		opt(r)
@@ -411,9 +414,9 @@ func newRegistry(client *daemonClient, processName string, perms leotools.Permis
 
 	r.add(toolDef{
 		Name:        "leo_send_message",
-		Description: allowNote("Send a text message to another *running* Leo agent or process (see leo_list_agents). It arrives in the recipient's prompt as a new turn, prefixed with your name, and returns immediately without their reply. 'to' is the target's name; 'message' is the text. NOT for asking a different model a question — to consult a model by name (\"consult fable\", \"ask codex\"), use leo_consult instead; those names are templates, not agents.", "message", perms.CanMessage),
+		Description: allowNote("Send a text message to another *running* Leo agent or process (see leo_list_agents). It arrives in the recipient's prompt as a new turn, prefixed with your name, and returns immediately without their reply. 'to' is the target's name, or agent@host for an agent on another Leo host (a key in client.hosts; delivered as a single line, no reply is returned, and it fails if the host is offline); 'message' is the text. NOT for asking a different model a question — to consult a model by name (\"consult fable\", \"ask codex\"), use leo_consult instead; those names are templates, not agents.", "message", perms.CanMessage),
 		InputSchema: objectSchema(map[string]any{
-			"to":      map[string]any{"type": "string", "description": "Target agent/process name (as shown by leo_list_agents or leo status)."},
+			"to":      map[string]any{"type": "string", "description": "Target agent/process name (as shown by leo_list_agents or leo status), or agent@host for a peer host (see leo_list_agents with host)."},
 			"message": map[string]any{"type": "string", "description": "The message body to deliver."},
 		}, "to", "message"),
 	}, func(args map[string]any) (string, error) {
@@ -428,8 +431,15 @@ func newRegistry(client *daemonClient, processName string, perms leotools.Permis
 		if to == processName {
 			return "", fmt.Errorf("cannot send a message to yourself (%q)", processName)
 		}
+		agent, host, isRemote, err := parseTarget(to)
+		if err != nil {
+			return "", err
+		}
 		if !perms.AllowsMessage(to) {
 			return "", denialError("message", to, "targets", perms.CanMessage)
+		}
+		if isRemote {
+			return r.sendRemote(client, processName, agent, host, message)
 		}
 		body := fmt.Sprintf(msgPrefixFormat, processName, message)
 		if err := client.sendMessage(to, processName, body); err != nil {
