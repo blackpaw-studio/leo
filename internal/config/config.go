@@ -488,7 +488,7 @@ type TemplateConfig struct {
 // Used to skip workspace/daemon-related operations that don't apply to
 // machines that only dispatch commands to remote leo servers.
 func (c *Config) IsClientOnly() bool {
-	return len(c.Client.Hosts) > 0 &&
+	return len(c.sshHostNames()) > 0 &&
 		len(c.Tasks) == 0 &&
 		len(c.Templates) == 0
 }

@@ -62,18 +62,28 @@ func (c *Config) ResolveHost(flagValue string) (HostResolution, error) {
 		return HostResolution{Localhost: true}, nil
 	}
 
-	// No explicit selection — fall through to the first configured host if any.
-	if len(c.Client.Hosts) > 0 {
-		names := make([]string, 0, len(c.Client.Hosts))
-		for name := range c.Client.Hosts {
-			names = append(names, name)
-		}
-		sort.Strings(names)
+	// No explicit selection — fall through to the first host with an ssh
+	// target, if any. A host with only api_url/api_token is a messaging peer
+	// (agent@host), not somewhere to run CLI commands.
+	if names := c.sshHostNames(); len(names) > 0 {
 		first := names[0]
 		return c.remoteResolution(first, c.Client.Hosts[first]), nil
 	}
 
 	return HostResolution{Localhost: true}, nil
+}
+
+// sshHostNames is the sorted names of the client.hosts entries the CLI can
+// reach over ssh.
+func (c *Config) sshHostNames() []string {
+	var names []string
+	for name, host := range c.Client.Hosts {
+		if host.SSH != "" {
+			names = append(names, name)
+		}
+	}
+	sort.Strings(names)
+	return names
 }
 
 // remoteResolution builds a HostResolution for a named remote host, attaching

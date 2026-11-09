@@ -123,3 +123,38 @@ func TestHostConfig_YAMLRoundTrip(t *testing.T) {
 		t.Fatalf("round trip mismatch:\n%s\nwant\n%s", out2, withAPI)
 	}
 }
+
+// A host that carries only api_url/api_token exists for agent@host messaging.
+// It has no ssh target, so it must never become the CLI's implicit remote.
+func TestResolveHost_APIOnlyHostsAreNotImplicitRemotes(t *testing.T) {
+	t.Setenv("LEO_HOST", "")
+	apiOnly := HostConfig{APIURL: "http://h:1", APIToken: tokenLiteral("t")}
+
+	t.Run("only api hosts: localhost", func(t *testing.T) {
+		cfg := Config{Client: ClientConfig{Hosts: map[string]HostConfig{"laptop": apiOnly}}}
+		got, err := cfg.ResolveHost("")
+		if err != nil || !got.Localhost {
+			t.Fatalf("ResolveHost = %+v, %v; want localhost", got, err)
+		}
+	})
+	t.Run("an ssh host still wins the implicit pick, whatever it sorts against", func(t *testing.T) {
+		cfg := Config{Client: ClientConfig{Hosts: map[string]HostConfig{"aaa": apiOnly, "prod": {SSH: "u@prod"}}}}
+		got, err := cfg.ResolveHost("")
+		if err != nil || got.Name != "prod" {
+			t.Fatalf("ResolveHost = %+v, %v; want prod", got, err)
+		}
+	})
+	t.Run("explicit selection is unchanged", func(t *testing.T) {
+		cfg := Config{Client: ClientConfig{Hosts: map[string]HostConfig{"laptop": apiOnly}}}
+		got, err := cfg.ResolveHost("laptop")
+		if err != nil || got.Name != "laptop" {
+			t.Fatalf("ResolveHost = %+v, %v; want laptop", got, err)
+		}
+	})
+	t.Run("api-only hosts do not make a machine client-only", func(t *testing.T) {
+		cfg := Config{Client: ClientConfig{Hosts: map[string]HostConfig{"laptop": apiOnly}}}
+		if cfg.IsClientOnly() {
+			t.Fatal("IsClientOnly = true for a config with only api-only hosts")
+		}
+	})
+}
