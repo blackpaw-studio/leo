@@ -40,6 +40,8 @@ client:
 - `tmux_path` overrides the remote `tmux` path used by `agent attach` and `agent logs --follow`. Defaults to `tmux`. For macOS arm64 homebrew remotes set to `/opt/homebrew/bin/tmux`; for intel homebrew, `/usr/local/bin/tmux`. Same reason as `leo_path` — homebrew paths live in `.zprofile`/`.zshrc` which ssh command-mode doesn't load.
 - `default_host` is optional — if set, commands without `--host` use it. Otherwise the first host in sorted order wins.
 
+A host can also carry `api_url`, `api_token` and `api_client`. Those are not used by the CLI; they let an *agent* on this machine message agents on that host (`leo_send_message to="agent@prod"`) over its web listener. See [Leo-to-Leo peers](../configuration/api-clients.md#leo-to-leo-peers) for the two-host walkthrough (tokens, `can_message`, `web.bind` and `allowed_hosts` for LAN reach).
+
 Verify the config parses:
 
 ```bash

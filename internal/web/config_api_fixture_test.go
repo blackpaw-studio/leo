@@ -23,6 +23,8 @@ client:
   hosts:
     remote:
       ssh: me@box
+      api_url: http://10.0.4.7:8370
+      api_token: fixture-api-token
 environments:
   base:
     A: "1"

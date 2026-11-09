@@ -19,6 +19,10 @@ import (
 type APIClientConfig struct {
 	CanMessage []string `yaml:"can_message,omitempty"`
 	CanPost    []string `yaml:"can_post,omitempty"`
+	// Peer marks the client as another Leo host messaging in through its
+	// own agents' leo_send_message: its messages read
+	// "[message from <agent>@<name>]" so a reply can be addressed back.
+	Peer bool `yaml:"peer,omitempty"`
 }
 
 // APIClientTokenPath returns the token file for a named client, under the
@@ -47,6 +51,9 @@ func validateAPIClients(clients map[string]APIClientConfig) []string {
 		if len(client.CanMessage) == 0 && len(client.CanPost) == 0 {
 			errs = append(errs, fmt.Sprintf("api_clients[%q] must set can_message or can_post; an empty scope can reach nothing", name))
 			continue
+		}
+		if client.Peer && strings.Contains(name, "@") {
+			errs = append(errs, fmt.Sprintf("api_clients[%q] is a peer, so its name must not contain '@' (messages render as agent@name)", name))
 		}
 		errs = append(errs, validateClientPatterns(name, "can_message", client.CanMessage)...)
 		errs = append(errs, validateClientPatterns(name, "can_post", client.CanPost)...)

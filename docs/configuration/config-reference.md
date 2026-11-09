@@ -179,9 +179,12 @@ Each entry under `hosts` has:
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
-| `ssh` | string | Yes | SSH target passed verbatim (e.g. `user@host`, or a `Host` alias from `~/.ssh/config`). |
+| `ssh` | string | Yes, for CLI use | SSH target passed verbatim (e.g. `user@host`, or a `Host` alias from `~/.ssh/config`). A host that only carries `api_url`/`api_token` (a messaging peer) may omit it; it is then never picked as the CLI's implicit remote. |
 | `ssh_args` | list | No | Extra arguments inserted between the target and the remote command (e.g. `["-p", "2222"]`). |
 | `leo_path` | string | No | Absolute path to `leo` on the remote host. Defaults to `$HOME/.local/bin/leo` (matches `install.sh`). Override when `leo` is installed elsewhere or the remote's non-interactive SSH shell doesn't have it on PATH. |
+| `api_url` | string | No | Base URL of that host's web listener (`http`/`https`), used for cross-host messaging (`agent@host`). Set together with `api_token`. See [Leo-to-Leo peers](api-clients.md#leo-to-leo-peers). |
+| `api_token` | string or secret reference | No | Bearer token the host issued for this machine's `api_clients` entry. Use a [secret reference](secret-env.md); never shown in the web UI. |
+| `api_client` | string | No | This machine's name in that host's `api_clients`. Defaults to the lowercased short hostname. |
 | `tmux_path` | string | No | Path to `tmux` on the remote host. Used by `agent attach` and `agent logs --follow`. Defaults to `tmux` (relies on PATH). Set to `/opt/homebrew/bin/tmux` for macOS arm64 homebrew remotes, `/usr/local/bin/tmux` for macOS intel. |
 
 ```yaml
@@ -199,7 +202,7 @@ client:
 
 Why `leo_path` exists: SSH runs a non-interactive shell on the remote, which doesn't source `.zshrc` / `.bashrc`. If `leo` lives in `~/.local/bin` and PATH is only extended in `.zshrc`, bare `leo` won't resolve. The default full path avoids that; set `leo_path` explicitly when the remote installs leo elsewhere (Homebrew, `/usr/local/bin`, etc.).
 
-Resolution order for the target host: `--host` flag → `LEO_HOST` env → `default_host` → first entry sorted by key → localhost (only when no hosts are configured). `--host localhost` is a hard override. On a host with a [`follow`](#following-a-lead-host-follow) block, the "first entry" step is skipped: with no `default_host` the CLI targets localhost, since the lead's entry is there to be followed, not to be the CLI's remote. See the [Remote CLI guide](../guides/remote-cli.md).
+Resolution order for the target host: `--host` flag → `LEO_HOST` env → `default_host` → first entry with an `ssh` target, sorted by key → localhost (only when no hosts are configured). `--host localhost` is a hard override. On a host with a [`follow`](#following-a-lead-host-follow) block, the "first entry" step is skipped: with no `default_host` the CLI targets localhost, since the lead's entry is there to be followed, not to be the CLI's remote. See the [Remote CLI guide](../guides/remote-cli.md).
 
 ## `api_clients`
 
@@ -209,6 +212,7 @@ External API clients — agents or jobs Leo does not supervise — each with a s
 |-------|------|----------|-------------|
 | `can_message` | list | One of the two | Agent names or globs the client may start a turn in (`POST /web/agent/<target>/message`). |
 | `can_post` | list | One of the two | Agent names or globs the client may post chat text to, with no turn (`POST /web/agent/<target>/chat/post`). |
+| `peer` | bool | No | The client is another Leo host: its messages read `[message from <agent>@<name>]` so they can be replied to. See [Leo-to-Leo peers](api-clients.md#leo-to-leo-peers). |
 
 ```yaml
 api_clients:

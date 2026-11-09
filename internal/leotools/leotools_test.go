@@ -172,3 +172,35 @@ func TestReadClientToolNames(t *testing.T) {
 		t.Fatalf("corrupt file = %v, want nil", got)
 	}
 }
+
+func TestAllowsMessage_RemoteTargets(t *testing.T) {
+	tests := []struct {
+		name   string
+		allow  []string
+		target string
+		want   bool
+	}{
+		{"absent list stays unrestricted", nil, "x@laptop", true},
+		{"exact remote entry", []string{"rocket@laptop"}, "rocket@laptop", true},
+		{"remote entry does not allow another agent", []string{"rocket@laptop"}, "infra@laptop", false},
+		{"remote entry does not allow another host", []string{"rocket@laptop"}, "rocket@desktop", false},
+		{"remote entry does not allow the bare local name", []string{"rocket@laptop"}, "rocket", false},
+		{"agent glob on a host", []string{"scout-*@laptop"}, "scout-1@laptop", true},
+		{"any agent on a host", []string{"*@laptop"}, "anyone@laptop", true},
+		{"any agent on any host", []string{"*@*"}, "anyone@anywhere", true},
+		// path.Match's * crosses '@', so without the guard a local glob would
+		// silently authorize remote targets.
+		{"local glob does not match a remote target", []string{"coder-*"}, "coder-x@laptop", false},
+		{"bare star does not match a remote target", []string{"*"}, "x@laptop", false},
+		{"local entries still allow local targets", []string{"coder-*", "rocket@laptop"}, "coder-1", true},
+		{"mixed list allows its remote entry", []string{"coder-*", "rocket@laptop"}, "rocket@laptop", true},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			p := Permissions{CanMessage: tc.allow}
+			if got := p.AllowsMessage(tc.target); got != tc.want {
+				t.Errorf("AllowsMessage(%q) with %v = %v, want %v", tc.target, tc.allow, got, tc.want)
+			}
+		})
+	}
+}

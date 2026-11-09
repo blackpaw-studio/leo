@@ -5,7 +5,7 @@
         "effective_harness": "claude",
         "inherited": {},
         "name": "coder2",
-        "revision": "sha256:384ef0d598c867b982a5186f8d65245406bf7fff44d7cf1be4ccdf6e0ce63276",
+        "revision": "sha256:55bdac3497efddcec27322ef97a2bab0e12d421e313b70bc2ee360f7d40267db",
         "values": {
           "add_dirs": [],
           "channels": [],
@@ -42,7 +42,7 @@
         "agents": true,
         "service": true
       },
-      "revision": "sha256:384ef0d598c867b982a5186f8d65245406bf7fff44d7cf1be4ccdf6e0ce63276"
+      "revision": "sha256:55bdac3497efddcec27322ef97a2bab0e12d421e313b70bc2ee360f7d40267db"
     },
     "ok": true
   },

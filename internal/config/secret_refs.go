@@ -36,6 +36,17 @@ func (c *Config) SecretReferences() []ScopedRef {
 		}
 	}
 
+	for name, h := range c.Client.Hosts {
+		if h.APIToken == nil {
+			continue
+		}
+		if ref, ok := h.APIToken.Ref(); ok {
+			launches = append(launches, EnvLayer{Secrets: map[string]ScopedRef{
+				"api_token": {Scope: hostAPIScope(name), Key: "api_token", Ref: ref},
+			}})
+		}
+	}
+
 	seen := map[[2]string]bool{}
 	var out []ScopedRef
 	for _, l := range launches {
@@ -75,4 +86,20 @@ func (x Expander) CheckSecret(sr ScopedRef) error {
 	}
 	_, err = x.ResolveLayer(l)
 	return err
+}
+
+// ResolveValue resolves one config value located at scope.key: a literal has
+// its variables expanded, a secret reference is resolved through x and used
+// verbatim. A resolution failure is a *SecretResolutionError naming the
+// location and reference, never the value.
+func (x Expander) ResolveValue(scope, key string, v EnvValue) (string, error) {
+	l, err := x.LiteralLayer(scope, EnvMap{key: v})
+	if err != nil {
+		return "", err
+	}
+	env, err := x.ResolveLayer(l)
+	if err != nil {
+		return "", err
+	}
+	return env[key], nil
 }

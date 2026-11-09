@@ -11,8 +11,10 @@ import (
 	"path"
 	"strings"
 
+	"github.com/blackpaw-studio/leo/internal/agent"
 	"github.com/blackpaw-studio/leo/internal/chat"
 	"github.com/blackpaw-studio/leo/internal/leotools"
+	"github.com/blackpaw-studio/leo/internal/observe"
 )
 
 // ClientPolicy is one external API client: an agent Leo does not supervise
@@ -29,6 +31,10 @@ type ClientPolicy struct {
 	Token      string
 	CanMessage []string
 	CanPost    []string
+	// Peer marks a client that is another Leo host: its messages read
+	// "[message from <agent>@<name>]", the address a reply goes to. Set only
+	// by the receiver's config, never by the client.
+	Peer bool
 }
 
 // allowsMessage reports whether this client may message target.
@@ -68,6 +74,21 @@ func (c ClientPolicy) allowsFrom(from string) bool {
 		return false
 	}
 	return validSessionSuffix(strings.TrimPrefix(from, prefix))
+}
+
+// senderLabel is how a validated `from` reads in the delivered message. A peer
+// host's agents render as "<agent>@<host>" so the recipient can reply to that
+// exact string; every other client keeps "<name>#<suffix>". A name containing
+// '@' would make the peer form ambiguous, so it stays plain.
+func (c ClientPolicy) senderLabel(from string) string {
+	if !c.Peer || strings.Contains(c.Name, "@") {
+		return from
+	}
+	suffix, found := strings.CutPrefix(from, c.Name+"#")
+	if !found {
+		return from
+	}
+	return suffix + "@" + c.Name
 }
 
 // maxSessionSuffix bounds the session id a client may claim. Real ids are ~30
@@ -180,8 +201,13 @@ func clientRoute(urlPath string) (target, verb string, ok bool) {
 	return "", "", false
 }
 
+// clientAgentsPath is the one read route a client token has: the agents it
+// may message, for cross-host discovery.
+const clientAgentsPath = "/web/client/agents"
+
 // serveClient handles a request authenticated by a client token. It is
-// default-deny: only POST /web/agent/<allowed>/message or .../chat/post, each
+// default-deny: only GET /web/client/agents and POST
+// /web/agent/<allowed>/message or .../chat/post, each
 // within its own scope and with a `from` the client is entitled to claim,
 // reaches the application, and everything else — every /api/* route, every
 // other agent verb, the browser UI — is refused here rather than falling
@@ -190,16 +216,28 @@ func clientRoute(urlPath string) (target, verb string, ok bool) {
 // The scope is checked before the target is looked up, so a client cannot
 // probe which agents exist outside its scope.
 func (s *Server) serveClient(w http.ResponseWriter, r *http.Request, policy ClientPolicy, next http.Handler) {
+	if r.Method == http.MethodGet && r.URL.Path == clientAgentsPath {
+		s.serveClientAgents(w, policy)
+		return
+	}
 	target, verb, ok := clientRoute(r.URL.Path)
 	if !ok || r.Method != http.MethodPost {
 		writeJSON(w, http.StatusForbidden, apiResponse{
-			Error: fmt.Sprintf("client %q may only POST to /web/agent/<target>/message or /web/agent/<target>/chat/post", policy.Name),
+			Error: fmt.Sprintf("client %q may only GET %s or POST to /web/agent/<target>/message or /web/agent/<target>/chat/post", policy.Name, clientAgentsPath),
 		})
 		return
 	}
 	allowed := policy.allowsMessage
-	if verb == clientVerbChatPost {
+	stored := target
+	switch verb {
+	case clientVerbChatPost:
 		allowed = policy.allowsPost
+	case clientVerbMessage:
+		// Authorize the agent the target resolves to, not just the string
+		// sent, so `rocket` and `leo-rocket` are one agent to a policy. The
+		// answer is a 403 whether or not the agent exists.
+		stored = s.resolveStoredAgent(target)
+		allowed = func(t string) bool { return policy.allowsMessage(t) || policy.allowsAgent(stored) }
 	}
 	if !allowed(target) {
 		writeJSON(w, http.StatusForbidden, apiResponse{
@@ -211,7 +249,65 @@ func (s *Server) serveClient(w http.ResponseWriter, r *http.Request, policy Clie
 		s.serveClientChatPost(w, r, policy, target)
 		return
 	}
+	if stored != target {
+		r.URL.Path = "/web/agent/" + stored + "/message"
+		r.URL.RawPath = ""
+	}
 	s.serveClientMessage(w, r, policy, next)
+}
+
+// allowsAgent reports whether this client may message the agent stored as
+// stored. Agents are stored canonically (leo-rocket) while policies usually
+// name the display form (rocket), so either matches. Only the prefix is ever
+// stripped, never added: a policy for leo-rocket does not reach an unrelated
+// agent that happens to be stored as rocket. Discovery and the message route
+// both authorize through this, so they cannot drift.
+func (c ClientPolicy) allowsAgent(stored string) bool {
+	return c.allowsMessage(stored) || c.allowsMessage(observe.DisplayName(stored))
+}
+
+// resolveStoredAgent maps a message target to the name the daemon stores the
+// agent under: the exact name when such an agent exists, else its canonical
+// leo- form when that exists, else target unchanged (the handler's 404).
+func (s *Server) resolveStoredAgent(target string) string {
+	exists := map[string]bool{}
+	for name := range s.processStates() {
+		exists[name] = true
+	}
+	if s.agentSvc != nil {
+		for _, rec := range s.agentSvc.List() {
+			exists[rec.Name] = true
+		}
+	}
+	if exists[target] {
+		return target
+	}
+	if canonical := agent.SessionName(target); exists[canonical] {
+		return canonical
+	}
+	return target
+}
+
+// clientAgent is the whole of what a client learns about an agent: enough to
+// address it and tell whether it is up, nothing about where or how it runs.
+type clientAgent struct {
+	Name   string `json:"name"`
+	Status string `json:"status"`
+}
+
+// serveClientAgents lists the agents policy may message. The answer is the
+// same 200 whether can_message is empty or merely matches nothing, so the
+// route cannot be used to probe for names outside the client's scope.
+func (s *Server) serveClientAgents(w http.ResponseWriter, policy ClientPolicy) {
+	out := []clientAgent{}
+	if s.agentSvc != nil {
+		for _, rec := range s.agentSvc.List() {
+			if policy.allowsAgent(rec.Name) {
+				out = append(out, clientAgent{Name: rec.Name, Status: rec.Status})
+			}
+		}
+	}
+	writeJSON(w, http.StatusOK, apiResponse{OK: true, Data: out})
 }
 
 // serveClientChatPost stores the client's text in target's chat thread. It
@@ -277,7 +373,7 @@ func (s *Server) serveClientMessage(w http.ResponseWriter, r *http.Request, poli
 	// another sender to the receiving agent. The authenticated identity is
 	// stamped on here, and only the two fields the handler reads survive.
 	rewritten, err := json.Marshal(map[string]string{
-		"text": fmt.Sprintf(leotools.MessagePrefixFormat, payload.From, sanitizeClientText(payload.Text)),
+		"text": fmt.Sprintf(leotools.MessagePrefixFormat, policy.senderLabel(payload.From), sanitizeClientText(payload.Text)),
 		"from": payload.From,
 	})
 	if err != nil {

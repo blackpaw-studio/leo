@@ -43,7 +43,7 @@
           }
         ],
         "recent_consults": [],
-        "revision": "sha256:f5802ba2ef4aa9685f186e261a0f3435ce2c39e5cbaaa3d304e0469cc7dbc99e",
+        "revision": "sha256:35558a391c9de291af7d87c2d9d933415d85c20c97bd7e2ef0cd64010c199c4a",
         "roles": [
           {
             "declared": true,
@@ -71,7 +71,7 @@
         "agents": true,
         "service": true
       },
-      "revision": "sha256:f5802ba2ef4aa9685f186e261a0f3435ce2c39e5cbaaa3d304e0469cc7dbc99e"
+      "revision": "sha256:35558a391c9de291af7d87c2d9d933415d85c20c97bd7e2ef0cd64010c199c4a"
     },
     "ok": true
   },

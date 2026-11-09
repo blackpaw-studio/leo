@@ -53,6 +53,19 @@ func TestAPIClientsValidation(t *testing.T) {
 			wantErr: "must not be empty",
 		},
 		{
+			name:    "peer client is valid",
+			clients: map[string]APIClientConfig{"dionysus": {CanMessage: []string{"rocket"}, Peer: true}},
+		},
+		{
+			name:    "peer name with @ would make agent@name ambiguous",
+			clients: map[string]APIClientConfig{"a@b": {CanMessage: []string{"rocket"}, Peer: true}},
+			wantErr: "peer",
+		},
+		{
+			name:    "non-peer name with @ stays valid",
+			clients: map[string]APIClientConfig{"a@b": {CanMessage: []string{"rocket"}}},
+		},
+		{
 			name:    "name with a path separator would break its token file",
 			clients: map[string]APIClientConfig{"../../etc/passwd": {CanMessage: []string{"rocket"}}},
 			wantErr: "api_clients",

@@ -131,6 +131,13 @@ type Server struct {
 	// ConfigService).
 	execCommandContext func(context.Context, string, ...string) *exec.Cmd
 
+	// secretResolver resolves client.hosts.<h>.api_token references for
+	// GET /api/remote-host/{host}; nil uses this machine's secret stores.
+	// hostname names this machine when a host sets no api_client; nil uses
+	// os.Hostname. Tests replace both.
+	secretResolver config.SecretResolver
+	hostname       func() (string, error)
+
 	// resolvePeerSocket and deliverPeer route live Claude messages through
 	// Claude Code's documented per-session inbox. Tests replace these seams.
 	resolvePeerSocket func(ctx context.Context, session string) (string, error)
@@ -721,6 +728,10 @@ func New(configPath string, processes ProcessStateProvider, scheduler SchedulerP
 	apiMux.HandleFunc("POST /api/dispatch/viewer/close-finished", s.handleDispatchViewerCloseFinished)
 	apiMux.HandleFunc("POST /api/dispatch/viewer/save-default", s.handleDispatchViewerSaveDefault)
 	apiMux.HandleFunc("GET /api/agent/list", s.handleAPIAgentList)
+	// Cross-host messaging (docs/specs/2026-11-09-cross-host-messaging.md):
+	// hands the calling agent's MCP process a peer host's URL and token. It
+	// returns a credential, so it takes the agent or operator token only.
+	apiMux.HandleFunc("GET /api/remote-host/{host}", s.requireAgentOrOperatorToken(s.handleAPIRemoteHost))
 	apiMux.HandleFunc("GET /api/template/list", s.handleAPITemplateList)
 	apiMux.HandleFunc("GET /api/task/list", s.handleAPITaskList)
 	apiMux.HandleFunc("POST /api/task/{name}/run", s.handleAPITaskRun)

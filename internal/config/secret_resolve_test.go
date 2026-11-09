@@ -216,3 +216,34 @@ func TestShadowedFileRefPathIsNeverExpanded(t *testing.T) {
 		t.Errorf("effective unset path: %v", err)
 	}
 }
+
+func TestExpanderResolveValue(t *testing.T) {
+	t.Run("literal is expanded, no resolver call", func(t *testing.T) {
+		f := &fakeSecrets{value: secretSentinel}
+		got, err := secretExpander(f).ResolveValue("client.hosts.h", "api_token", Literal("$HOME/t"))
+		if err != nil || got != "/home/evan/t" {
+			t.Fatalf("ResolveValue = %q, %v", got, err)
+		}
+		if len(f.calls) != 0 {
+			t.Fatalf("resolver called for a literal: %v", f.calls)
+		}
+	})
+	t.Run("reference is resolved verbatim", func(t *testing.T) {
+		f := &fakeSecrets{value: "$HOME-not-expanded"}
+		got, err := secretExpander(f).ResolveValue("client.hosts.h", "api_token", Secret(keychainRef))
+		if err != nil || got != "$HOME-not-expanded" {
+			t.Fatalf("ResolveValue = %q, %v", got, err)
+		}
+	})
+	t.Run("failure names the location and never a value", func(t *testing.T) {
+		f := &fakeSecrets{value: secretSentinel, reason: "item not found"}
+		_, err := secretExpander(f).ResolveValue("client.hosts.h", "api_token", Secret(keychainRef))
+		var sre *SecretResolutionError
+		if !errors.As(err, &sre) {
+			t.Fatalf("err = %T %v, want *SecretResolutionError", err, err)
+		}
+		if !strings.Contains(err.Error(), "client.hosts.h.api_token") || strings.Contains(err.Error(), secretSentinel) {
+			t.Fatalf("err = %v", err)
+		}
+	})
+}
