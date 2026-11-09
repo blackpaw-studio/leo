@@ -11,6 +11,10 @@ func FieldsFor(s Section) []Field {
 var Excluded = map[Section][]string{
 	// hosts is rendered as its own add/remove entries UI, not a flat field.
 	SectionClient: {"hosts"},
+	// api_token is a credential (literal or secret reference). It is edited
+	// in leo.yaml only: the web UI never renders it, and a form save must
+	// leave it untouched.
+	SectionClientHost: {"api_token"},
 	// harness_options is excluded from the flat registry on every scope
 	// below: it's a map rendered by the dedicated harness-options sub-form
 	// (internal/web/schema/harnessform.go + components/harness_options.html),
@@ -200,6 +204,10 @@ var registry = map[Section][]Field{
 		{Key: "ssh_args", Label: "SSH args", Group: "General"},
 		{Key: "leo_path", Label: "Leo path", Group: "General"},
 		{Key: "tmux_path", Label: "Tmux path", Group: "General"},
+		{Key: "api_url", Label: "API URL", Group: "Messaging",
+			Help: "base URL of that host's leo web listener, for agent@host messaging; needs api_token in leo.yaml"},
+		{Key: "api_client", Label: "API client name", Group: "Messaging",
+			Help: "this host's name in the remote's api_clients; empty = lowercased short hostname"},
 	},
 
 	SectionWeb: {
