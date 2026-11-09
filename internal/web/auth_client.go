@@ -11,6 +11,7 @@ import (
 	"path"
 	"strings"
 
+	"github.com/blackpaw-studio/leo/internal/agent"
 	"github.com/blackpaw-studio/leo/internal/chat"
 	"github.com/blackpaw-studio/leo/internal/leotools"
 	"github.com/blackpaw-studio/leo/internal/observe"
@@ -227,8 +228,16 @@ func (s *Server) serveClient(w http.ResponseWriter, r *http.Request, policy Clie
 		return
 	}
 	allowed := policy.allowsMessage
-	if verb == clientVerbChatPost {
+	stored := target
+	switch verb {
+	case clientVerbChatPost:
 		allowed = policy.allowsPost
+	case clientVerbMessage:
+		// Authorize the agent the target resolves to, not just the string
+		// sent, so `rocket` and `leo-rocket` are one agent to a policy. The
+		// answer is a 403 whether or not the agent exists.
+		stored = s.resolveStoredAgent(target)
+		allowed = func(t string) bool { return policy.allowsMessage(t) || policy.allowsAgent(stored) }
 	}
 	if !allowed(target) {
 		writeJSON(w, http.StatusForbidden, apiResponse{
@@ -240,22 +249,43 @@ func (s *Server) serveClient(w http.ResponseWriter, r *http.Request, policy Clie
 		s.serveClientChatPost(w, r, policy, target)
 		return
 	}
+	if stored != target {
+		r.URL.Path = "/web/agent/" + stored + "/message"
+		r.URL.RawPath = ""
+	}
 	s.serveClientMessage(w, r, policy, next)
 }
 
-// messageableName is the form of an agent's stored name that policy may
-// message, so the name discovery returns can be passed straight to send.
-// Agents are stored canonically (leo-rocket) while policies usually use the
-// display form (rocket); either may match. When both do, the canonical name
-// wins: it is the exact string the daemon keys agents by.
-func (c ClientPolicy) messageableName(stored string) (string, bool) {
-	if c.allowsMessage(stored) {
-		return stored, true
+// allowsAgent reports whether this client may message the agent stored as
+// stored. Agents are stored canonically (leo-rocket) while policies usually
+// name the display form (rocket), so either matches. Only the prefix is ever
+// stripped, never added: a policy for leo-rocket does not reach an unrelated
+// agent that happens to be stored as rocket. Discovery and the message route
+// both authorize through this, so they cannot drift.
+func (c ClientPolicy) allowsAgent(stored string) bool {
+	return c.allowsMessage(stored) || c.allowsMessage(observe.DisplayName(stored))
+}
+
+// resolveStoredAgent maps a message target to the name the daemon stores the
+// agent under: the exact name when such an agent exists, else its canonical
+// leo- form when that exists, else target unchanged (the handler's 404).
+func (s *Server) resolveStoredAgent(target string) string {
+	exists := map[string]bool{}
+	for name := range s.processStates() {
+		exists[name] = true
 	}
-	if display := observe.DisplayName(stored); display != stored && c.allowsMessage(display) {
-		return display, true
+	if s.agentSvc != nil {
+		for _, rec := range s.agentSvc.List() {
+			exists[rec.Name] = true
+		}
 	}
-	return "", false
+	if exists[target] {
+		return target
+	}
+	if canonical := agent.SessionName(target); exists[canonical] {
+		return canonical
+	}
+	return target
 }
 
 // clientAgent is the whole of what a client learns about an agent: enough to
@@ -272,8 +302,8 @@ func (s *Server) serveClientAgents(w http.ResponseWriter, policy ClientPolicy) {
 	out := []clientAgent{}
 	if s.agentSvc != nil {
 		for _, rec := range s.agentSvc.List() {
-			if name, ok := policy.messageableName(rec.Name); ok {
-				out = append(out, clientAgent{Name: name, Status: rec.Status})
+			if policy.allowsAgent(rec.Name) {
+				out = append(out, clientAgent{Name: rec.Name, Status: rec.Status})
 			}
 		}
 	}

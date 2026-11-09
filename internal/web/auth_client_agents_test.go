@@ -111,7 +111,7 @@ func TestServeClient_ListAgentsCanonicalAndDisplayNames(t *testing.T) {
 		canMessage []string
 		want       string
 	}{
-		{"display-name policy", []string{"rocket", "scout-*"}, `[{"name":"rocket","status":"running"},{"name":"scout-1","status":"running"}]`},
+		{"display-name policy", []string{"rocket", "scout-*"}, `[{"name":"leo-rocket","status":"running"},{"name":"leo-scout-1","status":"running"}]`},
 		{"canonical-name policy", []string{"leo-rocket"}, `[{"name":"leo-rocket","status":"running"}]`},
 		{"canonical glob", []string{"leo-scout-*"}, `[{"name":"leo-scout-1","status":"running"}]`},
 		{"both forms permitted: canonical wins", []string{"rocket", "leo-rocket"}, `[{"name":"leo-rocket","status":"running"}]`},
@@ -127,6 +127,74 @@ func TestServeClient_ListAgentsCanonicalAndDisplayNames(t *testing.T) {
 			}
 			if w.Code != http.StatusOK || json.Unmarshal(w.Body.Bytes(), &env) != nil || string(env.Data) != tc.want {
 				t.Fatalf("status %d data %s, want %s", w.Code, env.Data, tc.want)
+			}
+		})
+	}
+}
+
+// serveClientMessagePath runs a message POST through serveClient and returns
+// the path the downstream mux would route (empty if the request never got
+// there) and the response code.
+func serveClientMessagePath(t *testing.T, s *Server, policy ClientPolicy, target string) (string, int) {
+	t.Helper()
+	var routed string
+	next := http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) { routed = r.URL.Path })
+	req := httptest.NewRequest("POST", "/web/agent/"+target+"/message", strings.NewReader(`{"text":"hi","from":"dionysus#scout"}`))
+	req.Host = testHost
+	w := httptest.NewRecorder()
+	s.serveClient(w, req, policy, next)
+	return routed, w.Code
+}
+
+// Discovery must hand back names that round-trip into send: an agent stored as
+// leo-rocket, a policy written as `rocket`.
+func TestClientMessage_DiscoveredNameRoundTripsIntoSend(t *testing.T) {
+	s := newClientAgentsServer(t, []agent.Record{{Name: "leo-rocket", Status: "running"}, {Name: "leo-infra", Status: "running"}})
+	policy := ClientPolicy{Name: "dionysus", Token: listClientToken, CanMessage: []string{"rocket"}}
+	s.SetClients([]ClientPolicy{policy})
+
+	w := requestAs(t, s, "GET", "/web/client/agents", listClientToken, "")
+	var env struct {
+		Data []clientAgent `json:"data"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &env); err != nil || len(env.Data) != 1 {
+		t.Fatalf("listing %s (err %v)", w.Body, err)
+	}
+	if env.Data[0].Name != "leo-rocket" {
+		t.Fatalf("discovery returned %q, want the stored name leo-rocket", env.Data[0].Name)
+	}
+	routed, code := serveClientMessagePath(t, s, policy, env.Data[0].Name)
+	if code != http.StatusOK || routed != "/web/agent/leo-rocket/message" {
+		t.Fatalf("send to the discovered name: code %d routed %q", code, routed)
+	}
+}
+
+func TestClientMessage_DisplayTargetResolvesToStoredName(t *testing.T) {
+	policy := ClientPolicy{Name: "dionysus", Token: listClientToken, CanMessage: []string{"rocket"}}
+
+	cases := []struct {
+		name       string
+		records    []agent.Record
+		policy     ClientPolicy
+		target     string
+		wantRouted string
+		wantCode   int
+	}{
+		{"display target delivers to the canonical agent", []agent.Record{{Name: "leo-rocket"}}, policy, "rocket", "/web/agent/leo-rocket/message", 200},
+		{"canonical target is authorized by a display policy", []agent.Record{{Name: "leo-rocket"}}, policy, "leo-rocket", "/web/agent/leo-rocket/message", 200},
+		{"a display target that exists exactly is not rewritten", []agent.Record{{Name: "rocket"}, {Name: "leo-rocket"}}, policy, "rocket", "/web/agent/rocket/message", 200},
+		{"an unknown name is left for the handler's 404", nil, policy, "rocket", "/web/agent/rocket/message", 200},
+		{"canonical policy authorizes the display target", []agent.Record{{Name: "leo-rocket"}}, ClientPolicy{Name: "dionysus", CanMessage: []string{"leo-rocket"}}, "rocket", "/web/agent/leo-rocket/message", 200},
+		{"other agents are denied in either form", []agent.Record{{Name: "leo-infra"}}, policy, "infra", "", 403},
+		{"other agents are denied canonically", []agent.Record{{Name: "leo-infra"}}, policy, "leo-infra", "", 403},
+		{"a policy never reaches an unrelated exact agent via the prefix", []agent.Record{{Name: "rocket"}}, ClientPolicy{Name: "dionysus", CanMessage: []string{"leo-rocket"}}, "rocket", "", 403},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			s := newClientAgentsServer(t, tc.records)
+			routed, code := serveClientMessagePath(t, s, tc.policy, tc.target)
+			if code != tc.wantCode || routed != tc.wantRouted {
+				t.Fatalf("code %d routed %q, want %d %q", code, routed, tc.wantCode, tc.wantRouted)
 			}
 		})
 	}

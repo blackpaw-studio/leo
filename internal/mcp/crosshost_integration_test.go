@@ -185,10 +185,10 @@ func pair(t *testing.T) (dionysus, laptop *node) {
 	laptop.writeConfig(t, []peerLink{{to: dionysus, token: tokLaptopToDionysus, asClient: "laptop"}})
 	dionysus.serve(t,
 		[]web.ClientPolicy{{Name: "laptop", Token: tokLaptopToDionysus, CanMessage: []string{"scout"}, Peer: true}},
-		map[string]string{"scout": "running", "infra": "running"})
+		map[string]string{"leo-scout": "running", "leo-infra": "running"})
 	laptop.serve(t,
 		[]web.ClientPolicy{{Name: "dionysus", Token: tokDionysusToLaptop, CanMessage: []string{"rocket"}, Peer: true}},
-		map[string]string{"rocket": "running", "diary": "running"})
+		map[string]string{"leo-rocket": "running", "leo-diary": "running"})
 	return dionysus, laptop
 }
 
@@ -220,7 +220,7 @@ func TestCrossHost_SendReplyAndDiscovery(t *testing.T) {
 			t.Fatalf("wire:\n got %+v\nwant [%+v]", got, want)
 		}
 		got := deliveredTo("laptop")
-		if len(got) != 1 || got[0] != (delivery{Agent: "rocket", Text: "[message from scout@dionysus] hi"}) {
+		if len(got) != 1 || got[0] != (delivery{Agent: "leo-rocket", Text: "[message from scout@dionysus] hi"}) {
 			t.Fatalf("laptop deliveries = %+v", got)
 		}
 	})
@@ -231,7 +231,7 @@ func TestCrossHost_SendReplyAndDiscovery(t *testing.T) {
 			t.Fatalf("reply: %q, %v", out, err)
 		}
 		got := deliveredTo("dionysus")
-		if len(got) != 1 || got[0] != (delivery{Agent: "scout", Text: "[message from rocket@laptop] got it"}) {
+		if len(got) != 1 || got[0] != (delivery{Agent: "leo-scout", Text: "[message from rocket@laptop] got it"}) {
 			t.Fatalf("dionysus deliveries = %+v", got)
 		}
 	})
@@ -247,6 +247,25 @@ func TestCrossHost_SendReplyAndDiscovery(t *testing.T) {
 		}
 		if after := len(deliveredTo("laptop")); after != before {
 			t.Fatalf("a denied message was delivered")
+		}
+	})
+
+	t.Run("a discovered name sends straight back, and the stored agent receives it", func(t *testing.T) {
+		out, err := scout.Call("leo_list_agents", map[string]any{"host": "laptop"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		var listed []struct{ Name string }
+		if err := json.Unmarshal([]byte(out), &listed); err != nil || len(listed) != 1 {
+			t.Fatalf("listing %q: %v", out, err)
+		}
+		before := len(deliveredTo("laptop"))
+		if _, err := scout.Call("leo_send_message", map[string]any{"to": listed[0].Name + "@laptop", "message": "round trip"}); err != nil {
+			t.Fatalf("send to discovered name %q: %v", listed[0].Name, err)
+		}
+		got := deliveredTo("laptop")
+		if len(got) != before+1 || got[before] != (delivery{Agent: "leo-rocket", Text: "[message from scout@dionysus] round trip"}) {
+			t.Fatalf("deliveries = %+v", got)
 		}
 	})
 
@@ -267,7 +286,7 @@ func TestCrossHost_SendReplyAndDiscovery(t *testing.T) {
 		if err := json.Unmarshal([]byte(out), &got); err != nil {
 			t.Fatalf("decode %q: %v", out, err)
 		}
-		if len(got) != 1 || len(got[0]) != 2 || got[0]["name"] != "rocket" || got[0]["status"] != "running" {
+		if len(got) != 1 || len(got[0]) != 2 || got[0]["name"] != "leo-rocket" || got[0]["status"] != "running" {
 			t.Fatalf("listing = %s", out)
 		}
 		if strings.Contains(out, "diary") || strings.Contains(out, "/private") {
