@@ -100,7 +100,7 @@ not use them to contain an agent you do not trust.
 | Field | Meaning |
 |-------|---------|
 | `deny_tools` | Leo MCP tool names removed from this template's agents. |
-| `can_message` | Allowed `to` targets for `leo_send_message`. |
+| `can_message` | Allowed `to` targets for `leo_send_message`. A target on another host is `agent@host`; only entries containing `@` (e.g. `rocket@laptop`, `*@laptop`) match it, so `coder-*` or `*` never authorize a remote agent. See [Leo-to-Leo peers](api-clients.md#leo-to-leo-peers). |
 | `can_spawn` | Allowed `template` values for `leo_spawn_agent`. |
 | `can_consult` | Allowed `template` values for `leo_consult`. |
 

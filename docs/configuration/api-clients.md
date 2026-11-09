@@ -58,12 +58,20 @@ takes effect on `leo service reload`.
 
 ## What the token can do
 
-Up to two things, one per scope:
+Up to three things:
 
 ```
 POST /web/agent/<target>/message     # target matches can_message
 POST /web/agent/<target>/chat/post   # target matches can_post
+GET  /web/client/agents              # list the agents can_message allows
 ```
+
+`GET /web/client/agents` returns `[{"name": "...", "status": "..."}]` for the
+agents the token may message, and nothing else about them (no workspace,
+template or repo). A client with no `can_message`, or one that matches nothing,
+gets the same `200` with `[]`, so the route cannot be used to probe for names
+outside its scope. It is what `leo_list_agents` with a `host` calls on a peer
+(see [Leo-to-Leo peers](#leo-to-leo-peers)).
 
 Everything else is refused with 403 —
 every `/api/*` route, every other agent verb (`interrupt`, `send`, `stop`), the
@@ -185,6 +193,127 @@ The boundary was exercised from a real Docker container against a live daemon
 | `POST /api/agent/spawn`, `GET /api/agent/list`, `GET /api/v1/state` | 403 |
 | `GET /` | 403 |
 | `from: rocket#ses_x` (forged) / `from` absent | 400 |
+
+## Leo-to-Leo peers
+
+One Leo host can message agents on another with the same `leo_send_message`
+tool, addressed `agent@host`. It rides on this page's machinery: the sending
+host is an API client of the receiving one. Nothing new runs on the receiver
+except two additive settings, `peer: true` and the `GET /web/client/agents`
+route above.
+
+```
+Dionysus agent "scout"  ──leo_send_message to="rocket@laptop"──▶  laptop daemon
+   (MCP process, uses client.hosts.laptop)                          api_clients.dionysus
+                                                                    can_message: [rocket]
+                                          [message from scout@dionysus] hi  ──▶  rocket
+```
+
+### Receiver: the laptop
+
+The laptop must be reachable over HTTP from Dionysus, which takes
+[`web.bind` and `allowed_hosts`](#reachability). Name the address Dionysus will
+put in `api_url`:
+
+```yaml
+# laptop: ~/.leo/leo.yaml
+web:
+  enabled: true
+  port: 8370
+  bind: 0.0.0.0                       # or the laptop's LAN IP
+  allowed_hosts: [laptop.local, 10.0.4.7]
+
+api_clients:
+  dionysus:                           # named after the SENDING host
+    can_message: [rocket]             # default-deny, as for any client
+    peer: true                        # render senders as agent@host
+```
+
+```bash
+leo client add dionysus --can-message rocket   # prints the token once
+```
+
+(`leo client add` writes the entry; add `peer: true` to it in `leo.yaml`, then
+`leo service reload`.) Name the entry after the sending host: that name is
+what a recipient sees after the `@`.
+
+`peer: true` is a receiver-side setting a client cannot assert. It changes only
+how that client's messages are labelled: `[message from scout@dionysus] hi`
+instead of `[message from dionysus#scout] hi`, so the recipient can reply to
+the exact string it was shown. Every other client keeps the `name#session`
+form.
+
+### Sender: Dionysus
+
+Put the laptop's address and the token in `client.hosts`. The token should be a
+[secret reference](secret-env.md) so the shared config never holds it:
+
+```yaml
+# dionysus: ~/.leo/leo.yaml
+client:
+  hosts:
+    laptop:
+      ssh: evan@laptop.local          # optional; only for `leo agent --host laptop`
+      api_url: http://laptop.local:8370
+      api_token: {secret: file, path: ~/.config/leo/laptop.token}   # 0600 file holding the token
+      api_client: dionysus            # optional; defaults to the lowercased short hostname
+```
+
+| Key | Meaning |
+|---|---|
+| `api_url` | Base URL of the peer's web listener. `http` or `https`, no credentials, query or fragment. |
+| `api_token` | The token the peer issued for this host. A literal or a [secret reference](secret-env.md); set together with `api_url`. `leo validate` checks the reference. |
+| `api_client` | This host's name in the peer's `api_clients`. Defaults to the lowercased short hostname, so it must match the entry you created there. |
+
+The host key (`laptop`) is what an agent writes after the `@`, so it cannot
+contain `@`.
+
+An agent on Dionysus can now do:
+
+```
+leo_send_message  to="rocket@laptop"  message="deploy finished"
+leo_list_agents   host="laptop"        # the agents it may message there
+```
+
+The request goes from the agent's own MCP process, as
+`POST <api_url>/web/agent/rocket/message` with the token as a bearer and
+`from = "dionysus#scout"`. The MCP process does not read `leo.yaml`; it asks
+the local daemon (`GET /api/remote-host/laptop`, agent or operator token only)
+to resolve the host and the token. That is the same trust as the agent reading
+`leo.yaml`, and the token is never logged or put in an error.
+
+### Replying
+
+The recipient sees `[message from scout@dionysus] hi` and can answer with
+`leo_send_message to="scout@dionysus"`. That needs the mirror image: a
+`client.hosts.dionysus` entry on the laptop, and a `laptop` entry in
+Dionysus's `api_clients` (`can_message: [scout]`, `peer: true`) with its own
+token. Each direction has its own token, and each host decides independently
+which of its agents the other may reach.
+
+### What to know
+
+- **Permissions.** The receiver's `can_message` is the boundary. A template's
+  own `can_message` also applies on the sender, matched against the full
+  `agent@host` string, and only entries containing `@` can match a remote
+  target (`coder-*` or `*` does not authorize `coder-x@laptop`; `*@laptop`
+  does). An unrestricted template is still unrestricted.
+- **Failures are explicit.** An unknown host, a host with no `api_url`, a
+  rejected token (401), a target outside the peer's `can_message` (403), an
+  unknown agent (404), an unreachable peer, and a peer that does not answer in
+  10 s each return a clear error to the agent. There is no queue and no retry:
+  a sleeping laptop fails the send, and the agent decides whether to try again.
+  A timed-out send may still have been delivered.
+- **One line.** The receiver flattens newlines in the text (see
+  [Sender identity](#sender-identity-is-enforced-not-asserted)), so a remote
+  message arrives as a single line.
+- **No redirects.** The bearer token is sent only to `api_url`. A redirect is an
+  error, not followed.
+- **Dispatch subagents** (`leo_dispatch` children) cannot message another host.
+  Their orchestrator can.
+- **macOS.** The request comes from the agent's MCP process, so a laptop sending
+  to a peer on the LAN needs the Local Network permission that agents inherit
+  from the daemon's foreground tmux (see `leo doctor`).
 
 ## Two-way messaging
 
