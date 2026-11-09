@@ -43,6 +43,14 @@ An agent on one leo host can message an agent on another leo host, e.g. an agent
 
 The receiving daemon must listen beyond loopback, which takes `web.bind` plus `allowed_hosts`. Document a two-host walkthrough (Dionysus ⇄ laptop) in `docs/configuration/api-clients.md` and `docs/guides/remote-cli.md`, covering tokens, globs, and reaching the laptop over the LAN.
 
+### Resolved during planning
+
+- The receiver renders `agent@host` only for `api_clients` entries marked `peer: true`, a new opt-in receiver field. Every other client keeps today's `name#suffix` form.
+- The sender's own name comes from `client.hosts.<h>.api_client`. When unset it defaults to the lowercased short `os.Hostname()`.
+- The agent's MCP process gets the host URL and token from a loopback daemon route that requires the agent token. The trust level is the same as reading `leo.yaml`.
+- Dispatch children (`dispatch:<id>`) cannot send cross-host; they get a clear tool error.
+- Remote message text arrives as a single line, because the receiver's existing sanitizer strips newlines.
+
 ## Compatibility
 
 Every new config field is optional and additive. Existing configs, bare agent names, and the local send path behave exactly as before. External users need no migration.
