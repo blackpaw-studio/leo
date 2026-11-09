@@ -3,7 +3,7 @@
     "data": {
       "item": {
         "effective_harness": "claude",
-        "revision": "sha256:b32756745ab108c8e9bf254031b97032c6ed122a2c7bf8c08d16985453c76795",
+        "revision": "sha256:d511645b4d4464bd9c246ba8090b7ae3c2ef3de24ab99b18beea21a314793cac",
         "values": {
           "dispatch_viewer": {
             "placement": ""
@@ -30,7 +30,7 @@
         "agents": true,
         "service": false
       },
-      "revision": "sha256:b32756745ab108c8e9bf254031b97032c6ed122a2c7bf8c08d16985453c76795"
+      "revision": "sha256:d511645b4d4464bd9c246ba8090b7ae3c2ef3de24ab99b18beea21a314793cac"
     },
     "ok": true
   },

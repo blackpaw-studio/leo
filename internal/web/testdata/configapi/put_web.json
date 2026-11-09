@@ -2,7 +2,7 @@
   "body": {
     "data": {
       "item": {
-        "revision": "sha256:6dbd62d0f01d8fae8e00f7b62bae11913d8a16de50b3b1020e51c20f7066809d",
+        "revision": "sha256:2ceb5403b1042fdfd29c9489e630f2a70b8f49e5fddd37956f67416ac31807ca",
         "values": {
           "allowed_hosts": [],
           "bind": "",
@@ -16,7 +16,7 @@
         "agents": true,
         "service": true
       },
-      "revision": "sha256:6dbd62d0f01d8fae8e00f7b62bae11913d8a16de50b3b1020e51c20f7066809d"
+      "revision": "sha256:2ceb5403b1042fdfd29c9489e630f2a70b8f49e5fddd37956f67416ac31807ca"
     },
     "ok": true
   },

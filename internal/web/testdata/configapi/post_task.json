@@ -7,7 +7,7 @@
           "model": "opus"
         },
         "name": "weekly",
-        "revision": "sha256:3276bf9e832bcb4366a69706a48c9ec8512e5e728187a57d85b462b0887d5733",
+        "revision": "sha256:ea6d7e1c64b699254c08ad0f01de97dde5c7e703f7ec0a17a65d07b8d44c194f",
         "values": {
           "channels": [],
           "dev_channels": [],
@@ -38,7 +38,7 @@
         "agents": true,
         "service": true
       },
-      "revision": "sha256:3276bf9e832bcb4366a69706a48c9ec8512e5e728187a57d85b462b0887d5733"
+      "revision": "sha256:ea6d7e1c64b699254c08ad0f01de97dde5c7e703f7ec0a17a65d07b8d44c194f"
     },
     "ok": true
   },

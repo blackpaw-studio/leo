@@ -1332,6 +1332,30 @@
               "restart": "none",
               "type": "string",
               "warning": ""
+            },
+            {
+              "advanced": false,
+              "constraints": {},
+              "default": null,
+              "group": "Messaging",
+              "help": "base URL of that host's leo web listener, for agent@host messaging; needs api_token in leo.yaml",
+              "key": "api_url",
+              "label": "API URL",
+              "restart": "none",
+              "type": "string",
+              "warning": ""
+            },
+            {
+              "advanced": false,
+              "constraints": {},
+              "default": null,
+              "group": "Messaging",
+              "help": "this host's name in the remote's api_clients; empty = lowercased short hostname",
+              "key": "api_client",
+              "label": "API client name",
+              "restart": "none",
+              "type": "string",
+              "warning": ""
             }
           ],
           "harness_options": false,

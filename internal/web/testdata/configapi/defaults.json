@@ -2,7 +2,7 @@
   "body": {
     "data": {
       "effective_harness": "claude",
-      "revision": "sha256:d1e5ba28f778048557b354bff517f7ba525088d0ef619dbdaa4f1b36f87f9f08",
+      "revision": "sha256:15c47137441557d2be0bab87d27ccc7fd0ce68947aa7f9c27d7ea430b0c3c696",
       "values": {
         "dispatch_viewer": {
           "placement": ""

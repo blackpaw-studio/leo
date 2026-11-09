@@ -28,6 +28,8 @@ var roundTripOverrides = map[string]any{
 	"channels":             []any{"plugin:telegram@official"},
 	"dev_channels":         []any{"plugin:telegram@official"},
 	"ssh":                  "me@roundtrip.example",
+	"api_url":              "http://roundtrip.example:8370",
+	"api_client":           "roundtrip",
 	"template":             "reviewer",
 	"bind":                 "127.0.0.2",
 	"timezone":             "America/New_York",
