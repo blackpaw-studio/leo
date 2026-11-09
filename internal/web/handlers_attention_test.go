@@ -571,3 +571,27 @@ func TestSessionStartClearPublishesAttentionChange(t *testing.T) {
 		t.Fatalf("revision %d did not advance past %d", got.Revision, before.Revision)
 	}
 }
+
+// An unbridged launch (no leo-bridge mod) gets no delegation context, but a
+// /clear still moves it to a new session: its SessionStart must claim that
+// session, or every later hook (Stop, and so Leo Chat's reply capture) is
+// dropped as another process's.
+func TestAgentHooksAfterClearCountForAnUnbridgedLaunch(t *testing.T) {
+	s := newHookServer(t)
+	home := filepath.Dir(s.configPath)
+	if err := agentstore.Save(home, agentstore.Record{Name: "leo-a"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := agentstore.SetAttentionToken(home, "leo-a", "tok-a"); err != nil {
+		t.Fatal(err)
+	}
+
+	if got := postContext(t, s, "tok-a", `{"hook_event_name":"SessionStart","source":"clear","session_id":"sid-after-clear"}`); got != "" {
+		t.Fatalf("context = %q, want none for an unbridged launch", got)
+	}
+	postHook(t, s, "tok-a", `{"hook_event_name":"Stop","session_id":"sid-after-clear"}`)
+
+	if got, _ := s.attention.Get("leo-a"); got.State != observe.AttentionFinished {
+		t.Fatalf("attention = %q, want the post-/clear Stop to count", got.State)
+	}
+}
