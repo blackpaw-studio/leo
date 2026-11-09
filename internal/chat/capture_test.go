@@ -103,9 +103,29 @@ func TestCaptureMatchesWhitespaceNormalisedAndBlockContent(t *testing.T) {
 	}
 }
 
-func TestCaptureSupersededByNonChatPromptPostsNothing(t *testing.T) {
+// A non-chat prompt supersedes the capture (its own Stop was missed): the
+// text the agent wrote before it is the reply, not the later turn's.
+func TestCaptureSupersededPostsTheTextBeforeTheNewPrompt(t *testing.T) {
 	p := "[Leo Chat] summarise"
-	tr := transcript{}.user(p).assistant("working").user("[message from web] deploy done").assistant("noted")
+	tr := transcript{}.user(p).assistant("Summary: all green.").toolUse().toolResult().
+		user("[message from web] deploy done").assistant("noted")
+	if got := resolveOne(t, tr, capture("m1", p), "noted"); got.Action != CapturePost || got.Text != "Summary: all green." {
+		t.Fatalf("outcome = %+v", got)
+	}
+}
+
+func TestCaptureSupersededWithNothingSaidPostsNothing(t *testing.T) {
+	p := "[Leo Chat] summarise"
+	tr := transcript{}.user(p).toolUse().toolResult().user("[message from web] deploy done").assistant("noted")
+	if got := resolveOne(t, tr, capture("m1", p), "noted"); got.Action != CaptureDrop {
+		t.Fatalf("outcome = %+v", got)
+	}
+}
+
+func TestCaptureSupersededAfterAToolPostPostsNothing(t *testing.T) {
+	p := "[Leo Chat] summarise"
+	tr := transcript{}.user(p).chatPost().toolResult().assistant("Posted it.").
+		user("[message from web] deploy done").assistant("noted")
 	if got := resolveOne(t, tr, capture("m1", p), "noted"); got.Action != CaptureDrop {
 		t.Fatalf("outcome = %+v", got)
 	}
@@ -229,29 +249,39 @@ func (tr transcript) userOrigin(text string, origin map[string]any) transcript {
 
 // Prompts a plugin or the harness submits on its own (a leo-bridge dispatch
 // notification, a task notification) do not supersede a pending capture;
-// a plugin prompt sent as the user (Leo Chat's own delivery) still does.
+// a plugin prompt sent as the user still does, ending the reply before it.
 func TestCapturePluginAndTaskNotificationsDoNotSupersede(t *testing.T) {
 	p := "[Leo Chat] what next"
 	for _, tc := range []struct {
-		name   string
-		tr     transcript
-		action CaptureAction
+		name string
+		tr   transcript
+		want string // the posted reply
 	}{
 		{"bridge notification", transcript{}.user(p).assistant("Scanning.").
 			userOrigin("The leo-bridge plugin sent a message:\n[leo] dispatch d-1 done", map[string]any{"kind": "plugin", "name": "leo-bridge"}).
-			assistant("Do X next."), CapturePost},
+			assistant("Do X next."), "Do X next."},
 		{"bridge notification without origin", transcript{}.user(p).assistant("Scanning.").
-			user("The leo-bridge plugin sent a message:\n[leo] dispatch d-1 done").assistant("Do X next."), CapturePost},
+			user("The leo-bridge plugin sent a message:\n[leo] dispatch d-1 done").assistant("Do X next."), "Do X next."},
 		{"task notification origin", transcript{}.user(p).assistant("Scanning.").
-			userOrigin("Background job finished.", map[string]any{"kind": "task-notification"}).assistant("Do X next."), CapturePost},
+			userOrigin("Background job finished.", map[string]any{"kind": "task-notification"}).assistant("Do X next."), "Do X next."},
 		{"plugin prompt sent as the user", transcript{}.user(p).assistant("Scanning.").
-			userOrigin("[message from web] hi", map[string]any{"kind": "plugin", "name": "leo-bridge", "asUser": true}).assistant("Do X next."), CaptureDrop},
+			userOrigin("[message from web] hi", map[string]any{"kind": "plugin", "name": "leo-bridge", "asUser": true}).assistant("Do X next."), "Scanning."},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			got := resolveOne(t, tc.tr, capture("m1", p), "Do X next.")
-			if got.Action != tc.action || (tc.action == CapturePost && got.Text != "Do X next.") {
-				t.Fatalf("outcome = %+v, want action %d", got, tc.action)
+			if got.Action != CapturePost || got.Text != tc.want {
+				t.Fatalf("outcome = %+v, want %q posted", got, tc.want)
 			}
 		})
+	}
+}
+
+// A later Leo Chat prompt owns the reply even when its own capture is no
+// longer pending, so the earlier capture posts no partial text.
+func TestCaptureLaterChatPromptOwnsTheReplyWithoutItsCapture(t *testing.T) {
+	p1, p2 := "[Leo Chat] first", "[Leo Chat] second"
+	tr := transcript{}.user(p1).assistant("thinking").user(p2).assistant("Both done.")
+	if got := resolveOne(t, tr, capture("m1", p1), "Both done."); got.Action != CaptureDrop {
+		t.Fatalf("outcome = %+v", got)
 	}
 }

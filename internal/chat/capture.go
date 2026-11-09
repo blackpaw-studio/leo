@@ -222,9 +222,11 @@ func normalize(s string) string { return strings.Join(strings.Fields(s), " ") }
 // ResolveCaptures decides each pending capture (oldest first) at a Stop
 // hook, from the transcript entries and the hook's last_assistant_message.
 // A capture posts the final assistant text of the turn its prompt opened,
-// unless a non-chat prompt superseded it, a later chat prompt in the same
-// turn owns the reply, the agent called leo_chat_post in that turn, or the
-// reply is empty. A prompt not found yet waits CaptureWindow.
+// unless a later chat prompt in the same turn owns the reply, the agent
+// called leo_chat_post in that turn, or the reply is empty. A non-chat
+// prompt that superseded it (its own Stop never reached capture) ends the
+// reply: the text before that prompt posts. A prompt not found yet waits
+// CaptureWindow.
 //
 // The turn starts at the earliest prompt the pending captures matched: a
 // capture still pending at this Stop had its prompt in the turn ending now,
@@ -256,7 +258,7 @@ func ResolveCaptures(entries []TranscriptEntry, captures []Capture, lastAssistan
 	toolPosted := turn >= 0 && slices.ContainsFunc(entries[turn:], func(e TranscriptEntry) bool { return e.chatPost })
 	out := make([]CaptureOutcome, len(captures))
 	for i, c := range captures {
-		out[i] = resolveCapture(entries, c, starts[i], lastAssistant, now, toolPosted)
+		out[i] = resolveCapture(entries, c, starts[i], claimed, lastAssistant, now, toolPosted)
 	}
 	return out, mark
 }
@@ -286,7 +288,7 @@ func findPrompt(entries []TranscriptEntry, c Capture, prompt string, claimed map
 	return latestUnstamped
 }
 
-func resolveCapture(entries []TranscriptEntry, c Capture, start int, lastAssistant string, now time.Time, toolPosted bool) CaptureOutcome {
+func resolveCapture(entries []TranscriptEntry, c Capture, start int, claimed map[int]bool, lastAssistant string, now time.Time, toolPosted bool) CaptureOutcome {
 	if start < 0 {
 		if now.Sub(c.DeliveredAt) < CaptureWindow {
 			return CaptureOutcome{Capture: c, Action: CaptureKeep}
@@ -294,12 +296,16 @@ func resolveCapture(entries []TranscriptEntry, c Capture, start int, lastAssista
 		return CaptureOutcome{Capture: c, Action: CaptureDrop}
 	}
 	var reply string
-	for _, e := range entries[start+1:] {
+	for i, e := range entries[start+1:] {
 		switch e.kind {
 		case entryPrompt:
-			// Another chat prompt in the same turn owns the reply; any
-			// other prompt superseded this one. Either way, nothing here.
-			return CaptureOutcome{Capture: c, Action: CaptureDrop}
+			if claimed[start+1+i] || isChatPrompt(e.text) {
+				// Another chat prompt in the same turn owns the reply.
+				return CaptureOutcome{Capture: c, Action: CaptureDrop}
+			}
+			// Superseded: what the agent said before the new prompt is
+			// the reply; the rest belongs to the later turn.
+			return replyOutcome(c, reply, toolPosted)
 		case entryAssistant:
 			if strings.TrimSpace(e.text) != "" {
 				reply = e.text
@@ -311,8 +317,19 @@ func resolveCapture(entries []TranscriptEntry, c Capture, start int, lastAssista
 	if strings.TrimSpace(lastAssistant) != "" {
 		reply = lastAssistant
 	}
+	return replyOutcome(c, reply, toolPosted)
+}
+
+// replyOutcome posts reply unless the agent already answered with
+// leo_chat_post or said nothing.
+func replyOutcome(c Capture, reply string, toolPosted bool) CaptureOutcome {
 	if toolPosted || strings.TrimSpace(reply) == "" {
 		return CaptureOutcome{Capture: c, Action: CaptureDrop}
 	}
 	return CaptureOutcome{Capture: c, Action: CapturePost, Text: strings.TrimSpace(reply)}
+}
+
+// isChatPrompt reports whether a prompt is a Leo Chat delivery.
+func isChatPrompt(text string) bool {
+	return strings.HasPrefix(strings.TrimSpace(text), PromptPrefix)
 }
