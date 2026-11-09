@@ -215,6 +215,35 @@ type CaptureOutcome struct {
 	Capture Capture
 	Action  CaptureAction
 	Text    string
+	// Reason says why, for the log.
+	Reason string
+}
+
+// Why a capture was decided as it was.
+const (
+	reasonNotYet      = "prompt not in the transcript yet"
+	reasonExpired     = "prompt never showed up in the transcript within the capture window"
+	reasonChatOwns    = "a later chat prompt owns the reply"
+	reasonToolPosted  = "the agent answered with leo_chat_post"
+	reasonEmpty       = "no reply text"
+	reasonTurnEnd     = "final text of the turn"
+	reasonSuperseded  = "text before a superseding prompt"
+	reasonSupersededE = "superseded by a later prompt with no reply text before it"
+)
+
+// Decision names what was done with the capture: pending, posted,
+// suppressed (the agent posted itself) or dropped.
+func (o CaptureOutcome) Decision() string {
+	switch {
+	case o.Action == CaptureKeep:
+		return "pending"
+	case o.Action == CapturePost:
+		return "posted"
+	case o.Reason == reasonToolPosted:
+		return "suppressed"
+	default:
+		return "dropped"
+	}
 }
 
 func normalize(s string) string { return strings.Join(strings.Fields(s), " ") }
@@ -291,9 +320,9 @@ func findPrompt(entries []TranscriptEntry, c Capture, prompt string, claimed map
 func resolveCapture(entries []TranscriptEntry, c Capture, start int, claimed map[int]bool, lastAssistant string, now time.Time, toolPosted bool) CaptureOutcome {
 	if start < 0 {
 		if now.Sub(c.DeliveredAt) < CaptureWindow {
-			return CaptureOutcome{Capture: c, Action: CaptureKeep}
+			return CaptureOutcome{Capture: c, Action: CaptureKeep, Reason: reasonNotYet}
 		}
-		return CaptureOutcome{Capture: c, Action: CaptureDrop}
+		return CaptureOutcome{Capture: c, Action: CaptureDrop, Reason: reasonExpired}
 	}
 	var reply string
 	for i, e := range entries[start+1:] {
@@ -301,11 +330,11 @@ func resolveCapture(entries []TranscriptEntry, c Capture, start int, claimed map
 		case entryPrompt:
 			if claimed[start+1+i] || isChatPrompt(e.text) {
 				// Another chat prompt in the same turn owns the reply.
-				return CaptureOutcome{Capture: c, Action: CaptureDrop}
+				return CaptureOutcome{Capture: c, Action: CaptureDrop, Reason: reasonChatOwns}
 			}
 			// Superseded: what the agent said before the new prompt is
 			// the reply; the rest belongs to the later turn.
-			return replyOutcome(c, reply, toolPosted)
+			return replyOutcome(c, reply, toolPosted, reasonSuperseded, reasonSupersededE)
 		case entryAssistant:
 			if strings.TrimSpace(e.text) != "" {
 				reply = e.text
@@ -317,16 +346,19 @@ func resolveCapture(entries []TranscriptEntry, c Capture, start int, claimed map
 	if strings.TrimSpace(lastAssistant) != "" {
 		reply = lastAssistant
 	}
-	return replyOutcome(c, reply, toolPosted)
+	return replyOutcome(c, reply, toolPosted, reasonTurnEnd, reasonEmpty)
 }
 
-// replyOutcome posts reply unless the agent already answered with
-// leo_chat_post or said nothing.
-func replyOutcome(c Capture, reply string, toolPosted bool) CaptureOutcome {
-	if toolPosted || strings.TrimSpace(reply) == "" {
-		return CaptureOutcome{Capture: c, Action: CaptureDrop}
+// replyOutcome posts reply (for posted) unless the agent already answered
+// with leo_chat_post or said nothing (for empty).
+func replyOutcome(c Capture, reply string, toolPosted bool, posted, empty string) CaptureOutcome {
+	switch {
+	case toolPosted:
+		return CaptureOutcome{Capture: c, Action: CaptureDrop, Reason: reasonToolPosted}
+	case strings.TrimSpace(reply) == "":
+		return CaptureOutcome{Capture: c, Action: CaptureDrop, Reason: empty}
 	}
-	return CaptureOutcome{Capture: c, Action: CapturePost, Text: strings.TrimSpace(reply)}
+	return CaptureOutcome{Capture: c, Action: CapturePost, Text: strings.TrimSpace(reply), Reason: posted}
 }
 
 // isChatPrompt reports whether a prompt is a Leo Chat delivery.

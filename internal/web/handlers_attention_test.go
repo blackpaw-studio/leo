@@ -1,9 +1,12 @@
 package web
 
 import (
+	"bytes"
 	"encoding/json"
+	"log"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -593,5 +596,28 @@ func TestAgentHooksAfterClearCountForAnUnbridgedLaunch(t *testing.T) {
 
 	if got, _ := s.attention.Get("leo-a"); got.State != observe.AttentionFinished {
 		t.Fatalf("attention = %q, want the post-/clear Stop to count", got.State)
+	}
+}
+
+// A Stop hook the gate drops never reaches Leo Chat's reply capture, so the
+// drop is logged with why.
+func TestAgentHookDroppedStopIsLogged(t *testing.T) {
+	var buf bytes.Buffer
+	log.SetOutput(&buf)
+	t.Cleanup(func() { log.SetOutput(os.Stderr) })
+	s := newHookServer(t)
+
+	postHook(t, s, "tok-a", `{"hook_event_name":"Stop","session_id":"sid-other"}`)
+	postHook(t, s, "tok-nope", `{"hook_event_name":"Stop","session_id":"sid-x"}`)
+	postHook(t, s, "tok-a", `{"hook_event_name":"UserPromptSubmit","session_id":"sid-other"}`)
+
+	out := buf.String()
+	for _, want := range []string{`Stop hook for "leo-a" dropped: session "sid-other" is not the agent's`, `Stop hook with an unknown launch token dropped`} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("log = %q, want %q", out, want)
+		}
+	}
+	if strings.Contains(out, "UserPromptSubmit") {
+		t.Fatalf("log = %q, want only Stop drops logged", out)
 	}
 }
