@@ -321,3 +321,74 @@ func TestMapRemoteError(t *testing.T) {
 		})
 	}
 }
+
+func TestListAgents_RemoteHost(t *testing.T) {
+	const listing = `[{"name":"rocket","status":"running"}]`
+	peer := newFakePeer(t, func(w http.ResponseWriter, _ *http.Request) {
+		w.Write([]byte(`{"ok":true,"data":` + listing + `}`))
+	})
+	d := remoteHostDaemon(t, peer.srv.URL)
+	reg := remoteRegistry(d, leotools.Permissions{})
+
+	out, err := callTool(reg, "leo_list_agents", map[string]any{"host": "laptop"})
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	if out != listing {
+		t.Errorf("result = %q, want %q", out, listing)
+	}
+	calls := peer.recorded()
+	want := peerCall{Method: "GET", Path: "/web/client/agents", Auth: "Bearer " + peerToken}
+	if len(calls) != 1 || calls[0] != want {
+		t.Fatalf("peer calls = %+v, want [%+v]", calls, want)
+	}
+}
+
+func TestListAgents_RemoteHostErrors(t *testing.T) {
+	t.Run("old peer without the route", func(t *testing.T) {
+		peer := newFakePeer(t, peerStatus(404, "not found"))
+		reg := remoteRegistry(remoteHostDaemon(t, peer.srv.URL), leotools.Permissions{})
+		_, err := callTool(reg, "leo_list_agents", map[string]any{"host": "laptop"})
+		if err == nil || !strings.Contains(err.Error(), "does not serve this request") {
+			t.Fatalf("err = %v", err)
+		}
+	})
+	t.Run("wrong token", func(t *testing.T) {
+		peer := newFakePeer(t, peerStatus(401, "unauthorized"))
+		reg := remoteRegistry(remoteHostDaemon(t, peer.srv.URL), leotools.Permissions{})
+		_, err := callTool(reg, "leo_list_agents", map[string]any{"host": "laptop"})
+		if err == nil || !strings.Contains(err.Error(), "rejected the api_token") || strings.Contains(err.Error(), peerToken) {
+			t.Fatalf("err = %v", err)
+		}
+	})
+	t.Run("unknown host", func(t *testing.T) {
+		reg := remoteRegistry(remoteHostDaemon(t, "http://unused.invalid"), leotools.Permissions{})
+		_, err := callTool(reg, "leo_list_agents", map[string]any{"host": "nope"})
+		if err == nil || !strings.Contains(err.Error(), `"nope"`) {
+			t.Fatalf("err = %v", err)
+		}
+	})
+	t.Run("dispatch child refused", func(t *testing.T) {
+		d := remoteHostDaemon(t, "http://unused.invalid")
+		reg := newRegistry(newDaemonClient(d.port(), "tok"), "dispatch:d-1", leotools.Permissions{}, withDispatchID("d-1"))
+		if _, err := callTool(reg, "leo_list_agents", map[string]any{"host": "laptop"}); err == nil {
+			t.Fatal("expected a refusal")
+		}
+	})
+}
+
+func TestListAgents_NoHostStaysLocal(t *testing.T) {
+	d := newFakeDaemon(func(method, path string, _ []byte) (int, string) {
+		if method != "GET" || path != "/api/agent/list" {
+			t.Errorf("unexpected request %s %s", method, path)
+		}
+		return 200, `{"ok":true,"data":[{"name":"local-1"}]}`
+	})
+	defer d.close()
+	reg := newRegistry(newDaemonClient(d.port(), "tok"), "scout", leotools.Permissions{})
+	for _, args := range []map[string]any{{}, {"host": ""}} {
+		if out, err := callTool(reg, "leo_list_agents", args); err != nil || out != `[{"name":"local-1"}]` {
+			t.Fatalf("args %v: out=%q err=%v", args, out, err)
+		}
+	}
+}

@@ -249,3 +249,23 @@ func (r *registry) sendRemote(client *daemonClient, processName, agent, host, me
 	}
 	return fmt.Sprintf("Sent message to %s@%s", agent, host), nil
 }
+
+// listRemoteAgents lists the agents the peer's api_clients entry for this
+// host may message.
+func (r *registry) listRemoteAgents(client *daemonClient, host string) (string, error) {
+	if r.dispatchID != "" {
+		return "", errors.New("a leo_dispatch subagent cannot message another host, so it cannot list one's agents")
+	}
+	if strings.Contains(host, "@") {
+		return "", fmt.Errorf("host %q must be a client.hosts name, without '@'", host)
+	}
+	h, err := client.remoteHost(host)
+	if err != nil {
+		return "", err
+	}
+	data, err := r.remote.listAgents(context.Background(), h)
+	if err != nil {
+		return "", err
+	}
+	return string(data), nil
+}

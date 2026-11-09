@@ -309,9 +309,14 @@ func newRegistry(client *daemonClient, processName string, perms leotools.Permis
 
 	r.add(toolDef{
 		Name:        "leo_list_agents",
-		Description: "List all running ephemeral Leo agents with their name, status, and workspace.",
-		InputSchema: emptyArgs,
+		Description: "List all running ephemeral Leo agents with their name, status, and workspace. With `host` (a key in client.hosts), list that peer Leo host's agents instead: only the ones you may message with agent@host, name and status only.",
+		InputSchema: objectSchema(map[string]any{
+			"host": map[string]any{"type": "string", "description": "Optional peer host name from client.hosts. Omit to list this host's agents."},
+		}),
 	}, func(args map[string]any) (string, error) {
+		if host, _ := args["host"].(string); host != "" {
+			return r.listRemoteAgents(client, host)
+		}
 		data, err := client.listAgents()
 		if err != nil {
 			return "", err

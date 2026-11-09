@@ -180,8 +180,13 @@ func clientRoute(urlPath string) (target, verb string, ok bool) {
 	return "", "", false
 }
 
+// clientAgentsPath is the one read route a client token has: the agents it
+// may message, for cross-host discovery.
+const clientAgentsPath = "/web/client/agents"
+
 // serveClient handles a request authenticated by a client token. It is
-// default-deny: only POST /web/agent/<allowed>/message or .../chat/post, each
+// default-deny: only GET /web/client/agents and POST
+// /web/agent/<allowed>/message or .../chat/post, each
 // within its own scope and with a `from` the client is entitled to claim,
 // reaches the application, and everything else — every /api/* route, every
 // other agent verb, the browser UI — is refused here rather than falling
@@ -190,10 +195,14 @@ func clientRoute(urlPath string) (target, verb string, ok bool) {
 // The scope is checked before the target is looked up, so a client cannot
 // probe which agents exist outside its scope.
 func (s *Server) serveClient(w http.ResponseWriter, r *http.Request, policy ClientPolicy, next http.Handler) {
+	if r.Method == http.MethodGet && r.URL.Path == clientAgentsPath {
+		s.serveClientAgents(w, policy)
+		return
+	}
 	target, verb, ok := clientRoute(r.URL.Path)
 	if !ok || r.Method != http.MethodPost {
 		writeJSON(w, http.StatusForbidden, apiResponse{
-			Error: fmt.Sprintf("client %q may only POST to /web/agent/<target>/message or /web/agent/<target>/chat/post", policy.Name),
+			Error: fmt.Sprintf("client %q may only GET %s or POST to /web/agent/<target>/message or /web/agent/<target>/chat/post", policy.Name, clientAgentsPath),
 		})
 		return
 	}
@@ -212,6 +221,28 @@ func (s *Server) serveClient(w http.ResponseWriter, r *http.Request, policy Clie
 		return
 	}
 	s.serveClientMessage(w, r, policy, next)
+}
+
+// clientAgent is the whole of what a client learns about an agent: enough to
+// address it and tell whether it is up, nothing about where or how it runs.
+type clientAgent struct {
+	Name   string `json:"name"`
+	Status string `json:"status"`
+}
+
+// serveClientAgents lists the agents policy may message. The answer is the
+// same 200 whether can_message is empty or merely matches nothing, so the
+// route cannot be used to probe for names outside the client's scope.
+func (s *Server) serveClientAgents(w http.ResponseWriter, policy ClientPolicy) {
+	out := []clientAgent{}
+	if s.agentSvc != nil {
+		for _, rec := range s.agentSvc.List() {
+			if policy.allowsMessage(rec.Name) {
+				out = append(out, clientAgent{Name: rec.Name, Status: rec.Status})
+			}
+		}
+	}
+	writeJSON(w, http.StatusOK, apiResponse{OK: true, Data: out})
 }
 
 // serveClientChatPost stores the client's text in target's chat thread. It
