@@ -285,3 +285,38 @@ func TestCaptureLaterChatPromptOwnsTheReplyWithoutItsCapture(t *testing.T) {
 		t.Fatalf("outcome = %+v", got)
 	}
 }
+
+// The plugin-prefix fallback is only for transcripts without an origin: a
+// prompt Claude records as the user's is a prompt whatever its text.
+func TestCapturePluginPrefixWithAUserOriginIsAPrompt(t *testing.T) {
+	p := "[Leo Chat] what next"
+	for _, origin := range []map[string]any{{"kind": "human"}, {"kind": "plugin", "name": "leo-bridge", "asUser": true}} {
+		tr := transcript{}.user(p).assistant("Scanning.").
+			userOrigin("The leo-bridge plugin sent a message: is this real?", origin).assistant("Unrelated answer.")
+		if got := resolveOne(t, tr, capture("m1", p), "Unrelated answer."); got.Action != CapturePost || got.Text != "Scanning." {
+			t.Fatalf("origin %v: outcome = %+v, want the text before the user's prompt", origin, got)
+		}
+	}
+}
+
+// A leo_chat_post in a later, superseding turn answers that turn, not the
+// chat capture whose reply came before it.
+func TestCaptureToolPostAfterASupersedingPromptDoesNotSuppress(t *testing.T) {
+	p := "[Leo Chat] summarise"
+	tr := transcript{}.user(p).assistant("Summary: all green.").
+		user("deploy it").chatPost().toolResult().assistant("Deployed.")
+	if got := resolveOne(t, tr, capture("m1", p), "Deployed."); got.Action != CapturePost || got.Text != "Summary: all green." {
+		t.Fatalf("outcome = %+v", got)
+	}
+}
+
+// Nor does a post in a superseded turn suppress a later chat turn.
+func TestCaptureToolPostBeforeASupersedingPromptDoesNotSuppressALaterChat(t *testing.T) {
+	p1, p2 := "[Leo Chat] first", "[Leo Chat] second"
+	tr := transcript{}.user(p1).chatPost().toolResult().assistant("Posted.").
+		user("terminal question").assistant("Terminal answer.").user(p2).assistant("Second answer.")
+	out, _ := ResolveCaptures(ReadTranscript(tr.write(t)), []Capture{capture("m1", p1), capture("m2", p2)}, "Second answer.", captureNow, time.Time{})
+	if out[0].Action != CaptureDrop || out[0].Reason != reasonToolPosted || out[1].Action != CapturePost || out[1].Text != "Second answer." {
+		t.Fatalf("outcomes = %+v", out)
+	}
+}

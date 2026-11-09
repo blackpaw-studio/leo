@@ -140,7 +140,7 @@ func parseEntry(raw []byte) (TranscriptEntry, bool) {
 		if !onlyText || strings.TrimSpace(text) == "" {
 			return TranscriptEntry{}, false
 		}
-		if e.Origin.injected() || isInjected(text) {
+		if e.Origin.injected() || isInjected(text) || (e.Origin == nil && pluginMessagePrefix.MatchString(strings.TrimSpace(text))) {
 			return TranscriptEntry{kind: entryInjected, text: text}, true
 		}
 		at, _ := time.Parse(time.RFC3339Nano, e.Timestamp)
@@ -182,9 +182,6 @@ func contentText(raw json.RawMessage) (text string, onlyText, posted bool) {
 
 func isInjected(text string) bool {
 	t := strings.TrimSpace(text)
-	if pluginMessagePrefix.MatchString(t) {
-		return true
-	}
 	for _, m := range harnessInjectionMarkers {
 		if strings.HasPrefix(t, "<"+m+">") && strings.HasSuffix(t, "</"+m+">") {
 			return true
@@ -257,9 +254,11 @@ func normalize(s string) string { return strings.Join(strings.Fields(s), " ") }
 // reply: the text before that prompt posts. A prompt not found yet waits
 // CaptureWindow.
 //
-// The turn starts at the earliest prompt the pending captures matched: a
-// capture still pending at this Stop had its prompt in the turn ending now,
-// so a post made before a second chat prompt folded into that turn counts.
+// A leo_chat_post suppresses a capture only within its own span: from the
+// earliest prompt the pending captures matched (chat prompts folded into
+// one turn share it, so a post before the second one counts) to the first
+// non-chat prompt. A boundary prompt before the capture starts its span
+// there, so a post in a superseded or later turn answers that turn instead.
 //
 // after is the stamp of the last prompt occurrence an earlier call already
 // answered; the returned time advances it. Identical prompts (two "ok"s)
@@ -284,12 +283,40 @@ func ResolveCaptures(entries []TranscriptEntry, captures []Capture, lastAssistan
 			mark = entries[start].at
 		}
 	}
-	toolPosted := turn >= 0 && slices.ContainsFunc(entries[turn:], func(e TranscriptEntry) bool { return e.chatPost })
 	out := make([]CaptureOutcome, len(captures))
 	for i, c := range captures {
+		toolPosted := starts[i] >= 0 && postedInSpan(entries, turn, starts[i], claimed)
 		out[i] = resolveCapture(entries, c, starts[i], claimed, lastAssistant, now, toolPosted)
 	}
 	return out, mark
+}
+
+// isBoundary reports whether entries[i] is a prompt that is not a chat
+// delivery: it ends one conversational span and starts the next.
+func isBoundary(entries []TranscriptEntry, i int, claimed map[int]bool) bool {
+	e := entries[i]
+	return e.kind == entryPrompt && !claimed[i] && !isChatPrompt(e.text)
+}
+
+// postedInSpan reports whether a leo_chat_post falls in the span of the
+// capture whose prompt is entries[start]: from the last boundary before it
+// (but not before turn) to the first boundary after it.
+func postedInSpan(entries []TranscriptEntry, turn, start int, claimed map[int]bool) bool {
+	lo := turn
+	for j := start - 1; j >= turn; j-- {
+		if isBoundary(entries, j, claimed) {
+			lo = j + 1
+			break
+		}
+	}
+	hi := len(entries)
+	for j := start + 1; j < len(entries); j++ {
+		if isBoundary(entries, j, claimed) {
+			hi = j
+			break
+		}
+	}
+	return slices.ContainsFunc(entries[lo:hi], func(e TranscriptEntry) bool { return e.chatPost })
 }
 
 // findPrompt returns the index of the unclaimed prompt entry c delivered:
