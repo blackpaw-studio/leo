@@ -166,6 +166,16 @@ type HostConfig struct {
 	// sourced for login shells but not for `ssh host cmd`, so bare `tmux`
 	// may fail to resolve.
 	TmuxPath string `yaml:"tmux_path,omitempty"`
+	// APIURL is the base URL of the remote daemon's web listener, used for
+	// cross-host agent messaging (agent@host). Set together with APIToken;
+	// see docs/configuration/api-clients.md.
+	APIURL string `yaml:"api_url,omitempty"`
+	// APIToken is the bearer token the remote daemon issued for this host's
+	// api_clients entry: a literal or a secret reference.
+	APIToken *EnvValue `yaml:"api_token,omitempty"`
+	// APIClient is the name this host is registered under in the remote
+	// daemon's api_clients. Defaults to the lowercased short hostname.
+	APIClient string `yaml:"api_client,omitempty"`
 }
 
 // DefaultRemoteLeoPath is the default remote binary path used for SSH
@@ -792,6 +802,7 @@ func (c *Config) Validate() error {
 	}
 
 	errs = append(errs, validateAPIClients(c.APIClients)...)
+	errs = append(errs, validateClientHosts(c.Client.Hosts)...)
 
 	if c.Web.Port != 0 && (c.Web.Port < 1 || c.Web.Port > 65535) {
 		errs = append(errs, fmt.Sprintf("web.port %d is out of range (1-65535)", c.Web.Port))

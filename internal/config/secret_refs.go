@@ -36,6 +36,17 @@ func (c *Config) SecretReferences() []ScopedRef {
 		}
 	}
 
+	for name, h := range c.Client.Hosts {
+		if h.APIToken == nil {
+			continue
+		}
+		if ref, ok := h.APIToken.Ref(); ok {
+			launches = append(launches, EnvLayer{Secrets: map[string]ScopedRef{
+				"api_token": {Scope: hostAPIScope(name), Key: "api_token", Ref: ref},
+			}})
+		}
+	}
+
 	seen := map[[2]string]bool{}
 	var out []ScopedRef
 	for _, l := range launches {
