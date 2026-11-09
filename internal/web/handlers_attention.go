@@ -4,8 +4,10 @@ import (
 	"bytes"
 	"encoding/json"
 	"io"
+	"log"
 	"net/http"
 	"os"
+	"strconv"
 
 	"github.com/blackpaw-studio/leo/internal/observe"
 )
@@ -153,6 +155,9 @@ func (s *Server) handleAPIAgentHook(w http.ResponseWriter, r *http.Request) {
 		name, known = s.attention.AgentForToken(req.Token)
 	}
 	ours := known && s.isAgentHookSession(name, req.Token, payload.SessionID)
+	if !ours && payload.HookEventName == "Stop" {
+		logDroppedStop(known, name, payload.SessionID)
+	}
 	home, _ := os.UserHomeDir()
 	if tr, ok := attentionForHook(payload, home); ok && ours {
 		// The SetByToken family re-resolves the token atomically, so a stop
@@ -212,6 +217,17 @@ func (s *Server) feedHook(agent string, p agentHookPayload) {
 	case "PostCompact":
 		feed.HookCompaction(agent, observe.CompactionCompleted, trigger)
 	}
+}
+
+// logDroppedStop records a Stop hook the gate dropped: it never reaches
+// Leo Chat's reply capture, so a reply answered only in the terminal is
+// traced here.
+func logDroppedStop(known bool, name, sessionID string) {
+	if !known {
+		log.Printf("web: Stop hook with an unknown launch token dropped (session %s)", strconv.Quote(sessionID))
+		return
+	}
+	log.Printf("web: Stop hook for %s dropped: session %s is not the agent's", strconv.Quote(name), strconv.Quote(sessionID))
 }
 
 // isAgentHookSession reports whether a hook for sessionID belongs to the

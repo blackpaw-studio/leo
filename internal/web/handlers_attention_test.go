@@ -1,9 +1,12 @@
 package web
 
 import (
+	"bytes"
 	"encoding/json"
+	"log"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -569,5 +572,52 @@ func TestSessionStartClearPublishesAttentionChange(t *testing.T) {
 
 	if got, _ := s.attention.Get("leo-a"); got.Revision <= before.Revision {
 		t.Fatalf("revision %d did not advance past %d", got.Revision, before.Revision)
+	}
+}
+
+// An unbridged launch (no leo-bridge mod) gets no delegation context, but a
+// /clear still moves it to a new session: its SessionStart must claim that
+// session, or every later hook (Stop, and so Leo Chat's reply capture) is
+// dropped as another process's.
+func TestAgentHooksAfterClearCountForAnUnbridgedLaunch(t *testing.T) {
+	s := newHookServer(t)
+	home := filepath.Dir(s.configPath)
+	if err := agentstore.Save(home, agentstore.Record{Name: "leo-a"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := agentstore.SetAttentionToken(home, "leo-a", "tok-a"); err != nil {
+		t.Fatal(err)
+	}
+
+	if got := postContext(t, s, "tok-a", `{"hook_event_name":"SessionStart","source":"clear","session_id":"sid-after-clear"}`); got != "" {
+		t.Fatalf("context = %q, want none for an unbridged launch", got)
+	}
+	postHook(t, s, "tok-a", `{"hook_event_name":"Stop","session_id":"sid-after-clear"}`)
+
+	if got, _ := s.attention.Get("leo-a"); got.State != observe.AttentionFinished {
+		t.Fatalf("attention = %q, want the post-/clear Stop to count", got.State)
+	}
+}
+
+// A Stop hook the gate drops never reaches Leo Chat's reply capture, so the
+// drop is logged with why.
+func TestAgentHookDroppedStopIsLogged(t *testing.T) {
+	var buf bytes.Buffer
+	log.SetOutput(&buf)
+	t.Cleanup(func() { log.SetOutput(os.Stderr) })
+	s := newHookServer(t)
+
+	postHook(t, s, "tok-a", `{"hook_event_name":"Stop","session_id":"sid-other"}`)
+	postHook(t, s, "tok-nope", `{"hook_event_name":"Stop","session_id":"sid-x"}`)
+	postHook(t, s, "tok-a", `{"hook_event_name":"UserPromptSubmit","session_id":"sid-other"}`)
+
+	out := buf.String()
+	for _, want := range []string{`Stop hook for "leo-a" dropped: session "sid-other" is not the agent's`, `Stop hook with an unknown launch token dropped`} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("log = %q, want %q", out, want)
+		}
+	}
+	if strings.Contains(out, "UserPromptSubmit") {
+		t.Fatalf("log = %q, want only Stop drops logged", out)
 	}
 }

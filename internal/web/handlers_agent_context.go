@@ -103,18 +103,24 @@ func (s *Server) handleAPIAgentContext(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) agentContext(token string, hook contextHook) string {
 	s.clearErroredOnSessionStart(token, hook)
-	if s.attention == nil || s.delegationCtx == nil || hook.AgentID != "" || hook.SessionID == "" {
+	if s.attention == nil || hook.AgentID != "" || hook.SessionID == "" {
 		return ""
 	}
 	agent, known := s.attention.AgentForToken(token)
 	if !known {
 		return ""
 	}
-	if _, _, bridged := s.attention.BoundLaunch(agent); !bridged {
-		return ""
-	}
+	// Every launch claims its new session, bridged or not: without the
+	// claim a /clear's later hooks (Stop, so Leo Chat's reply capture) are
+	// dropped as another process's.
 	if hook.Event == "SessionStart" {
 		s.claimSession(agent, token, hook.SessionID)
+	}
+	if s.delegationCtx == nil {
+		return ""
+	}
+	if _, _, bridged := s.attention.BoundLaunch(agent); !bridged {
+		return ""
 	}
 	return s.delegationCtx.contextFor(agent, hook)
 }

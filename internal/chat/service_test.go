@@ -191,6 +191,7 @@ type harnessFixture struct {
 	cfg        *config.Config
 	root       string
 	transcript func(ctx context.Context, path string) (string, error)
+	logs       *logRecorder
 }
 
 func newFixture(t *testing.T) *harnessFixture {
@@ -206,6 +207,7 @@ func newFixture(t *testing.T) *harnessFixture {
 		runs:    map[string][2]string{},
 		cfg:     &config.Config{HomePath: "/home/leo", Tasks: map[string]config.TaskConfig{}},
 		root:    t.TempDir(),
+		logs:    &logRecorder{},
 	}
 	f.transcript = func(context.Context, string) (string, error) { return "", errors.New("no whisper") }
 	f.ids.src = NewULIDSource(f.clock.Now, nil)
@@ -224,6 +226,7 @@ func (f *harnessFixture) newService() *Service {
 			return f.transcript(ctx, path)
 		},
 		Publish: f.pub,
+		Logf:    f.logs.logf,
 		Now:     f.clock.Now,
 		IDs:     f.ids,
 		After:   f.timers.after,

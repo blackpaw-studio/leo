@@ -281,7 +281,10 @@ type HookEvent struct {
 // auto-captures; a PostToolUse for the tool call an open permission prompt
 // or questions card asked about marks it answered in the terminal.
 func (s *Service) OnHook(agent string, ev HookEvent) {
-	if s.enter() != nil {
+	if err := s.enter(); err != nil {
+		if ev.Event == "Stop" {
+			s.opts.Logf("chat: Stop hook for %s ignored, captures left pending: %v", agent, err)
+		}
 		return
 	}
 	defer s.leave()
@@ -306,16 +309,23 @@ func (s *Service) resolveCaptures(agent string, ev HookEvent) {
 	outcomes, mark := ResolveCaptures(entries, captures, ev.LastAssistantMessage, s.opts.Now(), s.marks.get(agent))
 	s.marks.advance(agent, mark)
 	for _, out := range outcomes {
+		id := out.Capture.MessageID
 		if out.Action == CaptureKeep {
+			s.opts.Logf("chat: capture %s for %s: %s (%s)", id, agent, out.Decision(), out.Reason)
 			continue
 		}
-		removed, err := s.opts.Store.RemoveCapture(out.Capture.MessageID)
+		removed, err := s.opts.Store.RemoveCapture(id)
 		if err != nil {
-			s.opts.Logf("chat: clearing capture %s: %v", out.Capture.MessageID, err)
+			s.opts.Logf("chat: clearing capture %s: %v", id, err)
 			continue
 		}
-		if removed && out.Action == CapturePost {
-			s.postReply(agent, out.Capture.MessageID, out.Text)
+		if !removed {
+			s.opts.Logf("chat: capture %s for %s: already settled by another Stop", id, agent)
+			continue
+		}
+		s.opts.Logf("chat: capture %s for %s: %s (%s)", id, agent, out.Decision(), out.Reason)
+		if out.Action == CapturePost {
+			s.postReply(agent, id, out.Text)
 		}
 	}
 }
