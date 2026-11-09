@@ -221,3 +221,37 @@ func TestReadTranscriptMissingFileIsEmpty(t *testing.T) {
 		t.Fatalf("entries = %+v", got)
 	}
 }
+
+// userOrigin is a prompt carrying Claude's origin record.
+func (tr transcript) userOrigin(text string, origin map[string]any) transcript {
+	return append(tr, line(map[string]any{"type": "user", "origin": origin, "message": map[string]any{"role": "user", "content": text}}))
+}
+
+// Prompts a plugin or the harness submits on its own (a leo-bridge dispatch
+// notification, a task notification) do not supersede a pending capture;
+// a plugin prompt sent as the user (Leo Chat's own delivery) still does.
+func TestCapturePluginAndTaskNotificationsDoNotSupersede(t *testing.T) {
+	p := "[Leo Chat] what next"
+	for _, tc := range []struct {
+		name   string
+		tr     transcript
+		action CaptureAction
+	}{
+		{"bridge notification", transcript{}.user(p).assistant("Scanning.").
+			userOrigin("The leo-bridge plugin sent a message:\n[leo] dispatch d-1 done", map[string]any{"kind": "plugin", "name": "leo-bridge"}).
+			assistant("Do X next."), CapturePost},
+		{"bridge notification without origin", transcript{}.user(p).assistant("Scanning.").
+			user("The leo-bridge plugin sent a message:\n[leo] dispatch d-1 done").assistant("Do X next."), CapturePost},
+		{"task notification origin", transcript{}.user(p).assistant("Scanning.").
+			userOrigin("Background job finished.", map[string]any{"kind": "task-notification"}).assistant("Do X next."), CapturePost},
+		{"plugin prompt sent as the user", transcript{}.user(p).assistant("Scanning.").
+			userOrigin("[message from web] hi", map[string]any{"kind": "plugin", "name": "leo-bridge", "asUser": true}).assistant("Do X next."), CaptureDrop},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := resolveOne(t, tc.tr, capture("m1", p), "Do X next.")
+			if got.Action != tc.action || (tc.action == CapturePost && got.Text != "Do X next.") {
+				t.Fatalf("outcome = %+v, want action %d", got, tc.action)
+			}
+		})
+	}
+}

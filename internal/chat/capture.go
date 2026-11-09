@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"io"
 	"os"
+	"regexp"
 	"slices"
 	"strings"
 	"time"
@@ -24,7 +25,7 @@ type entryKind int
 
 const (
 	entryPrompt    entryKind = iota // a submitted user prompt
-	entryInjected                   // a harness injection (task-notification) or command echo
+	entryInjected                   // a harness or plugin injection (task or dispatch notification) or command echo
 	entryAssistant                  // assistant text
 )
 
@@ -41,6 +42,26 @@ type TranscriptEntry struct {
 // harnessInjectionMarkers are the envelopes of prompts Claude Code submits
 // on its own, which fold into the running turn (leo #216).
 var harnessInjectionMarkers = []string{"task-notification"}
+
+// pluginMessagePrefix opens a prompt a plugin sent on its own (a leo-bridge
+// dispatch notification), for transcripts that predate the origin record.
+var pluginMessagePrefix = regexp.MustCompile(`^The \S+ plugin sent a message:`)
+
+// promptOrigin is Claude's record of who submitted a user entry.
+type promptOrigin struct {
+	Kind   string `json:"kind"`
+	AsUser bool   `json:"asUser"`
+}
+
+// injected reports whether the harness or a plugin submitted the prompt on
+// its own. A plugin prompt sent as the user (Leo Chat's own delivery) is a
+// real prompt.
+func (o *promptOrigin) injected() bool {
+	if o == nil {
+		return false
+	}
+	return o.Kind == "task-notification" || (o.Kind == "plugin" && !o.AsUser)
+}
 
 // commandEchoPrefixes start the user entries Claude writes for slash
 // commands and their output; they are not conversational prompts.
@@ -77,11 +98,12 @@ func ReadTranscript(path string) []TranscriptEntry {
 }
 
 type rawEntry struct {
-	Type             string `json:"type"`
-	IsMeta           bool   `json:"isMeta"`
-	IsCompactSummary bool   `json:"isCompactSummary"`
-	IsSidechain      bool   `json:"isSidechain"`
-	Timestamp        string `json:"timestamp"`
+	Type             string        `json:"type"`
+	IsMeta           bool          `json:"isMeta"`
+	IsCompactSummary bool          `json:"isCompactSummary"`
+	IsSidechain      bool          `json:"isSidechain"`
+	Timestamp        string        `json:"timestamp"`
+	Origin           *promptOrigin `json:"origin"`
 	Message          struct {
 		Content json.RawMessage `json:"content"`
 	} `json:"message"`
@@ -118,7 +140,7 @@ func parseEntry(raw []byte) (TranscriptEntry, bool) {
 		if !onlyText || strings.TrimSpace(text) == "" {
 			return TranscriptEntry{}, false
 		}
-		if isInjected(text) {
+		if e.Origin.injected() || isInjected(text) {
 			return TranscriptEntry{kind: entryInjected, text: text}, true
 		}
 		at, _ := time.Parse(time.RFC3339Nano, e.Timestamp)
@@ -160,6 +182,9 @@ func contentText(raw json.RawMessage) (text string, onlyText, posted bool) {
 
 func isInjected(text string) bool {
 	t := strings.TrimSpace(text)
+	if pluginMessagePrefix.MatchString(t) {
+		return true
+	}
 	for _, m := range harnessInjectionMarkers {
 		if strings.HasPrefix(t, "<"+m+">") && strings.HasSuffix(t, "</"+m+">") {
 			return true

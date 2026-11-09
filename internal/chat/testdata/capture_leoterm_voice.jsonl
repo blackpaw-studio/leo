@@ -1,0 +1,39 @@
+{"type": "assistant", "timestamp": "2026-10-25T15:20:02.216Z", "isSidechain": false, "message": {"role": "assistant", "content": [{"type": "text", "text": "The nightly build is uploaded."}]}}
+{"type": "attachment", "timestamp": "2026-10-25T15:20:02.715Z", "isSidechain": false, "attachment": {"type": "hook_success", "hookEvent": "Stop"}}
+{"type": "system", "timestamp": "2026-10-25T15:20:02.719Z", "isSidechain": false, "subtype": "stop_hook_summary"}
+{"type": "system", "timestamp": "2026-10-25T15:20:02.722Z", "isMeta": false, "isSidechain": false, "subtype": "turn_duration"}
+{"type": "user", "timestamp": "2026-10-25T15:21:48.542Z", "isSidechain": false, "message": {"role": "user", "content": "[Leo Chat] Which bug should we fix first?\nAttachments: /home/user/.leo/state/chat/attachments/_unassigned/01M5STEK0R060V0HFHTARQFP3P/Voice note.m4a"}, "origin": {"kind": "plugin", "name": "leo-bridge", "asUser": true}}
+{"type": "attachment", "timestamp": "2026-10-25T15:21:49.030Z", "isSidechain": false, "attachment": {"type": "hook_additional_context", "hookEvent": "UserPromptSubmit"}}
+{"type": "assistant", "timestamp": "2026-10-25T15:21:51.019Z", "isSidechain": false, "message": {"role": "assistant", "content": [{"type": "thinking", "thinking": ""}]}}
+{"type": "assistant", "timestamp": "2026-10-25T15:21:52.457Z", "isSidechain": false, "message": {"role": "assistant", "content": [{"type": "tool_use", "name": "Bash", "input": {}}]}}
+{"type": "user", "timestamp": "2026-10-25T15:21:54.426Z", "isSidechain": false, "message": {"role": "user", "content": [{"type": "tool_result", "content": ""}]}}
+{"type": "attachment", "timestamp": "2026-10-25T15:21:54.425Z", "isSidechain": false, "attachment": {"type": "hook_success", "hookEvent": "PostToolUse"}}
+{"type": "attachment", "timestamp": "2026-10-25T15:21:54.443Z", "isSidechain": false, "attachment": {"type": "total_tokens_reminder"}}
+{"type": "attachment", "timestamp": "2026-10-25T15:21:54.444Z", "isSidechain": false, "attachment": {"type": "output_style"}}
+{"type": "assistant", "timestamp": "2026-10-25T15:21:56.269Z", "isSidechain": false, "message": {"role": "assistant", "content": [{"type": "tool_use", "name": "Bash", "input": {}}]}}
+{"type": "user", "timestamp": "2026-10-25T15:22:14.457Z", "isSidechain": false, "message": {"role": "user", "content": [{"type": "tool_result", "content": ""}]}}
+{"type": "attachment", "timestamp": "2026-10-25T15:22:14.455Z", "isSidechain": false, "attachment": {"type": "hook_success", "hookEvent": "PostToolUse"}}
+{"type": "attachment", "timestamp": "2026-10-25T15:22:14.469Z", "isSidechain": false, "attachment": {"type": "total_tokens_reminder"}}
+{"type": "attachment", "timestamp": "2026-10-25T15:22:14.469Z", "isSidechain": false, "attachment": {"type": "output_style"}}
+{"type": "assistant", "timestamp": "2026-10-25T15:22:17.603Z", "isSidechain": false, "message": {"role": "assistant", "content": [{"type": "tool_use", "name": "Bash", "input": {}}]}}
+{"type": "user", "timestamp": "2026-10-25T15:22:22.021Z", "isSidechain": false, "message": {"role": "user", "content": [{"type": "tool_result", "content": ""}]}}
+{"type": "attachment", "timestamp": "2026-10-25T15:22:22.021Z", "isSidechain": false, "attachment": {"type": "hook_success", "hookEvent": "PostToolUse"}}
+{"type": "attachment", "timestamp": "2026-10-25T15:22:22.031Z", "isSidechain": false, "attachment": {"type": "total_tokens_reminder"}}
+{"type": "attachment", "timestamp": "2026-10-25T15:22:22.032Z", "isSidechain": false, "attachment": {"type": "output_style"}}
+{"type": "assistant", "timestamp": "2026-10-25T15:22:24.093Z", "isSidechain": false, "message": {"role": "assistant", "content": [{"type": "thinking", "thinking": ""}]}}
+{"type": "assistant", "timestamp": "2026-10-25T15:22:30.179Z", "isSidechain": false, "message": {"role": "assistant", "content": [{"type": "tool_use", "name": "mcp__leo__leo_dispatch", "input": {}}]}}
+{"type": "user", "timestamp": "2026-10-25T15:22:31.340Z", "isSidechain": false, "message": {"role": "user", "content": [{"type": "tool_result", "content": ""}]}}
+{"type": "attachment", "timestamp": "2026-10-25T15:22:31.339Z", "isSidechain": false, "attachment": {"type": "hook_success", "hookEvent": "PostToolUse"}}
+{"type": "attachment", "timestamp": "2026-10-25T15:22:31.348Z", "isSidechain": false, "attachment": {"type": "total_tokens_reminder"}}
+{"type": "attachment", "timestamp": "2026-10-25T15:22:31.349Z", "isSidechain": false, "attachment": {"type": "output_style"}}
+{"type": "assistant", "timestamp": "2026-10-25T15:22:32.904Z", "isSidechain": false, "message": {"role": "assistant", "content": [{"type": "thinking", "thinking": ""}]}}
+{"type": "assistant", "timestamp": "2026-10-25T15:22:32.950Z", "isSidechain": false, "message": {"role": "assistant", "content": [{"type": "text", "text": "The login bug, since it blocks new users."}]}}
+{"type": "attachment", "timestamp": "2026-10-25T15:22:33.432Z", "isSidechain": false, "attachment": {"type": "hook_success", "hookEvent": "Stop"}}
+{"type": "system", "timestamp": "2026-10-25T15:22:33.438Z", "isSidechain": false, "subtype": "stop_hook_summary"}
+{"type": "system", "timestamp": "2026-10-25T15:22:33.442Z", "isMeta": false, "isSidechain": false, "subtype": "turn_duration"}
+{"type": "user", "timestamp": "2026-10-25T15:25:33.887Z", "isSidechain": false, "message": {"role": "user", "content": "The leo-bridge plugin sent a message:\n[leo] dispatch d-e7f6a7ebacb6#1 (next-work-scan) done \u00b7 active 3:00 \u00b7 tokens 859136 in / 9749 out\n--- begin subagent output ---\n(trimmed)\n--- end subagent output ---"}, "origin": {"kind": "plugin", "name": "leo-bridge"}}
+{"type": "attachment", "timestamp": "2026-10-25T15:25:34.703Z", "isSidechain": false, "attachment": {"type": "hook_additional_context", "hookEvent": "UserPromptSubmit"}}
+{"type": "assistant", "timestamp": "2026-10-25T15:25:38.494Z", "isSidechain": false, "message": {"role": "assistant", "content": [{"type": "thinking", "thinking": ""}]}}
+{"type": "assistant", "timestamp": "2026-10-25T15:25:45.553Z", "isSidechain": false, "message": {"role": "assistant", "content": [{"type": "text", "text": "**My recommendation:** fix the login bug first, then the settings crash."}]}}
+{"type": "attachment", "timestamp": "2026-10-25T15:25:45.839Z", "isSidechain": false, "attachment": {"type": "hook_success", "hookEvent": "Stop"}}
+{"type": "system", "timestamp": "2026-10-25T15:25:45.842Z", "isSidechain": false, "subtype": "stop_hook_summary"}
