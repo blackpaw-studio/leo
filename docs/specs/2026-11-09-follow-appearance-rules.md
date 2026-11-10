@@ -16,7 +16,7 @@ A follower (for example the laptop) uses its lead's (Dionysus's) `appearance_rul
 
 ### Export
 
-- `leo config export --follow` gains `appearance_rules`, holding the lead's effective list. If the lead is itself a follower, that is the list it resolves.
+- `leo config export --follow` gains `appearance_rules`, holding the lead's list. A lead can't be a follower itself (`lead_is_follower`), so this is always the lead's local list.
 - The key is always present when the lead's leo supports it, even as an empty list. Followers on an older leo ignore unknown keys, so `FollowExportSchema` stays at 2.
 - If the export has no `appearance_rules` key (an older lead), the follower treats that as "the lead has no rules". It does not keep a stale cached list.
 
@@ -42,7 +42,7 @@ A follower (for example the laptop) uses its lead's (Dionysus's) `appearance_rul
 
 ### CLI and UI
 
-`leo config show` and the web UI, wherever they render appearance rules today, show where the rules come from. No new CLI verb.
+There's no appearance-rules view in the web UI or in `leo config show` today, so this adds none. leoterm surfaces `source`. `leo validate` already warns on rules from the effective list.
 
 ## Compatibility
 
@@ -53,7 +53,7 @@ A follower (for example the laptop) uses its lead's (Dionysus's) `appearance_rul
 
 ## Testing
 
-- **Export:** the key is present (including when the list is empty), and the list is the effective one on a chained lead.
+- **Export:** the key is present (including when the list is empty).
 - **Layering:**
   - A lead list with no local key gives `lead`.
   - A local list gives `local`.
