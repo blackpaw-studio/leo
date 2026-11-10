@@ -68,6 +68,10 @@ type FollowExport struct {
 	Environments map[string]EnvMap `json:"environments"`
 	Delegation   any               `json:"delegation"`
 	Defaults     map[string]any    `json:"defaults"`
+	// AppearanceRules is the lead's own appearance_rules list, always present
+	// (an empty list when it has none). A follower on an older leo ignores
+	// the unknown key, so the schema does not change.
+	AppearanceRules any `json:"appearance_rules"`
 }
 
 // BuildFollowExport builds the export of the config at path. It never
@@ -106,6 +110,12 @@ func BuildFollowExport(path, leoVersion string) (FollowExport, error) {
 	if raw.Delegation != nil {
 		if exp.Delegation, err = toJSONValue(raw.Delegation); err != nil {
 			return FollowExport{}, fmt.Errorf("exporting delegation: %w", err)
+		}
+	}
+	exp.AppearanceRules = []any{}
+	if rules, ok := raw.LocalAppearanceRules(); ok {
+		if exp.AppearanceRules, err = toJSONValue(rules); err != nil {
+			return FollowExport{}, fmt.Errorf("exporting appearance_rules: %w", err)
 		}
 	}
 	defaults, err := toJSONValue(raw.Defaults)
@@ -216,19 +226,31 @@ func (e FollowExport) decodeSections() (leadSections, error) {
 	return out, nil
 }
 
-// Digest is "sha256:" plus the hex digest of the canonical JSON of the four
-// synced sections, independent of key order and of the metadata header, so
-// a follower can tell whether a pull changed anything it uses.
+// Digest is "sha256:" plus the hex digest of the canonical JSON of the synced
+// sections, independent of key order and of the metadata header, so a
+// follower can tell whether a pull changed anything it uses. An empty or
+// absent appearance_rules list is left out, so a lead with no rules digests
+// as it did before the key existed.
 func (e FollowExport) Digest() string {
 	data, err := json.Marshal(struct {
 		Templates    map[string]any    `json:"templates"`
 		Environments map[string]EnvMap `json:"environments"`
 		Delegation   any               `json:"delegation"`
 		Defaults     map[string]any    `json:"defaults"`
-	}{e.Templates, e.Environments, e.Delegation, e.Defaults})
+		Appearance   any               `json:"appearance_rules,omitempty"`
+	}{e.Templates, e.Environments, e.Delegation, e.Defaults, digestableRules(e.AppearanceRules)})
 	if err != nil {
 		return ""
 	}
 	sum := sha256.Sum256(data)
 	return "sha256:" + hex.EncodeToString(sum[:])
+}
+
+// digestableRules maps an absent or empty rules list to nil, which the digest
+// omits.
+func digestableRules(v any) any {
+	if list, ok := v.([]any); ok && len(list) == 0 || v == nil {
+		return nil
+	}
+	return v
 }

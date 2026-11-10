@@ -394,8 +394,11 @@ resolution order and the routes.
   is set). Published after a manual set, for every agent after each config reload (no
   diffing: apply it as-is), after set-environment and set-template, and after a live
   rename.
-- `GET`/`PUT /api/v1/appearance/rules` (operator or paired device token) read and replace
-  the rules; `PUT /api/v1/agents/{name}/appearance` `{"emoji"?, "color"?}` sets an agent's
+- `GET`/`PUT`/`DELETE /api/v1/appearance/rules` (operator or paired device token) read,
+  replace and remove the rules. The document is `{revision, rules, errors, source}`:
+  `rules` is the effective list (`rule:<i>` indexes it) and `source` is `"lead"` (a
+  follower using its lead's list, via follow-lead) or `"local"`. On a follower `PUT`
+  writes a local list that overrides the lead's and `DELETE` reverts to it; `PUT /api/v1/agents/{name}/appearance` `{"emoji"?, "color"?}` sets an agent's
   manual values (`null` clears, absent is unchanged).
 
 ## Access

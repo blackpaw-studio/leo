@@ -194,7 +194,7 @@ func (l AppearanceRuleList) Errors() []AppearanceRuleError {
 // start`, `leo run` or a config API write. PUT /appearance/rules refuses one.
 func (c *Config) AppearanceRuleWarnings() []string {
 	var warnings []string
-	for _, e := range c.AppearanceRules.Errors() {
+	for _, e := range c.EffectiveAppearanceRules().Errors() {
 		warnings = append(warnings, fmt.Sprintf("appearance_rules[%d]: %s", e.Index, e.Reason))
 	}
 	return warnings
@@ -215,4 +215,59 @@ func ValidateAppearanceEmoji(emoji string) error {
 		return fmt.Errorf("emoji %q must be a single emoji (one grapheme cluster of at most %d bytes)", emoji, MaxAppearanceEmojiBytes)
 	}
 	return nil
+}
+
+// LocalAppearanceRules returns leo.yaml's own appearance_rules and whether the
+// key is present.
+func (c *Config) LocalAppearanceRules() (AppearanceRuleList, bool) {
+	if c.AppearanceRules == nil {
+		return nil, false
+	}
+	return *c.AppearanceRules, true
+}
+
+// Where the effective appearance_rules list comes from.
+const (
+	AppearanceRulesSourceLead  = "lead"
+	AppearanceRulesSourceLocal = "local"
+)
+
+// EffectiveAppearanceRules is the list in force: leo.yaml's own when the key
+// is present (an empty list included), otherwise the lead's list on a
+// follower, otherwise nil. The agent's rule:<i> source indexes this list.
+func (c *Config) EffectiveAppearanceRules() AppearanceRuleList {
+	if rules, ok := c.LocalAppearanceRules(); ok {
+		return rules
+	}
+	if c.follow != nil {
+		return c.follow.leadAppearance
+	}
+	return nil
+}
+
+// AppearanceRulesSource says which list EffectiveAppearanceRules returns:
+// "lead" on a follower with no local appearance_rules key, else "local".
+func (c *Config) AppearanceRulesSource() string {
+	if _, ok := c.LocalAppearanceRules(); !ok && c.Follow != nil {
+		return AppearanceRulesSourceLead
+	}
+	return AppearanceRulesSourceLocal
+}
+
+// decodeLeadAppearance decodes the export's appearance_rules leniently: a bad
+// rule, or a value that is not a list, loads as a malformed entry that
+// resolution skips and Validate reports, never as a failed pull.
+func decodeLeadAppearance(v any) (AppearanceRuleList, error) {
+	if v == nil {
+		return nil, nil
+	}
+	node, err := jsonToNode(v)
+	if err != nil {
+		return nil, err
+	}
+	var list AppearanceRuleList
+	if err := node.Decode(&list); err != nil {
+		return nil, err
+	}
+	return list, nil
 }

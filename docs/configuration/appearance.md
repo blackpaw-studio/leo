@@ -81,11 +81,13 @@ A source is `manual` or `rule:<i>`, where `i` is the 0-based index into `appeara
 
 Served on the daemon socket and under `/api/v1` with the operator token or a paired device token, like the [config API](config-api.md); the agent token is refused with 403.
 
-`GET /appearance/rules` answers the rules in order with the `leo.yaml` revision (also the `ETag`) and the problems of any rule that is invalid on disk:
+`GET /appearance/rules` answers the effective rules in order with the config revision (also the `ETag`), the problems of any rule that is invalid, and `source`:
 
 ```json
-{"ok": true, "data": {"revision": "sha256:…", "rules": [{"when": {"field": "environments", "op": "contains", "value": "prod"}, "color": "red"}], "errors": [{"index": 2, "reason": "color \"magenta\" is not in the palette (…)"}]}}
+{"ok": true, "data": {"revision": "sha256:…", "rules": [{"when": {"field": "environments", "op": "contains", "value": "prod"}, "color": "red"}], "errors": [{"index": 2, "reason": "color \"magenta\" is not in the palette (…)"}], "source": "local"}}
 ```
+
+`source` is `"lead"` on a [follower](follow-lead.md) whose `leo.yaml` has no `appearance_rules` key, so the rules are its lead's, and `"local"` otherwise, including every host that is not following. The `rule:<i>` index of an agent's color source counts into this effective list. On a follower the revision also changes when a pull changes the lead's rules.
 
 `PUT /appearance/rules` with `{"rules": [...]}` replaces the whole list atomically. It follows the config API's [revision rules](config-api.md#revisions-and-concurrency): `If-Match` is required (428 `revision_required` without it, 409 `revision_mismatch` when stale). The first invalid rule is a 400:
 
@@ -93,7 +95,9 @@ Served on the daemon socket and under `/api/v1` with the operator token or a pai
 {"ok": false, "code": "invalid_appearance_rule", "error": "appearance_rules[1]: color \"magenta\" is not in the palette (…)", "data": {"index": 1, "reason": "color \"magenta\" is not in the palette (…)"}}
 ```
 
-A malformed body (unknown keys, a non-object rule) is 400 `bad_request`. On success it answers 200 with the same document as the `GET` (new revision, `errors: []`). An empty list removes `appearance_rules` from `leo.yaml`. Like every config API write, it rewrites `leo.yaml` from the parsed config, so comments are not kept, and any other open editor's next write gets a 409.
+A malformed body (unknown keys, a non-object rule) is 400 `bad_request`. On success it answers 200 with the same document as the `GET` (new revision, `errors: []`). An empty list is written as `appearance_rules: []`. On a follower, `PUT` always writes the local key, which overrides the lead's list whole (and `source` becomes `"local"`), even for an empty list. Like every config API write, it rewrites `leo.yaml` from the parsed config, so comments are not kept, and any other open editor's next write gets a 409.
+
+`DELETE /appearance/rules` removes the `appearance_rules` key from `leo.yaml`. `If-Match` is required (428 / 409 as for `PUT`). On a follower the rules revert to the lead's list (`source: "lead"`); on any other host they become empty. It answers 200 with the same document as the `GET`. With no local key it is a 200 that writes nothing.
 
 ### Manual values
 

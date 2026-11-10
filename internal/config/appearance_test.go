@@ -62,7 +62,7 @@ func TestValidateAppearanceRules(t *testing.T) {
 // `leo service start`, `leo run` or config API writes.
 func TestAppearanceRuleWarningsByIndex(t *testing.T) {
 	cfg := minimalValidConfig()
-	cfg.AppearanceRules = AppearanceRuleList{
+	cfg.AppearanceRules = &AppearanceRuleList{
 		appearanceRule("name", "is", "ok", "red", ""),
 		appearanceRule("name", "is", "x", "magenta", ""),
 	}
@@ -127,13 +127,13 @@ func TestAppearanceRulesLenientLoad(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load() = %v, want a malformed rule to load", err)
 	}
-	if len(cfg.AppearanceRules) != 3 {
-		t.Fatalf("loaded %d rules, want 3", len(cfg.AppearanceRules))
+	if len(cfg.EffectiveAppearanceRules()) != 3 {
+		t.Fatalf("loaded %d rules, want 3", len(cfg.EffectiveAppearanceRules()))
 	}
-	if p := cfg.AppearanceRules[1].Problem(); !strings.Contains(p, "malformed") {
+	if p := cfg.EffectiveAppearanceRules()[1].Problem(); !strings.Contains(p, "malformed") {
 		t.Fatalf("rule 1 Problem() = %q, want malformed", p)
 	}
-	if p := cfg.AppearanceRules[0].Problem(); p != "" {
+	if p := cfg.EffectiveAppearanceRules()[0].Problem(); p != "" {
 		t.Fatalf("rule 0 Problem() = %q, want valid", p)
 	}
 	if err := cfg.Validate(); err != nil {
@@ -169,7 +169,7 @@ func TestAppearanceRulesNotAListStillLoads(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load() = %v, want a non-list appearance_rules to load", err)
 	}
-	errs := cfg.AppearanceRules.Errors()
+	errs := cfg.EffectiveAppearanceRules().Errors()
 	if len(errs) != 1 || errs[0].Index != 0 || !strings.Contains(errs[0].Reason, "must be a list") {
 		t.Fatalf("Errors() = %+v, want one list-level error at index 0", errs)
 	}
@@ -199,14 +199,14 @@ func TestSaveSplitKeepsAppearanceRules(t *testing.T) {
 	f := newSplitFixture(t)
 	cfg := f.load(t)
 	rules := AppearanceRuleList{appearanceRule("name", "glob", "alfred-*", "pink", "🎩")}
-	cfg.AppearanceRules = rules
+	cfg.AppearanceRules = &rules
 	leoTouched, sharedTouched := f.save(t, cfg)
 	if !leoTouched || sharedTouched {
 		t.Fatalf("touched leo.yaml=%v shared=%v, want only leo.yaml", leoTouched, sharedTouched)
 	}
 	reloaded := f.load(t)
-	if !reflect.DeepEqual(reloaded.AppearanceRules, rules) {
-		t.Fatalf("reloaded rules = %#v, want %#v", reloaded.AppearanceRules, rules)
+	if !reflect.DeepEqual(reloaded.EffectiveAppearanceRules(), rules) {
+		t.Fatalf("reloaded rules = %#v, want %#v", reloaded.EffectiveAppearanceRules(), rules)
 	}
 	if strings.Contains(readFile(t, f.sharedPath), "appearance_rules") {
 		t.Fatal("appearance_rules leaked into the shared templates file")
@@ -217,7 +217,7 @@ func TestSaveSplitKeepsAppearanceRules(t *testing.T) {
 	tmpl.Model = "sonnet"
 	reloaded.Templates["theirs"] = tmpl
 	f.save(t, reloaded)
-	if got := f.load(t).AppearanceRules; !reflect.DeepEqual(got, rules) {
+	if got := f.load(t).EffectiveAppearanceRules(); !reflect.DeepEqual(got, rules) {
 		t.Fatalf("rules after a shared edit = %#v, want %#v", got, rules)
 	}
 }

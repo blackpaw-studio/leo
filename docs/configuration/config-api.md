@@ -240,8 +240,9 @@ same auth, revision and envelope rules as the rest of this API. See
 
 | Request | Result |
 |---------|--------|
-| `GET /appearance/rules` | `{revision, rules, errors: [{index, reason}]}`; `errors` lists rules invalid on disk (warnings only: they never block other config writes) |
-| `PUT /appearance/rules` | `{rules}` replaces the list; `If-Match` required; the first invalid rule is 400 `invalid_appearance_rule` with `data: {index, reason}` (not a 422); 200 answers the new document |
+| `GET /appearance/rules` | `{revision, rules, errors: [{index, reason}], source}`; `rules` is the effective list and `source` is `"lead"` (a follower with no local `appearance_rules` key) or `"local"`; `errors` lists rules invalid in it (warnings only: they never block other config writes) |
+| `PUT /appearance/rules` | `{rules}` replaces the list; `If-Match` required; the first invalid rule is 400 `invalid_appearance_rule` with `data: {index, reason}` (not a 422); 200 answers the new document. On a follower it writes the local key, overriding the lead's list |
+| `DELETE /appearance/rules` | removes the local `appearance_rules` key (a follower reverts to its lead's list, other hosts end with none); `If-Match` required (428 / 409); 200 answers the new document, and a no-op 200 when no local key exists |
 
 An agent's own emoji and color are not config: they live on its agent record
 and are set with `PUT /agents/{name}/appearance` (see

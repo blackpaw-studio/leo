@@ -1,0 +1,21 @@
+{
+  "body": {
+    "data": {
+      "errors": [],
+      "revision": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+      "rules": [
+        {
+          "color": "teal",
+          "when": {
+            "field": "name",
+            "op": "glob",
+            "value": "lead-*"
+          }
+        }
+      ],
+      "source": "lead"
+    },
+    "ok": true
+  },
+  "status": 200
+}

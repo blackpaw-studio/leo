@@ -44,6 +44,7 @@ func (c *ConfigService) configRoutes(route func(pattern string, h http.HandlerFu
 	route("GET /config/schema", c.handleConfigSchema)
 	route("GET /appearance/rules", c.handleAppearanceRulesGet)
 	route("PUT /appearance/rules", c.handleAppearanceRulesPut)
+	route("DELETE /appearance/rules", c.handleAppearanceRulesDelete)
 	c.registerDelegationRoutes(route)
 	c.registerOpsRoutes(route)
 	c.registerFollowRoutes(route)
