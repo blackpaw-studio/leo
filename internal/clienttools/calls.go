@@ -144,14 +144,17 @@ func (c *Calls) Call(ctx context.Context, agent, toolName string, args json.RawM
 		args = json.RawMessage(`{}`)
 	}
 
-	p, req := c.park(agent, group, t, args)
-	c.publishRequest(req)
-
+	// Arm the timeout before the call becomes observable (pending or
+	// published), so nothing that sees the call can outrun its deadline.
 	wait := c.waitFor(t)
 	var timer <-chan time.Time
 	if wait > 0 {
 		timer = c.opts.After(wait)
 	}
+
+	p, req := c.park(agent, group, t, args)
+	c.publishRequest(req)
+
 	select {
 	case <-p.done:
 	case <-timer:
