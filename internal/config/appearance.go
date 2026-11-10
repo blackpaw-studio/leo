@@ -226,9 +226,48 @@ func (c *Config) LocalAppearanceRules() (AppearanceRuleList, bool) {
 	return *c.AppearanceRules, true
 }
 
+// Where the effective appearance_rules list comes from.
+const (
+	AppearanceRulesSourceLead  = "lead"
+	AppearanceRulesSourceLocal = "local"
+)
+
 // EffectiveAppearanceRules is the list in force: leo.yaml's own when the key
-// is present, otherwise nil.
+// is present (an empty list included), otherwise the lead's list on a
+// follower, otherwise nil. The agent's rule:<i> source indexes this list.
 func (c *Config) EffectiveAppearanceRules() AppearanceRuleList {
-	rules, _ := c.LocalAppearanceRules()
-	return rules
+	if rules, ok := c.LocalAppearanceRules(); ok {
+		return rules
+	}
+	if c.follow != nil {
+		return c.follow.leadAppearance
+	}
+	return nil
+}
+
+// AppearanceRulesSource says which list EffectiveAppearanceRules returns:
+// "lead" on a follower with no local appearance_rules key, else "local".
+func (c *Config) AppearanceRulesSource() string {
+	if _, ok := c.LocalAppearanceRules(); !ok && c.Follow != nil {
+		return AppearanceRulesSourceLead
+	}
+	return AppearanceRulesSourceLocal
+}
+
+// decodeLeadAppearance decodes the export's appearance_rules leniently: a bad
+// rule, or a value that is not a list, loads as a malformed entry that
+// resolution skips and Validate reports, never as a failed pull.
+func decodeLeadAppearance(v any) (AppearanceRuleList, error) {
+	if v == nil {
+		return nil, nil
+	}
+	node, err := jsonToNode(v)
+	if err != nil {
+		return nil, err
+	}
+	var list AppearanceRuleList
+	if err := node.Decode(&list); err != nil {
+		return nil, err
+	}
+	return list, nil
 }

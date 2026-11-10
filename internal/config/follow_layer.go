@@ -43,6 +43,9 @@ type followLayer struct {
 	// leadDefaults and leadDelegation are the lead's nodes, for saving only
 	// the keys the follower set or changed.
 	leadDefaults, leadDelegation *yaml.Node
+	// leadAppearance is the lead's appearance_rules, used while leo.yaml has
+	// no appearance_rules key of its own. It is never written to leo.yaml.
+	leadAppearance AppearanceRuleList
 	// sources holds the source of every entry the lead layer touched
 	// (lead, *-override-lead); other entries keep their usual source.
 	sources map[EntryKind]map[string]TemplateSource
@@ -182,6 +185,10 @@ func (c *Config) applyFollowLayer(leoBytes []byte) {
 	c.Environments = layerByName(effective.environments, c.Environments, fl.sources[KindEnvironment])
 	if err := c.layerDelegation(effective.delegation, leadDelegation, localDelegation); err != nil {
 		fl.warn("lead delegation is unusable (%v); using local delegation only", err)
+	}
+	if fl.leadAppearance, err = decodeLeadAppearance(exp.AppearanceRules); err != nil {
+		fl.warn("lead appearance_rules are unusable (%v); using none", err)
+		fl.leadAppearance = nil
 	}
 	c.isolateInvalidLeadEntries()
 	fl.snapshotLoaded(c)
