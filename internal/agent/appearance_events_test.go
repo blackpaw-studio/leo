@@ -43,7 +43,7 @@ func TestSetEnvironmentsRepublishesAppearance(t *testing.T) {
 	t.Setenv("CLAUDE_CONFIG_DIR", "")
 	home, tws, a, b := t.TempDir(), t.TempDir(), t.TempDir(), t.TempDir()
 	cfg := envTestConfig(home, tws, a, b)
-	cfg.AppearanceRules = config.AppearanceRuleList{colorRule("environments", "contains", "acct-b", "blue")}
+	cfg.AppearanceRules = &config.AppearanceRuleList{colorRule("environments", "contains", "acct-b", "blue")}
 	_, sup := savedLayeredAgent(t, cfg, nil)
 	pub := &recordingObservePublisher{}
 	m := envManager(cfg, sup)
@@ -70,7 +70,7 @@ func TestRepublishAppearancePublishesEveryAgent(t *testing.T) {
 	cfg := &config.Config{
 		HomePath:        home,
 		Templates:       map[string]config.TemplateConfig{"coding": {}},
-		AppearanceRules: config.AppearanceRuleList{colorRule("template", "is", "coding", "teal")},
+		AppearanceRules: &config.AppearanceRuleList{colorRule("template", "is", "coding", "teal")},
 	}
 	_ = agentstore.Save(home, agentstore.Record{Name: "coder", Template: "coding", Stopped: true})
 	_ = agentstore.Save(home, agentstore.Record{Name: "plain", Stopped: true})
@@ -97,7 +97,7 @@ func TestRepublishAppearancePublishesEveryAgent(t *testing.T) {
 func TestSwitchTemplateRepublishesAppearance(t *testing.T) {
 	home := t.TempDir()
 	cfg := switchCfg(home)
-	cfg.AppearanceRules = config.AppearanceRuleList{colorRule("harness", "is", "codex", "gray")}
+	cfg.AppearanceRules = &config.AppearanceRuleList{colorRule("harness", "is", "codex", "gray")}
 	_ = agentstore.Save(home, agentstore.Record{
 		Name: "leo-x", Template: "coding", Harness: "claude", Workspace: "/w", Stopped: true,
 	})
@@ -117,7 +117,7 @@ func TestRenameStoppedAgentSpawnedViewCarriesAppearance(t *testing.T) {
 	home := t.TempDir()
 	cfg := &config.Config{
 		HomePath:        home,
-		AppearanceRules: config.AppearanceRuleList{colorRule("name", "starts_with", "leo-re", "green")},
+		AppearanceRules: &config.AppearanceRuleList{colorRule("name", "starts_with", "leo-re", "green")},
 	}
 	_ = agentstore.Save(home, agentstore.Record{Name: "leo-stopped", Stopped: true, ClaudeArgs: []string{"--name", "leo-stopped"}})
 	if _, err := agentstore.SetAppearance(home, "leo-stopped", agentstore.AppearancePatch{Emoji: strRef("🏛️")}); err != nil {
@@ -149,7 +149,7 @@ func TestRenameLiveAgentPublishesAppearance(t *testing.T) {
 	home := t.TempDir()
 	cfg := &config.Config{
 		HomePath:        home,
-		AppearanceRules: config.AppearanceRuleList{colorRule("name", "is", "leo-renamed-agent", "orange")},
+		AppearanceRules: &config.AppearanceRuleList{colorRule("name", "is", "leo-renamed-agent", "orange")},
 	}
 	_ = agentstore.Save(home, agentstore.Record{Name: "leo-old", ClaudeArgs: []string{"--name", "leo-old"}})
 	pub := &recordingObservePublisher{}
@@ -169,7 +169,7 @@ func TestManagerSetAppearance(t *testing.T) {
 	home := t.TempDir()
 	cfg := &config.Config{
 		HomePath:        home,
-		AppearanceRules: config.AppearanceRuleList{colorRule("name", "is", "leo-x", "teal")},
+		AppearanceRules: &config.AppearanceRuleList{colorRule("name", "is", "leo-x", "teal")},
 	}
 	_ = agentstore.Save(home, agentstore.Record{Name: "leo-x", Stopped: true})
 	pub := &recordingObservePublisher{}

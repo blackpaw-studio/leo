@@ -24,7 +24,7 @@ func appearanceSnapshotConfig() *config.Config {
 			"ops":       {Model: "opus", Environments: []string{"homelab"}},
 			"assistant": {Model: "sonnet"},
 		},
-		AppearanceRules: config.AppearanceRuleList{
+		AppearanceRules: &config.AppearanceRuleList{
 			{When: config.AppearanceCondition{Field: "environments", Op: "contains", Value: "homelab"}, Color: "teal", Emoji: "🏠"},
 			{When: config.AppearanceCondition{Field: "name", Op: "glob", Value: "alfred-*"}, Color: "pink"},
 		},

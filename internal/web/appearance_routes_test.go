@@ -112,23 +112,24 @@ func TestAppearanceRulesRoutes(t *testing.T) {
 		t.Fatalf("reloads = %d, want 1 (the reload republishes appearance)", reload.calls)
 	}
 	cfg := h.loadConfig()
-	if len(cfg.AppearanceRules) != 2 || cfg.AppearanceRules[1].Emoji != "🎩" || cfg.AppearanceRules[0].When.Value != "prod" {
-		t.Fatalf("persisted rules = %+v", cfg.AppearanceRules)
+	if len(cfg.EffectiveAppearanceRules()) != 2 || cfg.EffectiveAppearanceRules()[1].Emoji != "🎩" || cfg.EffectiveAppearanceRules()[0].When.Value != "prod" {
+		t.Fatalf("persisted rules = %+v", cfg.EffectiveAppearanceRules())
 	}
 
 	// A rule hand-edited invalid on disk is listed with its error.
-	cfg.AppearanceRules = append(cfg.AppearanceRules, config.AppearanceRule{
+	withBad := append(cfg.EffectiveAppearanceRules(), config.AppearanceRule{
 		When: config.AppearanceCondition{Field: "template", Op: "is", Value: "coder"}, Color: "magenta",
 	})
+	cfg.AppearanceRules = &withBad
 	if err := config.Save(path, cfg); err != nil {
 		t.Fatal(err)
 	}
 	assertRulesWire(t, "appearance-rules.json", h.do(http.MethodGet, "/appearance/rules", "", nil))
 
-	// An empty list clears the rules.
+	// An empty list clears the rules; the key stays as an explicit empty list.
 	res = h.do(http.MethodPut, "/appearance/rules", h.revision(), map[string]any{"rules": []any{}})
 	wantStatus(t, res, http.StatusOK)
-	if got := h.loadConfig().AppearanceRules; len(got) != 0 || strings.Contains(h.fileBytes(), "appearance_rules") {
+	if got := h.loadConfig().EffectiveAppearanceRules(); len(got) != 0 || !strings.Contains(h.fileBytes(), "appearance_rules: []") {
 		t.Fatalf("rules after clearing = %+v", got)
 	}
 }
@@ -139,7 +140,7 @@ func TestConfigWriteSucceedsWithBadAppearanceRuleOnDisk(t *testing.T) {
 	svc, path := newConfigService(t, &countingReloader{})
 	h := newAPIHarnessOver(t, svc, path, "")
 	cfg := h.loadConfig()
-	cfg.AppearanceRules = config.AppearanceRuleList{{
+	cfg.AppearanceRules = &config.AppearanceRuleList{{
 		When: config.AppearanceCondition{Field: "name", Op: "is", Value: "x"}, Color: "magenta",
 	}}
 	if err := config.Save(path, cfg); err != nil {
@@ -147,7 +148,7 @@ func TestConfigWriteSucceedsWithBadAppearanceRuleOnDisk(t *testing.T) {
 	}
 	res := h.do(http.MethodPut, "/config/defaults", h.revision(), map[string]any{"values": map[string]any{"model": "opus"}})
 	wantStatus(t, res, http.StatusOK)
-	if got := h.loadConfig().AppearanceRules; len(got) != 1 || got[0].Color != "magenta" {
+	if got := h.loadConfig().EffectiveAppearanceRules(); len(got) != 1 || got[0].Color != "magenta" {
 		t.Fatalf("rules after an unrelated write = %+v, want the bad rule kept", got)
 	}
 }

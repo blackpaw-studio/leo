@@ -51,7 +51,7 @@ func (c *ConfigService) handleAppearanceRulesGet(w http.ResponseWriter, _ *http.
 		return
 	}
 	w.Header().Set("ETag", `"`+rev+`"`)
-	writeConfigData(w, http.StatusOK, newAppearanceRulesDocument(cfg.AppearanceRules, rev))
+	writeConfigData(w, http.StatusOK, newAppearanceRulesDocument(cfg.EffectiveAppearanceRules(), rev))
 }
 
 type appearanceRulesBody struct {
@@ -86,10 +86,10 @@ func (c *ConfigService) handleAppearanceRulesPut(w http.ResponseWriter, r *http.
 	res, err := c.Mutate(mutateOpts{
 		IfMatch: ifMatch,
 		Item: func(cfg *config.Config, revision string) any {
-			return newAppearanceRulesDocument(cfg.AppearanceRules, revision)
+			return newAppearanceRulesDocument(cfg.EffectiveAppearanceRules(), revision)
 		},
 	}, func(cfg *config.Config) error {
-		cfg.AppearanceRules = rules
+		cfg.AppearanceRules = &rules
 		return nil
 	})
 	if err != nil {

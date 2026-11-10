@@ -108,8 +108,10 @@ type Config struct {
 	Environments map[string]EnvMap `yaml:"environments,omitempty"`
 	Delegation   *DelegationConfig `yaml:"delegation,omitempty"`
 	// AppearanceRules are the ordered rules that give agents a color and/or
-	// an emoji; see appearance.go.
-	AppearanceRules AppearanceRuleList `yaml:"appearance_rules,omitempty"`
+	// an emoji; see appearance.go. A nil pointer means the key is absent (a
+	// follower then uses its lead's list); a pointer to an empty list means
+	// `appearance_rules: []`, a local override with no rules.
+	AppearanceRules *AppearanceRuleList `yaml:"appearance_rules,omitempty"`
 	// Chat configures Leo Chat (see chat.go).
 	Chat ChatConfig `yaml:"chat,omitempty"`
 	// Move configures `leo agent move` / `leo agent copy` for every

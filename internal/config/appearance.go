@@ -194,7 +194,7 @@ func (l AppearanceRuleList) Errors() []AppearanceRuleError {
 // start`, `leo run` or a config API write. PUT /appearance/rules refuses one.
 func (c *Config) AppearanceRuleWarnings() []string {
 	var warnings []string
-	for _, e := range c.AppearanceRules.Errors() {
+	for _, e := range c.EffectiveAppearanceRules().Errors() {
 		warnings = append(warnings, fmt.Sprintf("appearance_rules[%d]: %s", e.Index, e.Reason))
 	}
 	return warnings
@@ -215,4 +215,20 @@ func ValidateAppearanceEmoji(emoji string) error {
 		return fmt.Errorf("emoji %q must be a single emoji (one grapheme cluster of at most %d bytes)", emoji, MaxAppearanceEmojiBytes)
 	}
 	return nil
+}
+
+// LocalAppearanceRules returns leo.yaml's own appearance_rules and whether the
+// key is present.
+func (c *Config) LocalAppearanceRules() (AppearanceRuleList, bool) {
+	if c.AppearanceRules == nil {
+		return nil, false
+	}
+	return *c.AppearanceRules, true
+}
+
+// EffectiveAppearanceRules is the list in force: leo.yaml's own when the key
+// is present, otherwise nil.
+func (c *Config) EffectiveAppearanceRules() AppearanceRuleList {
+	rules, _ := c.LocalAppearanceRules()
+	return rules
 }

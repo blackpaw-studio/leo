@@ -131,7 +131,7 @@ func AgentAppearance(cfg *config.Config, name, template string, override []strin
 	facts := AppearanceFacts{Name: name, Environments: envs, Template: template}
 	var rules config.AppearanceRuleList
 	if cfg != nil {
-		rules = cfg.AppearanceRules
+		rules = cfg.EffectiveAppearanceRules()
 		if tmpl, ok := cfg.Templates[template]; ok && template != "" {
 			facts.Harness = cfg.TemplateHarness(tmpl)
 		}
