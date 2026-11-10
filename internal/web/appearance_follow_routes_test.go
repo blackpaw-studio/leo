@@ -63,6 +63,11 @@ func TestAppearanceRulesGetSource(t *testing.T) {
 	}
 }
 
+func TestAppearanceRulesWireFollowerUsingLeadRules(t *testing.T) {
+	h := followerRulesHarness(t, leadRulesSections, "")
+	assertRulesWire(t, "appearance-rules-lead.json", h.do(http.MethodGet, "/appearance/rules", "", nil))
+}
+
 func TestAppearanceRulesPutOnFollowerCreatesOverride(t *testing.T) {
 	h := followerRulesHarness(t, leadRulesSections, "")
 	res := h.do(http.MethodPut, "/appearance/rules", h.liveRevision(), map[string]any{"rules": twoRules})
