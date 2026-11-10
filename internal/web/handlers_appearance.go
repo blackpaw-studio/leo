@@ -27,18 +27,23 @@ const (
 // maxAppearanceBody caps PUT /agents/{name}/appearance: two short strings.
 const maxAppearanceBody = 4 << 10
 
-// appearanceRulesDocument is the body of GET and PUT /appearance/rules.
+// appearanceRulesDocument is the body of GET, PUT and DELETE
+// /appearance/rules. Rules is the effective list; Source says where it comes
+// from: "lead" (a follower with no appearance_rules key of its own) or
+// "local".
 type appearanceRulesDocument struct {
 	Revision string                       `json:"revision"`
 	Rules    config.AppearanceRuleList    `json:"rules"`
 	Errors   []config.AppearanceRuleError `json:"errors"`
+	Source   string                       `json:"source"`
 }
 
-func newAppearanceRulesDocument(rules config.AppearanceRuleList, revision string) appearanceRulesDocument {
+func newAppearanceRulesDocument(cfg *config.Config, revision string) appearanceRulesDocument {
+	rules := cfg.EffectiveAppearanceRules()
 	if rules == nil {
 		rules = config.AppearanceRuleList{}
 	}
-	return appearanceRulesDocument{Revision: revision, Rules: rules, Errors: rules.Errors()}
+	return appearanceRulesDocument{Revision: revision, Rules: rules, Errors: rules.Errors(), Source: cfg.AppearanceRulesSource()}
 }
 
 // handleAppearanceRulesGet lists the rules in order, with the revision to
@@ -51,7 +56,7 @@ func (c *ConfigService) handleAppearanceRulesGet(w http.ResponseWriter, _ *http.
 		return
 	}
 	w.Header().Set("ETag", `"`+rev+`"`)
-	writeConfigData(w, http.StatusOK, newAppearanceRulesDocument(cfg.EffectiveAppearanceRules(), rev))
+	writeConfigData(w, http.StatusOK, newAppearanceRulesDocument(cfg, rev))
 }
 
 type appearanceRulesBody struct {
@@ -59,7 +64,8 @@ type appearanceRulesBody struct {
 }
 
 // handleAppearanceRulesPut replaces the whole list atomically under the
-// config write lock. If-Match is required (428 without it, 409 when stale);
+// config write lock. On a follower it writes the local key, which overrides
+// the lead's list whole. If-Match is required (428 without it, 409 when stale);
 // the first invalid rule is a 400 carrying its index and reason. The save
 // reloads the daemon, which republishes every agent's appearance.
 // PUT /appearance/rules  {"rules": [...]}
@@ -86,7 +92,7 @@ func (c *ConfigService) handleAppearanceRulesPut(w http.ResponseWriter, r *http.
 	res, err := c.Mutate(mutateOpts{
 		IfMatch: ifMatch,
 		Item: func(cfg *config.Config, revision string) any {
-			return newAppearanceRulesDocument(cfg.EffectiveAppearanceRules(), revision)
+			return newAppearanceRulesDocument(cfg, revision)
 		},
 	}, func(cfg *config.Config) error {
 		cfg.AppearanceRules = &rules
