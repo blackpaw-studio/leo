@@ -125,7 +125,10 @@ Per section, lowest to highest: the lead, then the follower's `templates_file`
   blocks the follower. `PUT /appearance/rules` on a follower writes the local
   key, creating the override. `DELETE /appearance/rules` removes the key and
   returns to the lead's list; `GET` reports which one is in force as `source`
-  (see [Agent Appearance](appearance.md#rules)). Manual per-agent emoji and
+  (see [Agent Appearance](appearance.md#rules)). If a host saved an empty list
+  before it started following, that `appearance_rules: []` keeps overriding
+  the lead. `DELETE` clears it. `source: "lead"` with no rules can also mean
+  the first pull hasn't happened yet. Manual per-agent emoji and
   color are not synced.
 - **Values are copied verbatim.** `~` and `$VAR` expand on the follower, as
   they do for local values. Usernames and paths are not rewritten.
