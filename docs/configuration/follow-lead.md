@@ -1,8 +1,8 @@
 # Following a lead host
 
 A Leo host can **follow** another Leo host, the *lead*. The follower mirrors the
-lead's `templates`, `environments`, `delegation` and `defaults`, and can replace
-any of them locally by name. It keeps working from its last synced copy when the
+lead's `templates`, `environments`, `delegation`, `defaults` and
+`appearance_rules`, and can replace any of them locally. It keeps working from its last synced copy when the
 lead is unreachable.
 
 Typical setup: a server is the lead and holds the shared config; a laptop
@@ -115,6 +115,18 @@ Per section, lowest to highest: the lead, then the follower's `templates_file`
   and `delegation.active_profile: ""`: Leo writes these even when they are
   unset, so they count as unset too, and a follower cannot override a lead's
   value for them with an empty one.
+- **`appearance_rules`** is an ordered list, so it is never merged: one whole
+  list wins. If the follower's `leo.yaml` has an `appearance_rules` key, that
+  list is used, even when it is empty (`appearance_rules: []` means no rules
+  here). A null value counts as unset. Without the key the follower uses the
+  lead's list. A lead that predates this feature exports no list, and the
+  follower then treats it as having no rules. A bad lead rule is skipped and
+  reported as an `appearance_rules[i]` warning, like a local one, and never
+  blocks the follower. `PUT /appearance/rules` on a follower writes the local
+  key, creating the override. `DELETE /appearance/rules` removes the key and
+  returns to the lead's list; `GET` reports which one is in force as `source`
+  (see [Agent Appearance](appearance.md#rules)). Manual per-agent emoji and
+  color are not synced.
 - **Values are copied verbatim.** `~` and `$VAR` expand on the follower, as
   they do for local values. Usernames and paths are not rewritten.
 
