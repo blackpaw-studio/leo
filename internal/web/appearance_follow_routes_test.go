@@ -4,6 +4,7 @@ import (
 	"net/http"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -106,4 +107,93 @@ func TestAppearanceRulesRevisionChangesOnLeadPull(t *testing.T) {
 	}
 	stale := h.do(http.MethodPut, "/appearance/rules", before.(string), map[string]any{"rules": twoRules})
 	wantStatus(t, stale, http.StatusConflict)
+}
+
+func TestAppearanceRulesDelete(t *testing.T) {
+	t.Run("a follower reverts to the lead's list", func(t *testing.T) {
+		h := followerRulesHarness(t, leadRulesSections, localRuleYAML)
+		res := h.do(http.MethodDelete, "/appearance/rules", h.liveRevision(), nil)
+		wantStatus(t, res, http.StatusOK)
+		d := res.data()
+		if d["source"] != config.AppearanceRulesSourceLead {
+			t.Fatalf("source = %v, want lead", d["source"])
+		}
+		if rules, _ := d["rules"].([]any); len(rules) != 1 || rules[0].(map[string]any)["color"] != "teal" {
+			t.Fatalf("rules = %v, want the lead's teal rule", d["rules"])
+		}
+		if res.Header.Get("ETag") != `"`+h.liveRevision()+`"` || d["revision"] != h.liveRevision() {
+			t.Fatalf("revision %v / ETag %q, want the new live revision %s", d["revision"], res.Header.Get("ETag"), h.liveRevision())
+		}
+		if _, ok := h.loadConfig().LocalAppearanceRules(); ok || hasKey(h.fileBytes(), "appearance_rules") {
+			t.Fatalf("the local key survived:\n%s", h.fileBytes())
+		}
+	})
+
+	t.Run("an empty local override is removed too", func(t *testing.T) {
+		h := followerRulesHarness(t, leadRulesSections, "appearance_rules: []\n")
+		res := h.do(http.MethodDelete, "/appearance/rules", h.liveRevision(), nil)
+		wantStatus(t, res, http.StatusOK)
+		if res.data()["source"] != config.AppearanceRulesSourceLead {
+			t.Fatalf("source = %v, want lead", res.data()["source"])
+		}
+	})
+
+	t.Run("a plain host ends with no rules", func(t *testing.T) {
+		svc, path := newConfigService(t, &countingReloader{})
+		h := newAPIHarnessOver(t, svc, path, "")
+		wantStatus(t, h.do(http.MethodPut, "/appearance/rules", h.revision(), map[string]any{"rules": twoRules}), http.StatusOK)
+		res := h.do(http.MethodDelete, "/appearance/rules", h.revision(), nil)
+		wantStatus(t, res, http.StatusOK)
+		d := res.data()
+		if rules, _ := d["rules"].([]any); len(rules) != 0 || d["source"] != config.AppearanceRulesSourceLocal {
+			t.Fatalf("document = %s, want no rules, source local", res.Raw)
+		}
+		if hasKey(h.fileBytes(), "appearance_rules") {
+			t.Fatalf("the key survived:\n%s", h.fileBytes())
+		}
+	})
+
+	t.Run("428 without If-Match and 409 when stale", func(t *testing.T) {
+		h := followerRulesHarness(t, leadRulesSections, localRuleYAML)
+		before := h.fileBytes()
+		res := h.do(http.MethodDelete, "/appearance/rules", "", nil)
+		wantStatus(t, res, http.StatusPreconditionRequired)
+		wantCode(t, res, CodeRevisionRequired)
+		res = h.do(http.MethodDelete, "/appearance/rules", "sha256:stale", nil)
+		wantStatus(t, res, http.StatusConflict)
+		wantCode(t, res, CodeRevisionMismatch)
+		if h.fileBytes() != before {
+			t.Fatal("a refused DELETE changed leo.yaml")
+		}
+	})
+
+	t.Run("with no local key it is a 200 that leaves leo.yaml untouched", func(t *testing.T) {
+		for name, h := range map[string]*apiHarness{
+			"follower": followerRulesHarness(t, leadRulesSections, ""),
+			"plain": func() *apiHarness {
+				svc, path := newConfigService(t, &countingReloader{})
+				return newAPIHarnessOver(t, svc, path, "")
+			}(),
+		} {
+			before, rev := h.fileBytes(), h.liveRevision()
+			res := h.do(http.MethodDelete, "/appearance/rules", rev, nil)
+			wantStatus(t, res, http.StatusOK)
+			if res.data()["revision"] != rev {
+				t.Errorf("%s: revision = %v, want unchanged %s", name, res.data()["revision"], rev)
+			}
+			if h.fileBytes() != before {
+				t.Errorf("%s: a no-op DELETE rewrote leo.yaml", name)
+			}
+		}
+	})
+}
+
+// hasKey reports whether a YAML document has a top-level "<key>:" line.
+func hasKey(text, key string) bool {
+	for _, line := range strings.Split(text, "\n") {
+		if strings.HasPrefix(line, key+":") {
+			return true
+		}
+	}
+	return false
 }

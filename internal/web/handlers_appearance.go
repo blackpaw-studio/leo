@@ -106,6 +106,37 @@ func (c *ConfigService) handleAppearanceRulesPut(w http.ResponseWriter, r *http.
 	writeConfigData(w, http.StatusOK, res.Item)
 }
 
+// handleAppearanceRulesDelete removes leo.yaml's appearance_rules key, so a
+// follower reverts to its lead's list and any other host ends with no rules.
+// If-Match is required (428 without it, 409 when stale). With no local key
+// it writes nothing and still answers 200 with the current document.
+// DELETE /appearance/rules
+func (c *ConfigService) handleAppearanceRulesDelete(w http.ResponseWriter, r *http.Request) {
+	ifMatch, err := ifMatchOf(r)
+	if err != nil {
+		writeConfigError(w, err)
+		return
+	}
+	res, err := c.Mutate(mutateOpts{
+		IfMatch: ifMatch,
+		Item: func(cfg *config.Config, revision string) any {
+			return newAppearanceRulesDocument(cfg, revision)
+		},
+	}, func(cfg *config.Config) error {
+		if _, ok := cfg.LocalAppearanceRules(); !ok {
+			return errNoWrite
+		}
+		cfg.AppearanceRules = nil
+		return nil
+	})
+	if err != nil {
+		writeConfigError(w, err)
+		return
+	}
+	w.Header().Set("ETag", `"`+res.Revision+`"`)
+	writeConfigData(w, http.StatusOK, res.Item)
+}
+
 func errInvalidAppearanceRule(e config.AppearanceRuleError) *ConfigError {
 	return &ConfigError{Status: http.StatusBadRequest, Code: CodeInvalidAppearanceRule,
 		Message: fmt.Sprintf("appearance_rules[%d]: %s", e.Index, e.Reason), Data: e}

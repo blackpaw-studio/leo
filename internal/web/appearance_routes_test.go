@@ -158,6 +158,7 @@ func TestAppearanceRulesRoutesAreOperatorOnly(t *testing.T) {
 	for _, route := range []struct{ method, path string }{
 		{http.MethodGet, "/api/v1/appearance/rules"},
 		{http.MethodPut, "/api/v1/appearance/rules"},
+		{http.MethodDelete, "/api/v1/appearance/rules"},
 		{http.MethodPut, "/api/v1/agents/x/appearance"},
 	} {
 		if w := requestAs(t, s, route.method, route.path, testAgentToken, ""); w.Code != http.StatusForbidden {
