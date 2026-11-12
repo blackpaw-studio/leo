@@ -11,6 +11,11 @@ const (
 	// maxRolloutLine bounds one rollout line the tail will hold; codex lines
 	// reach ~150 KB, so a line this long is not one it needs.
 	maxRolloutLine = 4 << 20
+	// rolloutHeadBytes is how much of the start of the file the tail remembers
+	// and re-checks on every read. A rollout opens with a session_meta line
+	// carrying the session id and a timestamp, so two different files differ
+	// within it.
+	rolloutHeadBytes = 512
 	// maxRolloutRead bounds the bytes one Read takes, so a first look at a
 	// large rollout is spread over several ticks.
 	maxRolloutRead = 8 << 20
@@ -31,6 +36,11 @@ type rolloutTail struct {
 	skipping bool
 	// info is the file as last read, to notice a replacement.
 	info os.FileInfo
+	// head is the first min(offset, rolloutHeadBytes) bytes read from the
+	// file. Inode identity alone cannot tell a replacement (Linux hands a
+	// freed inode straight to the next file created, and a file can be
+	// rewritten in place), so the content at the start is verified too.
+	head []byte
 }
 
 // rolloutRead is the result of one Read.
@@ -59,8 +69,8 @@ func (t *rolloutTail) Read(maxBytes int64) rolloutRead {
 		return rolloutRead{}
 	}
 	res := rolloutRead{OK: true}
-	if t.info != nil && (!os.SameFile(t.info, info) || info.Size() < t.offset) {
-		t.offset, t.partial, t.skipping = 0, nil, false
+	if t.info != nil && (!os.SameFile(t.info, info) || info.Size() < t.offset || !t.headMatches(f)) {
+		t.offset, t.partial, t.skipping, t.head = 0, nil, false, nil
 		res.Reset = true
 	}
 	t.info = info
@@ -74,10 +84,31 @@ func (t *rolloutTail) Read(maxBytes int64) rolloutRead {
 	if err != nil {
 		return rolloutRead{}
 	}
+	t.rememberHead(buf)
 	t.offset += int64(len(buf))
 	res.More = t.offset < info.Size()
 	res.Lines = t.consume(buf)
 	return res
+}
+
+// headMatches reports whether f still starts with the bytes remembered from
+// it: a short read (the file is shorter now) or any difference is a mismatch.
+func (t *rolloutTail) headMatches(f *os.File) bool {
+	if len(t.head) == 0 {
+		return true
+	}
+	got := make([]byte, len(t.head))
+	n, err := f.ReadAt(got, 0)
+	return (err == nil || (err == io.EOF && n == len(got))) && bytes.Equal(got, t.head)
+}
+
+// rememberHead extends the remembered head with buf, the bytes read from
+// t.offset on, until it holds rolloutHeadBytes. The head always covers the
+// start of the file up to the offset, so buf continues it exactly.
+func (t *rolloutTail) rememberHead(buf []byte) {
+	if need := rolloutHeadBytes - len(t.head); need > 0 {
+		t.head = append(t.head, buf[:min(need, len(buf))]...)
+	}
 }
 
 // consume splits buf into lines, completing the held partial line and

@@ -121,6 +121,37 @@ func TestRolloutTail_RealFile(t *testing.T) {
 		}
 	})
 
+	t.Run("a file rewritten in place, longer than before, resets to the start", func(t *testing.T) {
+		// Same inode, size at or above the old offset: only the content can
+		// tell. (A delete-and-recreate can land here too: Linux reuses the
+		// freed inode at once.)
+		tail, path := newTail(t)
+		appendFile(t, path, tokenLine+"\n")
+		tail.Read(big)
+		if err := os.WriteFile(path, []byte(ctxLine+"\n"+ctxLine+"\n"+ctxLine+"\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		res := tail.Read(big)
+		if !res.Reset || len(res.Lines) != 3 {
+			t.Fatalf("after an in-place rewrite = reset=%v %v", res.Reset, strs(res.Lines))
+		}
+	})
+
+	t.Run("a head that grew across reads is still verified", func(t *testing.T) {
+		tail, path := newTail(t)
+		appendFile(t, path, strings.Repeat("a", 100)+"\n")
+		tail.Read(big)
+		appendFile(t, path, tokenLine+"\n") // the head now spans both reads
+		tail.Read(big)
+		other := strings.Repeat("a", 100) + "\n" + strings.Repeat("b", len(tokenLine)) + "\n" + ctxLine + "\n"
+		if err := os.WriteFile(path, []byte(other), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if res := tail.Read(big); !res.Reset {
+			t.Fatalf("a rewrite that differs only after the first line went unnoticed: %v", strs(res.Lines))
+		}
+	})
+
 	t.Run("a read is capped per call and resumes where it stopped", func(t *testing.T) {
 		tail, path := newTail(t)
 		appendFile(t, path, tokenLine+"\n"+ctxLine+"\n"+tokenLine+"\n")
