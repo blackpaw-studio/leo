@@ -74,3 +74,9 @@ func TestAgentTasksOmittedWhenEmpty(t *testing.T) {
 		t.Fatalf("tasks missing: %s", b)
 	}
 }
+
+func TestFeaturesAdvertiseAgentShell(t *testing.T) {
+	if !slices.Contains(Features(), FeatureAgentShell) || FeatureAgentShell != "agent_shell" {
+		t.Fatalf("Features() = %v, want agent_shell", Features())
+	}
+}

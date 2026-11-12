@@ -114,11 +114,15 @@ const (
 	// `leo progress`); /state agent rows carry tasks and agent_task_changed
 	// events follow them.
 	FeatureAgentProgress = "agent_progress"
+	// FeatureAgentShell: `leo [--host H] agent shell [--] <name>` opens a
+	// login shell in the agent's workspace on this machine over a PTY and
+	// exits with the shell's status; it refuses unknown and moved agents.
+	FeatureAgentShell = "agent_shell"
 )
 
 // Features returns the hello's features list, a fresh copy each call.
 func Features() []string {
-	return []string{FeatureBridgeTurns, FeatureAttentionReason, FeatureDispatchTree, FeatureAgentUsage, FeatureAgentControl, FeatureDispatchAttach, FeatureDispatchRemoved, FeatureStateSeq, FeatureAttachDispatchPlacement, FeatureDispatchPlacementLive, FeatureAgentEnvironments, FeatureChatQuestions, FeatureMachineStats, FeatureConfigAPI, FeatureAgentStatusRestoring, FeatureClientTools, FeatureAgentAppearance, FeatureAgentMove, FeatureAgentMoveFreshSession, FeatureAgentProgress}
+	return []string{FeatureBridgeTurns, FeatureAttentionReason, FeatureDispatchTree, FeatureAgentUsage, FeatureAgentControl, FeatureDispatchAttach, FeatureDispatchRemoved, FeatureStateSeq, FeatureAttachDispatchPlacement, FeatureDispatchPlacementLive, FeatureAgentEnvironments, FeatureChatQuestions, FeatureMachineStats, FeatureConfigAPI, FeatureAgentStatusRestoring, FeatureClientTools, FeatureAgentAppearance, FeatureAgentMove, FeatureAgentMoveFreshSession, FeatureAgentProgress, FeatureAgentShell}
 }
 
 // ActivityMinInterval is the most often agent_activity is published per
