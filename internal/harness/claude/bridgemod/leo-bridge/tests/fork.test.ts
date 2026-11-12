@@ -16,7 +16,6 @@ function engine(on: any, fork: () => unknown) {
     forks.push({ ...e })
     return { value: fork() }
   })
-  on('session.model', () => ({ value: 'claude-opus-5-5' }))
   return { forks }
 }
 

@@ -220,3 +220,80 @@ test('a reconnect hello says nothing of subagents', { timeoutMs: 20_000 }, async
   expect(hellos.length).toBe(2)
   expect(hellos.filter((r: any) => 'subagents' in r)).toEqual([])
 })
+
+// ---- usage telemetry --------------------------------------------------------
+
+async function completeTurn($: any, h: any, turnId = 't1') {
+  await $.turn.start({ text: 'go', turnId })
+  await $.turn.complete({ turnId, answer: 'done', durationMs: 1, isAborted: false, reason: 'answer' })
+  await h.settle()
+}
+
+test('turn.complete asks the host for the summary breakdown', async ($, on) => {
+  const h = setup(on)
+  await start($, h)
+  await completeTurn($, h)
+  expect(h.usageCalls.length).toBe(1)
+  expect(JSON.stringify(h.usageCalls[0])).toContain('"breakdown":"summary"')
+})
+
+test('turn.complete usage carries the session model id', async ($, on) => {
+  const h = setup(on, { model: () => 'claude-sonnet-5-5' })
+  await start($, h)
+  await completeTurn($, h)
+  const usage = named(h, 'turn.complete')[0]!.usage as Record<string, unknown>
+  expect(usage.model).toBe('claude-sonnet-5-5')
+  expect(usage.cost).toEqual({ usd: 0.01 })
+})
+
+test('a model lookup that fails still reports the usage', async ($, on) => {
+  const h = setup(on, {
+    model: () => {
+      throw new Error('no model')
+    },
+  })
+  await start($, h)
+  await completeTurn($, h)
+  const usage = named(h, 'turn.complete')[0]!.usage as Record<string, unknown>
+  expect(usage.cost).toEqual({ usd: 0.01 })
+  expect('model' in usage).toBe(false)
+})
+
+test('turn.complete is still sent when reading usage throws', async ($, on) => {
+  const h = setup(on, {
+    usage: () => {
+      throw new Error('usage unavailable')
+    },
+  })
+  await start($, h)
+  await completeTurn($, h)
+  const complete = named(h, 'turn.complete')
+  expect(complete.length).toBe(1)
+  expect('usage' in complete[0]!).toBe(false)
+  expect(h.logs.some((l) => l.includes('reading session usage failed'))).toBe(true)
+})
+
+test('effort is reported again after the bridge reconnects', { timeoutMs: 20_000 }, async ($, on) => {
+  const feeds = [new Feed(), new Feed()]
+  const h = setup(on, { feeds })
+  on('turn.step', async function* (_$: any, e: any) {
+    return { turnId: e.turnId, index: e.index, answer: '', toolUses: [], stopReason: 'end_turn', usage: null }
+  })
+  const step = async (index: number) => {
+    for await (const _ of $.turn.step({ turnId: 't1', index, model: 'claude-opus-5-5', messageCount: 1, effort: 'high' })) {
+      // drain
+    }
+    await h.settle()
+  }
+  await start($, h)
+  await step(0)
+  await step(1)
+  expect(named(h, 'effort').length).toBe(1)
+  feeds[0]!.end()
+  await advance(h, 1000)
+  expect(h.spawns.length).toBe(2)
+  // The daemon forgets effort across a reconnect (a restarted daemon, a new
+  // launch): the same level must be said again.
+  await step(2)
+  expect(named(h, 'effort').length).toBe(2)
+})

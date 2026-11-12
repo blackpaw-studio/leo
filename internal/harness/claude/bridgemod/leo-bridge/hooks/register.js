@@ -284,8 +284,15 @@ async function turnCompleteReport($, e, tokens) {
     tokens: turnTokens(tokens),
   }
   try {
-    const usage = await $.session.usage()
-    return eventReport('turn.complete', defined({ ...fields, usage }))
+    // The summary breakdown is an estimate from the host's own /context
+    // accounting: no token-count API calls.
+    const [usage, model] = await Promise.all([
+      $.session.usage({ breakdown: 'summary' }),
+      // The model id is a nice-to-have within a nice-to-have.
+      $.session.model().catch(() => undefined),
+    ])
+    const observed = typeof model === 'string' && model !== '' ? { model } : {}
+    return eventReport('turn.complete', defined({ ...fields, usage: { ...usage, ...observed } }))
   } catch (err) {
     $.ui.log('reading session usage failed: ' + errorText(err))
     return eventReport('turn.complete', defined(fields))
@@ -296,6 +303,8 @@ async function sendHello($) {
   const sessionId = await $.session.id()
   const version = await $.session.version()
   helloSessionId = sessionId
+  // The daemon's observed effort dies with its launch state: say it again.
+  reportedEffort = null
   return helloReport(sessionId, version.version, isTurnKnown ? runningTurn !== null : undefined)
 }
 
