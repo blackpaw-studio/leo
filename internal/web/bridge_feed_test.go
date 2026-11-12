@@ -1,6 +1,7 @@
 package web
 
 import (
+	"bytes"
 	"encoding/json"
 	"strings"
 	"sync"
@@ -303,5 +304,36 @@ func TestAgentGitListerSkipsAgentsWithoutALiveWorkspace(t *testing.T) {
 	got := l.GitAgents()
 	if len(got) != 1 || got[0] != (observe.GitAgent{Name: "live", Workspace: "/ws/live"}) {
 		t.Fatalf("agents = %+v", got)
+	}
+}
+
+// A codex agent's harness-reported usage reaches the snapshot through the
+// real feed: usage present, no cost, and no bridge field.
+func TestBuildSnapshotCodexUsageFromHarness(t *testing.T) {
+	feed := observe.NewBridgeFeed(observe.KeyResolverFunc(func(string) (string, bool) { return "", false }), nil)
+	feed.SetHarnessUsage(map[string]observe.AgentUsage{"agent-c": {
+		SessionID:   "sid",
+		Session:     observe.UsageTotals{Tokens: 42, CostUnknown: true},
+		Incarnation: observe.UsageTotals{Tokens: 42, CostUnknown: true},
+		Model:       "gpt-test-1",
+	}})
+
+	snap := buildSnapshot(snapshotInput{Config: bridgeMergeConfig(), Records: bridgeMergeRecords(), BridgeFeed: feed, Now: time.Now()})
+
+	var got observe.Agent
+	for _, a := range snap.Agents {
+		if a.Name == "agent-c" {
+			got = a
+		}
+	}
+	raw, err := json.Marshal(got)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Usage == nil || got.Usage.Session.Tokens != 42 || got.Usage.Model != "gpt-test-1" {
+		t.Fatalf("usage = %+v", got.Usage)
+	}
+	if bytes.Contains(raw, []byte(`"cost_usd"`)) || bytes.Contains(raw, []byte(`"bridge"`)) {
+		t.Fatalf("codex agent carries cost_usd or bridge: %s", raw)
 	}
 }
