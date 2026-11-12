@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"math"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -94,6 +95,12 @@ type feedAgent struct {
 	sessionCost float64
 	context     *ContextUsage
 	hasUsage    bool
+	// model, effort and rateLimits are what the harness last observed; they
+	// outlive a session (the account's limits and the loop's model do) and
+	// die with the launch.
+	model      string
+	effort     string
+	rateLimits []RateLimit
 
 	subagents int
 	// hookSubagents holds the ids of the subagents the SubagentStart/Stop
@@ -361,6 +368,7 @@ func (st *feedAgent) relaunch(launch string) {
 	st.launch = launch
 	st.subagents, st.hookSubagents, st.reason, st.action = 0, nil, nil, nil
 	st.seen, st.seenOrder = nil, nil
+	st.model, st.effort = "", ""
 }
 
 // cancelTrailing disarms a pending trailing edge, including one whose
@@ -563,7 +571,13 @@ type modUsage struct {
 		Tokens  *int64   `json:"tokens"`
 		Window  *int64   `json:"window"`
 		Percent *float64 `json:"percent"`
+		// Breakdown is decoded apart so a malformed one costs only itself.
+		Breakdown json.RawMessage `json:"breakdown"`
 	} `json:"context"`
+	// Model is the id the mod adds next to the host's usage.
+	Model *string `json:"model"`
+	// RateLimits entries are decoded one by one; nil means not reported.
+	RateLimits *[]json.RawMessage `json:"rateLimits"`
 }
 
 // applyUsage folds a session usage report in, reporting whether it changed
@@ -602,8 +616,28 @@ func (st *feedAgent) foldUsage(raw json.RawMessage) (changed bool, cost float64,
 	if c := u.Context; c != nil && c.Tokens != nil && c.Window != nil && c.Percent != nil &&
 		*c.Tokens >= 0 && *c.Window >= 0 && validAmount(*c.Percent) {
 		next := ContextUsage{Tokens: *c.Tokens, Window: *c.Window, Percent: *c.Percent}
+		if st.context != nil {
+			// A report without a usable breakdown keeps the last one.
+			next.Breakdown, next.CompactAt = st.context.Breakdown, st.context.CompactAt
+		}
+		var bd hostBreakdown
+		if len(c.Breakdown) > 0 && json.Unmarshal(c.Breakdown, &bd) == nil {
+			next.Breakdown, next.CompactAt = foldBreakdown(bd), compactAt(bd, *c.Window)
+		}
 		if st.context == nil || *st.context != next {
 			st.context = &next
+			changed = true
+		}
+	}
+	if u.Model != nil {
+		if m := cleanModel(*u.Model); m != st.model {
+			st.model = m
+			changed = true
+		}
+	}
+	if u.RateLimits != nil {
+		if limits := foldRateLimits(*u.RateLimits); !equalRateLimits(limits, st.rateLimits) {
+			st.rateLimits = limits
 			changed = true
 		}
 	}
@@ -614,7 +648,10 @@ func (st *feedAgent) foldUsage(raw json.RawMessage) (changed bool, cost float64,
 }
 
 func (st *feedAgent) usage() AgentUsage {
-	return AgentUsage{SessionID: st.sessionID, Session: st.session, Incarnation: st.incarnation, Context: cloneOf(st.context)}
+	return AgentUsage{
+		SessionID: st.sessionID, Session: st.session, Incarnation: st.incarnation, Context: cloneOf(st.context),
+		Model: st.model, Effort: st.effort, RateLimits: slices.Clone(st.rateLimits),
+	}
 }
 
 // validAmount reports whether v is a finite amount in [0, MaxUsageCostUSD].
