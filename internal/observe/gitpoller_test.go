@@ -9,11 +9,17 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/blackpaw-studio/leo/internal/bridge"
 )
 
 type fakeAgentLister []GitAgent
 
 func (l fakeAgentLister) GitAgents() []GitAgent { return slices.Clone(l) }
+
+type mutableLister struct{ agents []GitAgent }
+
+func (l *mutableLister) GitAgents() []GitAgent { return slices.Clone(l.agents) }
 
 type recordingSink struct {
 	mu   sync.Mutex
@@ -235,5 +241,108 @@ func TestGitPollerLogsAPersistentFailureOnce(t *testing.T) {
 	p.Tick(context.Background())
 	if len(logged) != 2 {
 		t.Fatalf("logged %d times; want the recurrence logged", len(logged))
+	}
+}
+
+func TestGitPollerKeepsPreviousGitWhenAWorkspaceErrors(t *testing.T) {
+	r := &workspaceRunner{
+		out: map[string]string{"/ws/a": " 1 file changed, 2 insertions(+)\n", "/ws/b": " 1 file changed, 5 deletions(-)\n"},
+	}
+	sink := &recordingSink{}
+	p := NewGitPoller(fakeAgentLister{{"alice", "/ws/a"}, {"bob", "/ws/b"}}, r, sink, GitPollerOptions{})
+	p.Tick(context.Background())
+
+	// /ws/a now errors (timeout, git hiccup); /ws/b is fine.
+	r.mu.Lock()
+	r.errFor = map[string]error{"/ws/a": errors.New("timed out")}
+	r.mu.Unlock()
+	p.Tick(context.Background())
+
+	got := sink.last(t)
+	if got["alice"] != (GitStats{Added: 2}) || got["bob"] != (GitStats{Removed: 5}) {
+		t.Fatalf("stats = %v; want alice's previous value kept through the error", got)
+	}
+}
+
+func TestGitPollerKeepOnErrorFeedsNoPublish(t *testing.T) {
+	h := newFeedHarness(t, nil)
+	h.send(bridge.Event{Name: bridge.EventTurnComplete, EventID: "a", Usage: hostUsage(t, nil)})
+	r := &workspaceRunner{out: map[string]string{"/ws/a": " 1 file changed, 2 insertions(+)\n"}}
+	p := NewGitPoller(fakeAgentLister{{"alice", "/ws/a"}}, r, h.feed, GitPollerOptions{})
+	p.Tick(context.Background())
+	h.pub.reset()
+
+	r.mu.Lock()
+	r.errFor = map[string]error{"/ws/a": errors.New("timed out")}
+	r.mu.Unlock()
+	p.Tick(context.Background())
+
+	if n := len(h.pub.snapshot()); n != 0 {
+		t.Fatalf("published %d events for a transient git error", n)
+	}
+	if u := h.usageNow(t); u.Git == nil || u.Git.Added != 2 {
+		t.Fatalf("usage git = %+v; want kept", u.Git)
+	}
+}
+
+func TestGitPollerClearsGitOnCleanNotARepoAndWhenAgentGoes(t *testing.T) {
+	r := &workspaceRunner{out: map[string]string{"/ws/a": " 1 file changed, 2 insertions(+)\n"}}
+	agents := &mutableLister{agents: []GitAgent{{"alice", "/ws/a"}, {"bob", "/ws/a"}}}
+	sink := &recordingSink{}
+	p := NewGitPoller(agents, r, sink, GitPollerOptions{})
+	p.Tick(context.Background())
+
+	// bob goes away: gone from the map. alice stays.
+	agents.agents = []GitAgent{{"alice", "/ws/a"}}
+	r.mu.Lock()
+	r.errFor = map[string]error{"/ws/a": errors.New("timed out")}
+	r.mu.Unlock()
+	p.Tick(context.Background())
+	got := sink.last(t)
+	if _, ok := got["bob"]; ok || got["alice"].Added != 2 {
+		t.Fatalf("stats = %v; want only alice, kept", got)
+	}
+
+	// A clean "not a repository" (exit 128) clears it.
+	r2 := &exitRunner{out: " 1 file changed, 2 insertions(+)\n"}
+	p2 := NewGitPoller(fakeAgentLister{{"alice", "/ws/a"}}, r2, sink, GitPollerOptions{})
+	p2.Tick(context.Background())
+	if got := sink.last(t); got["alice"].Added != 2 {
+		t.Fatalf("stats = %v", got)
+	}
+	r2.code = 128
+	p2.Tick(context.Background())
+	if got := sink.last(t); len(got) != 0 {
+		t.Fatalf("stats = %v; want cleared on a clean not-a-repo", got)
+	}
+}
+
+// exitRunner answers every call with out and exit code.
+type exitRunner struct {
+	out  string
+	code int
+}
+
+func (e *exitRunner) Run(context.Context, []string, ...string) ([]byte, int, error) {
+	return []byte(e.out), e.code, nil
+}
+
+func TestGitPollerCancelledTickDoesNotPublish(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	r := &workspaceRunner{
+		errFor: map[string]error{"/ws/a": context.Canceled},
+		hook:   func(string) { cancel() },
+	}
+	sink := &recordingSink{}
+	var logged []string
+	p := NewGitPoller(fakeAgentLister{{"alice", "/ws/a"}}, r, sink,
+		GitPollerOptions{Logf: func(f string, a ...any) { logged = append(logged, f) }})
+
+	p.Tick(ctx)
+
+	sink.mu.Lock()
+	defer sink.mu.Unlock()
+	if len(sink.sets) != 0 || len(logged) != 0 {
+		t.Fatalf("sink calls = %d, log lines = %d; a cancelled tick must do neither", len(sink.sets), len(logged))
 	}
 }

@@ -244,7 +244,8 @@ const (
 type RateLimit struct {
 	Kind        RateLimitKind `json:"kind"`
 	PercentUsed float64       `json:"percent_used"`
-	ResetsAt    time.Time     `json:"resets_at"`
+	// ResetsAt is omitted when the host gave no usable reset time.
+	ResetsAt time.Time `json:"resets_at,omitzero"`
 }
 
 // GitStats is the agent workspace's uncommitted change size

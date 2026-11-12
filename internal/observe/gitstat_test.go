@@ -76,7 +76,7 @@ func TestGitStatsForRunsPinnedArgvAndEnv(t *testing.T) {
 	if len(r.calls) != 1 {
 		t.Fatalf("calls = %d", len(r.calls))
 	}
-	wantArgv := []string{"git", "-C", "/work/space", "-c", "core.fsmonitor=false", "diff", "HEAD", "--shortstat"}
+	wantArgv := []string{"git", "-C", "/work/space", "-c", "core.fsmonitor=false", "diff", "HEAD", "--shortstat", "--no-textconv", "--no-ext-diff"}
 	if !slices.Equal(r.calls[0].argv, wantArgv) {
 		t.Fatalf("argv = %q\nwant   %q", r.calls[0].argv, wantArgv)
 	}

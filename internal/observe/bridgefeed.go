@@ -100,9 +100,11 @@ type feedAgent struct {
 	sessionCost float64
 	context     *ContextUsage
 	hasUsage    bool
-	// model, effort and rateLimits are what the harness last observed; they
-	// outlive a session (the account's limits and the loop's model do) and
-	// die with the launch.
+	// model, effort and rateLimits are what the harness last observed. They
+	// outlive a session. model and effort die with the launch (relaunch
+	// clears them: a new process has not said what it runs); rateLimits
+	// deliberately survive a relaunch, being account-scoped, and are replaced
+	// by the next report that carries them.
 	model      string
 	effort     string
 	rateLimits []RateLimit

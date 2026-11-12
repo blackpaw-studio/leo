@@ -78,8 +78,10 @@ func (ExecCommandRunner) Run(ctx context.Context, env []string, argv ...string) 
 }
 
 // GitStatsFor reads the uncommitted change size of workspace ws: one
-// `git diff HEAD --shortstat`, without taking locks or starting the
-// filesystem monitor, within GitStatsTimeout. ok=false with no error means
+// `git diff HEAD --shortstat`, without taking locks, starting the
+// filesystem monitor or running a repository's textconv and external diff
+// drivers (a workspace's config must not execute code in the daemon), within
+// GitStatsTimeout. ok=false with no error means
 // there is nothing to report (not a repository, or no commit yet); an error
 // is a failure worth logging.
 func GitStatsFor(ctx context.Context, r CommandRunner, ws string) (stats GitStats, ok bool, err error) {
@@ -89,7 +91,7 @@ func GitStatsFor(ctx context.Context, r CommandRunner, ws string) (stats GitStat
 	ctx, cancel := context.WithTimeout(ctx, GitStatsTimeout)
 	defer cancel()
 	env := append(os.Environ(), "GIT_OPTIONAL_LOCKS=0")
-	out, exit, err := r.Run(ctx, env, "git", "-C", ws, "-c", "core.fsmonitor=false", "diff", "HEAD", "--shortstat")
+	out, exit, err := r.Run(ctx, env, "git", "-C", ws, "-c", "core.fsmonitor=false", "diff", "HEAD", "--shortstat", "--no-textconv", "--no-ext-diff")
 	if err != nil {
 		return GitStats{}, false, fmt.Errorf("git stats in %s: %w", ws, err)
 	}

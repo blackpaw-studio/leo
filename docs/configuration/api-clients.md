@@ -162,11 +162,11 @@ one omits it, and every value is raw (no formatting, no thresholds).
 | `context.compact_at` | auto-compact threshold as a fraction of the window; omitted when auto-compact is off | same summary, threshold ÷ window | claude |
 | `model` | model the session observed (the `Agent.model` field stays the configured one) | host `session.model()` | claude |
 | `effort` | thinking effort of the main loop | bridge `effort` reports | claude |
-| `rate_limits [{kind: five_hour\|seven_day, percent_used, resets_at}]` | the account's limit windows (`resets_at` RFC3339 UTC); omitted for API-key or gateway sessions | host `usage().rateLimits` | claude |
+| `rate_limits [{kind: five_hour\|seven_day, percent_used, resets_at}]` | the account's limit windows (`resets_at` RFC3339 UTC, omitted when the host gave none); omitted for API-key or gateway sessions | host `usage().rateLimits` | claude |
 | `git {added, removed}` | `git diff HEAD --shortstat` of the agent's workspace, polled every 10 s | daemon | claude agents that already report bridge usage |
 
 `git` is read by the daemon, not the harness: one call per workspace, at most
-four at a time, 5 s timeout, `GIT_OPTIONAL_LOCKS=0`. It is absent for a
+four at a time, 5 s timeout, `GIT_OPTIONAL_LOCKS=0`, no textconv or external diff drivers. A failed call keeps the previous value. It is absent for a
 workspace that is not a repository or has no commit yet.
 
 ## Reachability

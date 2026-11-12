@@ -72,8 +72,9 @@ func compactAt(b hostBreakdown, window int64) float64 {
 	return frac
 }
 
-// foldRateLimits keeps the entries it can represent: a known kind, a valid
-// percentage and a parseable reset time. The rest are dropped one by one.
+// foldRateLimits keeps the entries it can represent: a known kind and a valid
+// percentage. A reset time that is missing or unreadable is left zero (and
+// omitted on the wire) rather than costing the entry its percentage.
 func foldRateLimits(raw []json.RawMessage) []RateLimit {
 	var out []RateLimit
 	for _, r := range raw {
@@ -88,10 +89,7 @@ func foldRateLimits(raw []json.RawMessage) []RateLimit {
 		if p := *l.PercentUsed; math.IsNaN(p) || p < 0 || p > maxRateLimitPercent {
 			continue
 		}
-		at, ok := parseResetsAt(l.ResetsAt)
-		if !ok {
-			continue
-		}
+		at, _ := parseResetsAt(l.ResetsAt) // zero when unusable
 		out = append(out, RateLimit{Kind: kind, PercentUsed: *l.PercentUsed, ResetsAt: at})
 	}
 	return out

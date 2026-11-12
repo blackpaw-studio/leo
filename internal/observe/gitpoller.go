@@ -2,6 +2,7 @@ package observe
 
 import (
 	"context"
+	"maps"
 	"path/filepath"
 	"sync"
 	"sync/atomic"
@@ -59,6 +60,10 @@ type GitPoller struct {
 	// persists (git missing from PATH) is logged once, not every tick. Only
 	// the poll holding the polling flag touches it.
 	logged map[string]bool
+	// last is the previous poll's result by agent name: what an agent keeps
+	// when its workspace's git call fails (a timeout or a hiccup says nothing
+	// about the tree). Same guard as logged.
+	last map[string]GitStats
 }
 
 // NewGitPoller builds a poller over lister, running git through runner and
@@ -118,7 +123,9 @@ func (p *GitPoller) Tick(ctx context.Context) bool {
 		wg   sync.WaitGroup
 		out  = map[string]GitStats{}
 		errs []error
-		sem  = make(chan struct{}, p.opts.Concurrency)
+		// failed holds the agents whose workspace's git call errored.
+		failed []string
+		sem    = make(chan struct{}, p.opts.Concurrency)
 	)
 	for ws, names := range byWorkspace {
 		sem <- struct{}{}
@@ -130,6 +137,7 @@ func (p *GitPoller) Tick(ctx context.Context) bool {
 			defer mu.Unlock()
 			if err != nil {
 				errs = append(errs, err)
+				failed = append(failed, names...)
 			}
 			if !ok {
 				return
@@ -140,6 +148,19 @@ func (p *GitPoller) Tick(ctx context.Context) bool {
 		}()
 	}
 	wg.Wait()
+	if ctx.Err() != nil {
+		// Shutting down: the calls were cut short, so their results (and
+		// errors) are not a reading of anything.
+		return false
+	}
+	// A failed call keeps the agent's previous value; only a clean "nothing
+	// to report" (not a repository) or the agent going away removes it.
+	for _, name := range failed {
+		if prev, ok := p.last[name]; ok {
+			out[name] = prev
+		}
+	}
+	p.last = maps.Clone(out)
 	// Logged here so Logf is never called concurrently.
 	nowLogged := make(map[string]bool, len(errs))
 	for _, err := range errs {

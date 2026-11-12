@@ -76,7 +76,7 @@ export interface HarnessOptions {
   // Exit code of `leo bridge report`: a number for every call, or a function
   // of the 1-based call count (throwing makes $.process.run reject).
   reportExit?: number | ((call: number) => number)
-  usage?: () => unknown
+  usage?: (e: Record<string, unknown>) => unknown
   // The model id $.session.model() answers with (throwing makes it reject).
   model?: () => string
   // Awaited before each $.store.set lands, so a test can hold one back.
@@ -188,7 +188,7 @@ export function setup(on: any, opts: HarnessOptions = {}): Harness {
   on('session.model', () => ({ value: opts.model ? opts.model() : 'claude-opus-5-5' }))
   on('session.usage', ($: any, e: any) => {
     h.usageCalls.push({ ...e })
-    if (opts.usage) return { value: opts.usage() }
+    if (opts.usage) return { value: opts.usage(e) }
     return {
       value: {
         startedAt: 1,

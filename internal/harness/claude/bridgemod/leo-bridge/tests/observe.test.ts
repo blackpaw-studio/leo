@@ -348,3 +348,33 @@ test('a usage without a breakdown passes through as it is', async ($, on) => {
   const usage = named(h, 'turn.complete')[0]!.usage as any
   expect('breakdown' in usage.context).toBe(false)
 })
+
+test('usage falls back to the plain call when the summary breakdown throws', async ($, on) => {
+  const h = setup(on, {
+    usage: (e) => {
+      if (JSON.stringify(e).includes('breakdown')) throw new Error('breakdown unavailable')
+      return { startedAt: 1, cost: { usd: 0.04 }, context: { tokens: 3, window: 9, percent: 33 } }
+    },
+  })
+  await start($, h)
+  await completeTurn($, h)
+  expect(h.usageCalls.length).toBe(2)
+  expect(JSON.stringify(h.usageCalls[1])).not.toContain('breakdown')
+  const usage = named(h, 'turn.complete')[0]!.usage as any
+  expect(usage.cost).toEqual({ usd: 0.04 })
+  expect('breakdown' in usage.context).toBe(false)
+})
+
+test('turn.complete still goes out when both usage calls throw', async ($, on) => {
+  const h = setup(on, {
+    usage: () => {
+      throw new Error('usage unavailable')
+    },
+  })
+  await start($, h)
+  await completeTurn($, h)
+  expect(h.usageCalls.length).toBe(2)
+  const complete = named(h, 'turn.complete')
+  expect(complete.length).toBe(1)
+  expect('usage' in complete[0]!).toBe(false)
+})

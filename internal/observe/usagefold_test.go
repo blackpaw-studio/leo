@@ -129,8 +129,6 @@ func TestFoldUsageRateLimitsDropBadEntries(t *testing.T) {
 		{"kind": "monthly", "percentUsed": 10, "resetsAt": "2026-11-12T05:00:00Z"},   // unknown kind
 		{"kind": "seven_day", "resetsAt": "2026-11-12T05:00:00Z"},                    // no percent
 		{"kind": "seven_day", "percentUsed": -3, "resetsAt": "2026-11-12T05:00:00Z"}, // invalid percent
-		{"kind": "seven_day", "percentUsed": 5, "resetsAt": "not a time"},            // unparseable reset
-		{"kind": "seven_day", "percentUsed": 5},                                      // no reset
 		{"kind": "seven_day", "percentUsed": 33, "resetsAt": 1794888000000},          // epoch ms
 	}
 	h := newFeedHarness(t, nil)
@@ -141,6 +139,27 @@ func TestFoldUsageRateLimitsDropBadEntries(t *testing.T) {
 	}
 	if want := time.UnixMilli(1794888000000).UTC(); !got[1].ResetsAt.Equal(want) {
 		t.Fatalf("epoch ms reset = %v; want %v", got[1].ResetsAt, want)
+	}
+}
+
+// A limit whose reset time is missing or unreadable still reports its percent.
+func TestFoldUsageRateLimitWithoutUsableResetKeepsPercent(t *testing.T) {
+	limits := []map[string]any{
+		{"kind": "five_hour", "percentUsed": 7, "resetsAt": "not a time"},
+		{"kind": "seven_day", "percentUsed": 9},
+	}
+	h := newFeedHarness(t, nil)
+	h.send(bridge.Event{Name: bridge.EventSessionEnd, EventID: "a", Usage: hostUsage(t, map[string]any{"rateLimits": limits})})
+	got := h.usageNow(t).RateLimits
+	if len(got) != 2 || got[0].PercentUsed != 7 || got[1].PercentUsed != 9 || !got[0].ResetsAt.IsZero() || !got[1].ResetsAt.IsZero() {
+		t.Fatalf("rate limits = %+v", got)
+	}
+	raw, err := json.Marshal(h.ofType(EventAgentUsage)[0].Payload.(*AgentUsagePayload).Usage.RateLimits)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(raw), "resets_at") {
+		t.Fatalf("wire %s carries a zero resets_at", raw)
 	}
 }
 
