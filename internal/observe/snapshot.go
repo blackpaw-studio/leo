@@ -8,6 +8,7 @@
 package observe
 
 import (
+	"encoding/json"
 	"strconv"
 	"time"
 )
@@ -204,6 +205,23 @@ type Outstanding struct {
 type UsageTotals struct {
 	Tokens  int64   `json:"tokens"`
 	CostUSD float64 `json:"cost_usd"`
+	// CostUnknown marks a harness that reports no cost (codex): cost_usd is
+	// then omitted from the wire rather than shown as a misleading 0. It must
+	// stay a comparable value type.
+	CostUnknown bool `json:"-"`
+}
+
+// MarshalJSON omits cost_usd when the harness reports none.
+func (u UsageTotals) MarshalJSON() ([]byte, error) {
+	if u.CostUnknown {
+		return json.Marshal(struct {
+			Tokens int64 `json:"tokens"`
+		}{u.Tokens})
+	}
+	return json.Marshal(struct {
+		Tokens  int64   `json:"tokens"`
+		CostUSD float64 `json:"cost_usd"`
+	}{u.Tokens, u.CostUSD})
 }
 
 // ContextUsage is how full the model's context window is.
