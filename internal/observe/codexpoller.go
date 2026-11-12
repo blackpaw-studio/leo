@@ -1,7 +1,10 @@
 package observe
 
 import (
+	"cmp"
 	"context"
+	"maps"
+	"slices"
 	"sync/atomic"
 	"time"
 )
@@ -137,23 +140,35 @@ func (p *CodexPoller) Tick(ctx context.Context) bool {
 
 	now := p.opts.Now()
 	out := map[string]AgentUsage{}
-	live := map[string]*codexAgentState{}
-	for _, a := range p.lister.CodexAgents() {
+	live := map[string]bool{}
+	// Agents with a stored id resolve first, so a fallback never takes a
+	// rollout an id holder is about to claim.
+	agents := p.lister.CodexAgents()
+	slices.SortStableFunc(agents, func(x, y CodexAgent) int {
+		return cmp.Compare(boolRank(x.SessionID == ""), boolRank(y.SessionID == ""))
+	})
+	for _, a := range agents {
 		if ctx.Err() != nil {
 			return false
 		}
-		st := p.stateFor(a)
-		live[a.Name] = st
-		if u, ok := p.poll(st, a, now); ok {
+		live[a.Name] = true
+		if u, ok := p.poll(p.stateFor(a), a, now); ok {
 			out[a.Name] = u
 		}
 	}
 	if ctx.Err() != nil {
 		return false
 	}
-	p.states = live
+	maps.DeleteFunc(p.states, func(name string, _ *codexAgentState) bool { return !live[name] })
 	p.sink.SetHarnessUsage(out)
 	return true
+}
+
+func boolRank(b bool) int {
+	if b {
+		return 1
+	}
+	return 0
 }
 
 // stateFor is a's state, fresh when it is new or its process restarted (the
@@ -168,15 +183,19 @@ func (p *CodexPoller) stateFor(a CodexAgent) *codexAgentState {
 	if prev != nil {
 		st.fold.rateLimits = prev.fold.rateLimits
 	}
+	p.states[a.Name] = st
 	return st
 }
 
 // poll reads a's rollout and returns its usage; ok=false omits the agent
 // (no rollout, or nothing in it to report yet).
 func (p *CodexPoller) poll(st *codexAgentState, a CodexAgent, now time.Time) (AgentUsage, bool) {
-	path, ok := p.locate(st, a, now)
-	if !ok {
+	path, found := p.locate(st, a, now)
+	switch found {
+	case rolloutMissing:
 		return AgentUsage{}, false
+	case rolloutKeepLast:
+		return st.last, st.hasLast
 	}
 	if path != st.tail.path {
 		st.tail = &rolloutTail{path: path}
@@ -208,36 +227,81 @@ func (p *CodexPoller) poll(st *codexAgentState, a CodexAgent, now time.Time) (Ag
 	return u, true
 }
 
+// rolloutLookup is what locate found.
+type rolloutLookup int
+
+const (
+	// rolloutFound: read the returned path.
+	rolloutFound rolloutLookup = iota
+	// rolloutMissing: nothing to report for the agent.
+	rolloutMissing
+	// rolloutKeepLast: the rollout it was reading is not there right now;
+	// keep showing the last reading.
+	rolloutKeepLast
+)
+
 // locate finds the rollout to read: the stored session id's, else (for an
 // agent leo has not stored an id for) the single rollout for its workspace
-// since it started. A found path is kept until reading it fails.
-func (p *CodexPoller) locate(st *codexAgentState, a CodexAgent, now time.Time) (string, bool) {
-	if st.path != "" && st.idKey == a.SessionID {
-		return st.path, true
-	}
-	if a.SessionID == "" && st.path != "" {
-		return st.path, true
-	}
-	key := "id:" + a.SessionID
-	if a.SessionID == "" {
-		key = "ws:" + a.Workspace
-	}
-	if st.walkKey == key && now.Sub(st.lastWalk) < codexRewalkInterval {
-		return "", false
-	}
-	st.walkKey, st.lastWalk = key, now
+// since it started. A found path is kept until reading it fails; a pin made
+// by workspace is re-checked on each rewalk, and never takes a rollout
+// another agent holds.
+func (p *CodexPoller) locate(st *codexAgentState, a CodexAgent, now time.Time) (string, rolloutLookup) {
 	if a.SessionID != "" {
-		path := p.loc.ByID(a.Home, a.SessionID)
-		if path == "" {
-			return "", false
-		}
-		st.path, st.sid, st.idKey = path, a.SessionID, a.SessionID
-		return path, true
+		return p.locateByID(st, a, now)
 	}
+	if !p.rewalkDue(st, "ws:"+a.Workspace, now) {
+		if st.path != "" {
+			return st.path, rolloutFound
+		}
+		return "", rolloutMissing
+	}
+	st.walkKey, st.lastWalk = "ws:"+a.Workspace, now
 	path, id, matches := p.loc.Latest(a.Home, a.Workspace, a.StartedAt)
-	if matches != 1 || path == "" {
-		return "", false
+	if matches != 1 || path == "" || p.heldByOther(st, path) {
+		// Ambiguous or someone else's: drop any pin rather than keep
+		// attributing a rollout that may not be this agent's.
+		st.path, st.sid, st.idKey, st.hasLast = "", "", "", false
+		return "", rolloutMissing
 	}
 	st.path, st.sid, st.idKey = path, id, ""
-	return path, true
+	return path, rolloutFound
+}
+
+func (p *CodexPoller) locateByID(st *codexAgentState, a CodexAgent, now time.Time) (string, rolloutLookup) {
+	if st.path != "" && st.idKey == a.SessionID {
+		return st.path, rolloutFound
+	}
+	key := "id:" + a.SessionID
+	if p.rewalkDue(st, key, now) {
+		st.walkKey, st.lastWalk = key, now
+		if path := p.loc.ByID(a.Home, a.SessionID); path != "" {
+			st.path, st.sid, st.idKey = path, a.SessionID, a.SessionID
+			return path, rolloutFound
+		}
+	}
+	// The id is stored but its rollout is not findable (yet): carry on with
+	// what the agent was showing instead of dropping the row.
+	switch {
+	case st.path != "" && st.idKey == "":
+		return st.path, rolloutFound // the pin made by workspace
+	case st.idKey == a.SessionID && st.hasLast:
+		return "", rolloutKeepLast
+	}
+	return "", rolloutMissing
+}
+
+// rewalkDue reports whether the search for key may run now: it has not run
+// for key, or has not within codexRewalkInterval.
+func (p *CodexPoller) rewalkDue(st *codexAgentState, key string, now time.Time) bool {
+	return st.walkKey != key || now.Sub(st.lastWalk) >= codexRewalkInterval
+}
+
+// heldByOther reports whether another agent already reads path.
+func (p *CodexPoller) heldByOther(st *codexAgentState, path string) bool {
+	for _, other := range p.states {
+		if other != st && other.path == path {
+			return true
+		}
+	}
+	return false
 }

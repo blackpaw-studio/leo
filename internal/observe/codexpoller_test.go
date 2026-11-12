@@ -2,6 +2,7 @@ package observe
 
 import (
 	"context"
+	"os"
 	"path/filepath"
 	"sync"
 	"testing"
@@ -155,7 +156,7 @@ func TestCodexPoller(t *testing.T) {
 		}
 	})
 
-	t.Run("the fallback walks at most once a minute until it finds one", func(t *testing.T) {
+	t.Run("the fallback walks at most once a minute", func(t *testing.T) {
 		f := newCodexFixture(t)
 		f.lister.agents = []CodexAgent{{Name: "alice", Home: "/h", Workspace: "/ws", StartedAt: started}}
 		f.tick()
@@ -169,10 +170,17 @@ func TestCodexPoller(t *testing.T) {
 		if _, ok := f.tick()["alice"]; !ok || f.walkCall != 2 {
 			t.Fatalf("after a minute: ok=%v walks=%d", ok, f.walkCall)
 		}
-		f.now = f.now.Add(time.Hour)
+		// A pin is re-checked on each rewalk (to notice a second match), not
+		// on every tick.
+		f.now = f.now.Add(30 * time.Second)
 		f.tick()
 		if f.walkCall != 2 {
-			t.Fatalf("a found rollout was walked for again: walks=%d", f.walkCall)
+			t.Fatalf("a pinned rollout was walked for again within the interval: walks=%d", f.walkCall)
+		}
+		f.now = f.now.Add(31 * time.Second)
+		f.tick()
+		if f.walkCall != 3 {
+			t.Fatalf("walks = %d after the interval, want 3", f.walkCall)
 		}
 	})
 
@@ -217,6 +225,113 @@ func TestCodexPoller(t *testing.T) {
 		cancel()
 		if f.poller.Tick(ctx) || len(f.sink.sets) != 0 {
 			t.Fatalf("published after cancel: %v", f.sink.sets)
+		}
+	})
+}
+
+func TestCodexPollerFallbackAttribution(t *testing.T) {
+	const at1 = "2026-11-12T10:00:02Z"
+	started := time.Date(2026, 11, 12, 10, 0, 0, 0, time.UTC)
+
+	t.Run("a rollout another agent holds is never assigned by the fallback", func(t *testing.T) {
+		f := newCodexFixture(t)
+		path := f.rollout("b", tcCount(at1, 700, 700, 10000, ""))
+		f.byID["sid-b"] = path
+		f.latest["/ws"] = []string{path} // the only rollout in the shared workspace is B's
+		// A is listed first: the id holders still resolve before any fallback.
+		f.lister.agents = []CodexAgent{
+			{Name: "alice", Home: "/h", Workspace: "/ws", StartedAt: started},
+			{Name: "bob", Home: "/h", Workspace: "/ws", SessionID: "sid-b", StartedAt: started},
+		}
+		got := f.tick()
+		if _, ok := got["alice"]; ok {
+			t.Fatalf("alice was attributed bob's rollout: %+v", got["alice"])
+		}
+		if got["bob"].Session.Tokens != 700 {
+			t.Fatalf("bob = %+v", got["bob"])
+		}
+		f.now = f.now.Add(2 * time.Minute)
+		if _, ok := f.tick()["alice"]; ok {
+			t.Fatal("alice claimed bob's rollout on a later walk")
+		}
+	})
+
+	t.Run("two fallback agents do not share one rollout", func(t *testing.T) {
+		f := newCodexFixture(t)
+		f.latest["/ws"] = []string{f.rollout("only", tcCount(at1, 500, 500, 10000, ""))}
+		f.lister.agents = []CodexAgent{
+			{Name: "alice", Home: "/h", Workspace: "/ws", StartedAt: started},
+			{Name: "bob", Home: "/h", Workspace: "/ws", StartedAt: started},
+		}
+		if got := f.tick(); len(got) != 1 {
+			t.Fatalf("agents with usage = %d, want the one rollout held once", len(got))
+		}
+	})
+
+	t.Run("a fallback pin is dropped once a second rollout matches", func(t *testing.T) {
+		f := newCodexFixture(t)
+		first := f.rollout("d1", tcCount(at1, 500, 500, 10000, ""))
+		f.latest["/ws"] = []string{first}
+		f.lister.agents = []CodexAgent{{Name: "alice", Home: "/h", Workspace: "/ws", StartedAt: started}}
+		if _, ok := f.tick()["alice"]; !ok {
+			t.Fatal("no usage from the single match")
+		}
+		f.latest["/ws"] = []string{first, f.rollout("d2")}
+		f.now = f.now.Add(30 * time.Second)
+		if _, ok := f.tick()["alice"]; !ok {
+			t.Fatal("pin dropped before the rewalk interval")
+		}
+		f.now = f.now.Add(31 * time.Second)
+		if _, ok := f.tick()["alice"]; ok {
+			t.Fatal("pin kept although two rollouts now match")
+		}
+		// Back to one match: attributed again on a later walk.
+		f.latest["/ws"] = []string{first}
+		f.now = f.now.Add(61 * time.Second)
+		if _, ok := f.tick()["alice"]; !ok {
+			t.Fatal("not re-pinned after the ambiguity ended")
+		}
+	})
+
+	t.Run("a stored id whose rollout is not there yet keeps serving the fallback", func(t *testing.T) {
+		f := newCodexFixture(t)
+		path := f.rollout("d", tcCount(at1, 500, 500, 10000, ""))
+		f.latest["/ws"] = []string{path}
+		f.lister.agents = []CodexAgent{{Name: "alice", Home: "/h", Workspace: "/ws", StartedAt: started}}
+		f.tick()
+		// leo stores the id, but ByID cannot find the file yet.
+		f.lister.agents[0].SessionID = "sid-a"
+		if got := f.tick()["alice"]; got.Session.Tokens != 500 {
+			t.Fatalf("row vanished or changed after the id was stored: %+v", got)
+		}
+		f.now = f.now.Add(2 * time.Minute)
+		if got := f.tick()["alice"]; got.Session.Tokens != 500 {
+			t.Fatalf("row vanished on the rewalk: %+v", got)
+		}
+		// The id resolves to the same file: no double counting.
+		f.byID["sid-a"] = path
+		f.now = f.now.Add(2 * time.Minute)
+		got := f.tick()["alice"]
+		if got.Session.Tokens != 500 || got.SessionID != "sid-a" {
+			t.Fatalf("after the id resolved = %+v", got)
+		}
+	})
+
+	t.Run("an id that resolved before keeps its last usage while the file is missing", func(t *testing.T) {
+		f := newCodexFixture(t)
+		path := f.rollout("a", tcCount(at1, 500, 500, 10000, ""))
+		f.byID["sid-a"] = path
+		f.lister.agents = []CodexAgent{{Name: "alice", Home: "/h", SessionID: "sid-a", StartedAt: started}}
+		f.tick()
+		if err := os.Remove(path); err != nil {
+			t.Fatal(err)
+		}
+		delete(f.byID, "sid-a")
+		for i := range 3 {
+			f.now = f.now.Add(2 * time.Minute)
+			if got := f.tick()["alice"]; got.Session.Tokens != 500 {
+				t.Fatalf("tick %d: row vanished: %+v", i, got)
+			}
 		}
 	})
 }

@@ -174,8 +174,9 @@ file (`$CODEX_HOME/sessions/…/rollout-*-<session id>.jsonl`) every 10 s, so th
 agent's `bridge` field is absent and `cost_usd` is omitted from `session` and
 `incarnation`. The rollout is found by the session id leo stored for the agent,
 which exists only after leo delivers its first message; before that, the one
-rollout whose cwd is the agent's workspace and that was modified since the
-agent started is used (nothing when it is ambiguous). A codex agent shows
+rollout whose cwd is the agent's workspace and whose session started after
+the agent did is used (nothing when it is ambiguous, or when another agent
+already reads it; it is re-checked every minute). A codex agent shows
 nothing until its first turn. `incarnation.tokens` counts the rollout's token
 deltas stamped since the agent's current process started. `/new` typed inside
 codex leaves the stored id on the old rollout until leo next stores one.
