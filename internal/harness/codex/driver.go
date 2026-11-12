@@ -8,11 +8,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io/fs"
 	"log"
 	"os"
 	"path/filepath"
-	"strings"
 	"time"
 
 	"github.com/blackpaw-studio/leo/internal/harness"
@@ -89,33 +87,11 @@ type rolloutMeta struct {
 // sharing a workspace can race here — newest wins and a warning is logged;
 // the residual ambiguity is accepted (see spec Risks).
 func discoverSessionID(_ context.Context, h harness.SessionHandle, since time.Time) (string, error) {
-	root := filepath.Join(CodexHome(h.Env), "sessions")
-	var bestID string
-	var bestMod time.Time
-	matches := 0
-	_ = filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
-		if err != nil || d.IsDir() || !strings.HasPrefix(d.Name(), "rollout-") || !strings.HasSuffix(d.Name(), ".jsonl") {
-			return nil //nolint:nilerr // unreadable entries are skipped, not fatal
-		}
-		info, err := d.Info()
-		if err != nil || info.ModTime().Before(since) {
-			return nil
-		}
-		id, cwd, ok := readRolloutMeta(path)
-		if !ok || !harness.SamePath(cwd, h.Workspace) {
-			return nil
-		}
-		matches++
-		if info.ModTime().After(bestMod) {
-			bestMod = info.ModTime()
-			bestID = id
-		}
-		return nil
-	})
+	best, matches := scanRollouts(filepath.Join(CodexHome(h.Env), "sessions"), h.Workspace, since, nil)
 	if matches > 1 {
-		log.Printf("codex: %d rollouts match workspace %s since %s; using newest (%s)", matches, h.Workspace, since.Format(time.RFC3339), bestID)
+		log.Printf("codex: %d rollouts match workspace %s since %s; using newest (%s)", matches, h.Workspace, since.Format(time.RFC3339), best.id)
 	}
-	return bestID, nil
+	return best.id, nil
 }
 
 // readRolloutMeta parses a rollout file's first line for the session id and
