@@ -217,6 +217,14 @@ func TestAgentShellLocalRefusals(t *testing.T) {
 			wantMsg: "no workspace",
 		},
 		{
+			name: "relative workspace",
+			f: shellFixture{
+				session: daemon.AgentSessionResponse{Name: "ghost", Session: "s"},
+				records: []agent.Record{{Name: "ghost", Workspace: "relative/dir"}},
+			},
+			wantMsg: "not an absolute path",
+		},
+		{
 			name: "workspace gone",
 			f: shellFixture{
 				session: daemon.AgentSessionResponse{Name: "ghost", Session: "s"},
@@ -279,9 +287,29 @@ func TestAgentShellRemoteArgvQuotesName(t *testing.T) {
 	}
 	want := []string{"ssh", "-tt", "user@prod.example.com", "-p", "2222"}
 	want = append(want, ctlOpts(homeFromConfigPath(path))...)
-	want = append(want, quotedDefaultRemoteLeo, "agent", "shell", "--", `'-it'\''s a name'`)
+	want = append(want, quotedDefaultRemoteLeo, "agent", "shell", "--host", "localhost", "--", `'-it'\''s a name'`)
 	if !slices.Equal(stub.calls[0], want) {
 		t.Errorf("ssh argv = %q\nwant      %q", stub.calls[0], want)
+	}
+}
+
+// The remote command pins --host localhost, so a destination whose own config
+// names a default_host (or LEO_HOST) still opens the shell on itself.
+func TestAgentShellForcedLocalIgnoresDestinationClientConfig(t *testing.T) {
+	t.Setenv("LEO_HOST", "prod")
+	ws := t.TempDir()
+	f := &shellFixture{
+		session: daemon.AgentSessionResponse{Name: "a"},
+		records: []agent.Record{{Name: "a", Workspace: ws}},
+	}
+	withShellFixture(t, f)
+	stub := withStubExec(t)
+	// newAgentCLITestConfig sets default_host: prod, as on the destination.
+	if err := runAgentShell(t, "--", "a"); err != nil {
+		t.Fatalf("execute: %v", err)
+	}
+	if f.execCalls != 1 || len(stub.calls) != 0 {
+		t.Errorf("exec=%d ssh=%v, want a local exec and no ssh", f.execCalls, stub.calls)
 	}
 }
 

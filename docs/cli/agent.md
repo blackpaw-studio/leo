@@ -211,7 +211,7 @@ dedicated socket and recommended bindings (tmux 3.2+).
 
 Open an interactive login shell (`$SHELL -l`, else the account's passwd shell, else `/bin/sh`) with the agent's workspace as its working directory. Locally the shell replaces the `leo` process, so its exit status is the command's. `TMUX` and `TMUX_PANE` are dropped from its environment, as for agent panes.
 
-With `--host` it runs `ssh -tt <host> <leo_path> agent shell -- '<name>'`, the same transport `attach` uses, and exits with the remote shell's status. `<name>` accepts shorthand and may follow `--`.
+With `--host` it runs `ssh -tt <host> <leo_path> agent shell --host localhost -- '<name>'`, the same transport `attach` uses, and exits with the remote shell's status. `<name>` accepts shorthand and may follow `--`.
 
 The command refuses, with a nonzero exit, an unknown agent, an agent that moved to another host (the message names the host), and an agent whose workspace is unset, missing or not a directory. A stopped agent is fine. The daemon advertises the capability as the `agent_shell` feature (event-stream `hello` and `/version`), so a client can tell whether a host's leo has the command.
 

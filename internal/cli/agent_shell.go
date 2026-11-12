@@ -38,7 +38,7 @@ else /bin/sh) on the machine the agent lives on, with its working directory set
 to the agent's workspace. The shell's exit status is this command's exit status.
 
 Locally the shell replaces this process. With --host the command runs
-'ssh -tt <host> <leo_path> agent shell -- <name>', the same transport as
+'ssh -tt <host> <leo_path> agent shell --host localhost -- <name>', the same transport as
 'agent attach', so the remote leo does the resolution and the exec.
 
 An unknown agent, an agent that moved to another host, or a workspace that is
@@ -105,6 +105,11 @@ func resolveShellWorkspace(ctx context.Context, homePath, query string) (string,
 	if workspace == "" {
 		return "", fmt.Errorf("agent %q has no workspace to open a shell in", session.Name)
 	}
+	// A relative path would resolve against wherever this process (or an ssh
+	// login) happens to be, not against the agent's own tree.
+	if !filepath.IsAbs(workspace) {
+		return "", fmt.Errorf("workspace %q of agent %q is not an absolute path", workspace, session.Name)
+	}
 	info, err := os.Stat(workspace)
 	switch {
 	case errors.Is(err, os.ErrNotExist):
@@ -129,14 +134,16 @@ func execLoginShell(dir string) error {
 
 // runRemoteShell runs `leo agent shell -- <name>` on res's host over a forced
 // PTY. Every token after the host is shell-quoted because ssh flattens them
-// into one string for the remote login shell.
+// into one string for the remote login shell. --host localhost makes the
+// remote leo run the shell on itself, ignoring its own client.default_host,
+// LEO_HOST and peers, so the shell never hops to a third machine.
 func runRemoteShell(res config.HostResolution, name string) error {
 	// The remote shell inherits $TERM through ssh; bootstrap its terminfo, or
 	// downgrade TERM on the remote command, as attach does.
 	termOverride := ensureRemoteTerminfoFn(res)
 	sshArgs := append([]string{"-tt"}, remote.SSHArgv(res, false)...)
 	prefixLen := len(sshArgs)
-	sshArgs = append(sshArgs, remoteLeoWord(res.Host.RemoteLeoPath()), "agent", "shell", "--", remote.Quote(name))
+	sshArgs = append(sshArgs, remoteLeoWord(res.Host.RemoteLeoPath()), "agent", "shell", "--host", config.LocalhostSentinel, "--", remote.Quote(name))
 	sshArgs = applyRemoteTermFallback(sshArgs, prefixLen, termOverride)
 	c := agentExecCommand("ssh", sshArgs...)
 	c.Stdin = os.Stdin
