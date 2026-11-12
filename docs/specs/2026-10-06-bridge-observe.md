@@ -126,3 +126,24 @@ route first, then the legacy inbox/tmux path. A missing agent returns 404.
 
 A, C, and D run in parallel after 0. B depends on C's count seam (defined in 0). The
 e2e fixture lands last.
+
+## Addendum 2026-11-12: richer usage telemetry
+
+`AgentUsage` (state payload, `agent_usage`) gains optional fields; see
+"Agent usage fields" in `docs/configuration/api-clients.md` for the table.
+
+- `usage.model`, `usage.effort`, `usage.context.breakdown`, `usage.context.compact_at`,
+  `usage.rate_limits`, `usage.git`: all `omitempty`, raw values, no new event types.
+- The mod's `turn.complete` usage is now `session.usage({breakdown:'summary'})` plus the
+  session's model id; the daemon folds it (`observe/usagefold.go`): only `kind: used`
+  breakdown rows count (unknown names fold into `tools`), `compact_at` is
+  `autoCompactThreshold ÷ window` when auto-compact is on, rate limits keep the two known
+  kinds with a valid percent and reset time.
+- `agent_turn_completed` stays cost and context only. A turn that changes the observed
+  model or rate limits additionally publishes `agent_usage`.
+- Effort is re-sent after every bridge hello, since the daemon forgets it per launch.
+- Git stats come from a daemon-wide poller (10 s, one `git diff HEAD --shortstat` per
+  unique workspace of a running agent, 4 concurrent, 5 s timeout), held by the bridge feed
+  per agent name. The feed is the only publisher of `agent_usage`: a git change publishes
+  it, and every bridge-driven publish carries the current git value. Agents without bridge
+  usage hold their git stats unpublished (codex follows in a separate change).
