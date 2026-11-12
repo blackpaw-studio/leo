@@ -401,6 +401,20 @@ resolution order and the routes.
   writes a local list that overrides the lead's and `DELETE` reverts to it; `PUT /api/v1/agents/{name}/appearance` `{"emoji"?, "color"?}` sets an agent's
   manual values (`null` clears, absent is unchanged).
 
+## Addendum: codex agent usage (2026-11-12)
+
+`agent.usage` (see `docs/configuration/api-clients.md`, "Agent usage fields")
+also covers codex agents. Codex has no bridge, so the daemon tails the agent's
+rollout file on a 10 s poll and publishes `agent_usage` through the same
+bridge feed, with these differences from claude agents:
+
+- the agent row has no `bridge` field;
+- `session` and `incarnation` carry `tokens` only (`cost_usd` omitted, not 0);
+- rate limits map by window length (300 → `five_hour`, 10080 → `seven_day`);
+- bridged usage wins if an agent ever has both.
+
+Dispatch (consult) records and opencode agents carry no usage.
+
 ## Access
 
 Both routes register on the existing `apiMux` and inherit its conventions unchanged:
