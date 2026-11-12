@@ -207,19 +207,67 @@ type UsageTotals struct {
 }
 
 // ContextUsage is how full the model's context window is.
+//
+// It is compared with == and shallow-copied (cloneOf): every field must be a
+// comparable value type.
 type ContextUsage struct {
 	Tokens  int64   `json:"tokens"`
 	Window  int64   `json:"window"`
 	Percent float64 `json:"percent"`
+	// Breakdown is the token estimate per category (used rows of the host's
+	// /context summary); omitted until the harness reports one.
+	Breakdown ContextBreakdown `json:"breakdown,omitzero"`
+	// CompactAt is the auto-compact threshold as a fraction of Window;
+	// omitted when auto-compact is off or unknown.
+	CompactAt float64 `json:"compact_at,omitzero"`
+}
+
+// ContextBreakdown is the context's token estimate per category.
+type ContextBreakdown struct {
+	System   int64 `json:"system"`
+	Tools    int64 `json:"tools"`
+	MCP      int64 `json:"mcp"`
+	Memory   int64 `json:"memory"`
+	Messages int64 `json:"messages"`
+}
+
+// RateLimitKind names one of an account's usage limit windows.
+type RateLimitKind string
+
+const (
+	RateLimitFiveHour RateLimitKind = "five_hour"
+	RateLimitSevenDay RateLimitKind = "seven_day"
+)
+
+// RateLimit is one account limit window's use. Raw values only; the consumer
+// formats them.
+type RateLimit struct {
+	Kind        RateLimitKind `json:"kind"`
+	PercentUsed float64       `json:"percent_used"`
+	ResetsAt    time.Time     `json:"resets_at"`
+}
+
+// GitStats is the agent workspace's uncommitted change size
+// (git diff HEAD --shortstat).
+type GitStats struct {
+	Added   int64 `json:"added"`
+	Removed int64 `json:"removed"`
 }
 
 // AgentUsage is a bridged agent's usage. Session resets when SessionID
-// changes; Incarnation resets when the agent respawns.
+// changes; Incarnation resets when the agent respawns. Every field after
+// Context is optional: a harness that cannot report one omits it.
 type AgentUsage struct {
 	SessionID   string        `json:"session_id"`
 	Session     UsageTotals   `json:"session"`
 	Incarnation UsageTotals   `json:"incarnation"`
 	Context     *ContextUsage `json:"context,omitempty"`
+	// Model and Effort are what the harness observed; Agent.Model stays the
+	// configured model.
+	Model      string      `json:"model,omitempty"`
+	Effort     string      `json:"effort,omitempty"`
+	RateLimits []RateLimit `json:"rate_limits,omitempty"`
+	Git        *GitStats   `json:"git,omitempty"`
 }
 
 // DispatchLinger is how long a finished dispatch stays in
