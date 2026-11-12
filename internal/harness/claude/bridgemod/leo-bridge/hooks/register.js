@@ -41,6 +41,7 @@ import {
   toolActivity,
   touchedEntry,
   turnTokens,
+  usageReport,
   withAcked,
   withInflight,
 } from './protocol.js'
@@ -291,8 +292,7 @@ async function turnCompleteReport($, e, tokens) {
       // The model id is a nice-to-have within a nice-to-have.
       $.session.model().catch(() => undefined),
     ])
-    const observed = typeof model === 'string' && model !== '' ? { model } : {}
-    return eventReport('turn.complete', defined({ ...fields, usage: { ...usage, ...observed } }))
+    return eventReport('turn.complete', defined({ ...fields, usage: usageReport(usage, model) }))
   } catch (err) {
     $.ui.log('reading session usage failed: ' + errorText(err))
     return eventReport('turn.complete', defined(fields))

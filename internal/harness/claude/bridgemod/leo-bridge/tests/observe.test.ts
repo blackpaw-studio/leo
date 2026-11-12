@@ -297,3 +297,54 @@ test('effort is reported again after the bridge reconnects', { timeoutMs: 20_000
   await step(2)
   expect(named(h, 'effort').length).toBe(2)
 })
+
+test('turn.complete forwards only the breakdown fields the daemon folds', async ($, on) => {
+  const row = (name: string, tokens: number, kind: string) => ({ name, tokens, kind, color: 'red', isDeferred: false })
+  const h = setup(on, {
+    usage: () => ({
+      startedAt: 1,
+      cost: { usd: 0.02 },
+      rateLimits: [{ kind: 'five_hour', percentUsed: 5, resetsAt: '2026-11-12T06:20:00.000Z' }],
+      context: {
+        tokens: 10,
+        window: 200000,
+        percent: 0,
+        breakdown: {
+          categories: [row('System prompt', 3000, 'used'), row('Free space', 9, 'free')],
+          totalTokens: 3009,
+          rawMaxTokens: 200000,
+          autoCompactThreshold: 160000,
+          isAutoCompactEnabled: true,
+          gridRows: [[{ color: 'red', isFilled: true }]],
+          memoryFiles: [{ path: '/home/me/CLAUDE.md', type: 'User', tokens: 12 }],
+          mcpTools: [{ name: 'x', serverName: 'y', tokens: 1, isLoaded: true }],
+          skills: { skillFrontmatter: [{ name: 'a', source: 'b', tokens: 1 }] },
+          apiUsage: { input_tokens: 1 },
+        },
+      },
+    }),
+  })
+  await start($, h)
+  await completeTurn($, h)
+  const usage = named(h, 'turn.complete')[0]!.usage as any
+  expect(usage.context.breakdown).toEqual({
+    categories: [
+      { name: 'System prompt', tokens: 3000, kind: 'used' },
+      { name: 'Free space', tokens: 9, kind: 'free' },
+    ],
+    autoCompactThreshold: 160000,
+    isAutoCompactEnabled: true,
+  })
+  // The rest of the host's usage passes through untouched.
+  expect(usage.cost).toEqual({ usd: 0.02 })
+  expect(usage.rateLimits).toEqual([{ kind: 'five_hour', percentUsed: 5, resetsAt: '2026-11-12T06:20:00.000Z' }])
+  expect(usage.context.tokens).toBe(10)
+})
+
+test('a usage without a breakdown passes through as it is', async ($, on) => {
+  const h = setup(on, { usage: () => ({ startedAt: 1, cost: { usd: 0.03 }, context: { tokens: 1, window: 2, percent: 50 } }) })
+  await start($, h)
+  await completeTurn($, h)
+  const usage = named(h, 'turn.complete')[0]!.usage as any
+  expect('breakdown' in usage.context).toBe(false)
+})
