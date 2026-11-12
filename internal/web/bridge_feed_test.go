@@ -224,3 +224,84 @@ func TestBridgeConnectedActionIsAuthoritativeEvenWhenNil(t *testing.T) {
 type staticActivityProvider map[string]observe.AgentActivity
 
 func (s staticActivityProvider) Activities() map[string]observe.AgentActivity { return s }
+
+// The state payload carries the richer usage fields, and the observed model
+// sits beside Agent.Model (config-derived) without replacing it.
+func TestBuildSnapshotCarriesObservedUsageFields(t *testing.T) {
+	cfg := bridgeMergeConfig()
+	cfg.Templates["claude"] = config.TemplateConfig{Harness: "claude", Model: "opus"}
+	feed := fakeBridgeFeed{"agent-a": {
+		Bridge: observe.BridgeConnected,
+		Usage: &observe.AgentUsage{
+			SessionID: "s1",
+			Model:     "claude-opus-5-5",
+			Effort:    "high",
+			Context: &observe.ContextUsage{
+				Tokens: 5, Window: 10, Percent: 50, CompactAt: 0.8,
+				Breakdown: observe.ContextBreakdown{System: 1, Tools: 2, MCP: 3, Memory: 4, Messages: 5},
+			},
+			RateLimits: []observe.RateLimit{{Kind: observe.RateLimitSevenDay, PercentUsed: 12, ResetsAt: time.Date(2026, 11, 17, 10, 0, 0, 0, time.UTC)}},
+			Git:        &observe.GitStats{Added: 7, Removed: 3},
+		},
+	}}
+
+	snap := buildSnapshot(snapshotInput{Config: cfg, Records: bridgeMergeRecords(), BridgeFeed: feed, Now: time.Now()})
+
+	var a observe.Agent
+	for _, cand := range snap.Agents {
+		if cand.Name == "agent-a" {
+			a = cand
+		}
+	}
+	raw, err := json.Marshal(a)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var wire struct {
+		Model string `json:"model"`
+		Usage struct {
+			Model   string `json:"model"`
+			Effort  string `json:"effort"`
+			Context struct {
+				Breakdown map[string]int `json:"breakdown"`
+				CompactAt float64        `json:"compact_at"`
+			} `json:"context"`
+			RateLimits []struct {
+				Kind        string  `json:"kind"`
+				PercentUsed float64 `json:"percent_used"`
+				ResetsAt    string  `json:"resets_at"`
+			} `json:"rate_limits"`
+			Git map[string]int `json:"git"`
+		} `json:"usage"`
+	}
+	if err := json.Unmarshal(raw, &wire); err != nil {
+		t.Fatal(err)
+	}
+	if wire.Model != "opus" || wire.Usage.Model != "claude-opus-5-5" || wire.Usage.Effort != "high" {
+		t.Fatalf("model=%q usage.model=%q effort=%q", wire.Model, wire.Usage.Model, wire.Usage.Effort)
+	}
+	if wire.Usage.Context.CompactAt != 0.8 || wire.Usage.Context.Breakdown["mcp"] != 3 || wire.Usage.Context.Breakdown["messages"] != 5 {
+		t.Fatalf("context = %+v", wire.Usage.Context)
+	}
+	if len(wire.Usage.RateLimits) != 1 || wire.Usage.RateLimits[0].Kind != "seven_day" || wire.Usage.RateLimits[0].ResetsAt != "2026-11-17T10:00:00Z" {
+		t.Fatalf("rate limits = %+v", wire.Usage.RateLimits)
+	}
+	if wire.Usage.Git["added"] != 7 || wire.Usage.Git["removed"] != 3 {
+		t.Fatalf("git = %+v", wire.Usage.Git)
+	}
+}
+
+func TestAgentGitListerSkipsAgentsWithoutALiveWorkspace(t *testing.T) {
+	l := agentGitLister{list: func() []agent.Record {
+		return []agent.Record{
+			{Name: "live", Status: "running", Workspace: "/ws/live"},
+			{Name: "suspended", Status: "suspended", Workspace: "/ws/s"},
+			{Name: "stopped", Status: "stopped", Workspace: "/ws/x"},
+			{Name: "noworkspace", Status: "running"},
+		}
+	}}
+	got := l.GitAgents()
+	if len(got) != 1 || got[0] != (observe.GitAgent{Name: "live", Workspace: "/ws/live"}) {
+		t.Fatalf("agents = %+v", got)
+	}
+}

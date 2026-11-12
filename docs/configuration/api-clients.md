@@ -147,6 +147,28 @@ Unlike template permissions — a guardrail enforced inside the agent's own
 process — this is a boundary enforced by the daemon against a party it does not
 trust.
 
+## Agent usage fields
+
+`GET /api/v1/state` agents carry a `usage` object, and the `agent_usage` SSE
+event (and the `usage` of a turn-completed event's context) carries the same
+shape. Every field after `context` is optional: a harness that cannot report
+one omits it, and every value is raw (no formatting, no thresholds).
+
+| Field | Meaning | Source | Harness |
+|---|---|---|---|
+| `session_id`, `session`, `incarnation` | token and cost totals | bridge turn reports | claude |
+| `context {tokens, window, percent}` | context window fill | host `usage()` | claude |
+| `context.breakdown {system, tools, mcp, memory, messages}` | token estimate per category (`used` rows of the host's `/context` summary) | host `usage({breakdown:'summary'})` | claude |
+| `context.compact_at` | auto-compact threshold as a fraction of the window; omitted when auto-compact is off | same summary, threshold ÷ window | claude |
+| `model` | model the session observed (the `Agent.model` field stays the configured one) | host `session.model()` | claude |
+| `effort` | thinking effort of the main loop | bridge `effort` reports | claude |
+| `rate_limits [{kind: five_hour\|seven_day, percent_used, resets_at}]` | the account's limit windows (`resets_at` RFC3339 UTC, omitted when the host gave none); omitted for API-key or gateway sessions | host `usage().rateLimits` | claude |
+| `git {added, removed}` | `git diff HEAD --shortstat` of the agent's workspace, polled every 10 s | daemon | claude agents that already report bridge usage |
+
+`git` is read by the daemon, not the harness: one call per workspace, at most
+four at a time, 5 s timeout, `GIT_OPTIONAL_LOCKS=0`, no textconv or external diff drivers. A failed call keeps the previous value. It is absent for a
+workspace that is not a repository or has no commit yet.
+
 ## Reachability
 
 Two settings decide whether a client can reach the daemon at all, and both fail

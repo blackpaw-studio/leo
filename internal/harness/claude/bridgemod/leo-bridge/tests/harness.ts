@@ -76,7 +76,9 @@ export interface HarnessOptions {
   // Exit code of `leo bridge report`: a number for every call, or a function
   // of the 1-based call count (throwing makes $.process.run reject).
   reportExit?: number | ((call: number) => number)
-  usage?: () => unknown
+  usage?: (e: Record<string, unknown>) => unknown
+  // The model id $.session.model() answers with (throwing makes it reject).
+  model?: () => string
   // Awaited before each $.store.set lands, so a test can hold one back.
   beforeStoreSet?: (key: string) => Promise<void> | void
   // Answers a tool call the plugin passes on (the engine running the tool).
@@ -103,6 +105,8 @@ export interface Harness {
   toasts: string[]
   invalidates: string[]
   toolCalls: Array<Record<string, unknown>>
+  // The argument events $.session.usage() was called with.
+  usageCalls: Array<Record<string, unknown>>
   settle: () => Promise<void>
 }
 
@@ -130,6 +134,7 @@ export function setup(on: any, opts: HarnessOptions = {}): Harness {
     toasts: [],
     invalidates: [],
     toolCalls: [],
+    usageCalls: [],
     settle: flush,
   }
 
@@ -180,8 +185,10 @@ export function setup(on: any, opts: HarnessOptions = {}): Harness {
     return { value: h.sessionId }
   })
   on('session.version', () => ({ value: { version: '2.1.289', base: '2.1.289' } }))
-  on('session.usage', () => {
-    if (opts.usage) return { value: opts.usage() }
+  on('session.model', () => ({ value: opts.model ? opts.model() : 'claude-opus-5-5' }))
+  on('session.usage', ($: any, e: any) => {
+    h.usageCalls.push({ ...e })
+    if (opts.usage) return { value: opts.usage(e) }
     return {
       value: {
         startedAt: 1,

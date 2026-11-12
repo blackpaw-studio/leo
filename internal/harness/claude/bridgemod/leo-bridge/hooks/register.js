@@ -41,6 +41,7 @@ import {
   toolActivity,
   touchedEntry,
   turnTokens,
+  usageReport,
   withAcked,
   withInflight,
 } from './protocol.js'
@@ -270,6 +271,16 @@ function defined(fields) {
   return Object.fromEntries(Object.entries(fields).filter(([, v]) => v !== undefined))
 }
 
+// The host's session usage with the /context summary breakdown; a host that
+// cannot produce the summary still has the plain usage.
+async function readSessionUsage($) {
+  try {
+    return await $.session.usage({ breakdown: 'summary' })
+  } catch {
+    return await $.session.usage()
+  }
+}
+
 // The final assistant message is what a dispatch returns as its result.
 // Usage is a nice-to-have: a turn.complete without it still ends the turn
 // in the daemon, which a lost turn.complete would leave stuck busy.
@@ -284,8 +295,14 @@ async function turnCompleteReport($, e, tokens) {
     tokens: turnTokens(tokens),
   }
   try {
-    const usage = await $.session.usage()
-    return eventReport('turn.complete', defined({ ...fields, usage }))
+    // The summary breakdown is an estimate from the host's own /context
+    // accounting: no token-count API calls.
+    const [usage, model] = await Promise.all([
+      readSessionUsage($),
+      // The model id is a nice-to-have within a nice-to-have.
+      $.session.model().catch(() => undefined),
+    ])
+    return eventReport('turn.complete', defined({ ...fields, usage: usageReport(usage, model) }))
   } catch (err) {
     $.ui.log('reading session usage failed: ' + errorText(err))
     return eventReport('turn.complete', defined(fields))
@@ -296,6 +313,8 @@ async function sendHello($) {
   const sessionId = await $.session.id()
   const version = await $.session.version()
   helloSessionId = sessionId
+  // The daemon's observed effort dies with its launch state: say it again.
+  reportedEffort = null
   return helloReport(sessionId, version.version, isTurnKnown ? runningTurn !== null : undefined)
 }
 

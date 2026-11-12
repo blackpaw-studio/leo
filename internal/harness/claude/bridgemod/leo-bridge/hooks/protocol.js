@@ -326,6 +326,42 @@ export function turnTokens(usage) {
 }
 
 /**
+ * The host's /context summary cut to what the daemon folds: the category rows
+ * and the auto-compact setting. The full summary (grid, per-file and per-tool
+ * rows) is tens of KB per turn.
+ * @param {unknown} breakdown
+ * @returns {Record<string, unknown> | undefined}
+ */
+function trimBreakdown(breakdown) {
+  if (!isRecord(breakdown) || !Array.isArray(breakdown.categories)) return undefined
+  return {
+    categories: breakdown.categories.filter(isRecord).map(({ name, tokens, kind }) => ({ name, tokens, kind })),
+    autoCompactThreshold: breakdown.autoCompactThreshold,
+    isAutoCompactEnabled: breakdown.isAutoCompactEnabled,
+  }
+}
+
+/**
+ * The usage a turn.complete report carries: the host's session usage with
+ * its breakdown trimmed (see trimBreakdown) and the session's model id added
+ * when known. Anything that is not a usage record passes through.
+ * @param {unknown} usage
+ * @param {unknown} model
+ * @returns {unknown}
+ */
+export function usageReport(usage, model) {
+  if (!isRecord(usage)) return usage
+  const out = { ...usage }
+  if (isRecord(usage.context)) {
+    const { breakdown, ...context } = usage.context
+    const trimmed = trimBreakdown(breakdown)
+    out.context = trimmed === undefined ? context : { ...context, breakdown: trimmed }
+  }
+  if (typeof model === 'string' && model !== '') out.model = model
+  return out
+}
+
+/**
  * How the mod answers a fork consult's tool call, from $.model.fork's
  * result: the reply under a header naming the model and its tokens
  * (in/out/cache-read), or a deny (an error result for the model) naming why
