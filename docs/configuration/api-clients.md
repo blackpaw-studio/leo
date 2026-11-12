@@ -156,18 +156,30 @@ one omits it, and every value is raw (no formatting, no thresholds).
 
 | Field | Meaning | Source | Harness |
 |---|---|---|---|
-| `session_id`, `session`, `incarnation` | token and cost totals | bridge turn reports | claude |
-| `context {tokens, window, percent}` | context window fill | host `usage()` | claude |
+| `session_id`, `session`, `incarnation` | token and cost totals (`cost_usd` is omitted when the harness reports no cost) | bridge turn reports; codex: the rollout's token counts | claude, codex |
+| `context {tokens, window, percent}` | context window fill | host `usage()`; codex: the last request's `total_tokens` over `model_context_window` (the codex TUI's own figure, no baseline) | claude, codex |
 | `context.breakdown {system, tools, mcp, memory, messages}` | token estimate per category (`used` rows of the host's `/context` summary) | host `usage({breakdown:'summary'})` | claude |
 | `context.compact_at` | auto-compact threshold as a fraction of the window; omitted when auto-compact is off | same summary, threshold ÷ window | claude |
-| `model` | model the session observed (the `Agent.model` field stays the configured one) | host `session.model()` | claude |
-| `effort` | thinking effort of the main loop | bridge `effort` reports | claude |
-| `rate_limits [{kind: five_hour\|seven_day, percent_used, resets_at}]` | the account's limit windows (`resets_at` RFC3339 UTC, omitted when the host gave none); omitted for API-key or gateway sessions | host `usage().rateLimits` | claude |
-| `git {added, removed}` | `git diff HEAD --shortstat` of the agent's workspace, polled every 10 s | daemon | claude agents that already report bridge usage |
+| `model` | model the session observed (the `Agent.model` field stays the configured one) | host `session.model()`; codex: the rollout's `turn_context` | claude, codex |
+| `effort` | thinking effort of the main loop | bridge `effort` reports; codex: the rollout's `turn_context` | claude, codex |
+| `rate_limits [{kind: five_hour\|seven_day, percent_used, resets_at}]` | the account's limit windows (`resets_at` RFC3339 UTC, omitted when the host gave none); omitted for API-key or gateway sessions | host `usage().rateLimits`; codex: the rollout's `rate_limits`, windows mapped by length (300 min → `five_hour`, 10080 min → `seven_day`; any other window is dropped) | claude, codex |
+| `git {added, removed}` | `git diff HEAD --shortstat` of the agent's workspace, polled every 10 s | daemon | claude/codex agents with usage |
 
 `git` is read by the daemon, not the harness: one call per workspace, at most
 four at a time, 5 s timeout, `GIT_OPTIONAL_LOCKS=0`, no textconv or external diff drivers. A failed call keeps the previous value. It is absent for a
 workspace that is not a repository or has no commit yet.
+
+Codex agents report no bridge; the daemon reads usage from the agent's rollout
+file (`$CODEX_HOME/sessions/…/rollout-*-<session id>.jsonl`) every 10 s, so the
+agent's `bridge` field is absent and `cost_usd` is omitted from `session` and
+`incarnation`. The rollout is found by the session id leo stored for the agent,
+which exists only after leo delivers its first message; before that, the one
+rollout whose cwd is the agent's workspace and whose session started after
+the agent did is used (nothing when it is ambiguous, or when another agent
+already reads it; it is re-checked every minute). A codex agent shows
+nothing until its first turn. `incarnation.tokens` counts the rollout's token
+deltas stamped since the agent's current process started. `/new` typed inside
+codex leaves the stored id on the old rollout until leo next stores one.
 
 ## Reachability
 

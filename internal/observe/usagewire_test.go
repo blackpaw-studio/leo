@@ -57,3 +57,47 @@ func TestAgentUsageJSON(t *testing.T) {
 		})
 	}
 }
+
+func TestUsageTotalsJSON(t *testing.T) {
+	tests := []struct {
+		name string
+		in   UsageTotals
+		want string
+	}{
+		{"zero cost is still emitted", UsageTotals{Tokens: 5}, `{"tokens":5,"cost_usd":0}`},
+		{"a claude cost is emitted", UsageTotals{Tokens: 5, CostUSD: 1.25}, `{"tokens":5,"cost_usd":1.25}`},
+		{"unknown cost is omitted", UsageTotals{Tokens: 5, CostUnknown: true}, `{"tokens":5}`},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := json.Marshal(tc.in)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if string(got) != tc.want {
+				t.Fatalf("json = %s, want %s", got, tc.want)
+			}
+		})
+	}
+
+	t.Run("a claude payload round-trips byte-identically", func(t *testing.T) {
+		in := `{"session_id":"s","session":{"tokens":7,"cost_usd":0.5},"incarnation":{"tokens":3,"cost_usd":0}}`
+		var u AgentUsage
+		if err := json.Unmarshal([]byte(in), &u); err != nil {
+			t.Fatal(err)
+		}
+		out, err := json.Marshal(u)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if string(out) != in {
+			t.Fatalf("round trip = %s, want %s", out, in)
+		}
+	})
+
+	t.Run("stays comparable", func(t *testing.T) {
+		if (UsageTotals{Tokens: 1, CostUnknown: true}) == (UsageTotals{Tokens: 1}) {
+			t.Fatal("CostUnknown must take part in equality")
+		}
+	})
+}

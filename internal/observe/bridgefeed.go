@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"maps"
 	"math"
+	"reflect"
 	"slices"
 	"strings"
 	"sync"
@@ -80,6 +81,10 @@ type BridgeFeed struct {
 	// SetGitStats, by agent name (it comes from the agent's workspace, not
 	// its bridge). It rides on usage once the agent has any.
 	git map[string]GitStats
+	// harness is the usage of agents whose harness reports it without the
+	// bridge (codex), as last handed to SetHarnessUsage, by agent name. An
+	// agent with bridged usage shows that instead.
+	harness map[string]AgentUsage
 }
 
 // feedAgent is one bridge key's projection.
@@ -188,8 +193,18 @@ func (f *BridgeFeed) BridgeAgents() map[string]BridgeAgentState {
 	defer f.mu.Unlock()
 	// A key whose launch retired (its successor has not reported yet) is
 	// omitted.
-	for name, st := range f.boundAgentsLocked() {
+	bound := f.boundAgentsLocked()
+	for name, st := range bound {
 		out[name] = f.viewLocked(name, st)
+	}
+	for name := range f.harness {
+		if bs, ok := out[name]; ok && bs.Usage != nil {
+			continue // bridged usage wins
+		}
+		bs := out[name] // the zero state when the agent has no bridge
+		u := f.harnessUsageLocked(name)
+		bs.Usage = &u
+		out[name] = bs
 	}
 	return out
 }
@@ -694,11 +709,78 @@ func (f *BridgeFeed) SetGitStats(stats map[string]GitStats) {
 	if len(changed) == 0 {
 		return
 	}
-	for name, st := range f.boundAgentsLocked() {
-		if changed[name] && st.hasUsage {
+	bound := f.boundAgentsLocked()
+	for name := range changed {
+		switch st, isBridged := bound[name]; {
+		case isBridged && st.hasUsage:
 			f.publishUsageLocked(name, st)
+		case f.hasHarnessUsageLocked(name):
+			f.publishHarnessUsageLocked(name)
 		}
 	}
+}
+
+func (f *BridgeFeed) hasHarnessUsageLocked(name string) bool {
+	_, ok := f.harness[name]
+	return ok
+}
+
+// harnessUsageLocked is name's harness-reported usage plus its workspace git
+// stats, as its row shows it.
+func (f *BridgeFeed) harnessUsageLocked(name string) AgentUsage {
+	u := cloneUsage(f.harness[name])
+	if g, ok := f.git[name]; ok {
+		u.Git = &g
+	}
+	return u
+}
+
+func (f *BridgeFeed) publishHarnessUsageLocked(name string) {
+	f.publish(EventAgentUsage, &AgentUsagePayload{Agent: name, Usage: f.harnessUsageLocked(name)})
+}
+
+// SetHarnessUsage replaces the usage of every agent whose harness reports it
+// without the bridge (by agent name; an agent absent from usage has none) and
+// publishes agent_usage for each agent whose usage changed. An agent that
+// also has bridged usage keeps showing that, so nothing is published for it.
+// An agent that dropped out is removed without an event, as with SetGitStats.
+func (f *BridgeFeed) SetHarnessUsage(usage map[string]AgentUsage) {
+	if f == nil {
+		return
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	next := make(map[string]AgentUsage, len(usage))
+	for name, u := range usage {
+		next[name] = cloneUsage(u)
+	}
+	prev := f.harness
+	f.harness = next
+	var changed []string
+	for name, u := range next {
+		if old, ok := prev[name]; !ok || !reflect.DeepEqual(old, u) {
+			changed = append(changed, name)
+		}
+	}
+	if len(changed) == 0 {
+		return
+	}
+	bound := f.boundAgentsLocked()
+	for _, name := range changed {
+		if st, ok := bound[name]; ok && st.hasUsage {
+			continue
+		}
+		f.publishHarnessUsageLocked(name)
+	}
+}
+
+// cloneUsage copies u so a retained map cannot be changed through the
+// caller's pointers and slices.
+func cloneUsage(u AgentUsage) AgentUsage {
+	u.Context = cloneOf(u.Context)
+	u.Git = cloneOf(u.Git)
+	u.RateLimits = slices.Clone(u.RateLimits)
+	return u
 }
 
 // GitStats returns a copy of the git stats last handed to SetGitStats.
