@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"io"
 	"os"
+	"slices"
 )
 
 const (
@@ -101,7 +102,7 @@ func (t *rolloutTail) consume(buf []byte) [][]byte {
 		}
 		line := seg
 		if len(t.partial) > 0 {
-			line = append(t.partial, seg...)
+			line = slices.Concat(t.partial, seg)
 			t.partial = nil
 		}
 		if rolloutWorthDecoding(line) {
