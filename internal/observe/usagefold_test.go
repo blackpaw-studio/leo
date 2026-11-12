@@ -295,3 +295,110 @@ func TestTurnCompletePublishesUsageOnlyForObservedFieldChanges(t *testing.T) {
 		t.Fatalf("model turn: %v", eventTypes(h.pub.snapshot()))
 	}
 }
+
+func gitOf(e Event) *GitStats { return e.Payload.(*AgentUsagePayload).Usage.Git }
+
+func TestSetGitStatsPublishesUsageWithEverythingElse(t *testing.T) {
+	h := newFeedHarness(t, nil)
+	h.send(bridge.Event{Name: bridge.EventEffort, EventID: "e", Effort: "high"})
+	h.send(bridge.Event{Name: bridge.EventTurnComplete, EventID: "a", Usage: hostUsage(t, nil)})
+	h.pub.reset()
+
+	h.feed.SetGitStats(map[string]GitStats{"alice": {Added: 3, Removed: 1}})
+
+	evs := h.ofType(EventAgentUsage)
+	if len(evs) != 1 {
+		t.Fatalf("agent_usage events = %d; want 1", len(evs))
+	}
+	got := evs[0].Payload.(*AgentUsagePayload)
+	if got.Agent != "alice" || *got.Usage.Git != (GitStats{Added: 3, Removed: 1}) {
+		t.Fatalf("payload = %+v", got)
+	}
+	if got.Usage.Effort != "high" || got.Usage.Session.CostUSD != 0.25 || got.Usage.Context == nil || len(got.Usage.RateLimits) != 2 || got.Usage.Model == "" {
+		t.Fatalf("git publish lost the rest of the usage: %+v", got.Usage)
+	}
+	if u := h.usageNow(t); u.Git == nil || *u.Git != (GitStats{Added: 3, Removed: 1}) {
+		t.Fatalf("BridgeAgents usage git = %+v", u.Git)
+	}
+}
+
+func TestSetGitStatsUnchangedPublishesNothing(t *testing.T) {
+	h := newFeedHarness(t, nil)
+	h.send(bridge.Event{Name: bridge.EventTurnComplete, EventID: "a", Usage: hostUsage(t, nil)})
+	h.feed.SetGitStats(map[string]GitStats{"alice": {Added: 1}})
+	h.pub.reset()
+
+	h.feed.SetGitStats(map[string]GitStats{"alice": {Added: 1}})
+
+	if n := len(h.pub.snapshot()); n != 0 {
+		t.Fatalf("published %d events for an unchanged map", n)
+	}
+}
+
+func TestSetGitStatsRemovalPublishesOnce(t *testing.T) {
+	h := newFeedHarness(t, nil)
+	h.send(bridge.Event{Name: bridge.EventTurnComplete, EventID: "a", Usage: hostUsage(t, nil)})
+	h.feed.SetGitStats(map[string]GitStats{"alice": {Added: 1}})
+	h.pub.reset()
+
+	h.feed.SetGitStats(map[string]GitStats{})
+	h.feed.SetGitStats(nil)
+
+	evs := h.ofType(EventAgentUsage)
+	if len(evs) != 1 || gitOf(evs[0]) != nil {
+		t.Fatalf("removal events = %d, git = %v; want one without git", len(evs), evs)
+	}
+	if u := h.usageNow(t); u.Git != nil {
+		t.Fatalf("git still on usage: %+v", u.Git)
+	}
+}
+
+func TestBridgeReportsKeepCurrentGit(t *testing.T) {
+	h := newFeedHarness(t, nil)
+	h.send(bridge.Event{Name: bridge.EventTurnComplete, EventID: "a", Usage: hostUsage(t, nil)})
+	h.feed.SetGitStats(map[string]GitStats{"alice": {Added: 5, Removed: 2}})
+	h.pub.reset()
+
+	h.send(bridge.Event{Name: bridge.EventSessionEnd, EventID: "b", Usage: hostUsage(t, map[string]any{"cost": map[string]any{"usd": 0.9}})})
+	h.send(bridge.Event{Name: bridge.EventEffort, EventID: "c", Effort: "max"})
+
+	evs := h.ofType(EventAgentUsage)
+	if len(evs) != 2 {
+		t.Fatalf("agent_usage events = %d", len(evs))
+	}
+	for i, e := range evs {
+		if g := gitOf(e); g == nil || *g != (GitStats{Added: 5, Removed: 2}) {
+			t.Fatalf("event %d git = %v; want the current stats", i, g)
+		}
+	}
+}
+
+func TestSetGitStatsWithoutBridgeUsageIsHeldNotPublished(t *testing.T) {
+	h := newFeedHarness(t, nil)
+
+	h.feed.SetGitStats(map[string]GitStats{"alice": {Added: 4}, "codex-agent": {Added: 9}})
+
+	if n := len(h.pub.snapshot()); n != 0 {
+		t.Fatalf("published %d events for agents with no bridge usage", n)
+	}
+	if got := h.feed.GitStats(); got["alice"] != (GitStats{Added: 4}) {
+		t.Fatalf("GitStats() = %v; want the held map", got)
+	}
+	// Once bridge usage exists it carries what was held.
+	h.send(bridge.Event{Name: bridge.EventTurnComplete, EventID: "a", Usage: hostUsage(t, nil)})
+	if u := h.usageNow(t); u.Git == nil || u.Git.Added != 4 {
+		t.Fatalf("usage git = %+v", u.Git)
+	}
+}
+
+func TestBridgeAgentsGitDoesNotAliasHeldMap(t *testing.T) {
+	h := newFeedHarness(t, nil)
+	h.send(bridge.Event{Name: bridge.EventTurnComplete, EventID: "a", Usage: hostUsage(t, nil)})
+	in := map[string]GitStats{"alice": {Added: 1}}
+	h.feed.SetGitStats(in)
+	in["alice"] = GitStats{Added: 99}
+	h.usageNow(t).Git.Added = 77
+	if got := h.usageNow(t).Git.Added; got != 1 {
+		t.Fatalf("held git = %d; caller mutation leaked", got)
+	}
+}

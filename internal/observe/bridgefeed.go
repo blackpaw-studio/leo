@@ -3,6 +3,7 @@ package observe
 import (
 	"crypto/sha256"
 	"encoding/json"
+	"maps"
 	"math"
 	"slices"
 	"strings"
@@ -75,6 +76,10 @@ type BridgeFeed struct {
 
 	mu     sync.Mutex
 	agents map[string]*feedAgent // by bridge key
+	// git is each agent's uncommitted change size as last handed to
+	// SetGitStats, by agent name (it comes from the agent's workspace, not
+	// its bridge). It rides on usage once the agent has any.
+	git map[string]GitStats
 }
 
 // feedAgent is one bridge key's projection.
@@ -179,24 +184,10 @@ func (f *BridgeFeed) BridgeAgents() map[string]BridgeAgentState {
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	owned := map[string]*feedAgent{}
-	for key, st := range f.agents {
-		name, ok := f.resolve.AgentForKey(key)
-		if !ok || name == "" {
-			st.cancelTrailing()
-			delete(f.agents, key)
-			continue
-		}
-		if !f.boundLocked(st) {
-			// Its launch retired; its successor has not reported yet.
-			continue
-		}
-		if cur, taken := owned[name]; !taken || st.gen > cur.gen {
-			owned[name] = st
-		}
-	}
-	for name, st := range owned {
-		out[name] = f.viewLocked(st)
+	// A key whose launch retired (its successor has not reported yet) is
+	// omitted.
+	for name, st := range f.boundAgentsLocked() {
+		out[name] = f.viewLocked(name, st)
 	}
 	return out
 }
@@ -207,13 +198,13 @@ func (f *BridgeFeed) boundLocked(st *feedAgent) bool {
 	return f.attention == nil || f.attention.IsBoundLaunch(st.key, st.launch)
 }
 
-func (f *BridgeFeed) viewLocked(st *feedAgent) BridgeAgentState {
+func (f *BridgeFeed) viewLocked(name string, st *feedAgent) BridgeAgentState {
 	bs := BridgeAgentState{Bridge: BridgeAbsent, Subagents: st.subagents, Reason: cloneOf(st.reason), CurrentAction: cloneOf(st.action)}
 	if f.connected != nil && f.connected(st.key) {
 		bs.Bridge = BridgeConnected
 	}
 	if st.hasUsage {
-		u := st.usage()
+		u := f.usageLocked(name, st)
 		bs.Usage = &u
 	}
 	return bs
@@ -294,7 +285,7 @@ func (f *BridgeFeed) OnBridgeEvent(ev bridge.Event) {
 		}
 	}
 	if st.applyUsage(ev.Usage) || usageChanged {
-		f.publish(EventAgentUsage, &AgentUsagePayload{Agent: name, Usage: st.usage()})
+		f.publishUsageLocked(name, st)
 	}
 }
 
@@ -322,7 +313,7 @@ func (f *BridgeFeed) turnCompleteLocked(name string, st *feedAgent, ev bridge.Ev
 	if observedChanged {
 		// Cost and context ride the turn event; what the turn event cannot
 		// carry (model, rate limits) is published as usage.
-		f.publish(EventAgentUsage, &AgentUsagePayload{Agent: name, Usage: st.usage()})
+		f.publishUsageLocked(name, st)
 	}
 	f.attention.AdvanceBridge(st.key, st.launch, AttentionFinished)
 }
@@ -658,6 +649,89 @@ func (st *feedAgent) foldUsage(raw json.RawMessage) (changed bool, cost float64,
 		st.hasUsage = true
 	}
 	return changed, cost, hasCost
+}
+
+// usageLocked is st's usage as agent name's row shows it: what the bridge
+// reported plus the agent's workspace git stats.
+func (f *BridgeFeed) usageLocked(name string, st *feedAgent) AgentUsage {
+	u := st.usage()
+	if g, ok := f.git[name]; ok {
+		u.Git = &g
+	}
+	return u
+}
+
+func (f *BridgeFeed) publishUsageLocked(name string, st *feedAgent) {
+	f.publish(EventAgentUsage, &AgentUsagePayload{Agent: name, Usage: f.usageLocked(name, st)})
+}
+
+// SetGitStats replaces every agent's git stats (by agent name; an agent
+// absent from stats has none) and publishes agent_usage for each agent whose
+// stats changed and that already has usage. Stats for an agent without usage
+// are held, and ride on its first.
+func (f *BridgeFeed) SetGitStats(stats map[string]GitStats) {
+	if f == nil {
+		return
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	next := maps.Clone(stats)
+	prev := f.git
+	f.git = next
+	changed := map[string]bool{}
+	for name, g := range next {
+		if old, ok := prev[name]; !ok || old != g {
+			changed[name] = true
+		}
+	}
+	for name := range prev {
+		if _, ok := next[name]; !ok {
+			changed[name] = true
+		}
+	}
+	if len(changed) == 0 {
+		return
+	}
+	for name, st := range f.boundAgentsLocked() {
+		if changed[name] && st.hasUsage {
+			f.publishUsageLocked(name, st)
+		}
+	}
+}
+
+// GitStats returns a copy of the git stats last handed to SetGitStats.
+func (f *BridgeFeed) GitStats() map[string]GitStats {
+	if f == nil {
+		return nil
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return maps.Clone(f.git)
+}
+
+// boundAgentsLocked is each live agent's current projection by name, as
+// BridgeAgents resolves it (the newer launch wins a name two keys briefly
+// share; unresolvable keys are dropped).
+func (f *BridgeFeed) boundAgentsLocked() map[string]*feedAgent {
+	owned := map[string]*feedAgent{}
+	if f.resolve == nil {
+		return owned
+	}
+	for key, st := range f.agents {
+		name, ok := f.resolve.AgentForKey(key)
+		if !ok || name == "" {
+			st.cancelTrailing()
+			delete(f.agents, key)
+			continue
+		}
+		if !f.boundLocked(st) {
+			continue
+		}
+		if cur, taken := owned[name]; !taken || st.gen > cur.gen {
+			owned[name] = st
+		}
+	}
+	return owned
 }
 
 func (st *feedAgent) usage() AgentUsage {
