@@ -4,6 +4,13 @@ All notable user-visible changes to Leo are documented here.
 
 ## [Unreleased]
 
+### Added
+
+- **`leo agent shell [--] <name>`** opens a login shell in the agent's
+  workspace, locally or over `--host` (`ssh -tt`), and exits with the shell's
+  status. Unknown and moved agents are refused. Advertised as the
+  `agent_shell` feature.
+
 ### Fixed
 
 - **Managed installs now start with the web listener on.** The default

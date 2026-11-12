@@ -12,6 +12,7 @@ leo agent spawn <template> --repo <name> --name <n>                # spawn with 
 leo agent spawn <template> --repo <owner/repo> --worktree <branch> # spawn into a dedicated git worktree
 leo agent worktree <agent> <branch>                                # spawn a worktree agent branched off an existing agent
 leo agent attach <name> [--cc] [--dispatch-placement P]           # attach to the agent's tmux session
+leo agent shell [--] <name>                                        # login shell in the agent's workspace
 leo agent session-name <query>                                     # print the tmux session name
 leo agent stop <name>                                              # stop a running agent — always dormant, never deletes anything
 leo agent start <name>                                             # start a dormant agent, rejoining its prior conversation
@@ -20,7 +21,7 @@ leo agent delete <name> [--delete-branch]                          # delete a st
 leo agent logs <name> [-n LINES] [-f]                              # tail the agent's pane output
 ```
 
-`<name>` for `attach`, `stop`, `reset`, and `logs` accepts shorthand — see [Shorthand Resolution](#shorthand-resolution) below. `start` and `delete` take the canonical name only — the shorthand resolver only matches *live* agents, and both a dormant agent (`start`'s target) and a stopped agent (`delete`'s target) are not live. `session-name` is the explicit resolver.
+`<name>` for `attach`, `shell`, `stop`, `reset`, and `logs` accepts shorthand — see [Shorthand Resolution](#shorthand-resolution) below. `start` and `delete` take the canonical name only — the shorthand resolver only matches *live* agents, and both a dormant agent (`start`'s target) and a stopped agent (`delete`'s target) are not live. `session-name` is the explicit resolver.
 
 ## Flags
 
@@ -205,6 +206,19 @@ does the attach, so `--cc` then runs `ssh -tt -e none <host> leo agent attach
 Detach with the normal tmux prefix + `d` (default: `C-b d`). The agent keeps
 running. See [tmux config](../guides/tmux-config.md) for deeper detail on the
 dedicated socket and recommended bindings (tmux 3.2+).
+
+### `leo agent shell [--] <name>`
+
+Open an interactive login shell (`$SHELL -l`, else the account's passwd shell, else `/bin/sh`) with the agent's workspace as its working directory. Locally the shell replaces the `leo` process, so its exit status is the command's. `TMUX` and `TMUX_PANE` are dropped from its environment, as for agent panes.
+
+With `--host` it runs `ssh -tt <host> <leo_path> agent shell --host localhost -- '<name>'`, the same transport `attach` uses, and exits with the remote shell's status. `<name>` accepts shorthand and may follow `--`.
+
+The command refuses, with a nonzero exit, an unknown agent, an agent that moved to another host (the message names the host), and an agent whose workspace is unset, missing or not a directory. A stopped agent is fine. The daemon advertises the capability as the `agent_shell` feature (event-stream `hello` and `/version`), so a client can tell whether a host's leo has the command.
+
+```bash
+leo agent shell fetch
+leo --host prod agent shell -- fetch
+```
 
 ### `leo agent session-name <query>`
 
