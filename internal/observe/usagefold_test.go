@@ -226,3 +226,72 @@ func TestBridgeAgentsUsageDoesNotAliasRateLimits(t *testing.T) {
 		t.Fatalf("caller mutation reached the feed's state: %v", got)
 	}
 }
+
+func TestBridgeFeedEffort(t *testing.T) {
+	h := newFeedHarness(t, nil)
+
+	h.send(bridge.Event{Name: bridge.EventEffort, EventID: "e1", Effort: "high"})
+	if got := h.usageNow(t).Effort; got != "high" {
+		t.Fatalf("effort = %q", got)
+	}
+	if n := len(h.ofType(EventAgentUsage)); n != 1 {
+		t.Fatalf("agent_usage events = %d after the first effort", n)
+	}
+
+	h.send(bridge.Event{Name: bridge.EventEffort, EventID: "e2", Effort: "high"})
+	if n := len(h.ofType(EventAgentUsage)); n != 1 {
+		t.Fatalf("agent_usage events = %d; a repeated effort must publish nothing", n)
+	}
+
+	h.send(bridge.Event{Name: bridge.EventEffort, EventID: "e3", Effort: "max"})
+	if n := len(h.ofType(EventAgentUsage)); n != 2 || h.usageNow(t).Effort != "max" {
+		t.Fatalf("effort change: events=%d usage=%+v", n, h.usageNow(t))
+	}
+
+	// A relaunch (new launch of the key) forgets it: the new process has not
+	// said what effort it runs at.
+	h.store.BindBridgeKey("alice-key", "alice-key-L2", "alice")
+	h.send(bridge.Event{Name: bridge.ReportHello, Gen: 2, LaunchID: "alice-key-L2"})
+	if got := h.usageNow(t).Effort; got != "" {
+		t.Fatalf("effort = %q after a relaunch; want cleared", got)
+	}
+	evs := h.ofType(EventAgentUsage)
+	if last := evs[len(evs)-1].Payload.(*AgentUsagePayload); last.Usage.Effort != "" {
+		t.Fatalf("relaunch published stale effort %q", last.Usage.Effort)
+	}
+}
+
+func TestTurnCompletePublishesUsageOnlyForObservedFieldChanges(t *testing.T) {
+	limits := func(pct float64) []map[string]any {
+		return []map[string]any{{"kind": "five_hour", "percentUsed": pct, "resetsAt": "2026-11-12T05:00:00Z"}}
+	}
+	h := newFeedHarness(t, nil)
+
+	// First report brings a model and limits: both events.
+	h.send(bridge.Event{Name: bridge.EventTurnComplete, EventID: "a", Usage: hostUsage(t, map[string]any{"rateLimits": limits(10)})})
+	if len(h.ofType(EventAgentTurnCompleted)) != 1 || len(h.ofType(EventAgentUsage)) != 1 {
+		t.Fatalf("first turn: %v", eventTypes(h.pub.snapshot()))
+	}
+
+	// Cost and context move, nothing observed does: the turn event alone.
+	h.send(bridge.Event{Name: bridge.EventTurnComplete, EventID: "b", Usage: hostUsage(t, map[string]any{"rateLimits": limits(10), "cost": map[string]any{"usd": 0.5}})})
+	if len(h.ofType(EventAgentTurnCompleted)) != 2 || len(h.ofType(EventAgentUsage)) != 1 {
+		t.Fatalf("cost-only turn: %v", eventTypes(h.pub.snapshot()))
+	}
+
+	// New limits: both again, and the usage event carries them.
+	h.send(bridge.Event{Name: bridge.EventTurnComplete, EventID: "c", Usage: hostUsage(t, map[string]any{"rateLimits": limits(11)})})
+	usage := h.ofType(EventAgentUsage)
+	if len(h.ofType(EventAgentTurnCompleted)) != 3 || len(usage) != 2 {
+		t.Fatalf("limits turn: %v", eventTypes(h.pub.snapshot()))
+	}
+	if got := usage[1].Payload.(*AgentUsagePayload).Usage.RateLimits[0].PercentUsed; got != 11 {
+		t.Fatalf("published percent = %v", got)
+	}
+
+	// A new model: both.
+	h.send(bridge.Event{Name: bridge.EventTurnComplete, EventID: "d", Usage: hostUsage(t, map[string]any{"rateLimits": limits(11), "model": "claude-sonnet-5-5"})})
+	if len(h.ofType(EventAgentUsage)) != 3 {
+		t.Fatalf("model turn: %v", eventTypes(h.pub.snapshot()))
+	}
+}

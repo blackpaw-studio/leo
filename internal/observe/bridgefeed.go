@@ -287,6 +287,11 @@ func (f *BridgeFeed) OnBridgeEvent(ev bridge.Event) {
 		}
 	case bridge.EventCompact:
 		f.compactLocked(name, st, ev.Compact)
+	case bridge.EventEffort:
+		if ev.Effort != "" && ev.Effort != st.effort {
+			st.effort, st.hasUsage = ev.Effort, true
+			usageChanged = true
+		}
 	}
 	if st.applyUsage(ev.Usage) || usageChanged {
 		f.publish(EventAgentUsage, &AgentUsagePayload{Agent: name, Usage: st.usage()})
@@ -303,14 +308,22 @@ func (f *BridgeFeed) turnCompleteLocked(name string, st *feedAgent, ev bridge.Ev
 		p.Tokens = TurnTokens{Input: t.Input, Output: t.Output, CacheRead: t.CacheRead, CacheCreation: t.CacheCreation}
 		st.addTokens(addSaturating(addSaturating(t.Input, t.Output), addSaturating(t.CacheRead, t.CacheCreation)))
 	}
+	observedChanged := false
 	if len(ev.Usage) > 0 {
+		model, limits := st.model, st.rateLimits
 		_, cost, ok := st.foldUsage(ev.Usage)
 		if ok {
 			p.CostUSD = &cost
 		}
 		p.Context = cloneOf(st.context)
+		observedChanged = st.model != model || !equalRateLimits(st.rateLimits, limits)
 	}
 	f.publish(EventAgentTurnCompleted, p)
+	if observedChanged {
+		// Cost and context ride the turn event; what the turn event cannot
+		// carry (model, rate limits) is published as usage.
+		f.publish(EventAgentUsage, &AgentUsagePayload{Agent: name, Usage: st.usage()})
+	}
 	f.attention.AdvanceBridge(st.key, st.launch, AttentionFinished)
 }
 
