@@ -28,10 +28,12 @@ func RolloutPath(home, id string) string {
 // day before since onward (codex files a rollout under the day it started, so
 // older directories hold older sessions). matches counts every rollout that
 // qualified; path and id are the newest's. The day of slack covers a rollout
-// started before midnight and a directory dated in another zone.
+// started before midnight and a directory dated in another zone. The
+// session itself must have started at/after since: a session resumed into the
+// workspace keeps writing to an older rollout, which is not this agent's.
 func LatestRolloutFor(home, workspace string, since time.Time) (path, id string, matches int) {
 	cutoff := since.AddDate(0, 0, -1)
-	best, matches := scanRollouts(filepath.Join(home, "sessions"), workspace, since, func(rel []string) bool {
+	best, matches := scanRollouts(filepath.Join(home, "sessions"), workspace, since, since, func(rel []string) bool {
 		return dateDirBefore(rel, cutoff)
 	})
 	return best.path, best.id, matches
@@ -43,9 +45,11 @@ type rolloutHit struct {
 }
 
 // scanRollouts walks root for rollouts modified at/after since whose cwd is
-// workspace, returning the newest and how many matched. skipDir, when set, is
-// asked about each directory (by its path parts below root) and prunes it.
-func scanRollouts(root, workspace string, since time.Time, skipDir func(rel []string) bool) (best rolloutHit, matches int) {
+// workspace, returning the newest and how many matched. When startedSince is
+// set the session must also have started at/after it (a rollout without a
+// readable start does not count). skipDir, when set, is asked about each
+// directory (by its path parts below root) and prunes it.
+func scanRollouts(root, workspace string, since, startedSince time.Time, skipDir func(rel []string) bool) (best rolloutHit, matches int) {
 	_ = filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return nil //nolint:nilerr // unreadable entries are skipped, not fatal
@@ -65,8 +69,11 @@ func scanRollouts(root, workspace string, since time.Time, skipDir func(rel []st
 		if err != nil || info.ModTime().Before(since) {
 			return nil
 		}
-		id, cwd, ok := readRolloutMeta(path)
+		id, cwd, startedAt, ok := readRolloutMeta(path)
 		if !ok || !harness.SamePath(cwd, workspace) {
+			return nil
+		}
+		if !startedSince.IsZero() && (startedAt.IsZero() || startedAt.Before(startedSince)) {
 			return nil
 		}
 		matches++

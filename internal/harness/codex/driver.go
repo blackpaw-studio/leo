@@ -75,10 +75,23 @@ func recoverQuickExitArgs(args []string) ([]string, harness.QuickExitAction) {
 
 // rolloutMeta is the shape of a rollout file's first line.
 type rolloutMeta struct {
-	Payload struct {
-		ID  string `json:"id"`
-		Cwd string `json:"cwd"`
+	Timestamp string `json:"timestamp"`
+	Payload   struct {
+		ID        string `json:"id"`
+		Cwd       string `json:"cwd"`
+		Timestamp string `json:"timestamp"`
 	} `json:"payload"`
+}
+
+// startedAt is when the session began: the payload's timestamp, else the
+// line's; zero when neither parses.
+func (m rolloutMeta) startedAt() time.Time {
+	for _, raw := range []string{m.Payload.Timestamp, m.Timestamp} {
+		if at, err := time.Parse(time.RFC3339, raw); err == nil {
+			return at
+		}
+	}
+	return time.Time{}
 }
 
 // discoverSessionID finds the newest rollout created at/after `since` whose
@@ -87,29 +100,30 @@ type rolloutMeta struct {
 // sharing a workspace can race here — newest wins and a warning is logged;
 // the residual ambiguity is accepted (see spec Risks).
 func discoverSessionID(_ context.Context, h harness.SessionHandle, since time.Time) (string, error) {
-	best, matches := scanRollouts(filepath.Join(CodexHome(h.Env), "sessions"), h.Workspace, since, nil)
+	best, matches := scanRollouts(filepath.Join(CodexHome(h.Env), "sessions"), h.Workspace, since, time.Time{}, nil)
 	if matches > 1 {
 		log.Printf("codex: %d rollouts match workspace %s since %s; using newest (%s)", matches, h.Workspace, since.Format(time.RFC3339), best.id)
 	}
 	return best.id, nil
 }
 
-// readRolloutMeta parses a rollout file's first line for the session id and
-// cwd. ok=false on any parse trouble — discovery just keeps polling.
-func readRolloutMeta(path string) (id, cwd string, ok bool) {
+// readRolloutMeta parses a rollout file's first line for the session id, cwd
+// and start time (zero when unreadable). ok=false on any parse trouble —
+// discovery just keeps polling.
+func readRolloutMeta(path string) (id, cwd string, startedAt time.Time, ok bool) {
 	f, err := os.Open(path) // #nosec G304 -- path enumerated from codex's own sessions dir
 	if err != nil {
-		return "", "", false
+		return "", "", time.Time{}, false
 	}
 	defer f.Close()
 	sc := bufio.NewScanner(f)
 	sc.Buffer(make([]byte, 0, 64*1024), 1024*1024)
 	if !sc.Scan() {
-		return "", "", false
+		return "", "", time.Time{}, false
 	}
 	var meta rolloutMeta
 	if json.Unmarshal(sc.Bytes(), &meta) != nil {
-		return "", "", false
+		return "", "", time.Time{}, false
 	}
-	return meta.Payload.ID, meta.Payload.Cwd, meta.Payload.ID != "" && meta.Payload.Cwd != ""
+	return meta.Payload.ID, meta.Payload.Cwd, meta.startedAt(), meta.Payload.ID != "" && meta.Payload.Cwd != ""
 }

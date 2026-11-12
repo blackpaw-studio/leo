@@ -1,7 +1,9 @@
 package codex
 
 import (
+	"os"
 	"path/filepath"
+	"strconv"
 	"testing"
 	"time"
 )
@@ -59,5 +61,38 @@ func TestLatestRolloutFor_DateDirsOnly(t *testing.T) {
 
 	if _, id, n = LatestRolloutFor(t.TempDir(), ws, since); id != "" || n != 0 {
 		t.Fatalf("no sessions dir = %q %d", id, n)
+	}
+}
+
+func TestLatestRolloutFor_SessionStartedBeforeSinceIsNotMatched(t *testing.T) {
+	home := t.TempDir()
+	ws := t.TempDir()
+	since := time.Date(2026, 11, 12, 12, 0, 0, 0, time.Local)
+	dir := dateDir(home, since)
+
+	// A session started an hour before the agent, still being written to: a
+	// fresh mtime, the right cwd, but not this agent's.
+	old := filepath.Join(dir, "rollout-old-uuid-old.jsonl")
+	writeRollout(t, old, "uuid-old", ws, since.Add(-time.Hour))
+	if err := os.Chtimes(old, since.Add(5*time.Minute), since.Add(5*time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	if _, id, n := LatestRolloutFor(home, ws, since); id != "" || n != 0 {
+		t.Fatalf("matched a session that started before since: %q %d", id, n)
+	}
+
+	// One that started after it does match.
+	writeRollout(t, filepath.Join(dir, "rollout-new-uuid-new.jsonl"), "uuid-new", ws, since.Add(time.Minute))
+	if _, id, n := LatestRolloutFor(home, ws, since); id != "uuid-new" || n != 1 {
+		t.Fatalf("LatestRolloutFor = %q %d, want uuid-new once", id, n)
+	}
+
+	// An unreadable timestamp is not attributed either.
+	bad := filepath.Join(dir, "rollout-bad-uuid-bad.jsonl")
+	if err := os.WriteFile(bad, []byte(`{"type":"session_meta","payload":{"id":"uuid-bad","cwd":`+strconv.Quote(ws)+`}}`+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, n := LatestRolloutFor(home, ws, since); n != 1 {
+		t.Fatalf("matches = %d, a rollout with no session_meta timestamp must not count", n)
 	}
 }
