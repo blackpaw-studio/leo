@@ -290,3 +290,18 @@ func TestBuildSnapshotCarriesObservedUsageFields(t *testing.T) {
 		t.Fatalf("git = %+v", wire.Usage.Git)
 	}
 }
+
+func TestAgentGitListerSkipsAgentsWithoutALiveWorkspace(t *testing.T) {
+	l := agentGitLister{list: func() []agent.Record {
+		return []agent.Record{
+			{Name: "live", Status: "running", Workspace: "/ws/live"},
+			{Name: "suspended", Status: "suspended", Workspace: "/ws/s"},
+			{Name: "stopped", Status: "stopped", Workspace: "/ws/x"},
+			{Name: "noworkspace", Status: "running"},
+		}
+	}}
+	got := l.GitAgents()
+	if len(got) != 1 || got[0] != (observe.GitAgent{Name: "live", Workspace: "/ws/live"}) {
+		t.Fatalf("agents = %+v", got)
+	}
+}

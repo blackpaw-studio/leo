@@ -170,6 +170,7 @@ func (s *Server) setupConsultRuntime(opts Options, resolveCallerSession func(str
 		prune = s.consults.Prune
 	}
 	loopCtx, cancel := context.WithCancel(opts.ParentContext)
+	gitDone := s.startGitPoller(loopCtx)
 	done := make(chan struct{})
 	placementDone := make(chan struct{})
 	// reconciled closes once the restart reconcile has exited, or once
@@ -191,6 +192,7 @@ func (s *Server) setupConsultRuntime(opts Options, resolveCallerSession func(str
 		reconcileOnce.Do(func() { close(reconciled) })
 		<-done
 		<-placementDone
+		<-gitDone
 		<-reconciled
 	}
 	// A placement poll waits on tmux moves, so it gets a loop of its own

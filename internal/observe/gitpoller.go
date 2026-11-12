@@ -55,6 +55,10 @@ type GitPoller struct {
 	opts   GitPollerOptions
 
 	polling atomic.Bool
+	// logged holds the failures the previous poll reported, so one that
+	// persists (git missing from PATH) is logged once, not every tick. Only
+	// the poll holding the polling flag touches it.
+	logged map[string]bool
 }
 
 // NewGitPoller builds a poller over lister, running git through runner and
@@ -136,9 +140,16 @@ func (p *GitPoller) Tick(ctx context.Context) bool {
 		}()
 	}
 	wg.Wait()
-	for _, err := range errs { // logged here so Logf is never called concurrently
-		p.opts.Logf("%v", err)
+	// Logged here so Logf is never called concurrently.
+	nowLogged := make(map[string]bool, len(errs))
+	for _, err := range errs {
+		msg := err.Error()
+		nowLogged[msg] = true
+		if !p.logged[msg] {
+			p.opts.Logf("%s", msg)
+		}
 	}
+	p.logged = nowLogged
 	p.sink.SetGitStats(out)
 	return true
 }

@@ -210,3 +210,30 @@ func TestGitPollerRunPollsEachTickUntilCancelled(t *testing.T) {
 		t.Fatalf("calls = %d; want at least one", n)
 	}
 }
+
+func TestGitPollerLogsAPersistentFailureOnce(t *testing.T) {
+	var logged []string
+	r := &workspaceRunner{errFor: map[string]error{"/ws/bad": errors.New("boom")}}
+	p := NewGitPoller(fakeAgentLister{{"bad", "/ws/bad"}}, r, &recordingSink{},
+		GitPollerOptions{Logf: func(f string, a ...any) { logged = append(logged, f) }})
+
+	for i := 0; i < 3; i++ {
+		p.Tick(context.Background())
+	}
+	if len(logged) != 1 {
+		t.Fatalf("logged %d times over 3 ticks; want once", len(logged))
+	}
+
+	// Recovery then a new failure logs again.
+	r.mu.Lock()
+	r.errFor = nil
+	r.mu.Unlock()
+	p.Tick(context.Background())
+	r.mu.Lock()
+	r.errFor = map[string]error{"/ws/bad": errors.New("boom")}
+	r.mu.Unlock()
+	p.Tick(context.Background())
+	if len(logged) != 2 {
+		t.Fatalf("logged %d times; want the recurrence logged", len(logged))
+	}
+}
