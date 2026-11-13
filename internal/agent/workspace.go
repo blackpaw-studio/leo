@@ -56,8 +56,51 @@ func expandTilde(p string) string {
 	return filepath.Join(home, strings.TrimPrefix(p, "~"))
 }
 
+// isSharedRoot reports whether path is the shared agents root by filesystem
+// identity, so symlinks, relative paths, /var vs /private/var style aliases
+// and case aliases cannot slip past a string comparison.
 func isSharedRoot(path string) bool {
-	return filepath.Clean(expandTilde(path)) == filepath.Clean(SharedAgentsRoot())
+	return sameLocation(path, SharedAgentsRoot())
+}
+
+// anchoredPath is an absolute path split into its longest existing ancestor
+// (symlinks resolved) and the not-yet-existing remainder beneath it.
+type anchoredPath struct {
+	anchor string
+	rest   string
+	info   os.FileInfo
+}
+
+func anchor(path string) (anchoredPath, bool) {
+	abs, err := filepath.Abs(expandTilde(path))
+	if err != nil {
+		return anchoredPath{}, false
+	}
+	rest := ""
+	for cur := abs; ; {
+		if resolved, err := filepath.EvalSymlinks(cur); err == nil {
+			if fi, err := os.Stat(resolved); err == nil {
+				return anchoredPath{anchor: resolved, rest: rest, info: fi}, true
+			}
+		}
+		parent := filepath.Dir(cur)
+		if parent == cur {
+			return anchoredPath{}, false
+		}
+		rest = filepath.Join(filepath.Base(cur), rest)
+		cur = parent
+	}
+}
+
+// sameLocation compares two paths by identity: SameFile on their longest
+// existing ancestors plus an equal not-yet-existing remainder.
+func sameLocation(a, b string) bool {
+	pa, okA := anchor(a)
+	pb, okB := anchor(b)
+	if !okA || !okB {
+		return filepath.Clean(expandTilde(a)) == filepath.Clean(expandTilde(b))
+	}
+	return pa.rest == pb.rest && os.SameFile(pa.info, pb.info)
 }
 
 // CheckNotSharedRoot refuses a spawn whose final workspace is the shared
@@ -156,7 +199,7 @@ func ResolveWorkspace(tmpl config.TemplateConfig, templateName, repo, nameOverri
 			if err := validWorkspaceDirName(name); err != nil {
 				return "", "", err
 			}
-			ws = filepath.Join(filepath.Clean(expandTilde(base)), name)
+			ws = filepath.Join(SharedAgentsRoot(), name)
 		}
 		if err := os.MkdirAll(ws, 0o755); err != nil { // #nosec G301 -- agent workspaces are user-readable project dirs
 			return "", "", fmt.Errorf("creating workspace dir: %w", err)

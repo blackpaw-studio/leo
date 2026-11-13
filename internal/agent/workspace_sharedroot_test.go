@@ -127,3 +127,103 @@ func TestStartExistingSharedRootRecordStillWorks(t *testing.T) {
 		t.Fatalf("spawn call = %+v, want WorkDir %s", sup.spawnCall, root)
 	}
 }
+
+func TestSharedRootAliasesAreRefused(t *testing.T) {
+	root := fakeHome(t)
+	if err := os.MkdirAll(root, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	tmp := t.TempDir()
+	link := filepath.Join(tmp, "link")
+	if err := os.Symlink(root, link); err != nil {
+		t.Fatal(err)
+	}
+	// Relative path from a cwd inside the temp tree to the root.
+	rel, err := filepath.Rel(tmp, root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Chdir(tmp)
+
+	cases := map[string]string{
+		"symlink to root":      link,
+		"symlink with dot":     link + "/.",
+		"relative to root":     rel,
+		"dotdot through child": filepath.Join(root, "x", ".."),
+	}
+	for name, ws := range cases {
+		t.Run(name, func(t *testing.T) {
+			if err := CheckNotSharedRoot(ws); !errors.Is(err, ErrSharedRootWorkspace) {
+				t.Errorf("CheckNotSharedRoot(%q) = %v, want ErrSharedRootWorkspace", ws, err)
+			}
+			got, _, err := ResolveWorkspace(config.TemplateConfig{Workspace: ws}, "claude", "", "copilot")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if want := filepath.Join(root, "copilot"); filepath.Clean(got) != want {
+				t.Errorf("ResolveWorkspace(%q) = %q, want %q", ws, got, want)
+			}
+		})
+	}
+	if err := CheckNotSharedRoot(filepath.Join(link, "copilot")); err != nil {
+		t.Errorf("child via symlink refused: %v", err)
+	}
+}
+
+func TestSharedRootCaseAlias(t *testing.T) {
+	root := fakeHome(t)
+	if err := os.MkdirAll(root, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	alias := filepath.Join(filepath.Dir(filepath.Dir(root)), ".LEO", "agents")
+	if _, err := os.Stat(alias); err != nil {
+		t.Skip("filesystem is case-sensitive")
+	}
+	if err := CheckNotSharedRoot(alias); !errors.Is(err, ErrSharedRootWorkspace) {
+		t.Errorf("case alias: err = %v, want ErrSharedRootWorkspace", err)
+	}
+}
+
+func TestReceiveRefusesSharedRootWorkspace(t *testing.T) {
+	root := fakeHome(t)
+	if err := os.MkdirAll(root, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	m, sup, home, _ := receiveManager(t)
+	spec := ReceiveSpec{Record: arriving(root), From: "studio", At: receiveAt}
+	if err := m.Receive(context.Background(), spec); !errors.Is(err, ErrSharedRootWorkspace) {
+		t.Fatalf("Receive err = %v, want ErrSharedRootWorkspace", err)
+	}
+	if _, _, err := m.ArrivalEnv(spec); !errors.Is(err, ErrSharedRootWorkspace) {
+		t.Fatalf("ArrivalEnv err = %v, want ErrSharedRootWorkspace", err)
+	}
+	if sup.spawnCall != nil {
+		t.Fatal("agent started in the shared root")
+	}
+	if recs, _ := agentstore.Load(agentstore.FilePath(home)); len(recs) != 0 {
+		t.Fatalf("record persisted: %v", recs)
+	}
+}
+
+func TestSpawnNameCollisionGetsOwnWorkspace(t *testing.T) {
+	root := fakeHome(t)
+	home, ws, a, b := t.TempDir(), t.TempDir(), t.TempDir(), t.TempDir()
+	cfg := envTestConfig(home, ws, a, b)
+	cfg.Templates["coding"] = config.TemplateConfig{Workspace: root, Model: "sonnet"}
+	sup := &capturingSupervisor{}
+	m := envManager(cfg, sup)
+	first, err := m.Spawn(context.Background(), SpawnSpec{Template: "coding"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := m.Spawn(context.Background(), SpawnSpec{Template: "coding"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.Name == second.Name {
+		t.Fatalf("names collide: %q", first.Name)
+	}
+	if got, want := loadRec(t, home, second.Name).Workspace, filepath.Join(root, second.Name); got != want {
+		t.Errorf("second workspace = %q, want %q", got, want)
+	}
+}

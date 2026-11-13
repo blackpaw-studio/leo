@@ -723,7 +723,7 @@ func (m *Manager) spawnShared(cfg *config.Config, tmpl config.TemplateConfig, sp
 		return Record{}, err
 	}
 
-	workspace, _, err := ResolveWorkspace(tmpl, spec.Template, spec.Repo, spec.Name)
+	workspace, _, err := ResolveWorkspace(tmpl, spec.Template, spec.Repo, agentName)
 	if err != nil {
 		return Record{}, err
 	}
