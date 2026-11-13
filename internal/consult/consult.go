@@ -430,6 +430,9 @@ func (d *Dispatcher) Start(_ context.Context, cfg *config.Config, req Request) (
 	if caller == "" {
 		caller = req.Caller
 	}
+	if err := d.checkReadOnlyParent(cfg, parentID, req); err != nil {
+		return Started{}, err
+	}
 	// Admit a nested start atomically with registering it, so concurrent
 	// starts cannot overshoot the per-root cap. Held until d.runs has the run.
 	d.nestMu.Lock()

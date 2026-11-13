@@ -122,6 +122,36 @@ caller-only tools such as `leo_chat_post`: a subagent inherits its
 orchestrator's `LEO_PROCESS_NAME`, so without it the subagent would pass for
 the orchestrator. The subagent should report files to its orchestrator instead.
 
+### Read-only trees
+
+A dispatch whose role is one of the stable read-only roles (`explore`, `plan`,
+`review`, `review.*`) cannot gain write access through a child. The daemon
+refuses, with an error naming the parent's role, every nested start except
+role `explore`:
+
+- `implement`, `implement.hard`, `plan`, `review*`, and any other role are
+  refused; so is a template dispatch (no role, or the `explore` role paired with
+  another template).
+- `leo_consult` from inside such a tree is allowed only for a template that
+  some read-only role resolves to under the active profile.
+- `leo_send_dispatch` from inside such a tree may only message dispatches whose
+  own role is read-only, so a planner cannot drive an existing implementer.
+- `explore` is itself read-only, so an `explore` child (and its children) stays
+  inside the restriction at any depth.
+
+The decision uses the parent's **role** as the daemon recorded it, not its
+template (delegation profiles remap roles to templates), and walks the whole
+parent chain, so a role-less intermediate dispatch cannot launder it. Parents
+with write-capable roles (`implement*`) and top-level callers are unaffected,
+and the depth and descendant caps are unchanged.
+
+The parent is identified by the `LEO_DISPATCH_ID` of the calling process,
+which Leo's MCP server sends as `parent_dispatch_id`. A process that can reach
+the daemon API with its own credentials can omit or forge that field, so this
+stops a read-only subagent's honest tool use, not a hostile one with shell
+access. Pairing it with a read-only template (`permission_mode`, sandbox) is
+what makes the restriction a hard boundary.
+
 ## MCP tools
 
 `leo_consult(template, prompt, model?)` is for a quick second opinion. It
@@ -400,7 +430,9 @@ queue and never use a slot. Use `leo_wait` on a run ID to wait for the latest or
 the moment the wait starts, or on an explicit turn ID such as `d-…#2` to wait
 for that turn. Wait results include `turn_id`, `outcome`, `delivered`, and
 `stalled`; a turn with no hook activity for ten minutes is reported stalled on
-wait timeout, not forcibly closed.
+wait timeout, not forcibly closed. The result opens with `waited 12s (timeout
+1799s)`: the time the call actually blocked, with the limit in parentheses. A
+wait that ran to its limit reads `waited 1799s (timeout 1799s)`.
 
 A claude turn that stops while its own background work is still in flight
 (a `run_in_background` shell, a Monitor, a subagent, or a scheduled wakeup)

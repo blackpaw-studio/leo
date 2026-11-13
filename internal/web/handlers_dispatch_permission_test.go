@@ -39,6 +39,9 @@ func TestDispatchSendDecisionHTTP(t *testing.T) {
 	if code, body := call(`{"decision":"allow"}`); code != http.StatusConflict || !strings.Contains(body, "unknown dispatch") {
 		t.Fatalf("decision on unknown run: %d %s", code, body)
 	}
+	if code, body := call(`{"message":"hi","parent_dispatch_id":"../x"}`); code != http.StatusBadRequest || !strings.Contains(body, "parent_dispatch_id") {
+		t.Fatalf("malformed sender id: %d %s", code, body)
+	}
 	if code, body := call(`{"message":"hi","decision":"allow"}`); code != http.StatusBadRequest || !strings.Contains(body, "either") {
 		t.Fatalf("message+decision: %d %s", code, body)
 	}
