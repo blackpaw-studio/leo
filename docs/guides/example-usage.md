@@ -84,7 +84,7 @@ templates:
       agent: leo
 ```
 
-Start the daemon, then spawn the assistant from its own template — repo-less, so it runs directly in `workspace` and is named after the template:
+Start the daemon, then spawn the assistant from its own template — repo-less, so it runs directly in `workspace` (a dedicated directory, not the shared `~/.leo/agents` root) and is named after the template:
 
 ```bash
 leo service start --daemon     # installs launchd/systemd unit

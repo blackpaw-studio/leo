@@ -54,7 +54,7 @@ leo agent logs demo -n 100
 leo agent stop demo
 ```
 
-`--repo` is optional. Omit it to run the template directly in its own workspace, with the agent named after the template (`--name` still overrides, and a collision appends `-2`, `-3`, ...).
+`--repo` is optional. Omit it to run the template as-is — in its own `workspace` if it sets one, otherwise in `~/.leo/agents/<agent name>`, never the shared `~/.leo/agents` root — with the agent named after the template (`--name` still overrides, and a collision appends `-2`, `-3`, ...).
 
 Run these locally on the server, or from a laptop against a remote host by adding a `client.hosts` section to `leo.yaml`. See the [Remote CLI guide](remote-cli.md) and the [`leo agent` reference](../cli/agent.md).
 

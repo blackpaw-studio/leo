@@ -268,8 +268,10 @@ type SpawnSpec struct {
 	Template string // required — template name from config.Templates
 	// Repo is optional. owner/repo clones into the template workspace; a bare
 	// name reuses the template workspace under a per-name subdir; empty runs
-	// the template as-is directly in its own workspace (agent named after the
-	// template). Branch (worktree mode) requires a non-empty owner/repo.
+	// the template as-is (agent named after the template) in its dedicated
+	// workspace, or in <shared agents root>/<agent name> when the template has
+	// no dedicated workspace — never in the shared root itself.
+	// Branch (worktree mode) requires a non-empty owner/repo.
 	Repo   string
 	Name   string // optional — overrides the derived agent name
 	Branch string // optional — when non-empty, spawn in a dedicated worktree on this branch
@@ -725,6 +727,11 @@ func (m *Manager) spawnShared(cfg *config.Config, tmpl config.TemplateConfig, sp
 	if err != nil {
 		return Record{}, err
 	}
+	// Backstop for every spawn path (repo ".", explicit overrides, ...). Only
+	// spawns are refused; restore/start of existing records are untouched.
+	if err := CheckNotSharedRoot(workspace); err != nil {
+		return Record{}, err
+	}
 
 	harnessName := cfg.TemplateHarness(tmpl)
 	isClaude := harnessName == "" || harnessName == "claude"
@@ -1027,6 +1034,9 @@ func (m *Manager) spawnWorktreeCore(ctx context.Context, cfg *config.Config, tmp
 		return Record{}, err
 	}
 	layout.AgentName = agentName
+	if err := CheckNotSharedRoot(layout.WorktreePath); err != nil {
+		return Record{}, err
+	}
 
 	if p.fetch {
 		fetchCtx, cancel := context.WithTimeout(ctx, gitFetchTimeout)
@@ -1423,6 +1433,7 @@ func (m *Manager) Start(name string) error {
 		args = ResumeArgs(resolvedArgs, resumeID)
 	}
 
+	WarnIfSharedRoot(rec.Name, rec.Workspace)
 	if err := m.sup.SpawnAgent(SpawnRequest{
 		Name:       rec.Name,
 		ClaudeArgs: args,

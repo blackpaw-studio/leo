@@ -2,7 +2,9 @@ package agent
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -29,6 +31,58 @@ func BaseWorkspace(tmpl config.TemplateConfig) string {
 	}
 	home, _ := os.UserHomeDir()
 	return filepath.Join(home, ".leo", "agents")
+}
+
+// ErrSharedRootWorkspace is returned when a spawn would root an agent in the
+// shared agents directory (~/.leo/agents), which holds every repo.
+var ErrSharedRootWorkspace = errors.New("workspace is the shared agents root, which holds every repo; give the agent its own directory")
+
+// SharedAgentsRoot is the default shared directory (~/.leo/agents) that holds
+// all of a user's repos and per-agent workspaces.
+func SharedAgentsRoot() string {
+	home, _ := os.UserHomeDir()
+	return filepath.Join(home, ".leo", "agents")
+}
+
+// expandTilde resolves a leading "~" or "~/" against $HOME.
+func expandTilde(p string) string {
+	if p != "~" && !strings.HasPrefix(p, "~/") {
+		return p
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return p
+	}
+	return filepath.Join(home, strings.TrimPrefix(p, "~"))
+}
+
+func isSharedRoot(path string) bool {
+	return filepath.Clean(expandTilde(path)) == filepath.Clean(SharedAgentsRoot())
+}
+
+// CheckNotSharedRoot refuses a spawn whose final workspace is the shared
+// agents root. Restore and start of existing records deliberately skip it.
+func CheckNotSharedRoot(workspace string) error {
+	if isSharedRoot(workspace) {
+		return fmt.Errorf("%w (%s)", ErrSharedRootWorkspace, filepath.Clean(expandTilde(workspace)))
+	}
+	return nil
+}
+
+// WarnIfSharedRoot logs (never refuses) when an existing record still runs in
+// the shared agents root, so legacy agents keep working across restarts.
+func WarnIfSharedRoot(name, workspace string) {
+	if isSharedRoot(workspace) {
+		log.Printf("warning: agent %q workspace is the shared agents root (%s); re-home it to its own directory", name, workspace)
+	}
+}
+
+// validWorkspaceDirName guards the <root>/<name> join against escaping root.
+func validWorkspaceDirName(name string) error {
+	if name == "" || name == "." || name == ".." || strings.ContainsAny(name, `/\`) {
+		return fmt.Errorf("agent name %q cannot be used as a workspace directory", name)
+	}
+	return nil
 }
 
 // WorktreeRoot returns the shared root under baseWorkspace where per-agent
@@ -58,8 +112,9 @@ type WorktreeLayout struct {
 
 // ResolveWorkspace determines the workspace path and agent name for a shared
 // (non-worktree) spawn. Preserves historical behavior: owner/repo is cloned
-// into <base>/<repo-short> with `gh`; a bare name uses the base workspace
-// directly.
+// into <base>/<repo-short> with `gh`; a bare name uses <base>/<name>; an empty
+// repo uses the template's dedicated workspace as-is, or <root>/<agent name>
+// when the base is the shared agents root.
 // DeriveSharedAgentName computes the agent name for a shared-workspace spawn
 // without touching the filesystem. Separate from ResolveWorkspace so callers
 // can reserve the name in the supervisor before ResolveWorkspace does a
@@ -85,20 +140,28 @@ func DeriveSharedAgentName(templateName, repo, nameOverride string) string {
 }
 
 // ResolveWorkspace resolves the workspace and agent name for a shared spawn.
-// An empty repo resolves to the template's own base workspace (no per-repo
-// subdirectory) with the agent named after the template — see
-// DeriveSharedAgentName.
+// An empty repo resolves to the template's own dedicated workspace with the
+// agent named after the template (see DeriveSharedAgentName); if that base is
+// the shared agents root it resolves to <root>/<agent name> instead.
 func ResolveWorkspace(tmpl config.TemplateConfig, templateName, repo, nameOverride string) (workspace, agentName string, err error) {
 	base := BaseWorkspace(tmpl)
 	if repo == "" {
-		if err := os.MkdirAll(base, 0750); err != nil {
-			return "", "", fmt.Errorf("creating workspace dir: %w", err)
-		}
 		name := templateName
 		if nameOverride != "" {
 			name = nameOverride
 		}
-		return base, name, nil
+		ws := base
+		if isSharedRoot(base) {
+			// Never root a repo-less agent over every repo: give it its own dir.
+			if err := validWorkspaceDirName(name); err != nil {
+				return "", "", err
+			}
+			ws = filepath.Join(filepath.Clean(expandTilde(base)), name)
+		}
+		if err := os.MkdirAll(ws, 0o755); err != nil { // #nosec G301 -- agent workspaces are user-readable project dirs
+			return "", "", fmt.Errorf("creating workspace dir: %w", err)
+		}
+		return ws, name, nil
 	}
 	if strings.Contains(repo, "/") {
 		canonical, err := EnsureCanonical(base, repo)
