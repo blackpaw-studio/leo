@@ -89,7 +89,7 @@ leo-scratch         -         ~/agents/scratch       running  1
 
 ### `leo agent spawn <template>`
 
-Spawn a new agent from the named template. `--repo` (or the positional `[repo]` arg) is optional and takes either an `owner/repo` pair (Leo clones via `gh repo clone`) or a plain name (Leo reuses the template's configured workspace path under a per-name subdir). Omit it entirely to run the template as-is, directly in its own workspace — the agent is named after the template.
+Spawn a new agent from the named template. `--repo` (or the positional `[repo]` arg) is optional and takes either an `owner/repo` pair (Leo clones via `gh repo clone`) or a plain name (Leo reuses the template's configured workspace path under a per-name subdir). Omit it entirely to run the template as-is — the agent is named after the template. It runs in the template's own `workspace` if one is set; otherwise in `~/.leo/agents/<agent name>` (never the shared `~/.leo/agents` root, which holds all your repos). Spawning an agent whose workspace would be that shared root is refused; existing agents already there keep running.
 
 ```bash
 leo agent spawn coding                          # run the template as-is; agent named "coding"

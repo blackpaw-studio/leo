@@ -44,6 +44,9 @@ func (m *Manager) ArrivalEnv(spec ReceiveSpec) (map[string]string, *redact.Secre
 		return nil, nil, fmt.Errorf("loading config: %w", err)
 	}
 	rec := arrivedRecord(spec)
+	if err := CheckNotSharedRoot(rec.Workspace); err != nil {
+		return nil, nil, fmt.Errorf("receiving %q: %w", rec.Name, err)
+	}
 	tmpl, ok := templateOf(cfg, rec)
 	if !ok {
 		return nil, nil, &UnknownTemplateError{Name: rec.Template}
@@ -99,6 +102,11 @@ func (m *Manager) Receive(_ context.Context, spec ReceiveSpec) error {
 		return fmt.Errorf("receiving %q: an agent with that name already exists here", name)
 	}
 	rec := arrivedRecord(spec)
+	// Before anything is persisted: an arrival is a new spawn here, so it
+	// cannot take the shared root (legacy records already here stay exempt).
+	if err := CheckNotSharedRoot(rec.Workspace); err != nil {
+		return fmt.Errorf("receiving %q: %w", name, err)
+	}
 	tmpl, ok := templateOf(cfg, rec)
 	if !ok {
 		return &UnknownTemplateError{Name: rec.Template}

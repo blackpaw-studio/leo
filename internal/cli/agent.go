@@ -208,8 +208,10 @@ func newAgentSpawnCmd() *cobra.Command {
 		Long: `Spawn a new ephemeral agent from a template. Repo is optional and can be
 passed as a positional arg or via --repo. Use owner/repo to clone a canonical
 repo, a plain name to reuse the template workspace under a per-name subdir, or
-omit it entirely to run the template as-is directly in its own workspace (the
-agent is named after the template).
+omit it entirely to run the template as-is (the agent is named after the
+template) in the template's dedicated workspace — or, when the template has no
+workspace of its own, in ~/.leo/agents/<agent name>, never the shared
+~/.leo/agents root that holds every repo.
 
 When repo is slashless and matches an existing agent's short name, the CLI
 prompts the user for how to proceed: attach to the existing agent, spawn using

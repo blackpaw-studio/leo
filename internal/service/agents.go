@@ -310,6 +310,7 @@ func reserveAdoptions(sv agentSpawner, spawns []restoreSpawn) {
 // A failed spawn gives its adoption reservation back.
 func spawnRestored(homePath string, sv agentSpawner, p restoreSpawn) bool {
 	name, rec := p.spec.Name, p.rec
+	agent.WarnIfSharedRoot(name, p.spec.WorkDir)
 	if err := sv.SpawnAgent(p.spec); err != nil {
 		fmt.Fprintf(os.Stderr, "warning: failed to restore agent %q: %v\n", name, err)
 		if r, ok := sv.(adoptionReserver); ok && p.spec.Adopt {
