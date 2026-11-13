@@ -430,9 +430,17 @@ func (d *Dispatcher) Start(_ context.Context, cfg *config.Config, req Request) (
 	if caller == "" {
 		caller = req.Caller
 	}
-	if err := d.checkReadOnlyParent(cfg, parentID, req); err != nil {
+	// A parent the caller named but the daemon cannot resolve is refused, not
+	// filed as top-level: otherwise forging or losing the id would shed the
+	// read-only restriction. An empty id stays a top-level start.
+	tree, err := d.treeOf(req.ParentDispatchID)
+	if err != nil {
 		return Started{}, err
 	}
+	if err := d.checkReadOnlyParent(cfg, tree, req); err != nil {
+		return Started{}, err
+	}
+	treeAccess, readOnlyRole := treeAccessFor(req.Role, tree)
 	// Admit a nested start atomically with registering it, so concurrent
 	// starts cannot overshoot the per-root cap. Held until d.runs has the run.
 	d.nestMu.Lock()
@@ -455,7 +463,7 @@ func (d *Dispatcher) Start(_ context.Context, cfg *config.Config, req Request) (
 		ReleaseOnFinish: mode == ModeInteractive && kind == "dispatch" && ResolveReleaseOnFinish(req.Role, req.ReleaseOnFinish),
 		CallerPaneID:    req.CallerPaneID, CallerHarness: req.CallerHarness, CallerSessionID: req.CallerSessionID, CallerWindowID: req.CallerWindowID,
 		CallerBridgeKey: req.CallerBridgeKey, CallerBridgeLaunch: req.CallerBridgeLaunch,
-		SlotExempt:   exempt,
+		SlotExempt: exempt, TreeAccess: treeAccess, ReadOnlyRole: readOnlyRole,
 		Environments: cfg.DispatchEnvironmentNames(tmpl, inherited), EnvironmentsSource: envSource, InheritedEnvironments: inherited,
 	}
 	handle, err := d.recorder.Open(rec)

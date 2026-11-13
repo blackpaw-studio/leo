@@ -182,3 +182,73 @@ func TestReadOnlySenderMayOnlyMessageReadOnlyDispatches(t *testing.T) {
 		t.Fatalf("top-level sender: %v", err)
 	}
 }
+
+func TestRefusalsCarryTheStablePolicyCode(t *testing.T) {
+	d := newNestedDispatcher(t)
+	root := mustStartRole(t, d, "plan", "")
+	_, err := startRole(t, d, "implement", root.ID)
+	if err == nil || !strings.HasPrefix(err.Error(), PolicyRefusedCode+":") {
+		t.Fatalf("err = %v, want it to start with %q so callers can tell a policy refusal from an outage", err, PolicyRefusedCode+":")
+	}
+	_, err = startRole(t, d, "implement", "d-000000000000")
+	if err == nil || !strings.HasPrefix(err.Error(), PolicyRefusedCode+":") {
+		t.Fatalf("unverifiable parent err = %v, want the policy code too", err)
+	}
+}
+
+func TestUnverifiableParentIsRefusedNotTreatedAsTopLevel(t *testing.T) {
+	d := newNestedDispatcher(t)
+	for _, id := range []string{"d-000000000000", "../x", "a/b"} {
+		if _, err := startRole(t, d, "implement", id); err == nil {
+			t.Fatalf("parent %q that cannot be resolved was treated as a top-level caller", id)
+		}
+	}
+	mustStartRole(t, d, "implement", "")
+}
+
+func TestUnverifiableSenderIsRefused(t *testing.T) {
+	d := newNestedDispatcher(t)
+	builder := mustStartRole(t, d, "implement", "")
+	if err := d.CheckSendAllowed("d-000000000000", builder.ID); err == nil {
+		t.Fatal("a sender dispatch id that cannot be resolved was allowed")
+	}
+}
+
+// forget drops a run's record, as pruning does once enough newer runs end.
+func forget(d *Dispatcher, id string) {
+	d.mu.Lock()
+	delete(d.runs, id)
+	d.mu.Unlock()
+}
+
+func TestReadOnlyRestrictionSurvivesAPrunedAncestor(t *testing.T) {
+	d := newNestedDispatcher(t)
+	root := mustStartRole(t, d, "plan", "")
+	scout := mustStartRole(t, d, "explore", root.ID)
+	forget(d, root.ID)
+	if _, err := startRole(t, d, "implement", scout.ID); err == nil || !strings.Contains(err.Error(), "explore") {
+		t.Fatalf("implement under a read-only tree whose root was pruned: err = %v", err)
+	}
+	mustStartRole(t, d, "explore", scout.ID)
+}
+
+func TestWritableTreeSurvivesAPrunedAncestor(t *testing.T) {
+	d := newNestedDispatcher(t)
+	root := mustStartRole(t, d, "implement", "")
+	child := mustStartRole(t, d, "implement", root.ID)
+	forget(d, root.ID)
+	mustStartRole(t, d, "implement", child.ID)
+}
+
+func TestRecordedTreeAccessFollowsTheRoleChain(t *testing.T) {
+	d := newNestedDispatcher(t)
+	planner := mustStartRole(t, d, "plan", "")
+	scout := mustStartRole(t, d, "explore", planner.ID)
+	builder := mustStartRole(t, d, "implement", "")
+	for rec, want := range map[string]string{planner.ID: TreeReadOnly, scout.ID: TreeReadOnly, builder.ID: TreeWritable} {
+		got, _ := d.Get(rec)
+		if got.TreeAccess != want {
+			t.Fatalf("%s TreeAccess = %q, want %q", rec, got.TreeAccess, want)
+		}
+	}
+}

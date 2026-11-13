@@ -67,6 +67,20 @@ test('a failed leo_dispatch lets native agents through until one succeeds', asyn
   expect(h.statuses.at(-1)).toBeUndefined()
 })
 
+const REFUSAL = 'policy_refused: dispatch d-1 runs as read-only role "plan" and may only dispatch role "explore"; refusing role "implement" on template "builder"'
+const REFUSALS: Record<string, object> = { 'an error result': { result: REFUSAL, text: REFUSAL, isError: true }, 'a deny': { deny: REFUSAL } }
+for (const [name, result] of Object.entries(REFUSALS)) {
+  test(`a policy refusal from leo_dispatch (${name}) does not unlock native agents`, async ($, on) => {
+    const { h } = await started($, on, ON, { toolCall: () => result })
+    await $.tool.call({ tool: LEO_DISPATCH_TOOL, role: 'implement', prompt: 'x' })
+    await h.settle()
+    expect(await callAgent($, 'Explore')).toEqual({ deny: AGENT_DENY_TEXT })
+    expect(await callAgent($)).toEqual({ deny: AGENT_DENY_TEXT })
+    expect(await offer($, 'Explore')).toEqual({ isOffered: false })
+    expect(h.statuses.at(-1)).toBeUndefined()
+  })
+}
+
 test('no state within ten seconds of session start falls back', async ($, on) => {
   const h = setup(on, { feeds: [new Feed()] })
   await start($, h)

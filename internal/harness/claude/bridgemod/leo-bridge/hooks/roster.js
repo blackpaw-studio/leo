@@ -104,6 +104,25 @@ export function isFailedCall(result) {
   return isRecord(result) && (result.isError === true || typeof result.deny === 'string')
 }
 
+// Starts the error text of a leo_dispatch the daemon refused on policy (a
+// read-only dispatch tree asking for write access, an unverifiable parent), as
+// opposed to one that failed because leo was unavailable. Matches
+// consult.PolicyRefusedCode.
+export const POLICY_REFUSED_CODE = 'policy_refused'
+
+/**
+ * Whether a failed tool.call result is a policy refusal: its text carries
+ * POLICY_REFUSED_CODE. A refusal is an answer, not an outage, so it must not
+ * unlock native agents.
+ */
+export function isPolicyRefusal(result) {
+  if (!isRecord(result)) return false
+  const text = [result.deny, result.text, result.result]
+    .map((v) => (typeof v === 'string' ? v : v === undefined ? '' : JSON.stringify(v)))
+    .join('\n')
+  return text.includes(POLICY_REFUSED_CODE + ':')
+}
+
 export function isTerminal(status) {
   return TERMINAL.includes(status)
 }

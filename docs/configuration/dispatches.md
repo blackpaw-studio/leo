@@ -145,6 +145,16 @@ parent chain, so a role-less intermediate dispatch cannot launder it. Parents
 with write-capable roles (`implement*`) and top-level callers are unaffected,
 and the depth and descendant caps are unchanged.
 
+Every refusal starts with the stable code `policy_refused:`, so a caller can
+tell a policy answer from an outage; the leo-bridge mod does not treat it as
+"`leo_dispatch` failed" and keeps native agents denied. A `parent_dispatch_id`
+(or `leo_send_dispatch` sender) that names no known dispatch is refused with the
+same code instead of being filed as top-level; an empty one is top-level. Each
+record keeps its `tree_access` (`read_only` or `writable`) and `read_only_role`,
+fixed at start, so pruning an ancestor's record cannot lift the restriction.
+Only records from before this guard are walked up their parent chain, and a gap
+in such a chain is not held against them.
+
 The parent is identified by the `LEO_DISPATCH_ID` of the calling process,
 which Leo's MCP server sends as `parent_dispatch_id`. A process that can reach
 the daemon API with its own credentials can omit or forge that field, so this

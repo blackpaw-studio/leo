@@ -189,6 +189,16 @@ type Record struct {
 	// nested dispatch (headless parents included). Records written before it
 	// existed name their parent only through CallerBridgeKey.
 	ParentDispatchID string `json:"parent_dispatch_id,omitempty"`
+	// TreeAccess is whether this run sits in a read-only dispatch tree
+	// (TreeReadOnly) or a write-capable one (TreeWritable), fixed when it
+	// started from its own role and its verified parent's TreeAccess. It is the
+	// durable tombstone of the ancestry: children read it instead of walking
+	// parents, so pruning an ancestor's record cannot lift the restriction.
+	// ReadOnlyRole is the role that put it there: this run's own when that is
+	// read-only, else the inherited one. Records from before the guard have
+	// neither.
+	TreeAccess   string `json:"tree_access,omitempty"`
+	ReadOnlyRole string `json:"read_only_role,omitempty"`
 	// Environments is the run's effective ordered environment names (the
 	// template's, then the inherited layer), never values; a nested dispatch
 	// inherits it. EnvironmentsSource says where the inherited layer came

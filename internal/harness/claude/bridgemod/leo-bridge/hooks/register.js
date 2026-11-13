@@ -53,6 +53,7 @@ import {
   FALLBACK_STREAM_DOWN,
   isAgentHidden,
   isFailedCall,
+  isPolicyRefusal,
   bandChrome,
   bandHeader,
   isRunning,
@@ -1076,6 +1077,9 @@ export function register(on) {
   // LEO_DISPATCH_TOOL, spelled out: a matcher takes literals.
   on('tool.call', { tool: 'mcp__leo__leo_dispatch' }, async ($, e, next) => {
     const result = await next(e)
+    // A policy refusal is the daemon answering, not leo being unavailable:
+    // it leaves native-agent enforcement as it was.
+    if (isPolicyRefusal(result)) return result
     if (isFailedCall(result)) setFallback($, FALLBACK_DISPATCH_FAILED)
     else clearDispatchFallback($)
     return result
