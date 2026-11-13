@@ -159,9 +159,21 @@ func (s *Server) handleAPIDispatchSend(w http.ResponseWriter, r *http.Request) {
 		Decision  string `json:"decision"`
 		Reason    string `json:"reason"`
 		RequestID string `json:"request_id"`
+		// ParentDispatchID is the sending dispatch (its LEO_DISPATCH_ID), if
+		// any; a dispatch inside a read-only tree may only drive read-only
+		// dispatches.
+		ParentDispatchID string `json:"parent_dispatch_id"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSON(w, http.StatusBadRequest, apiResponse{Error: fmt.Sprintf("invalid request: %v", err)})
+		return
+	}
+	if req.ParentDispatchID != "" && !consult.ValidDispatchID(req.ParentDispatchID) {
+		writeJSON(w, http.StatusBadRequest, apiResponse{Error: "invalid parent_dispatch_id"})
+		return
+	}
+	if err := s.consults.CheckSendAllowed(req.ParentDispatchID, r.PathValue("id")); err != nil {
+		s.writeDispatchSendConflict(w, r.PathValue("id"), err)
 		return
 	}
 	if req.Decision != "" {

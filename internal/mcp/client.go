@@ -338,8 +338,12 @@ func (c *daemonClient) delegationStatus(ctx context.Context) (string, error) {
 	return status, nil
 }
 
-func (c *daemonClient) sendDispatch(ctx context.Context, id, message string) (consult.SendResult, error) {
-	raw, err := c.doContext(ctx, http.MethodPost, "/api/dispatch/"+url.PathEscape(id)+"/send", map[string]string{"message": message})
+func (c *daemonClient) sendDispatch(ctx context.Context, senderDispatchID, id, message string) (consult.SendResult, error) {
+	body := map[string]string{"message": message}
+	if senderDispatchID != "" {
+		body["parent_dispatch_id"] = senderDispatchID
+	}
+	raw, err := c.doContext(ctx, http.MethodPost, "/api/dispatch/"+url.PathEscape(id)+"/send", body)
 	if err != nil {
 		return consult.SendResult{}, err
 	}

@@ -502,7 +502,7 @@ func newRegistry(client *daemonClient, processName string, perms leotools.Permis
 	})
 
 	r.addContext(toolDef{
-		Name: "leo_dispatch", Description: allowNote("Run a subagent on the template's harness/model in your project directory. By default (mode interactive) it runs a real TUI, usually split as a pane in your current tmux window (falling back to a separate window, or a background session if your caller can't be resolved), that the user may watch; the result comes from the harness's own turn hooks. Pass mode headless for a plain background run with no TUI (the daemon also falls back to headless, and says so, when interactive is impossible). Send every follow-up through leo_send_dispatch; never ask the user to type into the pane. Returns immediately. With notify on (default), end your turn: the completion message carries the result. leo_wait only to block within this turn or if it says truncated (or leo_dispatch_output); codex/opencode callers collect with leo_wait. Read-only roles (explore, plan, review, review.*) release their pane as soon as the first answer reaches you (release_on_finish), so a follow-up to one is rejected: start a new dispatch, or pass release_on_finish false when you expect to follow up.", "dispatch to these templates", perms.CanConsult),
+		Name: "leo_dispatch", Description: allowNote("Run a subagent on the template's harness/model in your project directory. By default (mode interactive) it runs a real TUI, usually split as a pane in your current tmux window (falling back to a separate window, or a background session if your caller can't be resolved), that the user may watch; the result comes from the harness's own turn hooks. Pass mode headless for a plain background run with no TUI (the daemon also falls back to headless, and says so, when interactive is impossible). Send every follow-up through leo_send_dispatch; never ask the user to type into the pane. Returns immediately. With notify on (default), end your turn: the completion message carries the result. leo_wait only to block within this turn or if it says truncated (or leo_dispatch_output); codex/opencode callers collect with leo_wait. Read-only roles (explore, plan, review, review.*) release their pane as soon as the first answer reaches you (release_on_finish), so a follow-up to one is rejected: start a new dispatch, or pass release_on_finish false when you expect to follow up. A subagent running as a read-only role may dispatch role explore only (the daemon refuses implement, template dispatches and the rest).", "dispatch to these templates", perms.CanConsult),
 		InputSchema: objectSchema(map[string]any{"template": map[string]any{"type": "string"}, "role": map[string]any{"type": "string"}, "prompt": map[string]any{"type": "string"}, "model": map[string]any{"type": "string"}, "effort": map[string]any{"type": "string"}, "cwd": map[string]any{"type": "string"}, "name": map[string]any{"type": "string"}, "mode": map[string]any{"type": "string", "enum": []string{"headless", "interactive"}, "description": "defaults to interactive; headless runs without a TUI"}, "notify": map[string]any{"type": "boolean", "description": "notify the caller when complete; defaults to true"}, "release_on_finish": map[string]any{"type": "boolean", "description": releaseOnFinishSchemaDescription}, "isolation": map[string]any{"type": "string", "enum": []string{"worktree"}, "description": "run from a managed Git worktree created at the current committed HEAD"}, "timeout_seconds": map[string]any{"type": "number", "description": "optional run cap in seconds; unlimited when omitted"}, "environments": map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": dispatchEnvironmentsParamDescription}}, "prompt"),
 	}, func(ctx context.Context, args map[string]any) (string, error) {
 		template, _ := args["template"].(string)
@@ -628,7 +628,7 @@ func newRegistry(client *daemonClient, processName string, perms leotools.Permis
 		if message == "" {
 			return "", fmt.Errorf("message or decision is required")
 		}
-		result, err := client.sendDispatch(ctx, id, message)
+		result, err := client.sendDispatch(ctx, r.dispatchID, id, message)
 		if err != nil {
 			return "", err
 		}
@@ -665,6 +665,7 @@ func newRegistry(client *daemonClient, processName string, perms leotools.Permis
 			timeout = maxWaitTimeout
 		}
 		timeout = clampWaitTimeout(timeout)
+		waitStart := time.Now()
 		entries, err := client.waitDispatch(ctx, ids, timeout)
 		if err != nil {
 			return "", err
@@ -697,7 +698,7 @@ func newRegistry(client *daemonClient, processName string, perms leotools.Permis
 			}
 			blocks = append(blocks, fmt.Sprintf("[%s · %s · elapsed %.1fs · active %.1fs%s]\n%s", entry.ID, entry.Status, entry.Elapsed.Seconds(), entry.Active.Seconds(), extra, body))
 		}
-		return fmt.Sprintf("wait timeout: %.0fs\n%s", timeout.Seconds(), strings.Join(blocks, "\n\n")), nil
+		return fmt.Sprintf("waited %.0fs (timeout %.0fs)\n%s", time.Since(waitStart).Seconds(), timeout.Seconds(), strings.Join(blocks, "\n\n")), nil
 	})
 
 	r.addContext(toolDef{

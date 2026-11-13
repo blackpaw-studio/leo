@@ -61,12 +61,12 @@ func TestNestedDispatchKeepsItsCallerWhenTheParentHasNone(t *testing.T) {
 	}
 }
 
-func TestNestedDispatchIgnoresAnUnknownParent(t *testing.T) {
+func TestNestedDispatchRefusesAnUnknownParent(t *testing.T) {
 	d := newNestedDispatcher(t)
 	for _, id := range []string{"d-000000000000", "../x", "a/b"} {
-		child := startNested(t, d, Request{Caller: "alpha", ParentDispatchID: id})
-		if child.ParentDispatchID != "" || child.Caller != "alpha" {
-			t.Fatalf("id %q: parent=%q caller=%q; an unverifiable parent must not be recorded", id, child.ParentDispatchID, child.Caller)
+		req := Request{Template: "claude", Prompt: "q", Kind: "dispatch", Cwd: t.TempDir(), Caller: "alpha", ParentDispatchID: id}
+		if _, err := d.Start(context.Background(), testConfig(), req); err == nil {
+			t.Fatalf("id %q: an unverifiable parent must be refused, not filed as top-level", id)
 		}
 	}
 }
