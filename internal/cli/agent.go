@@ -1292,7 +1292,7 @@ func newAgentRenameCmd() *cobra.Command {
 		Short: "Rename an agent",
 		Long: `Rename an agent's identity. A running agent is renamed in place with no
 process restart; its claude session keeps running. The new name is normalized to
-a leo- prefixed slug (lowercase, a-z 0-9 and dashes only).`,
+a slug (lowercase, a-z 0-9 and dashes only); no prefix is added.`,
 		Example:           `  leo agent rename leo-mcp-node-owner-fetch auth-refactor`,
 		Args:              cobra.ExactArgs(2),
 		ValidArgsFunction: completeAgentNames,

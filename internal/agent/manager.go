@@ -2196,7 +2196,7 @@ func (m *Manager) Rename(query, rawNewName string) (Record, error) {
 	}
 	oldName := rec.Name
 
-	newName, err := NormalizeAgentName(rawNewName)
+	newName, err := renameTargetName(rawNewName)
 	if err != nil {
 		return Record{}, err
 	}

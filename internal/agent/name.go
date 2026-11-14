@@ -59,3 +59,18 @@ func NormalizeAgentName(raw string) (string, error) {
 	}
 	return name, nil
 }
+
+// renameTargetName validates a rename target and returns it as given (slugged,
+// but without forcing the leo- prefix): records are keyed by the name the user
+// chose, exactly as spawn --name does. The tmux session name keeps its own
+// leo- derivation via SessionName.
+func renameTargetName(raw string) (string, error) {
+	norm, err := NormalizeAgentName(raw)
+	if err != nil {
+		return "", err
+	}
+	if strings.HasPrefix(strings.ToLower(strings.TrimSpace(raw)), agentNamePrefix) {
+		return norm, nil
+	}
+	return strings.TrimPrefix(norm, agentNamePrefix), nil
+}

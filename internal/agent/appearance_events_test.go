@@ -149,7 +149,7 @@ func TestRenameLiveAgentPublishesAppearance(t *testing.T) {
 	home := t.TempDir()
 	cfg := &config.Config{
 		HomePath:        home,
-		AppearanceRules: &config.AppearanceRuleList{colorRule("name", "is", "leo-renamed-agent", "orange")},
+		AppearanceRules: &config.AppearanceRuleList{colorRule("name", "is", "renamed-agent", "orange")},
 	}
 	_ = agentstore.Save(home, agentstore.Record{Name: "leo-old", ClaudeArgs: []string{"--name", "leo-old"}})
 	pub := &recordingObservePublisher{}
@@ -160,7 +160,7 @@ func TestRenameLiveAgentPublishesAppearance(t *testing.T) {
 	if _, err := m.Rename("leo-old", "renamed-agent"); err != nil {
 		t.Fatal(err)
 	}
-	if got := lastAppearanceEvent(t, pub, "leo-renamed-agent").Appearance; got == nil || got.Color != "orange" {
+	if got := lastAppearanceEvent(t, pub, "renamed-agent").Appearance; got == nil || got.Color != "orange" {
 		t.Fatalf("appearance after a live rename = %+v, want orange", got)
 	}
 }
