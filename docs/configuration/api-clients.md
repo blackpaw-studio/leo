@@ -197,7 +197,7 @@ Rules for the `tasks` hold:
 
 - Only `pending.tasks` hold. `pending.wakeups` (session crons and timers) never do: waiting on a timer is idle.
 - `pending` is read on every `turn.complete` and replaces the previous count; it never carries over to a later turn.
-- The hold drops at the next `turn.start` (the task's wake turn or a user prompt), at `session.end`, when the turn is interrupted (an aborted `turn.complete` ignores its `pending`), and when the agent stops or its launch changes. That turn's own `turn.complete` then decides again: `finished`, or held again if tasks remain.
+- The hold drops at the next `turn.start` (the task's wake turn or a user prompt), at `session.end`, when the turn is interrupted (an aborted `turn.complete` ignores its `pending`, and so does a native-hook `Interrupt`; the web, API and `leo_interrupt` paths end in one of those two), and when the agent stops or its launch changes. That turn's own `turn.complete` then decides again: `finished`, or held again if tasks remain.
 - Never-ending tasks (dev servers, watchers) hold too, and a task that never wakes the session keeps the agent `working` until one of the releases above. `Working` is accurate for live work, so there is no per-type exclusion.
 - A needs-input prompt answered during a hold keeps the hold.
 

@@ -593,13 +593,13 @@ func (s *AttentionStore) AgentForToken(token string) (string, bool) {
 // only the dispatch snapshot it read. ok=false means no transition was
 // recorded.
 func (s *AttentionStore) SetByToken(token string, state AttentionState, from ...AttentionState) (AgentAttention, bool) {
-	return s.setByToken(token, state, "", from)
+	return s.setByToken(token, state, "", from, false)
 }
 
 // SetByTokenFinished is SetByToken to finished, carrying the turn's final
 // assistant message as the transition's preview (empty for none).
 func (s *AttentionStore) SetByTokenFinished(token, preview string) (AgentAttention, bool) {
-	return s.setByToken(token, AttentionFinished, preview, nil)
+	return s.setByToken(token, AttentionFinished, preview, nil, false)
 }
 
 // SetByTokenNeedsInput moves the agent token routes to into needs_input with
@@ -623,7 +623,14 @@ func (s *AttentionStore) SetByTokenNeedsInput(token string, reason AttentionReas
 	return s.setLocked(agent, AttentionNeedsInput), true
 }
 
-func (s *AttentionStore) setByToken(token string, state AttentionState, preview string, from []AttentionState) (AgentAttention, bool) {
+// SetByTokenInterrupted is SetByTokenFinished for an interrupt: it also
+// drops the background tasks the interrupted turn had held the agent on,
+// since an interrupt ends that hold whichever way it arrives.
+func (s *AttentionStore) SetByTokenInterrupted(token string) (AgentAttention, bool) {
+	return s.setByToken(token, AttentionFinished, "", nil, true)
+}
+
+func (s *AttentionStore) setByToken(token string, state AttentionState, preview string, from []AttentionState, dropTasks bool) (AgentAttention, bool) {
 	if s == nil || token == "" {
 		return AgentAttention{}, false
 	}
@@ -640,6 +647,9 @@ func (s *AttentionStore) setByToken(token string, state AttentionState, preview 
 		return AgentAttention{}, false
 	}
 	s.reconcileLocked(gen, counts, agent)
+	if dropTasks {
+		s.bridge.clearTasks(agent)
+	}
 	return s.setPreviewLocked(agent, state, preview), true
 }
 
