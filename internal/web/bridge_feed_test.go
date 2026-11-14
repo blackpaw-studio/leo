@@ -337,3 +337,24 @@ func TestBuildSnapshotCodexUsageFromHarness(t *testing.T) {
 		t.Fatalf("codex agent carries cost_usd or bridge: %s", raw)
 	}
 }
+
+func TestProjectAgentsReportsBackgroundTasksInOutstanding(t *testing.T) {
+	store := observe.NewAttentionStore(nil)
+	store.BindBridgeKey("key-a", "launch-a", "agent-a")
+	store.Set("agent-a", observe.AttentionWorking)
+	store.CompleteBridgeTurn("key-a", "launch-a", 3)
+
+	agents := ProjectAgents(bridgeMergeRecords(), nil, bridgeMergeSources(store), bridgeMergeConfig())
+
+	for _, a := range agents {
+		if a.Name != "agent-a" {
+			continue
+		}
+		if a.Outstanding == nil || *a.Outstanding != (observe.Outstanding{Dispatches: 2, Subagents: 1, Tasks: 3}) {
+			t.Fatalf("agent-a outstanding = %+v", a.Outstanding)
+		}
+		if a.Attention == nil || a.Attention.State != observe.AttentionWorking {
+			t.Fatalf("agent-a attention = %+v", a.Attention)
+		}
+	}
+}

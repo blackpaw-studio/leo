@@ -175,7 +175,10 @@ func (s *AttentionStore) setPreviewLocked(agent string, state AttentionState, pr
 		state = AttentionWorking
 	case state == AttentionWorking && prev == AttentionNeedsInput:
 	case state != AttentionNeedsInput:
+		// A new turn or a lifecycle transition ends the hold, and with it
+		// the background tasks the finished turn left running.
 		delete(s.held, agent)
+		s.bridge.clearTasks(agent)
 	}
 	if state != AttentionNeedsInput {
 		delete(s.reasons, agent)
@@ -215,6 +218,48 @@ func (s *AttentionStore) attentionLocked(agent string) AgentAttention {
 // cannot part a report from its agent. ok=false means nothing was
 // published.
 func (s *AttentionStore) AdvanceBridge(key, launch string, state AttentionState, from ...AttentionState) (AgentAttention, bool) {
+	return s.advanceBridge(key, launch, state, taskReport{}, from)
+}
+
+// BeginBridgeTurn is AdvanceBridge to working for a turn.start: it also
+// drops the background tasks the previous turn left, which the new turn
+// (their wake-up, or a prompt) supersedes. The turn's own completion
+// reports what is still running.
+func (s *AttentionStore) BeginBridgeTurn(key, launch string) (AgentAttention, bool) {
+	return s.advanceBridge(key, launch, AttentionWorking, taskReport{set: true}, nil)
+}
+
+// CompleteBridgeTurn is AdvanceBridge to finished for a turn.complete that
+// left tasks background tasks running (the sum of its pending.tasks; wakeups
+// never count). A finished with tasks is held as working like one with
+// subagents or dispatches. tasks replaces the previous report: it is read
+// per completion and never carried over.
+func (s *AttentionStore) CompleteBridgeTurn(key, launch string, tasks int) (AgentAttention, bool) {
+	return s.advanceBridge(key, launch, AttentionFinished, taskReport{set: true, n: tasks}, nil)
+}
+
+// ClearBridgeTasks drops launch's background tasks without a turn (the
+// session ended), releasing a hold they were keeping.
+func (s *AttentionStore) ClearBridgeTasks(key, launch string) {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	agent, bound := s.bridge.boundAgent(key, launch)
+	if bound && s.bridge.setTasks(key, launch, 0) {
+		s.outstandingChangedLocked(agent)
+	}
+}
+
+// taskReport is a transition's accompanying background-task count, applied
+// atomically with it; the zero value leaves the count alone.
+type taskReport struct {
+	set bool
+	n   int
+}
+
+func (s *AttentionStore) advanceBridge(key, launch string, state AttentionState, tasks taskReport, from []AttentionState) (AgentAttention, bool) {
 	if s == nil {
 		return AgentAttention{}, false
 	}
@@ -230,13 +275,28 @@ func (s *AttentionStore) AdvanceBridge(key, launch string, state AttentionState,
 		return AgentAttention{}, false
 	}
 	s.reconcileLocked(gen, counts, agent)
+	tasksChanged := tasks.set && s.bridge.setTasks(key, launch, tasks.n)
+	att, published := s.advanceLocked(agent, state, cur)
+	if !published && tasksChanged {
+		// The state stands but what explains it changed.
+		s.outstandingChangedLocked(agent)
+	}
+	return att, published
+}
+
+// advanceLocked applies AdvanceBridge's transition rules to a tracked
+// agent currently in cur.
+func (s *AttentionStore) advanceLocked(agent string, state, cur AttentionState) (AgentAttention, bool) {
 	switch {
 	case state == AttentionWorking && cur == AttentionWorking:
 		delete(s.held, agent)
+		s.bridge.clearTasks(agent)
 		return AgentAttention{}, false
 	case state == AttentionFinished && cur == AttentionWorking && s.bridge.of(agent).total() > 0:
 		s.held[agent] = true
 		return AgentAttention{}, false
+	case state == AttentionFinished && cur == AttentionFinished && s.bridge.of(agent).Tasks > 0:
+		// A completion that left tasks running holds even a finished agent.
 	case state == cur:
 		return AgentAttention{}, false
 	}

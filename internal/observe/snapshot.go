@@ -193,12 +193,15 @@ const (
 	BridgeAbsent    BridgeState = "absent"
 )
 
-// Outstanding counts an agent's still-running children: leo dispatches it
-// called and native background subagents. While either is non-zero after a
-// turn completes, the agent's attention stays working (B-051).
+// Outstanding counts what an agent still has running: leo dispatches it
+// called, native background subagents and background tasks (Bash
+// run_in_background, Monitor, ...) its last turn left behind. While any is
+// non-zero after a turn completes, the agent's attention stays working
+// (B-051). Tasks is omitted at zero, so agents without any read as before.
 type Outstanding struct {
 	Dispatches int `json:"dispatches"`
 	Subagents  int `json:"subagents"`
+	Tasks      int `json:"tasks,omitempty"`
 }
 
 // UsageTotals is accumulated tokens and cost over some span.
