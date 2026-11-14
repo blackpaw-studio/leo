@@ -177,3 +177,42 @@ func TestManagerRename_KeepsNameAsGiven(t *testing.T) {
 		t.Fatalf("renaming to same name: err = %v, want ErrAgentNameUnchanged", err)
 	}
 }
+
+func TestManagerRename_RejectsSessionNameClash(t *testing.T) {
+	home := t.TempDir()
+	_ = agentstore.Save(home, agentstore.Record{Name: "leo-foo", ClaudeArgs: []string{"--name", "leo-foo"}})
+	_ = agentstore.Save(home, agentstore.Record{Name: "x", ClaudeArgs: []string{"--name", "x"}})
+	sup := &fakeSupervisor{ephemeral: map[string]ProcessState{"x": {Name: "x", Status: "running"}}}
+	m := newTestManager(t, home, sup)
+
+	if _, err := m.Rename("x", "foo"); !errors.Is(err, ErrAgentNameTaken) {
+		t.Fatalf("err = %v, want ErrAgentNameTaken", err)
+	}
+	if sup.renamedNew != "" {
+		t.Fatalf("supervisor renamed despite clash: %q", sup.renamedNew)
+	}
+}
+
+func TestManagerRename_LiveStateSessionClash(t *testing.T) {
+	home := t.TempDir()
+	_ = agentstore.Save(home, agentstore.Record{Name: "x"})
+	sup := &fakeSupervisor{ephemeral: map[string]ProcessState{
+		"x":       {Name: "x", Status: "running"},
+		"leo-foo": {Name: "leo-foo", Status: "running"},
+	}}
+	m := newTestManager(t, home, sup)
+	if _, err := m.Rename("x", "foo"); !errors.Is(err, ErrAgentNameTaken) {
+		t.Fatalf("err = %v, want ErrAgentNameTaken", err)
+	}
+}
+
+func TestManagerRename_SelfSessionNotAClash(t *testing.T) {
+	home := t.TempDir()
+	_ = agentstore.Save(home, agentstore.Record{Name: "leo-foo", ClaudeArgs: []string{"--name", "leo-foo"}})
+	sup := &fakeSupervisor{ephemeral: map[string]ProcessState{"leo-foo": {Name: "leo-foo", Status: "running"}}}
+	m := newTestManager(t, home, sup)
+	rec, err := m.Rename("leo-foo", "foo")
+	if err != nil || rec.Name != "foo" {
+		t.Fatalf("rec=%q err=%v, want foo/nil", rec.Name, err)
+	}
+}
