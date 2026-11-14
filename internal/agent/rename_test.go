@@ -50,18 +50,18 @@ func TestManagerRename_RunningAgent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Rename: %v", err)
 	}
-	if rec.Name != "leo-renamed-agent" {
+	if rec.Name != "renamed-agent" {
 		t.Fatalf("returned record name = %q", rec.Name)
 	}
-	if sup.renamedOld != "leo-old" || sup.renamedNew != "leo-renamed-agent" {
+	if sup.renamedOld != "leo-old" || sup.renamedNew != "renamed-agent" {
 		t.Fatalf("supervisor not called: %q -> %q", sup.renamedOld, sup.renamedNew)
 	}
 	recs, _ := agentstore.Load(agentstore.FilePath(home))
-	got, ok := recs["leo-renamed-agent"]
+	got, ok := recs["renamed-agent"]
 	if !ok {
 		t.Fatal("store not re-keyed")
 	}
-	if strings.Join(got.ClaudeArgs, " ") != "--name leo-renamed-agent --model opus" {
+	if strings.Join(got.ClaudeArgs, " ") != "--name renamed-agent --model opus" {
 		t.Fatalf("--name not rewritten: %v", got.ClaudeArgs)
 	}
 }
@@ -147,5 +147,72 @@ func TestHandleForRecordCarriesTheManagersTmux(t *testing.T) {
 
 	if h.TmuxPath != "/managed/3.5/tmux" {
 		t.Errorf("TmuxPath = %q, want /managed/3.5/tmux", h.TmuxPath)
+	}
+}
+
+// Regression: rename used to force a leo- prefix onto the record name, so
+// `rename leo-claude-documentary documentary` produced "leo-documentary" and
+// a repeat of the same command failed with "agent name unchanged".
+func TestManagerRename_KeepsNameAsGiven(t *testing.T) {
+	home := t.TempDir()
+	_ = agentstore.Save(home, agentstore.Record{
+		Name:       "leo-claude-documentary",
+		ClaudeArgs: []string{"--name", "leo-claude-documentary"},
+	})
+	sup := &fakeSupervisor{ephemeral: map[string]ProcessState{"leo-claude-documentary": {Name: "leo-claude-documentary", Status: "running"}}}
+	m := newTestManager(t, home, sup)
+
+	rec, err := m.Rename("leo-claude-documentary", "documentary")
+	if err != nil {
+		t.Fatalf("Rename: %v", err)
+	}
+	if rec.Name != "documentary" || sup.renamedNew != "documentary" {
+		t.Fatalf("name = %q, supervisor got %q; want documentary", rec.Name, sup.renamedNew)
+	}
+	recs, _ := agentstore.Load(agentstore.FilePath(home))
+	if _, ok := recs["documentary"]; !ok {
+		t.Fatalf("store not keyed by documentary: %v", recs)
+	}
+	if _, err := m.Rename("documentary", "Documentary"); !errors.Is(err, ErrAgentNameUnchanged) {
+		t.Fatalf("renaming to same name: err = %v, want ErrAgentNameUnchanged", err)
+	}
+}
+
+func TestManagerRename_RejectsSessionNameClash(t *testing.T) {
+	home := t.TempDir()
+	_ = agentstore.Save(home, agentstore.Record{Name: "leo-foo", ClaudeArgs: []string{"--name", "leo-foo"}})
+	_ = agentstore.Save(home, agentstore.Record{Name: "x", ClaudeArgs: []string{"--name", "x"}})
+	sup := &fakeSupervisor{ephemeral: map[string]ProcessState{"x": {Name: "x", Status: "running"}}}
+	m := newTestManager(t, home, sup)
+
+	if _, err := m.Rename("x", "foo"); !errors.Is(err, ErrAgentNameTaken) {
+		t.Fatalf("err = %v, want ErrAgentNameTaken", err)
+	}
+	if sup.renamedNew != "" {
+		t.Fatalf("supervisor renamed despite clash: %q", sup.renamedNew)
+	}
+}
+
+func TestManagerRename_LiveStateSessionClash(t *testing.T) {
+	home := t.TempDir()
+	_ = agentstore.Save(home, agentstore.Record{Name: "x"})
+	sup := &fakeSupervisor{ephemeral: map[string]ProcessState{
+		"x":       {Name: "x", Status: "running"},
+		"leo-foo": {Name: "leo-foo", Status: "running"},
+	}}
+	m := newTestManager(t, home, sup)
+	if _, err := m.Rename("x", "foo"); !errors.Is(err, ErrAgentNameTaken) {
+		t.Fatalf("err = %v, want ErrAgentNameTaken", err)
+	}
+}
+
+func TestManagerRename_SelfSessionNotAClash(t *testing.T) {
+	home := t.TempDir()
+	_ = agentstore.Save(home, agentstore.Record{Name: "leo-foo", ClaudeArgs: []string{"--name", "leo-foo"}})
+	sup := &fakeSupervisor{ephemeral: map[string]ProcessState{"leo-foo": {Name: "leo-foo", Status: "running"}}}
+	m := newTestManager(t, home, sup)
+	rec, err := m.Rename("leo-foo", "foo")
+	if err != nil || rec.Name != "foo" {
+		t.Fatalf("rec=%q err=%v, want foo/nil", rec.Name, err)
 	}
 }

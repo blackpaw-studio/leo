@@ -2196,7 +2196,7 @@ func (m *Manager) Rename(query, rawNewName string) (Record, error) {
 	}
 	oldName := rec.Name
 
-	newName, err := NormalizeAgentName(rawNewName)
+	newName, err := renameTargetName(rawNewName)
 	if err != nil {
 		return Record{}, err
 	}
@@ -2226,6 +2226,12 @@ func (m *Manager) Rename(query, rawNewName string) (Record, error) {
 	}
 	if _, exists := records[newName]; exists {
 		return Record{}, fmt.Errorf("%w: %q", ErrAgentNameTaken, newName)
+	}
+	// Names may omit the leo- prefix, but tmux sessions never do, so "foo"
+	// and "leo-foo" would share one session. Reject any other stored record
+	// or live agent whose session name matches the new one.
+	if clash, ok := sessionClash(oldName, newName, records, m.sup.EphemeralAgents()); ok {
+		return Record{}, fmt.Errorf("%w: %q (tmux session %s is used by %q)", ErrAgentNameTaken, newName, SessionName(newName), clash)
 	}
 
 	persistRename := func() error {
@@ -2435,4 +2441,21 @@ func (e *UnknownTemplateError) Error() string {
 		return "template is required"
 	}
 	return fmt.Sprintf("template %q not found", e.Name)
+}
+
+// sessionClash reports another agent (stored or live, never oldName itself)
+// whose tmux session name equals the one newName would get.
+func sessionClash(oldName, newName string, records map[string]agentstore.Record, live map[string]ProcessState) (string, bool) {
+	want := SessionName(newName)
+	for name := range records {
+		if name != oldName && SessionName(name) == want {
+			return name, true
+		}
+	}
+	for name := range live {
+		if name != oldName && SessionName(name) == want {
+			return name, true
+		}
+	}
+	return "", false
 }
