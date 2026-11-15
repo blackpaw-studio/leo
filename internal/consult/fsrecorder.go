@@ -195,7 +195,9 @@ func (r *FileRecorder) prune(keep int) {
 
 	settled := make([]Record, 0, len(records))
 	for _, rec := range records {
-		if (rec.Isolation == "worktree" && rec.WorktreeState != WorktreeRemoved) || recordHasUnresolvedNotification(rec) {
+		// A parked run is kept for a follow-up to reopen until release or
+		// the retention sweep ends it.
+		if (rec.Isolation == "worktree" && rec.WorktreeState != WorktreeRemoved) || recordHasUnresolvedNotification(rec) || parked(rec) {
 			continue
 		}
 		if (rec.ViewerWindowID != "" || rec.ViewerPaneID != "") && !rec.EndedAt.IsZero() && now.Before(rec.EndedAt.Add(viewerGraceAfterEnd)) {

@@ -298,6 +298,14 @@ func (d *Dispatcher) runRestartJob(ctx context.Context, recorder *FileRecorder, 
 // standing closed, its worktree cleaned up or deferred, and the
 // notifications it still owes requeued. It returns the record it left.
 func (d *Dispatcher) reconcileTerminalRecord(ctx context.Context, recorder *FileRecorder, rec Record, tm *recordTimings) Record {
+	// A parked run has no pane and keeps its worktree for a follow-up to
+	// reopen: only notifications it still owes are requeued.
+	if parked(rec) {
+		stop := tm.start("notification restore")
+		d.restorePendingNotifications(rec)
+		stop()
+		return rec
+	}
 	stop := tm.start("viewer pane lookup")
 	rec = d.reconcileRestartViewer(rec)
 	stop()
