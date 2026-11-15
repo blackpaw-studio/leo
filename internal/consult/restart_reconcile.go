@@ -293,14 +293,38 @@ func (d *Dispatcher) runRestartJob(ctx context.Context, recorder *FileRecorder, 
 	return d.applyWorktreeAssessment(d.restartGit(ctx, job.id), d.restartGit(context.WithoutCancel(ctx), job.id), rec, state), true
 }
 
+// closeParkedLeftoverPane closes the pane a failed reopen left recorded on
+// parked run rec when its kill never landed, so no reopen resumes the
+// session beside it. A pane tmux confirms gone is only cleared; one that
+// cannot be killed stays recorded and its kill is retried (killPending).
+func (d *Dispatcher) closeParkedLeftoverPane(rec Record) Record {
+	rt := d.interactiveRuntime
+	kill := rt.Kill
+	if present, certain := panePresent(rt, rec.PaneID); certain && !present {
+		kill = func(string) error { return nil }
+	}
+	cleaned, err := d.closeRecordedPaneThen(rec, rec.PaneID, kill, runtimeLayout(rt), func(rec Record) Record { return rec })
+	if err != nil {
+		d.trackRestartKill(rec)
+		return rec
+	}
+	return cleaned
+}
+
 // reconcileTerminalRecord reconciles a record that was already terminal when
 // the previous daemon stopped: its split viewer looked up, a pane still
 // standing closed, its worktree cleaned up or deferred, and the
 // notifications it still owes requeued. It returns the record it left.
 func (d *Dispatcher) reconcileTerminalRecord(ctx context.Context, recorder *FileRecorder, rec Record, tm *recordTimings) Record {
-	// A parked run has no pane and keeps its worktree for a follow-up to
-	// reopen: only notifications it still owes are requeued.
+	// A parked run keeps its worktree for a follow-up to reopen: only a pane
+	// a failed reopen left standing is closed, and the notifications it
+	// still owes requeued.
 	if parked(rec) {
+		if rec.PaneID != "" && d.interactiveRuntime != nil {
+			stop := tm.start("pane close")
+			rec = d.closeParkedLeftoverPane(rec)
+			stop()
+		}
 		stop := tm.start("notification restore")
 		d.restorePendingNotifications(rec)
 		stop()

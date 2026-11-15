@@ -4,7 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -220,5 +222,101 @@ func TestReopenTimeoutCountsFromTheReopen(t *testing.T) {
 
 	if got, _ := d.Get(rec.ID); got.Status.Terminal() || got.Status == StatusSettling {
 		t.Fatalf("a reopen timed out on the original start: %s", got.Status)
+	}
+}
+
+// A failed reopen whose pane survived its kill is parked with that pane
+// still recorded. A retry must not resume the session beside it: it is
+// refused while the pane cannot be killed, and goes ahead only once it is.
+func TestReopenRetryWaitsForThePreviousPane(t *testing.T) {
+	now := time.Date(2026, time.November, 14, 12, 0, 0, 0, time.UTC)
+	d, rt, _, id, _ := reopened(t, &now)
+	var mu sync.Mutex
+	var events []string
+	note := func(event string) func() {
+		return func() { mu.Lock(); events = append(events, event); mu.Unlock() }
+	}
+	rt.mu.Lock()
+	rt.killErr, rt.killHook, rt.launchHook = errors.New("tmux: server busy"), note("kill"), note("launch")
+	rt.mu.Unlock()
+	if _, err := d.Cancel(id); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := d.Get(id); !parked(got) || got.PaneID == "" {
+		t.Fatalf("precondition: status=%s retained=%v pane=%q, want parked with its pane", got.Status, got.Retained, got.PaneID)
+	}
+	launches := len(rt.launchRequests())
+
+	_, err := d.SendWithConfig(context.Background(), testConfig(), id, "again")
+
+	if err == nil || !strings.Contains(err.Error(), "previous pane") {
+		t.Fatalf("retry with the old pane standing = %v, want a refusal", err)
+	}
+	if len(rt.launchRequests()) != launches {
+		t.Fatal("a reopen launched beside the earlier pane")
+	}
+	if got, _ := d.Get(id); !parked(got) || got.PaneID == "" || len(got.Turns) != 2 {
+		t.Fatalf("a refused retry changed the run: status=%s pane=%q turns=%d", got.Status, got.PaneID, len(got.Turns))
+	}
+
+	rt.mu.Lock()
+	rt.killErr = nil
+	rt.mu.Unlock()
+	mu.Lock()
+	events = nil
+	mu.Unlock()
+	sent, err := d.SendWithConfig(context.Background(), testConfig(), id, "again")
+	if err != nil || sent.TurnID != id+"#3" {
+		t.Fatalf("retry once the pane can go = %+v, %v", sent, err)
+	}
+	waitForArmed(t, d, id)
+	mu.Lock()
+	defer mu.Unlock()
+	if !slices.Equal(events, []string{"kill", "launch"}) {
+		t.Fatalf("pane events = %q, want the old pane killed before the reopen launched", events)
+	}
+}
+
+// A restart that finds a parked run's pane still recorded (a failed
+// reopen's kill never landed) kills it and clears it, keeping the run
+// parked and its worktree.
+func TestRestartKillsAParkedRunsLeftoverPane(t *testing.T) {
+	configDir := claudeConfigDir(t)
+	stateDir := t.TempDir()
+	rec := seedReopenable(t, stateDir, configDir, "d-left", func(r *Record) { r.PaneID = "%7" })
+	d := NewDispatcher(NewFileRecorder(stateDir))
+	rt := newPaneRuntime(true)
+	d.SetInteractiveRuntime(rt)
+
+	markInterruptedAndReconcile(t, d)
+
+	if !slices.Contains(rt.killedPanes(), "%7") {
+		t.Fatalf("killed panes = %q, want the leftover %%7", rt.killedPanes())
+	}
+	got := mustLoad(t, stateDir, rec.ID)
+	if !parked(got) || got.PaneID != "" || got.SessionID != rec.SessionID {
+		t.Fatalf("after restart: status=%s retained=%v pane=%q session=%q", got.Status, got.Retained, got.PaneID, got.SessionID)
+	}
+}
+
+// A leftover pane the restart cannot kill stays recorded, so a reopen still
+// sees it and the kill is retried.
+func TestRestartKeepsAParkedRunsUnkillablePane(t *testing.T) {
+	configDir := claudeConfigDir(t)
+	stateDir := t.TempDir()
+	rec := seedReopenable(t, stateDir, configDir, "d-stuck", func(r *Record) { r.PaneID = "%7" })
+	d := NewDispatcher(NewFileRecorder(stateDir))
+	rt := newPaneRuntime(true)
+	rt.killErr = errors.New("tmux: server busy")
+	d.SetInteractiveRuntime(rt)
+
+	markInterruptedAndReconcile(t, d)
+
+	if got, _ := d.Get(rec.ID); !parked(got) || got.PaneID != "%7" {
+		t.Fatalf("after a failed kill: status=%s pane=%q, want parked with %%7", got.Status, got.PaneID)
+	}
+	_, err := d.SendWithConfig(context.Background(), testConfig(), rec.ID, "more")
+	if err == nil || !strings.Contains(err.Error(), "previous pane") {
+		t.Fatalf("reopen beside an unkillable pane = %v, want a refusal", err)
 	}
 }

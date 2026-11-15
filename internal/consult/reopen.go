@@ -34,6 +34,9 @@ func (d *Dispatcher) reopenLocked(cfg *config.Config, rec Record, message string
 	if err != nil {
 		return SendResult{}, err
 	}
+	if rec, err = d.awaitPreviousPaneGone(rec, plan.rt); err != nil {
+		return SendResult{}, err
+	}
 	// Admission is atomic with going live, as for a start: nestMu is held
 	// until the reopened state is registered.
 	d.nestMu.Lock()

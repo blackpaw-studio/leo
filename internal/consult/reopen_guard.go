@@ -85,6 +85,40 @@ func (d *Dispatcher) parkFailedReopenLocked(s *runState, outcome TurnOutcome, re
 	fmt.Fprintf(os.Stderr, "dispatch %s: reopen failed, parked again: %s\n", s.record.ID, reason)
 }
 
+// awaitPreviousPaneGone makes sure no earlier pane of parked run rec still
+// runs before a reopen resumes its session: two harnesses must never run one
+// session side by side. A pane a failed reopen or a restart left recorded
+// (its kill pending) is killed now, through the run's pane-op queue so the
+// kill follows any already queued, and the reopen is refused while the pane
+// is still there. A refusal leaves the kill pending, never discarded. It
+// returns the record as the kill left it. The caller holds the run's serial
+// lock.
+func (d *Dispatcher) awaitPreviousPaneGone(rec Record, rt InteractiveRuntime) (Record, error) {
+	if rec.PaneID == "" {
+		return rec, nil
+	}
+	d.mu.Lock()
+	tracked := d.runs[rec.ID] != nil
+	d.mu.Unlock()
+	if !tracked {
+		d.trackRestartKill(rec)
+	}
+	d.mu.Lock()
+	s := d.runs[rec.ID]
+	s.killPending = true
+	done := d.enqueuePaneOpLocked(s, paneOpKill, func() { d.retryPaneKill(s, rt) })
+	d.mu.Unlock()
+	d.awaitPaneOp(done)
+	got, _, err := d.lookup(rec.ID)
+	if err != nil {
+		return Record{}, err
+	}
+	if got.PaneID != "" {
+		return Record{}, fmt.Errorf("dispatch %s's previous pane (%s) is still closing; send the follow-up again shortly", rec.ID, got.PaneID)
+	}
+	return got, nil
+}
+
 // parkRestartedReopen parks a reopen a restart found still waiting for its
 // slot: it never launched, so nothing was continued and it stays resumable.
 // Its turn's notification is owed; no close notice is.
