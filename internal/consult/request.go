@@ -45,9 +45,9 @@ type Request struct {
 	// claude's launch, which the key alone does not name: a recreated
 	// agent takes its predecessor's key again. Optional.
 	CallerBridgeLaunch string
-	// ReleaseOnFinish releases an interactive run once its first turn
-	// finishes and its result reached the caller. Nil resolves from the role
-	// (see ResolveReleaseOnFinish).
+	// ReleaseOnFinish closes an interactive run's pane once a turn's
+	// complete result reached the caller; a follow-up reopens it. Nil means
+	// on (see ResolveReleaseOnFinish); false keeps the pane open.
 	ReleaseOnFinish *bool
 	// Environments, when non-nil, replaces the inherited environment layer
 	// for this dispatch (an empty list inherits nothing). Nil inherits.

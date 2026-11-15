@@ -1,6 +1,7 @@
 package consult
 
 import (
+	"errors"
 	"fmt"
 	"time"
 )
@@ -81,100 +82,137 @@ func (d *Dispatcher) releaseLocked(id string, layout func(string) error) (Record
 	if !releasable(rec.Status) {
 		return rec, invalidf("dispatch %s cannot be released while %s", id, rec.Status)
 	}
-	d.mu.Lock()
-	rt := d.interactiveRuntime
 	if state != nil {
-		rec = cloneRecord(state.record)
-		if state.releasing {
-			d.mu.Unlock()
-			return rec, invalidf("dispatch %s is being released", id)
+		admit := func(s *runState) error {
+			if !releasable(s.record.Status) {
+				return invalidf("dispatch %s cannot be released while %s", id, s.record.Status)
+			}
+			if s.record.Status == StatusWaiting {
+				d.endWaitingTurnsForReleaseLocked(s)
+			}
+			return nil
 		}
-		if !releasable(rec.Status) {
-			d.mu.Unlock()
-			return rec, invalidf("dispatch %s cannot be released while %s", id, rec.Status)
+		rec, err = d.retirePaneLocked(state, layout, admit, d.commitReleaseLocked)
+		if err != nil {
+			if errors.As(err, new(*ValidationError)) {
+				return rec, err
+			}
+			return rec, fmt.Errorf("release dispatch %s: %w", id, err)
 		}
-		if rec.Status == StatusWaiting {
-			d.endWaitingTurnsForReleaseLocked(state)
-			rec = cloneRecord(state.record)
-		}
-		state.releasing = true
-	}
-	d.mu.Unlock()
-	if state != nil {
-		defer func() { d.mu.Lock(); state.releasing = false; d.mu.Unlock() }()
-	}
-	if rec.PaneID != "" && rt != nil {
-		var closeErr error
-		if layout == nil {
-			layout = runtimeLayout(rt)
-		}
-		if state != nil {
-			// Ordered with the run's other pane ops, and killing whatever
-			// pane the run has when it runs.
-			d.mu.Lock()
-			closed := d.enqueuePaneOpLocked(state, paneOpKill, func() {
-				d.mu.Lock()
-				current := cloneRecord(state.record)
-				d.mu.Unlock()
-				rec, closeErr = d.closeRecordedPane(current, current.PaneID, rt.Kill, layout)
-			})
-			d.mu.Unlock()
-			<-closed
-		} else {
-			rec, closeErr = d.closeRecordedPane(rec, rec.PaneID, rt.Kill, layout)
-		}
-		if closeErr != nil {
-			return rec, fmt.Errorf("release dispatch %s: %w", id, closeErr)
-		}
-	}
-	rec.Status, rec.PaneID, rec.ViewerPaneID, rec.ViewerKind = StatusReleased, "", "", ""
-	if rec.EndedAt.IsZero() {
-		rec.EndedAt = d.now()
-	}
-	if state != nil {
-		d.mu.Lock()
-		current := state.record
-		current.Status, current.PaneID, current.ViewerPaneID, current.ViewerKind = StatusReleased, "", "", ""
-		current.ReleasedOnFinish = state.releasingOnFinish
-		if current.EndedAt.IsZero() {
-			current.EndedAt = d.now()
-		}
-		current.foldActive(current.EndedAt)
-		state.record = current
-		state.killPending = false
-		d.persistLocked(state, "status")
-		_ = state.handle.Close(StatusReleased, nil)
-		select {
-		case <-state.done:
-		default:
-			close(state.done)
-		}
-		rec = cloneRecord(state.record)
-		d.mu.Unlock()
 		if fr, ok := d.recorder.(*FileRecorder); ok {
 			_ = fr.PersistRecord(rec)
 		}
-	} else if d.recorder != nil {
-		h, openErr := d.recorder.Resume(rec)
-		if openErr != nil {
-			return rec, openErr
-		}
-		if rh, ok := h.(recordHandle); ok {
-			if err := rh.SetRecord(rec); err != nil {
-				return rec, err
+	} else {
+		d.mu.Lock()
+		rt := d.interactiveRuntime
+		d.mu.Unlock()
+		if rec.PaneID != "" && rt != nil {
+			if layout == nil {
+				layout = runtimeLayout(rt)
+			}
+			var closeErr error
+			if rec, closeErr = d.closeRecordedPane(rec, rec.PaneID, rt.Kill, layout); closeErr != nil {
+				return rec, fmt.Errorf("release dispatch %s: %w", id, closeErr)
 			}
 		}
-		_ = h.Close(StatusReleased, nil)
+		rec.Status, rec.PaneID, rec.ViewerPaneID, rec.ViewerKind = StatusReleased, "", "", ""
+		if rec.EndedAt.IsZero() {
+			rec.EndedAt = d.now()
+		}
+		if d.recorder != nil {
+			h, openErr := d.recorder.Resume(rec)
+			if openErr != nil {
+				return rec, openErr
+			}
+			if rh, ok := h.(recordHandle); ok {
+				if err := rh.SetRecord(rec); err != nil {
+					return rec, err
+				}
+			}
+			_ = h.Close(StatusReleased, nil)
+		}
 	}
 	// Released runs never launch again, in memory or restored from disk.
 	d.mu.Lock()
 	d.releaseRunFilesLocked(id)
 	d.mu.Unlock()
 	// The pane is gone, so a cleanup deferred (or kept) while it was alive
-	// can finally be decided. This is the path manual release, close and
-	// release_on_finish all take.
+	// can finally be decided. This is the path manual release and the
+	// release of a closed run both take.
 	if rec.Isolation == "worktree" {
 		rec = d.cleanupWorktree(id)
 	}
+	return rec, nil
+}
+
+// commitReleaseLocked marks s released once its pane is gone. The caller
+// holds d.mu.
+func (d *Dispatcher) commitReleaseLocked(s *runState) {
+	current := s.record
+	current.Status, current.PaneID, current.ViewerPaneID, current.ViewerKind = StatusReleased, "", "", ""
+	if current.EndedAt.IsZero() {
+		current.EndedAt = d.now()
+	}
+	current.foldActive(current.EndedAt)
+	s.record = current
+	s.killPending = false
+	d.persistLocked(s, "status")
+	_ = s.handle.Close(StatusReleased, nil)
+	select {
+	case <-s.done:
+	default:
+		close(s.done)
+	}
+}
+
+// retirePaneLocked takes run s's pane down, then commits what that means for
+// the run: a release (commitReleaseLocked) or closing on a delivered result
+// (parkLocked). admit runs under d.mu first and may refuse (refusals are
+// ValidationErrors; anything else is the kill's error); from then until
+// commit, s.releasing keeps reports, sweeps and follow-ups off the run. The
+// kill is ordered with the run's other pane ops and kills whatever pane the
+// run has when it runs. A failed kill commits nothing. The caller holds the
+// run's serial lock.
+func (d *Dispatcher) retirePaneLocked(s *runState, layout func(string) error, admit func(*runState) error, commit func(*runState)) (Record, error) {
+	d.mu.Lock()
+	if s.releasing {
+		rec := cloneRecord(s.record)
+		d.mu.Unlock()
+		return rec, invalidf("dispatch %s is being released", rec.ID)
+	}
+	if admit != nil {
+		if err := admit(s); err != nil {
+			rec := cloneRecord(s.record)
+			d.mu.Unlock()
+			return rec, err
+		}
+	}
+	s.releasing = true
+	rt := d.interactiveRuntime
+	rec := cloneRecord(s.record)
+	d.mu.Unlock()
+	defer func() { d.mu.Lock(); s.releasing = false; d.mu.Unlock() }()
+	if rec.PaneID != "" && rt != nil {
+		if layout == nil {
+			layout = runtimeLayout(rt)
+		}
+		var closeErr error
+		d.mu.Lock()
+		closed := d.enqueuePaneOpLocked(s, paneOpKill, func() {
+			d.mu.Lock()
+			current := cloneRecord(s.record)
+			d.mu.Unlock()
+			rec, closeErr = d.closeRecordedPane(current, current.PaneID, rt.Kill, layout)
+		})
+		d.mu.Unlock()
+		<-closed
+		if closeErr != nil {
+			return rec, closeErr
+		}
+	}
+	d.mu.Lock()
+	commit(s)
+	rec = cloneRecord(s.record)
+	d.mu.Unlock()
 	return rec, nil
 }

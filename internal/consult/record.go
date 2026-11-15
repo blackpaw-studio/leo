@@ -259,9 +259,9 @@ type Record struct {
 	// never mutate a map a Record copy may share.
 	OpenTools map[string]time.Time `json:"-"`
 	// ReleaseOnFinish is the resolved release_on_finish setting: an
-	// interactive run releases itself once its first turn finishes and the
-	// result has reached the caller. ReleasedOnFinish says that is why a
-	// released run closed.
+	// interactive run closes its pane once a turn's complete result has
+	// reached the caller, and is kept (Retained) for a follow-up to reopen.
+	// ReleasedOnFinish marks a run an older leo released on finish.
 	ReleaseOnFinish  bool `json:"release_on_finish"`
 	ReleasedOnFinish bool `json:"released_on_finish,omitempty"`
 	// Retained marks a closed interactive run whose pane closed because its

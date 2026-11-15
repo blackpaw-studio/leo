@@ -201,10 +201,9 @@ type runState struct {
 	// session); its close notice says so once it ends.
 	closeReason string
 	killPending bool
-	releasing   bool
-	// releasingOnFinish marks a release triggered by release_on_finish, so
-	// the record says why the run closed.
-	releasingOnFinish bool
+	// releasing marks a run whose pane is being retired, by a release or by
+	// closing on a delivered result (see retirePaneLocked).
+	releasing bool
 	// pgid is the headless command's private process group. It is retained
 	// after Wait so worktree cleanup can prove no detached child remains.
 	pgid            int
@@ -1098,6 +1097,12 @@ func (d *Dispatcher) collectRun(ctx context.Context, id string, observed *runSta
 	// A result read for an older terminal turn must not clean up or collect
 	// while a newer invocation owns the run.
 	if state != nil && state.done != done && !rec.Status.Terminal() {
+		return rec, false
+	}
+	// A parked run is kept whole for a follow-up to reopen; release or the
+	// retention sweep cleans it up. Nothing was collected, so a wait reports
+	// the retained worktree as is.
+	if parked(rec) {
 		return rec, false
 	}
 	rec = d.cleanupWorktree(rec.ID)

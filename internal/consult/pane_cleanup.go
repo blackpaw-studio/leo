@@ -89,7 +89,8 @@ func (d *Dispatcher) closeRecordedPaneThen(rec Record, pane string, kill func(st
 	}
 	// A finished run whose pane was the last writer: decide its worktree now
 	// rather than leaving the cleanup that found the pane alive deferred.
-	if rec.Mode == ModeInteractive && rec.Isolation == "worktree" && rec.Status.Terminal() && rec.PaneID == "" && rec.WorktreeState != WorktreeRemoved {
+	// A parked run keeps its worktree for a follow-up to reopen in.
+	if rec.Mode == ModeInteractive && rec.Isolation == "worktree" && rec.Status.Terminal() && !parked(rec) && rec.PaneID == "" && rec.WorktreeState != WorktreeRemoved {
 		rec = cleanup(rec)
 	}
 	return rec, nil

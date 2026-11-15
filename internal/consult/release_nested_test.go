@@ -46,11 +46,12 @@ func TestReleasedChildFreesItsPlaceUnderTheRootsCapWithoutTouchingThePool(t *tes
 	for _, tc := range []struct {
 		name    string
 		release func(d *Dispatcher, id string) error
+		want    Status
 	}{
-		{"release_on_finish", func(d *Dispatcher, id string) error {
-			return d.WaitAndRelease(context.Background(), []string{id}, 0, func([]Entry) error { return nil })
-		}},
-		{"manual leo_release", func(d *Dispatcher, id string) error { _, err := d.Release(id); return err }},
+		{"closed on finish", func(d *Dispatcher, id string) error {
+			return d.WaitAndClose(context.Background(), []string{id}, 0, func([]Entry) error { return nil })
+		}, StatusClosed},
+		{"manual leo_release", func(d *Dispatcher, id string) error { _, err := d.Release(id); return err }, StatusReleased},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			d, rt, ids := releaseTree(t)
@@ -60,11 +61,11 @@ func TestReleasedChildFreesItsPlaceUnderTheRootsCapWithoutTouchingThePool(t *tes
 			if err := tc.release(d, ids[0]); err != nil {
 				t.Fatal(err)
 			}
-			if rec := status(d, ids[0]); rec.Status != StatusReleased || rt.killCount() != 1 {
+			if rec := status(d, ids[0]); rec.Status != tc.want || rt.killCount() != 1 {
 				t.Fatalf("status=%s kills=%d", rec.Status, rt.killCount())
 			}
 			if err := admitsAnotherChild(d); err != nil {
-				t.Fatalf("a released child kept its place under the root's cap: %v", err)
+				t.Fatalf("a %s child kept its place under the root's cap: %v", tc.want, err)
 			}
 			// Releasing an exempt child must not hand back a place in the
 			// shared pool it never took: it stays held by its real owner.
