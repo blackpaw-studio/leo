@@ -415,6 +415,18 @@ bridge feed, with these differences from claude agents:
 
 Dispatch (consult) records and opencode agents carry no usage.
 
+## Addendum: resumable dispatches (2026-11-14)
+
+Each `dispatches[]` entry in `/api/v1/state`, and each `dispatch_changed`
+payload, gains `resumable` (bool, omitted when false). It is true for a
+closed interactive dispatch whose pane closed once its result was delivered
+(see `docs/configuration/dispatches.md`, "Close on delivery and reopen"):
+a follow-up (`leo_send_dispatch`) reopens its session in the same cwd or
+worktree. It is false once a reopen found the session unresumable, and for
+a released run. Such a run is terminal (`closed`), so like any ended
+dispatch it leaves `dispatches[]` after `DispatchLinger` (60 s). The tmux
+status-bar roster is unchanged.
+
 ## Access
 
 Both routes register on the existing `apiMux` and inherit its conventions unchanged:

@@ -309,7 +309,7 @@ func (s *Server) handleAPIDispatchWait(w http.ResponseWriter, r *http.Request) {
 		}
 		timeout = time.Duration(seconds * float64(time.Second))
 	}
-	// A release_on_finish run is released only once its result was written.
+	// A release_on_finish run's pane closes only once its result was written.
 	_ = s.consults.WaitAndClose(r.Context(), ids, timeout, func(entries []consult.Entry) error {
 		return encodeJSON(w, http.StatusOK, apiResponse{OK: true, Data: entries})
 	})
