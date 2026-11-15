@@ -80,7 +80,8 @@ func (r *TmuxInteractiveRuntime) spillHome() string {
 	return cfg.HomePath
 }
 
-// ReleaseRunFiles removes run id's settings spill file and, if it used
+// ReleaseRunFiles removes run id's settings spill file, its private MCP
+// config and, if it used
 // argv-delivered claude opening (see claudeDeliversPromptViaArgv), its
 // opening-brief file. A bridged run's bridge is forgotten too.
 func (r *TmuxInteractiveRuntime) ReleaseRunFiles(id string) {
@@ -88,6 +89,7 @@ func (r *TmuxInteractiveRuntime) ReleaseRunFiles(id string) {
 	home := r.spillHome()
 	removeIfExists(dispatchSpillPath(home, id), "settings spill", id)
 	removeIfExists(dispatchBriefPath(home, id), "opening brief", id)
+	removeIfExists(dispatchMCPConfigPath(home, id), "mcp config", id)
 }
 
 func removeIfExists(path, what, id string) {
@@ -108,7 +110,8 @@ func (r *TmuxInteractiveRuntime) SweepRunFiles(keep func(id string) bool) int {
 		return 0
 	}
 	return sweepGlob(filepath.Join(home, "state", "settings", dispatchSpillPrefix+"*.json"), dispatchSpillPrefix, ".json", "settings spill", keep) +
-		sweepGlob(filepath.Join(home, "state", claudeharness.DispatchBriefSpillDir, "*.txt"), "", ".txt", "opening brief", keep)
+		sweepGlob(filepath.Join(home, "state", claudeharness.DispatchBriefSpillDir, "*.txt"), "", ".txt", "opening brief", keep) +
+		sweepGlob(filepath.Join(home, "state", "mcp", dispatchSpillPrefix+"*.json"), dispatchSpillPrefix, ".json", "mcp config", keep)
 }
 
 // sweepGlob removes the files matching pattern whose run id keep rejects and

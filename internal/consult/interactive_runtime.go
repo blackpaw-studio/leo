@@ -147,10 +147,13 @@ func (r *TmuxInteractiveRuntime) Launch(ctx context.Context, req LaunchRequest) 
 	}
 	childEnv := leomcp.DispatchChildEnv(cfg, tmpl, req.ID)
 	if claudeOpts, ok := opts.(claudeharness.Options); ok && req.Dispatched {
-		opts = resolveClaudeDispatchProfile(cfg, tmpl, "dispatch", claudeOpts, tmplEnv, r.LeoMCP)
+		var warnings []string
+		opts, warnings = resolveClaudeDispatchOptions(cfg, tmpl, "dispatch", claudeOpts, tmplEnv, r.LeoMCP)
+		logDispatchWarnings(req.ID, req.Template, warnings)
 	} else if req.Dispatched {
 		opts = withLeoMCPBridge(opts, r.LeoMCP, tmpl, childEnv)
 	}
+	paneLaunched := false
 	spec := harness.LaunchSpec{Kind: harness.KindAgent, Name: req.Name, Model: req.Model, Effort: req.Effort, MaxTurns: cfg.TemplateMaxTurns(tmpl), Workspace: req.Cwd, Options: opts, Dispatched: req.Dispatched}
 	// Claude delivers the opening brief as a launch-time argv positional
 	// instead of a tmux paste: a pasted brief arrives wrapped as
@@ -171,6 +174,21 @@ func (r *TmuxInteractiveRuntime) Launch(ctx context.Context, req LaunchRequest) 
 		if err := writePrivateBrief(briefPath, req.Prompt); err != nil {
 			return "", "", fmt.Errorf("claude: %w", err)
 		}
+	}
+	if claudeOpts, ok := spec.Options.(claudeharness.Options); ok && claudeOpts.StrictMCPConfigPrivate {
+		// Written fresh for this launch; ReleaseRunFiles removes it, and a
+		// launch that fails here removes it itself.
+		mcpPath := dispatchMCPConfigPath(cfg.HomePath, req.ID)
+		materialized, err := claudeharness.MaterializeStrictMCPConfig(claudeOpts, mcpPath)
+		if err != nil {
+			return "", "", fmt.Errorf("claude: writing the MCP config: %w", err)
+		}
+		spec.Options = materialized
+		defer func() {
+			if !paneLaunched {
+				removeIfExists(mcpPath, "mcp config", req.ID)
+			}
+		}()
 	}
 	args, err := h.Args(spec)
 	if err != nil {
@@ -344,6 +362,7 @@ func (r *TmuxInteractiveRuntime) Launch(ctx context.Context, req LaunchRequest) 
 	}
 	r.AdoptPane(pane, h.Name(), req.Placement.Kind)
 	launched = true
+	paneLaunched = true
 	if bd != nil {
 		r.bridgeLaunched(req.ID, pane)
 		r.tagLaunch(ctx, req.ID, pane, bd.launch)

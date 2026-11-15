@@ -1063,3 +1063,52 @@ func TestInteractiveDispatchInheritsEnvironmentsAndBlanksTheRest(t *testing.T) {
 		t.Fatalf("launch argv does not blank ANTHROPIC_BASE_URL: %v", launch)
 	}
 }
+
+func TestInteractiveClaudeDispatchMCPServersLaunchUsesPrivateFile(t *testing.T) {
+	account := t.TempDir()
+	body := `{"mcpServers":{"chrome":{"command":"npx","headers":{"Authorization":"` + mcpSecretSentinel + `"}},"other":{"url":"https://example.invalid"}}}`
+	if err := os.WriteFile(filepath.Join(account, ".claude.json"), []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg := &config.Config{HomePath: t.TempDir(), Web: config.WebConfig{Enabled: true}, Delegation: &config.DelegationConfig{ActiveProfile: "p", Profiles: map[string]config.Profile{"p": {Roles: map[string]config.RoleTarget{"implement": {Template: "claude"}}}}}, Templates: map[string]config.TemplateConfig{
+		"claude": {Harness: "claude", Model: "sonnet", Env: config.LiteralEnv(map[string]string{"HOME": t.TempDir(), "CLAUDE_CONFIG_DIR": account}), HarnessOptions: map[string]any{"mcp_servers": []any{"chrome", "nope"}}},
+	}}
+	r := NewInteractiveRuntime("/tmp/leo.yaml", func() (*config.Config, error) { return cfg, nil }, nil, "tmux", "/opt/leo")
+	var launch []string
+	r.ExecCommandContext = func(_ context.Context, _ string, args ...string) *exec.Cmd {
+		if slices.Contains(args, "new-window") {
+			launch = append([]string(nil), args...)
+			return exec.Command("echo", "%42")
+		}
+		if slices.Contains(args, "has-session") {
+			return exec.Command("false")
+		}
+		return exec.Command("true")
+	}
+
+	if _, _, err := r.Launch(context.Background(), LaunchRequest{ID: "d-mcp", Template: "claude", Cwd: t.TempDir(), Dispatched: true}); err != nil {
+		t.Fatal(err)
+	}
+
+	command := launch[len(launch)-1]
+	path := dispatchMCPConfigPath(cfg.HomePath, "d-mcp")
+	if !containsAll(command, "--strict-mcp-config", "--mcp-config", path) {
+		t.Fatalf("launch lacks --mcp-config %s: %q", path, command)
+	}
+	if strings.Contains(command, mcpSecretSentinel) || strings.Contains(command, "mcpServers") {
+		t.Fatalf("launch command leaks the MCP config: %q", command)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if names := configServerNames(t, data); len(names) != 2 || names[0] != "chrome" || names[1] != "leo" {
+		t.Fatalf("file servers = %v, want [chrome leo]", names)
+	}
+	if fi, _ := os.Stat(path); fi.Mode().Perm() != 0o600 {
+		t.Fatalf("mode = %v, want 0600", fi.Mode().Perm())
+	}
+
+	r.ReleaseRunFiles("d-mcp")
+	assertGone(t, path)
+}
