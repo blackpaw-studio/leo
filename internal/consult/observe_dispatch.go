@@ -234,8 +234,8 @@ func observedDispatchShown(rec, shown Record, now time.Time) observe.Dispatch {
 		Environments: slices.Clone(rec.Environments), EnvironmentsSource: rec.EnvironmentsSource,
 		Status: string(shown.Status), Stalled: isStalled(rec, now), Pending: shown.PendingWork.Summary(),
 		CallerAgent: rec.Caller, ParentDispatchID: parentDispatchID(rec), StartedAt: rec.StartedAt,
-		Attachable: Attachable(rec),
-		TokensIn:   valueOr(rec.InputTokens), TokensOut: valueOr(rec.OutputTokens), CostUSD: valueOr(rec.CostUSD),
+		Attachable: Attachable(rec), Resumable: resumable(rec),
+		TokensIn: valueOr(rec.InputTokens), TokensOut: valueOr(rec.OutputTokens), CostUSD: valueOr(rec.CostUSD),
 	}
 	if rec.Mode == ModeInteractive {
 		d.TmuxTarget = rec.PaneID

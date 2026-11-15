@@ -167,6 +167,14 @@ type InteractivePreparer interface {
 	PrepareInteractive(env map[string]string, cwd, leoBin string) error
 }
 
+// InteractiveResumer is an optional adapter capability for relaunching an
+// interactive (KindAgent) TUI on an existing session: it rewrites the launch
+// argv to resume sessionID rather than start fresh. A harness without it
+// cannot reopen a dispatch.
+type InteractiveResumer interface {
+	InteractiveResumeArgs(args []string, sessionID string) []string
+}
+
 // FallbackString returns primary if non-empty, else fallback. Callers use
 // it to resolve config cascades into a LaunchSpec.
 func FallbackString(primary, fallback string) string {

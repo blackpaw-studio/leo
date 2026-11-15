@@ -185,6 +185,11 @@ func (d *Dispatcher) cleanupPrecheck(rec Record, state *runState) (Record, bool)
 	if rec.Isolation != "worktree" || rec.WorktreeState == WorktreeRemoved {
 		return rec, false
 	}
+	// A parked run keeps its worktree for a follow-up to reopen in; release
+	// or the retention sweep decides it.
+	if parked(rec) {
+		return rec, false
+	}
 	deferCleanup := func() (Record, bool) { return d.setWorktreeState(rec, state, WorktreeDeferred), false }
 	if rec.Mode == ModeInteractive {
 		switch {

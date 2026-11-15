@@ -35,10 +35,12 @@ func (d *Dispatcher) CloseFinished(callerSessionID string) ([]Record, error) {
 			if rec.Status != StatusIdle && !rec.Status.Terminal() {
 				continue
 			}
-			if rec.Status == StatusReleased {
+			// A parked run has no pane left to close, and is kept for its
+			// orchestrator's follow-up; release or retention ends it.
+			if rec.Status == StatusReleased || parked(rec) {
 				continue
 			}
-			rec, err = d.releaseLocked(id, deferLayout)
+			rec, err = d.releaseLocked(id, deferLayout, ReleaseReasonManual)
 		} else {
 			if !rec.Status.Terminal() {
 				continue

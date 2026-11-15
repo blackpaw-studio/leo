@@ -36,11 +36,12 @@ func carriesResultInline(rec Record, transport string) bool {
 // deliveryMessage is the text to send for notification key over transport.
 func deliveryMessage(rec Record, key string, n Notification, transport string) string {
 	pointer := notificationMessage(rec, key, n)
-	if !carriesResultInline(rec, transport) {
-		return pointer
-	}
+	inline := carriesResultInline(rec, transport)
 	if isCloseNoticeKey(rec, key) {
-		return closeNoticeMessage(rec, pointer)
+		return closeNoticeMessage(rec, pointer, inline)
+	}
+	if !inline {
+		return pointer
 	}
 	if isWaitingNoticeKey(rec, key) {
 		// No turn has a result to carry: the notice is its header alone.
@@ -192,12 +193,12 @@ func (d *Dispatcher) collectDelivered(ctx context.Context, item pendingNotificat
 	rec, done := cloneRecord(item.state.record), item.state.done
 	d.mu.Unlock()
 	if rec.Mode == ModeInteractive {
-		// A run that opted into release_on_finish is released now that its
-		// result was delivered; released is terminal, so it is collected below.
-		// A notification cut at the inline cap did not carry the whole
-		// result, so that run keeps its pane until the idle close.
+		// A release_on_finish run closes its pane now that this turn's
+		// result was delivered, and is kept for a follow-up to reopen. A
+		// notification cut at the inline cap did not carry the whole
+		// result, so that run keeps its pane until the result is collected.
 		if !inlineTruncated(rec, item.key) {
-			if err := d.releaseDeliveredLocked(rec.ID); err != nil {
+			if err := d.parkDeliveredLocked(rec.ID, item.key); err != nil {
 				fmt.Fprintf(os.Stderr, "dispatch %s: %v\n", rec.ID, err)
 			}
 			rec = d.stateRecord(item.state)

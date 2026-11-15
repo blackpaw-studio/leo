@@ -187,6 +187,15 @@ func (h *restoredNotificationHandle) SetViewerWindowID(id string) error {
 func (h *restoredNotificationHandle) Close(Status, error) error { return nil }
 
 func (d *Dispatcher) addRestartCandidates(rec *Record) {
+	d.addRestartTurnCandidates(rec)
+	if rec.Mode == ModeInteractive {
+		d.addCloseNotice(rec, closeReasonDaemonRestart, d.waitCoversRunLocked(*rec))
+	}
+}
+
+// addRestartTurnCandidates owes a notification for each turn a restart
+// found ended.
+func (d *Dispatcher) addRestartTurnCandidates(rec *Record) {
 	if rec.Notifications == nil {
 		rec.Notifications = make(map[string]Notification)
 	}
@@ -206,9 +215,6 @@ func (d *Dispatcher) addRestartCandidates(rec *Record) {
 		if turn.Outcome != "" {
 			add(turn.TurnID)
 		}
-	}
-	if rec.Mode == ModeInteractive {
-		d.addCloseNotice(rec, closeReasonDaemonRestart, d.waitCoversRunLocked(*rec))
 	}
 }
 

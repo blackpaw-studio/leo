@@ -223,6 +223,15 @@ func (r *TmuxInteractiveRuntime) Launch(ctx context.Context, req LaunchRequest) 
 	if err != nil {
 		return "", "", err
 	}
+	if req.ResumeSessionID != "" {
+		// A reopen resumes the run's own session; there is no fallback to a
+		// fresh one. The bridge's legacy relaunch reuses these args too.
+		resumer, ok := h.(harness.InteractiveResumer)
+		if !ok {
+			return "", "", fmt.Errorf("harness %q cannot resume an interactive session", h.Name())
+		}
+		args = resumer.InteractiveResumeArgs(args, req.ResumeSessionID)
+	}
 	env, err := h.Env(spec)
 	if err != nil {
 		return "", "", err

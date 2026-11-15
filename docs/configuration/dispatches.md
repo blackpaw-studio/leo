@@ -18,7 +18,8 @@ defaults to `window` instead of `pane`; any explicit value, including one
 inherited from a lead by [follow-lead](follow-lead.md), wins. The JSON config
 API edits it as `values.dispatch_viewer.placement` on `/config/defaults`
 (`max_panes` and `main_pane_height` stay on the settings-menu endpoint).
-Release an idle or finished interactive pane with `leo dispatch release <id>`.
+Release an interactive dispatch you are done with (idle, finished, or parked
+after its result was delivered) with `leo dispatch release <id>`.
 
 `background` never touches the caller's tmux session: every dispatch (headless
 viewer or interactive TUI, nested dispatches included) opens as a detached
@@ -199,9 +200,13 @@ outlive collection; such writes after a clean removal are lost.
 
 Cleanup runs against the dispatch's canonical repository (not the worktree's
 directory) and applies the same rules everywhere: when a result is collected,
-when a run is released, closed, or released on finish, after its pane is
-killed, after a daemon restart, and in
+when a run is released or closed, after its pane is killed, after a daemon
+restart, and in
 [`leo dispatch prune`](../cli/dispatch-prune.md).
+
+A run [parked](#close-on-delivery-and-reopen) after its result was delivered
+is skipped by all of these until it is released: its worktree waits for a
+follow-up.
 
 - A worktree with modified tracked files or untracked (non-ignored) files is
   **kept**. Ignored build output never blocks removal.
@@ -477,48 +482,88 @@ the dispatch id, hook event, task id and a fixed reason.
 
 An interactive dispatch is bound to its caller's tmux session. It closes on
 cancel, TUI exit, one hour of empty-composer idle time, or the session timeout.
-A live pane survives a daemon restart (see [Daemon restarts](#daemon-restarts)),
-and interactive panes never close merely
-because their result was collected, unless the run opted into
-[`release_on_finish`](#release-on-finish).
+A live pane survives a daemon restart (see [Daemon restarts](#daemon-restarts)).
+Once a turn's complete result reaches the caller the pane closes and the run
+is parked for a follow-up, unless the run opted out
+([close on delivery and reopen](#close-on-delivery-and-reopen)).
 
-### Release on finish
+### Close on delivery and reopen
 
-Read-only dispatches (explore, plan, review) are rarely followed up, yet an
-idle interactive pane stays open for an hour after it answers. `release_on_finish`
-releases the run, with the same effect as `leo_release`, as soon as its first
-turn finishes **and** the result has reached the caller.
+An idle interactive pane would otherwise stay open for an hour after it
+answers. Instead, once a turn's complete result has reached the caller, the
+pane closes and the run is **parked**: its record, session id, transcript,
+cwd and worktree are kept, and a follow-up reopens it. This is
+`release_on_finish` (the name predates reopening).
 
-- **Default.** On for the read-only roles `explore`, `plan`, `review` and any
-  `review.*` sub-role; off for `implement`, `implement.hard`, every other role,
-  and template dispatches that name no role. The role name is the signal, not
-  the template's permissions: the harnesses share no write-permission setting
-  (codex sandbox, claude permission mode, opencode), and a "read-only" template
-  often still runs with bypass permissions. An explicit `release_on_finish:
-  true|false` (MCP/API) or `--release-on-finish[=false]` (CLI) always wins.
+- **Default.** On for every interactive dispatch, every role and template
+  dispatches alike. An explicit `release_on_finish: false` (MCP/API) or
+  `--release-on-finish=false` (CLI) keeps the pane open until the one-hour
+  idle close.
 - **Trigger.** Only after the complete result was delivered, never before: the
   inline completion notification was delivered (claude callers; a bridged
   caller's ack counts), or `leo_wait` returned the result and its HTTP response
-  was written successfully (a failed write or canceled request keeps the run).
+  was written successfully (a failed write or canceled request keeps the pane).
   A pointer-only notification (codex and opencode callers) does not carry the
-  result, so those callers release on `leo_wait`. `leo_dispatch_output` never
-  releases. A result cut at a size cap (8 KiB inline, 32 KiB in `leo_wait`) was
-  not delivered whole, so that run is kept. With `notify: false` and nobody
-  collecting, or after any of these, the run falls back to the normal one-hour
-  idle close.
-- **Never** on an `interrupted`, `lost` or `rejected` turn, a run that is
-  `needs_input` or `waiting`, a follow-up that is queued or running, or a run
-  that has a second turn (including one typed into the pane).
-- **After release.** The recorded result stays readable (`leo_wait`,
-  `leo_dispatch_output`, `leo dispatch show`). `leo_send_dispatch` to the run
-  fails with `dispatch d-… was released after finishing (release_on_finish);
-  start a new dispatch`. Pass `release_on_finish: false` when you expect a
-  follow-up.
+  result, so those callers close on `leo_wait`. `leo_dispatch_output` never
+  closes. A result cut at a size cap (8 KiB inline, 32 KiB in `leo_wait`) was
+  not delivered whole, so its pane stays until `leo_wait` collects it.
+- **Never** when the delivered turn is not the run's last, on an
+  `interrupted`, `lost` or `rejected` turn, a run that is `needs_input` or
+  `waiting`, a follow-up that is queued or running, or a run anyone has typed
+  into (someone is using the pane).
+- **Nothing to read.** Closing on delivery sends no close notice: the caller
+  already has the result.
+- **Reopen.** `leo_send_dispatch` to a parked run relaunches its own session
+  (`claude --resume <id>`, `codex resume <id>`) in the same cwd or worktree,
+  with the same template and environments, placed like a new dispatch next to
+  its caller. The follow-up is sent as written, without the dispatch brief,
+  and comes back as turn `d-…#n` like any follow-up; its result is delivered
+  once and the pane closes again. With every slot busy the reopen queues in
+  the same FIFO as new dispatches; a second send while it is queued is
+  rejected. Its timeout, if any, counts from the reopen.
+- **Never fresh.** A reopen is checked before anything changes, and nothing
+  changes when it is refused (`dispatch d-… closed and is not resumable:
+  <reason>; start a new dispatch`): no recorded session, an earlier reopen that
+  failed, a harness that cannot resume (opencode), a template that is gone or
+  now runs another harness, a missing workspace, or a claude transcript that
+  is missing or lives under another claude config dir than the one the reopen
+  would use. Once launched, the reopen is confirmed by the first hook naming
+  the run's session. A hook naming another session means the harness started
+  fresh: the pane is killed, the turn is rejected with `could not resume
+  session X (harness started Y); nothing was continued`, and the run is parked
+  again as no longer resumable. A pane that exits before confirming does the
+  same. A launch failure, a cancel or a timeout before confirmation also parks
+  the run again, still resumable. None of these send a close notice or touch
+  the worktree.
+- **Retention.** A parked run is released after 7 days without a follow-up
+  (`release_reason: retention`), and by `leo_release` (`manual`). Release
+  removes a clean worktree and keeps one with uncommitted or unmerged work,
+  as everywhere else. After release the recorded result stays readable
+  (`leo_wait`, `leo_dispatch_output`, `leo dispatch show`) and a follow-up
+  fails with `dispatch d-… was released (leo_release); start a new dispatch`
+  (or `…after 7 days without a follow-up (retention)…`).
+- **Other closes stay final.** Idle, pane-gone, caller-gone and restart
+  closes are terminal as before, and their close notice is one header line
+  pointing at `leo_dispatch_output` when the last result already reached the
+  caller.
 - **Visibility.** The record (`leo dispatch show`, `GET /api/dispatch/{id}`)
-  carries the resolved `release_on_finish`, and `released_on_finish: true` on a
-  run that closed this way, to tell it from a manual release or an idle close.
+  carries the resolved `release_on_finish`, `retained: true` while parked,
+  `resume_error` after a failed reopen, `release_reason` once released, and
+  each turn's `result_collected_at`. `/api/v1` marks a parked run
+  `resumable`. Older records' `released_on_finish: true` still reads as a
+  release.
 - Headless dispatches ignore the setting (it records `false`); headless
   continuation is unchanged.
+
+| State | Event | Next |
+|---|---|---|
+| live, idle | last turn's complete result delivered | parked: pane closed, no close notice |
+| parked | follow-up, a slot free | live: resumed session, unconfirmed |
+| parked | follow-up, every slot busy | queued reopen, still parked underneath |
+| live, unconfirmed | hook names the run's session | live: an ordinary run again |
+| live unconfirmed, or queued | other session, early exit, launch error, cancel, restart | parked (a failure to resume makes it unresumable) |
+| parked | `leo_release`, or 7 days with no follow-up | released, worktree cleaned up under the usual rules |
+| live, confirmed | idle, pane gone, caller gone, cancel, timeout | closed as before, with a close notice |
 
 Known limitations: turns are attributed by the harness's own ids (claude's
 `prompt_id`, the bridge's turn id, codex's `turn_id`), not by arrival order
@@ -624,6 +669,10 @@ and the turn's result reaches the caller as usual. Each run logs one
 - **Older runs.** Runs launched before this release carry no launch tag, so
   they are adopted hook-driven: their mod is refused, and hooks and the pane
   drive them.
+- **Parked runs** are left as they are: a restart neither settles nor
+  cleans up a run parked for a follow-up. A reopen still waiting for its slot
+  parks again (its turn ends `interrupted`), and a reopened pane the restart
+  adopts is treated as resumed.
 - **Headless runs** are unchanged: they settle as `daemon restarted`, and
   [headless continuation](#headless-continuation) picks them up.
 
@@ -646,7 +695,10 @@ the base commit itself when cleanup deleted a branch that pointed at it. Active
 or still-reaping runs, missing sessions/templates/workspaces, changed
 harnesses, unsupported adapters, and exhausted capacity (headless continuation
 does not queue) are rejected before
-the record is changed. Timeout and completion notification apply separately
+the record is changed. (A closed interactive run is different: only one parked
+after its result was delivered can be followed up, and it
+[reopens](#close-on-delivery-and-reopen) a pane rather than running headless.)
+Timeout and completion notification apply separately
 to each invocation; elapsed active time and measured usage accumulate across
 turns. Recorded output is append-only, so `dispatch output` and `watch` show
 the complete session history.
@@ -698,7 +750,8 @@ it first. The cap applies to new runs and queued follow-ups alike and is
 re-read from the config on each dispatch or send.
 Consult runs are capped at 30 minutes. Dispatch runs are unlimited unless
 `timeout_seconds` (or CLI `--timeout`) is set. Leo retains the 20 newest
-settled records and never prunes plausible in-flight runs.
+settled records and never prunes plausible in-flight runs, nor a parked run
+(`retained: true`) before it is released.
 
 ## Example templates
 

@@ -42,6 +42,12 @@ type LaunchRequest struct {
 	// Environments is the dispatch's inherited environment layer (see
 	// Record.InheritedEnvironments), layered over the template's.
 	Environments []string
+	// ResumeSessionID relaunches the harness on this earlier session instead
+	// of a fresh one (claude --resume <id>, codex resume <id>). Reopen marks
+	// the launch of a parked run's follow-up: Prompt is the raw follow-up,
+	// not a dispatch brief.
+	ResumeSessionID string
+	Reopen          bool
 }
 type InteractiveRuntime interface {
 	Launch(context.Context, LaunchRequest) (paneID, window string, err error)
@@ -257,6 +263,11 @@ func (d *Dispatcher) launchWhenSlotFree(ctx context.Context, s *runState, req Re
 // launchInteractive opens turnID's pane. turnID must already hold a slot.
 func (d *Dispatcher) launchInteractive(ctx context.Context, s *runState, req Request, harnessName, model string, cfg *config.Config, rt InteractiveRuntime, turnID string) (Started, error) {
 	prompt := requestPrompt(req)
+	if req.resumeSessionID != "" {
+		// A reopen's opening turn is the follow-up as sent (D8): the
+		// resumed session already holds the dispatch brief.
+		prompt = req.Prompt
+	}
 	bridgesOpening := false
 	if b, ok := rt.(bridgeOpeningRuntime); ok {
 		bridgesOpening = b.BridgesOpening(ctx, harnessName)
@@ -311,7 +322,7 @@ func (d *Dispatcher) launchInteractive(ctx context.Context, s *runState, req Req
 	// as the opening brief (see TmuxInteractiveRuntime.Launch), so it must
 	// already be what the model should see, identical to what a tmux paste
 	// would have delivered.
-	pane, window, err := rt.Launch(ctx, LaunchRequest{ID: s.record.ID, Harness: harnessName, Model: model, Effort: req.Effort, Cwd: req.Cwd, Name: req.Name, Template: req.Template, Caller: req.Caller, Prompt: prompt, Timeout: req.Timeout, Dispatched: true, CallerPaneID: req.CallerPaneID, CallerSessionID: req.CallerSessionID, CallerWindowID: req.CallerWindowID, Placement: placement, Environments: placementRecord.InheritedEnvironments})
+	pane, window, err := rt.Launch(ctx, LaunchRequest{ID: s.record.ID, Harness: harnessName, Model: model, Effort: req.Effort, Cwd: req.Cwd, Name: req.Name, Template: req.Template, Caller: req.Caller, Prompt: prompt, Timeout: req.Timeout, Dispatched: true, CallerPaneID: req.CallerPaneID, CallerSessionID: req.CallerSessionID, CallerWindowID: req.CallerWindowID, Placement: placement, Environments: placementRecord.InheritedEnvironments, ResumeSessionID: req.resumeSessionID, Reopen: req.resumeSessionID != ""})
 	if err != nil {
 		d.placement.Cancel(placementRecord.ID)
 		d.mu.Lock()
@@ -341,7 +352,9 @@ func (d *Dispatcher) launchInteractive(ctx context.Context, s *runState, req Req
 		go d.watchLiveUsage(s)
 	}
 	go d.injectOpening(ctx, s, rt, harnessName, turnID, pane, prompt)
-	return Started{ID: s.record.ID, Harness: harnessName, Model: model, Cwd: req.Cwd, Placement: placement.Kind, Pane: pane, Window: window}, nil
+	// The id is read from the snapshot: s.record is mu's, and a pane op
+	// may be replacing it right now.
+	return Started{ID: placementRecord.ID, Harness: harnessName, Model: model, Cwd: req.Cwd, Placement: placement.Kind, Pane: pane, Window: window}, nil
 }
 
 // publishPane attaches a launched pane to its run, or kills it when the run
@@ -722,7 +735,15 @@ func clearPendingLocked(s *runState) {
 	s.record.PendingWork = nil
 }
 
+// Send sends a follow-up to a live interactive run. A parked run needs the
+// configuration to reopen, so it goes through SendWithConfig.
 func (d *Dispatcher) Send(ctx context.Context, id, message string) (SendResult, error) {
+	return d.sendInteractive(ctx, nil, id, message)
+}
+
+// sendInteractive injects message into a live run's pane, or reopens a
+// parked run's session with it (reopenLocked).
+func (d *Dispatcher) sendInteractive(ctx context.Context, cfg *config.Config, id, message string) (SendResult, error) {
 	unlockSerial := d.serialLocks([]string{id})
 	defer unlockSerial()
 	for _, ch := range message {
@@ -732,9 +753,10 @@ func (d *Dispatcher) Send(ctx context.Context, id, message string) (SendResult, 
 	}
 	rec, s, err := d.lookup(id)
 	if err == nil && rec.Status == StatusReleased {
-		if releasedErr := releasedSendError(rec); releasedErr != nil {
-			return SendResult{}, releasedErr
-		}
+		return SendResult{}, releasedSendError(rec)
+	}
+	if err == nil && parked(rec) {
+		return d.reopenLocked(cfg, rec, message)
 	}
 	if err != nil || s == nil {
 		return SendResult{}, fmt.Errorf("unknown dispatch %s", id)
@@ -898,6 +920,15 @@ func (d *Dispatcher) Report(id string, r HookReport) error {
 	// A report is the run's own word on where it is: an adopted run is
 	// live, and nothing it did while the daemon was down needs guessing.
 	s.adopting, s.adoptReconcile = false, false
+	if s.reopenUnconfirmed {
+		if got := str(p, "session_id"); got != "" {
+			if got != s.record.SessionID {
+				d.failReopenLocked(s, got)
+				return nil
+			}
+			d.confirmReopenLocked(s)
+		}
+	}
 	if s.record.SessionID == "" {
 		s.record.SessionID = str(p, "session_id")
 	}
@@ -1228,6 +1259,12 @@ func (d *Dispatcher) finishInteractiveLocked(s *runState, status Status) {
 	if s.record.Status.Terminal() {
 		return
 	}
+	if s.reopenUnconfirmed {
+		// A reopen that ends before its session is confirmed continued
+		// nothing: the run goes back to parked, never closed or released.
+		d.revertReopenLocked(s, status)
+		return
+	}
 	d.dropPermissionsLocked(s)
 	s.record.foldActive(d.now())
 	clearPendingLocked(s)
@@ -1339,7 +1376,7 @@ func (d *Dispatcher) Sweep(now time.Time) {
 			}
 		}
 		if !s.record.Status.Terminal() {
-			if s.record.Timeout > 0 && now.Sub(s.record.StartedAt) >= s.record.Timeout {
+			if s.record.Timeout > 0 && now.Sub(timeoutStart(s)) >= s.record.Timeout {
 				d.beginSettlementLocked(s, StatusTimeout, 0)
 			} else if s.record.PaneID != "" && rt != nil {
 				probes = append(probes, probe{state: s, pane: s.record.PaneID, callerSession: s.record.CallerSessionID, idle: s.record.Status == StatusIdle && !s.idleSince.IsZero() && now.Sub(s.idleSince) >= idleCloseAfter})

@@ -151,10 +151,33 @@ func (d *Dispatcher) closeNoticeLocked(s *runState, reason string) {
 	}
 }
 
-// closeNoticeMessage is the close notice for transports that take the last
-// turn's result inline: header, then that result delimited as subagent output.
-func closeNoticeMessage(rec Record, pointer string) string {
-	return inlineNotification(rec, lastTurnID(rec), strings.TrimSuffix(pointer, pointerSuffix))
+// closeNoticeMessage is the close notice as delivered. When the last
+// turn's result already reached the caller (its notice delivered, truncated
+// or not, or leo_wait collected it) the notice is its header alone, pointing
+// at the full output. Otherwise a transport that takes the result inline
+// gets it after the header, and any other the pointer.
+func closeNoticeMessage(rec Record, pointer string, inline bool) string {
+	header := strings.TrimSuffix(pointer, pointerSuffix)
+	switch {
+	case lastResultReachedCaller(rec):
+		return header + fullOutputPointer + sanitizeNotification(rec.ID)
+	case !inline:
+		return pointer
+	}
+	return inlineNotification(rec, lastTurnID(rec), header)
+}
+
+// fullOutputPointer ends a close notice whose result the caller already has.
+const fullOutputPointer = " — full output: leo_dispatch_output "
+
+// lastResultReachedCaller reports whether the run's last turn's result
+// reached its caller: delivered as a notice, or collected by leo_wait.
+func lastResultReachedCaller(rec Record) bool {
+	if len(rec.Turns) == 0 {
+		return false
+	}
+	last := rec.Turns[len(rec.Turns)-1]
+	return !last.ResultCollectedAt.IsZero() || rec.Notifications[last.TurnID].Disposition == NotificationDelivered
 }
 
 // beginCloseLocked starts settling s into closed for reason, which its close

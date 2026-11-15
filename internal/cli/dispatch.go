@@ -199,7 +199,7 @@ func newDispatchRunCmd() *cobra.Command {
 	cmd.Flags().StringVar(&mode, "mode", "", "execution mode: interactive (default) or headless")
 	cmd.Flags().DurationVar(&timeout, "timeout", 0, "optional run cap (unlimited when omitted)")
 	cmd.Flags().BoolVar(&notify, "notify", true, "notify the caller when the dispatch completes")
-	cmd.Flags().BoolVar(&releaseOnFinish, "release-on-finish", false, "interactive only: release the pane once the first turn finishes and its result was read (default on for the explore, plan and review roles, off otherwise; --release-on-finish=false opts out)")
+	cmd.Flags().BoolVar(&releaseOnFinish, "release-on-finish", false, "interactive only: close the pane once a turn's result was read, keeping the run for a follow-up that reopens it (default on; --release-on-finish=false keeps the pane open)")
 	cmd.Flags().StringVar(&isolation, "isolation", "", "execution isolation (worktree)")
 	cmd.Flags().StringSliceVar(&environments, "environment", nil, "named environments to run under, layered over the template's; replaces the inherited (caller's) list, and --environment= inherits nothing")
 	addHostFlag(cmd, &host)

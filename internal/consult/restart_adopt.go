@@ -51,6 +51,11 @@ const adoptWaitLostText = "may have been waiting on background work when the dae
 // only in that daemon; any other run is settled as "daemon restarted". It
 // returns how many jobs it queued for ReconcileRestart.
 func (d *Dispatcher) restoreInteractive(rec Record) int {
+	if rec.Retained && rec.PaneID == "" {
+		// A reopen still in the slot line (Retained is cleared once a
+		// reopen is confirmed): nothing was continued, so it parks again.
+		return d.parkRestartedReopen(rec)
+	}
 	rt, ok := d.interactiveRuntime.(adoptionRuntime)
 	switch {
 	case !ok:
@@ -112,6 +117,10 @@ func (d *Dispatcher) adoptRestarted(rec Record, probe AdoptProbe, rt adoptionRun
 	// repopulates it. A turn already waiting on background work still is.
 	rec.BackgroundTasks, rec.OpenTools, rec.NeedsInput = nil, nil, nil
 	rec.AdoptedAt, rec.HookActivity = now, now
+	// An adopted reopen is taken as confirmed (an accepted risk: the restart
+	// would have to land between its launch and its first hook), so it
+	// closes like any live run from here.
+	rec.Retained = false
 	handle, err := recorder.Resume(rec)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "dispatch %s: reopening recording to adopt: %v\n", rec.ID, err)

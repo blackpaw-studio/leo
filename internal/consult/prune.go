@@ -27,6 +27,9 @@ const (
 	// PruneKeepDeferred: the daemon deferred this cleanup because a writer
 	// may be live, and prune cannot positively confirm it is gone.
 	PruneKeepDeferred = "keep:deferred"
+	// PruneKeepRetained: a parked run kept for a follow-up to reopen, until
+	// release or the retention sweep ends it.
+	PruneKeepRetained = "keep:retained"
 	PruneOrphan       = "orphan"
 	// PruneStale is a terminal record whose worktree directory is already
 	// gone: nothing to remove, only the record and git's registration to
@@ -185,6 +188,8 @@ func pruneDecide(git gitFunc, probe writerProbe, rec Record) (action, reason str
 	switch {
 	case !rec.Status.Terminal():
 		return PruneKeepNotTerm, fmt.Sprintf("dispatch is %s", rec.Status)
+	case parked(rec):
+		return PruneKeepRetained, "retained for follow-up until " + rec.EndedAt.Add(resumableRetention).Format(time.RFC3339)
 	case rec.Mode == ModeInteractive && rec.PaneID != "":
 		return PruneKeepNotTerm, fmt.Sprintf("pane %s is still recorded", rec.PaneID)
 	case rec.WorktreeState != WorktreeRemoved && missingOnDisk(rec.Worktree):

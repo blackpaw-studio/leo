@@ -10,7 +10,7 @@ import (
 
 func boolPtr(b bool) *bool { return &b }
 
-func TestResolveReleaseOnFinishDefaults(t *testing.T) {
+func TestResolveReleaseOnFinishDefaultsOnForEveryRole(t *testing.T) {
 	cases := []struct {
 		name     string
 		role     string
@@ -21,12 +21,13 @@ func TestResolveReleaseOnFinishDefaults(t *testing.T) {
 		{"plan defaults on", "plan", nil, true},
 		{"review defaults on", "review", nil, true},
 		{"review subrole defaults on", "review.security", nil, true},
-		{"implement defaults off", "implement", nil, false},
-		{"implement.hard defaults off", "implement.hard", nil, false},
-		{"no role defaults off", "", nil, false},
-		{"unknown role defaults off", "reviewer-ish", nil, false},
+		{"implement defaults on", "implement", nil, true},
+		{"implement.hard defaults on", "implement.hard", nil, true},
+		{"no role (template dispatch) defaults on", "", nil, true},
+		{"unknown role defaults on", "reviewer-ish", nil, true},
 		{"explicit false wins on a read-only role", "explore", boolPtr(false), false},
-		{"explicit true wins on implement", "implement", boolPtr(true), true},
+		{"explicit false wins on implement", "implement", boolPtr(false), false},
+		{"explicit false wins without a role", "", boolPtr(false), false},
 		{"explicit true wins without a role", "", boolPtr(true), true},
 	}
 	for _, c := range cases {
@@ -45,10 +46,10 @@ func TestStartRecordsResolvedReleaseOnFinish(t *testing.T) {
 		want bool
 	}{
 		{"read-only role", Request{Role: "explore"}, true},
-		{"implement role", Request{Role: "implement"}, false},
-		{"template escape hatch", Request{}, false},
+		{"implement role", Request{Role: "implement"}, true},
+		{"template dispatch", Request{}, true},
 		{"explicit opt-out", Request{Role: "review", ReleaseOnFinish: boolPtr(false)}, false},
-		{"explicit opt-in", Request{Role: "implement", ReleaseOnFinish: boolPtr(true)}, true},
+		{"explicit opt-out on implement", Request{Role: "implement", ReleaseOnFinish: boolPtr(false)}, false},
 		{"headless is a no-op", Request{Role: "explore", Mode: ModeHeadless}, false},
 	}
 	for _, c := range cases {
@@ -101,33 +102,33 @@ func status(d *Dispatcher, id string) Record {
 	return rec
 }
 
-func TestReleaseOnFinishReleasesOnlyAfterInlineDelivery(t *testing.T) {
+func TestReleaseOnFinishClosesOnlyAfterInlineDelivery(t *testing.T) {
 	d, rt, _ := finishedRun(t, "claude", TurnFinished, true)
 	delivery := &fakeNotificationDelivery{ready: false}
 	d.SetNotificationDelivery(delivery)
 
 	d.SweepNotifications(context.Background())
 	if rec := status(d, "d-rof"); rec.Status != StatusIdle || rt.killCount() != 0 {
-		t.Fatalf("released before the result reached the caller: status=%s kills=%d", rec.Status, rt.killCount())
+		t.Fatalf("closed before the result reached the caller: status=%s kills=%d", rec.Status, rt.killCount())
 	}
 
 	delivery.ready = true
 	d.SweepNotifications(context.Background())
 	rec := status(d, "d-rof")
-	if rec.Status != StatusReleased || !rec.ReleasedOnFinish || rec.PaneID != "" || rt.killCount() != 1 {
-		t.Fatalf("after delivery: status=%s released_on_finish=%v pane=%q kills=%d", rec.Status, rec.ReleasedOnFinish, rec.PaneID, rt.killCount())
+	if !parked(rec) || rec.PaneID != "" || rt.killCount() != 1 {
+		t.Fatalf("after delivery: status=%s retained=%v pane=%q kills=%d", rec.Status, rec.Retained, rec.PaneID, rt.killCount())
 	}
 	if rec.Notifications["d-rof#1"].Disposition != NotificationDelivered {
 		t.Fatalf("notification = %+v", rec.Notifications["d-rof#1"])
 	}
 }
 
-func TestReleaseOnFinishDoesNotReleaseOnFailedDelivery(t *testing.T) {
+func TestReleaseOnFinishDoesNotCloseOnFailedDelivery(t *testing.T) {
 	d, rt, _ := finishedRun(t, "claude", TurnFinished, true)
 	d.SetNotificationDelivery(&fakeNotificationDelivery{ready: true, err: ErrNotificationAmbiguous})
 	d.SweepNotifications(context.Background())
 	if rec := status(d, "d-rof"); rec.Status != StatusIdle || rt.killCount() != 0 {
-		t.Fatalf("released on a failed delivery: %s kills=%d", rec.Status, rt.killCount())
+		t.Fatalf("closed on a failed delivery: %s kills=%d", rec.Status, rt.killCount())
 	}
 }
 
@@ -136,29 +137,29 @@ func TestReleaseOnFinishPointerOnlyDeliveryWaitsForCollection(t *testing.T) {
 	d.SetNotificationDelivery(&fakeNotificationDelivery{ready: true})
 	d.SweepNotifications(context.Background())
 	if rec := status(d, "d-rof"); rec.Status != StatusIdle || rt.killCount() != 0 {
-		t.Fatalf("a pointer-only notification does not carry the result, yet released: %s", rec.Status)
+		t.Fatalf("a pointer-only notification does not carry the result, yet closed: %s", rec.Status)
 	}
 	var entry Entry
-	err := d.WaitAndRelease(context.Background(), []string{"d-rof"}, 0, func(entries []Entry) error { entry = entries[0]; return nil })
+	err := d.WaitAndClose(context.Background(), []string{"d-rof"}, 0, func(entries []Entry) error { entry = entries[0]; return nil })
 	if err != nil || entry.Text != "the answer" || entry.Outcome != TurnFinished {
 		t.Fatalf("wait entry = %+v, %v", entry, err)
 	}
-	if rec := status(d, "d-rof"); rec.Status != StatusReleased || !rec.ReleasedOnFinish || rt.killCount() != 1 {
+	if rec := status(d, "d-rof"); !parked(rec) || rt.killCount() != 1 {
 		t.Fatalf("after leo_wait returned the result: %s kills=%d", rec.Status, rt.killCount())
 	}
 }
 
-func TestReleaseOnFinishWaitReleasesWhenNotifyIsOff(t *testing.T) {
+func TestReleaseOnFinishWaitClosesWhenNotifyIsOff(t *testing.T) {
 	d, rt, s := finishedRun(t, "claude", TurnFinished, true)
 	s.record.Notify = false
 	var entry Entry
-	if err := d.WaitAndRelease(context.Background(), []string{"d-rof"}, 0, func(entries []Entry) error { entry = entries[0]; return nil }); err != nil {
+	if err := d.WaitAndClose(context.Background(), []string{"d-rof"}, 0, func(entries []Entry) error { entry = entries[0]; return nil }); err != nil {
 		t.Fatal(err)
 	}
 	if entry.Text != "the answer" {
 		t.Fatalf("the wait must still return the result, got %+v", entry)
 	}
-	if rec := status(d, "d-rof"); rec.Status != StatusReleased || rt.killCount() != 1 {
+	if rec := status(d, "d-rof"); !parked(rec) || rt.killCount() != 1 {
 		t.Fatalf("status=%s kills=%d", rec.Status, rt.killCount())
 	}
 }
@@ -178,14 +179,14 @@ func TestReleaseOnFinishNotifyOffWithNoCollectorFallsBackToIdleClose(t *testing.
 	}
 }
 
-func TestReleaseOnFinishPlainWaitDoesNotRelease(t *testing.T) {
+func TestReleaseOnFinishPlainWaitDoesNotClose(t *testing.T) {
 	d, rt, s := finishedRun(t, "claude", TurnFinished, true)
 	s.record.Notify = false
 	if entry := d.Wait(context.Background(), []string{"d-rof"}, 0)[0]; entry.Text != "the answer" {
 		t.Fatalf("entry = %+v", entry)
 	}
 	if rec := status(d, "d-rof"); rec.Status != StatusIdle || rt.killCount() != 0 {
-		t.Fatalf("Wait released before the transport acknowledged the result: %s", rec.Status)
+		t.Fatalf("Wait closed before the transport acknowledged the result: %s", rec.Status)
 	}
 }
 
@@ -203,28 +204,28 @@ func TestReleaseOnFinishKeepsTheRunWhenTheWaitResponseIsNotWritten(t *testing.T)
 		t.Run(c.name, func(t *testing.T) {
 			d, rt, s := finishedRun(t, "claude", TurnFinished, true)
 			s.record.Notify = false
-			_ = d.WaitAndRelease(c.ctx, []string{"d-rof"}, 0, c.deliver)
+			_ = d.WaitAndClose(c.ctx, []string{"d-rof"}, 0, c.deliver)
 			if rec := status(d, "d-rof"); rec.Status != StatusIdle || rt.killCount() != 0 {
-				t.Fatalf("released without a delivered response: %s kills=%d", rec.Status, rt.killCount())
+				t.Fatalf("closed without a delivered response: %s kills=%d", rec.Status, rt.killCount())
 			}
 		})
 	}
 }
 
-func TestReleaseOnFinishKeepsTheRunWhenTheResultIsTruncated(t *testing.T) {
+func TestTruncatedResultKeepsPane(t *testing.T) {
 	t.Run("leo_wait result over 32 KiB", func(t *testing.T) {
 		d, rt, s := finishedRun(t, "claude", TurnFinished, true)
 		s.record.Notify = false
 		s.record.Turns[0].Text = strings.Repeat("x", maxWaitEntryBytes+1)
 		var entry Entry
-		if err := d.WaitAndRelease(context.Background(), []string{"d-rof"}, 0, func(e []Entry) error { entry = e[0]; return nil }); err != nil {
+		if err := d.WaitAndClose(context.Background(), []string{"d-rof"}, 0, func(e []Entry) error { entry = e[0]; return nil }); err != nil {
 			t.Fatal(err)
 		}
 		if !strings.Contains(entry.Text, "[truncated;") {
 			t.Fatal("test setup: the wait result was not truncated")
 		}
 		if rec := status(d, "d-rof"); rec.Status != StatusIdle || rt.killCount() != 0 {
-			t.Fatalf("released after a truncated wait result: %s", rec.Status)
+			t.Fatalf("closed after a truncated wait result: %s", rec.Status)
 		}
 	})
 	t.Run("inline notification over 8 KiB", func(t *testing.T) {
@@ -237,21 +238,23 @@ func TestReleaseOnFinishKeepsTheRunWhenTheResultIsTruncated(t *testing.T) {
 			t.Fatalf("test setup: delivery = %v", delivery.calls)
 		}
 		if rec := status(d, "d-rof"); rec.Status != StatusIdle || rt.killCount() != 0 {
-			t.Fatalf("released after a truncated notification: %s", rec.Status)
+			t.Fatalf("closed after a truncated notification: %s", rec.Status)
 		}
 	})
-	t.Run("a result just under the caps still releases", func(t *testing.T) {
+	t.Run("a result just under the caps still closes", func(t *testing.T) {
 		d, rt, _ := finishedRun(t, "claude", TurnFinished, true)
 		d.runs["d-rof"].record.Turns[0].Text = strings.Repeat("x", maxInlineResultBytes-1)
 		d.SetNotificationDelivery(&fakeNotificationDelivery{ready: true})
 		d.SweepNotifications(context.Background())
-		if rec := status(d, "d-rof"); rec.Status != StatusReleased || rt.killCount() != 1 {
+		if rec := status(d, "d-rof"); !parked(rec) || rt.killCount() != 1 {
 			t.Fatalf("status = %s", rec.Status)
 		}
 	})
 }
 
 func TestReleaseOnFinishSkipsRunsThatAreNotCleanlyFinished(t *testing.T) {
+	// Each case keeps its pane: closing is for a run whose last turn, one the
+	// orchestrator sent, finished cleanly and nothing else is going on.
 	cases := []struct {
 		name  string
 		setup func(s *runState)
@@ -285,28 +288,13 @@ func TestReleaseOnFinishSkipsRunsThatAreNotCleanlyFinished(t *testing.T) {
 			c.setup(s)
 			d.SetNotificationDelivery(&fakeNotificationDelivery{ready: true})
 			d.SweepNotifications(context.Background())
-			if err := d.WaitAndRelease(context.Background(), []string{"d-rof"}, time.Millisecond, func([]Entry) error { return nil }); err != nil {
+			if err := d.WaitAndClose(context.Background(), []string{"d-rof"}, time.Millisecond, func([]Entry) error { return nil }); err != nil {
 				t.Fatal(err)
 			}
-			if rec := status(d, "d-rof"); rec.Status == StatusReleased || rec.ReleasedOnFinish || rt.killCount() != 0 {
-				t.Fatalf("released: status=%s kills=%d", rec.Status, rt.killCount())
+			if rec := status(d, "d-rof"); rec.Status.Terminal() || rt.killCount() != 0 {
+				t.Fatalf("closed: status=%s kills=%d", rec.Status, rt.killCount())
 			}
 		})
-	}
-}
-
-func TestSendToARunReleasedOnFinishNamesWhy(t *testing.T) {
-	d, rt, _ := finishedRun(t, "claude", TurnFinished, true)
-	d.SetNotificationDelivery(&fakeNotificationDelivery{ready: true})
-	d.SweepNotifications(context.Background())
-
-	_, err := d.Send(context.Background(), "d-rof", "one more thing")
-	want := "dispatch d-rof was released after finishing (release_on_finish); start a new dispatch"
-	if err == nil || err.Error() != want {
-		t.Fatalf("send error = %v, want %q", err, want)
-	}
-	if rt.injectionCount() != 0 {
-		t.Fatalf("a message was injected into a released run's pane")
 	}
 }
 
@@ -327,14 +315,14 @@ func TestSendToARestoredReleasedOnFinishRunNamesWhy(t *testing.T) {
 	}
 }
 
-func TestReleaseOnFinishReleasesWhenTheBridgeAcksTheNotification(t *testing.T) {
+func TestReleaseOnFinishClosesWhenTheBridgeAcksTheNotification(t *testing.T) {
 	d, rt, s := finishedRun(t, "claude", TurnFinished, true)
 	n := s.record.Notifications["d-rof#1"]
 	n.Disposition, n.Transport, n.DeliveredAt = NotificationDelivered, NotificationTransportBridge, time.Unix(1000, 0)
 	s.record.Notifications["d-rof#1"] = n
 	d.collectAcked(cloneRecord(s.record), "d-rof#1")
-	if rec := status(d, "d-rof"); rec.Status != StatusReleased || !rec.ReleasedOnFinish || rt.killCount() != 1 {
-		t.Fatalf("status=%s released_on_finish=%v kills=%d", rec.Status, rec.ReleasedOnFinish, rt.killCount())
+	if rec := status(d, "d-rof"); !parked(rec) || rt.killCount() != 1 {
+		t.Fatalf("status=%s retained=%v kills=%d", rec.Status, rec.Retained, rt.killCount())
 	}
 }
 

@@ -100,7 +100,11 @@ type Turn struct {
 	// harnessKey); a wake adds a second. They are kept on the record so a
 	// restarted daemon still routes a completion under any of them.
 	HarnessKeys []string `json:"harness_keys,omitempty"`
-	armedAt     time.Time
+	// ResultCollectedAt is when this turn's complete result reached the
+	// caller (an inline notification that carried it whole, or a leo_wait
+	// that returned it untruncated) and the run's pane closed on it.
+	ResultCollectedAt time.Time `json:"result_collected_at,omitzero"`
+	armedAt           time.Time
 	// commandID is the bridge command a sent turn travels under, which its
 	// turn.start names. submitted is the normalized prompt of the submit
 	// that started it.
@@ -255,11 +259,23 @@ type Record struct {
 	// never mutate a map a Record copy may share.
 	OpenTools map[string]time.Time `json:"-"`
 	// ReleaseOnFinish is the resolved release_on_finish setting: an
-	// interactive run releases itself once its first turn finishes and the
-	// result has reached the caller. ReleasedOnFinish says that is why a
-	// released run closed.
+	// interactive run closes its pane once a turn's complete result has
+	// reached the caller, and is kept (Retained) for a follow-up to reopen.
+	// ReleasedOnFinish marks a run an older leo released on finish.
 	ReleaseOnFinish  bool `json:"release_on_finish"`
 	ReleasedOnFinish bool `json:"released_on_finish,omitempty"`
+	// Retained marks a closed interactive run whose pane closed because its
+	// result was delivered (see parked): its session, cwd and worktree are
+	// kept, nothing may clean them up, and a follow-up reopens the pane.
+	// Release or the retention sweep ends it.
+	Retained bool `json:"retained,omitempty"`
+	// ResumeError is why a reopen of this run could not resume its session;
+	// once set the run is no longer resumable.
+	ResumeError string `json:"resume_error,omitempty"`
+	// ReleaseReason says why a released run was released: ReleaseReasonManual
+	// (leo_release) or ReleaseReasonRetention (the retention sweep). Older
+	// records name a release_on_finish release with ReleasedOnFinish instead.
+	ReleaseReason string `json:"release_reason,omitempty"`
 	// AdoptedAt is when a restarted daemon took the run over from the one
 	// that launched it, its pane having survived the restart.
 	AdoptedAt time.Time `json:"adopted_at,omitzero"`
