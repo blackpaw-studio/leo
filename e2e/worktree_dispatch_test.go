@@ -18,27 +18,7 @@ import (
 
 func TestDispatchWorktreeThroughDaemonKeepsFakeHarnessChanges(t *testing.T) {
 	s := newInteractiveE2E(t)
-	repo := filepath.Join(s.ws, "repo")
-	if err := os.MkdirAll(repo, 0o700); err != nil {
-		t.Fatal(err)
-	}
-	for _, args := range [][]string{{"init"}, {"config", "user.email", "leo@example.test"}, {"config", "user.name", "Leo Test"}} {
-		cmd := exec.Command("git", args...)
-		cmd.Dir = repo
-		if out, err := cmd.CombinedOutput(); err != nil {
-			t.Fatalf("git %v: %v: %s", args, err, out)
-		}
-	}
-	if err := os.WriteFile(filepath.Join(repo, "README.md"), []byte("base\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	for _, args := range [][]string{{"add", "README.md"}, {"commit", "-m", "base"}} {
-		cmd := exec.Command("git", args...)
-		cmd.Dir = repo
-		if out, err := cmd.CombinedOutput(); err != nil {
-			t.Fatalf("git %v: %v: %s", args, err, out)
-		}
-	}
+	repo := initE2ERepo(t, filepath.Join(s.ws, "repo"))
 	f, err := os.OpenFile(s.cfgPath, os.O_APPEND|os.O_WRONLY, 0)
 	if err != nil {
 		t.Fatal(err)
@@ -64,6 +44,32 @@ func TestDispatchWorktreeThroughDaemonKeepsFakeHarnessChanges(t *testing.T) {
 	if string(data) != "isolated" {
 		t.Fatalf("output = %q", data)
 	}
+}
+
+// initE2ERepo makes repo a git repository with one commit.
+func initE2ERepo(t *testing.T, repo string) string {
+	t.Helper()
+	if err := os.MkdirAll(repo, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	for _, args := range [][]string{{"init"}, {"config", "user.email", "leo@example.test"}, {"config", "user.name", "Leo Test"}} {
+		cmd := exec.Command("git", args...)
+		cmd.Dir = repo
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v: %s", args, err, out)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(repo, "README.md"), []byte("base\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, args := range [][]string{{"add", "README.md"}, {"commit", "-m", "base"}} {
+		cmd := exec.Command("git", args...)
+		cmd.Dir = repo
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v: %s", args, err, out)
+		}
+	}
+	return repo
 }
 
 func TestCodexSandboxCanWriteManagedWorktree(t *testing.T) {

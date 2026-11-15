@@ -40,7 +40,8 @@ func TestInteractiveReleasePane(t *testing.T) {
 	other := strings.TrimSpace(string(otherOut))
 	before, _ := exec.Command(s.tmux, tmux.Args("display-message", "-p", "-t", other, "#{window_layout}")...).Output()
 	var started consult.Started
-	s.request(t, http.MethodPost, "/api/dispatch", map[string]string{"template": "interactive", "prompt": "release me", "cwd": s.ws, "mode": "interactive", "caller_pane_id": caller}, &started)
+	// Opted out of closing on delivery: this checks release of a live pane.
+	s.request(t, http.MethodPost, "/api/dispatch", map[string]any{"template": "interactive", "prompt": "release me", "cwd": s.ws, "mode": "interactive", "caller_pane_id": caller, "release_on_finish": false}, &started)
 	if started.Placement != "split" || started.Pane == "" {
 		t.Fatalf("placement=%q pane=%q, want a split pane", started.Placement, started.Pane)
 	}
@@ -86,7 +87,7 @@ func TestInteractiveReleasePane(t *testing.T) {
 // real.  The only fake is the Codex-shaped TUI binary built in TestMain.
 func TestInteractiveDispatchLifecycle(t *testing.T) {
 	s := newInteractiveE2E(t)
-	started := s.dispatch(t, "opening prompt")
+	started := s.dispatchKeepingPane(t, "opening prompt")
 
 	if !s.windowExists(started.Window) {
 		t.Fatalf("interactive window %q was not created", started.Window)
@@ -130,6 +131,73 @@ func TestInteractiveDispatchLifecycle(t *testing.T) {
 	}
 }
 
+// TestInteractiveDispatchCloseReopenRelease: collecting a result parks the
+// run (pane closed, worktree kept); a follow-up reopens the same session in
+// the same worktree; once released, a further follow-up is refused.
+func TestInteractiveDispatchCloseReopenRelease(t *testing.T) {
+	var repo, argLog string
+	s := newInteractiveE2EWithOptions(t, interactiveOptions{
+		extraConfig: func(ws string) string {
+			repo, argLog = filepath.Join(ws, "repo"), filepath.Join(ws, "reopen-args.json")
+			return fmt.Sprintf("  reopen:\n    harness: codex\n    model: gpt-5\n    workspace: %s\n    env:\n      CODEX_HOME: %s\n      FAKECLAUDE_DISPATCH_INTERACTIVE: \"1\"\n      FAKECLAUDE_ARGLOG: %s\n", repo, ws, argLog)
+		},
+		beforeStart: func(string) { initE2ERepo(t, repo) },
+	})
+	var started consult.Started
+	s.request(t, http.MethodPost, "/api/dispatch", map[string]any{"template": "reopen", "prompt": "opening", "cwd": repo, "mode": "interactive", "isolation": "worktree"}, &started)
+	if first := s.wait(t, started.ID+"#1"); first.Outcome != consult.TurnFinished {
+		t.Fatalf("opening turn = %+v", first)
+	}
+	parked := s.waitForParked(t, started.ID)
+	if parked.SessionID != "fake-session" || parked.Worktree == "" {
+		t.Fatalf("parked record: session=%q worktree=%q", parked.SessionID, parked.Worktree)
+	}
+	if s.paneAlive(started.Pane) {
+		t.Fatal("the pane survived close on delivery")
+	}
+
+	sent := s.send(t, started.ID, "follow up")
+	if sent.TurnID != started.ID+"#2" {
+		t.Fatalf("reopen turn_id = %q", sent.TurnID)
+	}
+	reopened := s.record(t, started.ID)
+	if reopened.PaneID == "" {
+		t.Fatal("the reopen has no pane")
+	}
+	wantCwd, err := filepath.EvalSymlinks(parked.Worktree)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cwd := s.paneCwd(t, reopened.PaneID); cwd != wantCwd {
+		t.Fatalf("reopened pane cwd = %q, want the worktree %q", cwd, wantCwd)
+	}
+	second := s.wait(t, sent.TurnID)
+	if second.Outcome != consult.TurnFinished || second.Text != "FAKE-REPLY: follow up" {
+		t.Fatalf("reopened turn = %+v", second)
+	}
+	var args []string
+	if data, err := os.ReadFile(argLog); err != nil || json.Unmarshal(data, &args) != nil {
+		t.Fatalf("reading the reopen argv %s: %v", argLog, err)
+	}
+	if len(args) < 2 || args[0] != "resume" || args[1] != parked.SessionID {
+		t.Fatalf("reopen argv = %q, want it to resume session %q", args, parked.SessionID)
+	}
+	again := s.waitForParked(t, started.ID)
+	if again.SessionID != parked.SessionID || again.Worktree != parked.Worktree {
+		t.Fatalf("parked again: session=%q worktree=%q, want %q %q", again.SessionID, again.Worktree, parked.SessionID, parked.Worktree)
+	}
+
+	var released consult.Record
+	s.request(t, http.MethodPost, "/api/dispatch/"+started.ID+"/release", nil, &released)
+	if released.Status != consult.StatusReleased {
+		t.Fatalf("release status = %q", released.Status)
+	}
+	refusal := s.tryRequest(t, http.MethodPost, "/api/dispatch/"+started.ID+"/send", map[string]string{"message": "one more"}, nil)
+	if !strings.Contains(refusal, "was released (leo_release)") {
+		t.Fatalf("follow-up after release = %q, want a refusal", refusal)
+	}
+}
+
 func TestInteractiveDispatchConfirmsLongMultilinePreamble(t *testing.T) {
 	s := newInteractiveE2E(t)
 	lines := make([]string, 160)
@@ -157,7 +225,7 @@ func TestInteractiveDispatchRosterWithNoLocale(t *testing.T) {
 func TestInteractivePaneDeath(t *testing.T) {
 	t.Run("after finished turn closes", func(t *testing.T) {
 		s := newInteractiveE2E(t)
-		started := s.dispatch(t, "complete first")
+		started := s.dispatchKeepingPane(t, "complete first")
 		_ = s.wait(t, started.ID+"#1")
 		rec := s.record(t, started.ID)
 		s.killPane(t, rec.PaneID)
@@ -178,7 +246,7 @@ func TestInteractivePaneDeath(t *testing.T) {
 // same id, pane and turns, and it still takes follow-ups.
 func TestInteractiveDaemonRestartAdoptsTheLivePane(t *testing.T) {
 	s := newInteractiveE2E(t)
-	started := s.dispatch(t, "complete before daemon restart")
+	started := s.dispatchKeepingPane(t, "complete before daemon restart")
 	_ = s.wait(t, started.ID+"#1")
 	rec := s.record(t, started.ID)
 	if !s.paneAlive(rec.PaneID) {
@@ -206,7 +274,7 @@ func TestInteractiveDaemonRestartAdoptsTheLivePane(t *testing.T) {
 // run closes as before.
 func TestInteractiveDaemonRestartSettlesAGonePane(t *testing.T) {
 	s := newInteractiveE2E(t)
-	started := s.dispatch(t, "complete before daemon restart")
+	started := s.dispatchKeepingPane(t, "complete before daemon restart")
 	_ = s.wait(t, started.ID+"#1")
 	rec := s.record(t, started.ID)
 	s.restartDaemonAfter(t, func() { s.killPane(t, rec.PaneID) })
@@ -446,6 +514,15 @@ func (s *interactiveE2E) waitForStatus(t *testing.T, id string, want consult.Sta
 
 func (s *interactiveE2E) request(t *testing.T, method, path string, in, out any) {
 	t.Helper()
+	if errText := s.tryRequest(t, method, path, in, out); errText != "" {
+		t.Fatalf("%s %s: %s", method, path, errText)
+	}
+}
+
+// tryRequest is request for a call that may be refused: it returns the
+// refusal ("status=N error=…"), or "" on success.
+func (s *interactiveE2E) tryRequest(t *testing.T, method, path string, in, out any) string {
+	t.Helper()
 	var body *bytes.Reader
 	if in != nil {
 		raw, err := json.Marshal(in)
@@ -478,17 +555,27 @@ func (s *interactiveE2E) request(t *testing.T, method, path string, in, out any)
 		t.Fatal(err)
 	}
 	if resp.StatusCode/100 != 2 || !envelope.OK {
-		t.Fatalf("%s %s: status=%d error=%q", method, path, resp.StatusCode, envelope.Error)
+		return fmt.Sprintf("status=%d error=%q", resp.StatusCode, envelope.Error)
 	}
 	if out != nil {
 		if err := json.Unmarshal(envelope.Data, out); err != nil {
 			t.Fatal(err)
 		}
 	}
+	return ""
 }
 
 func (s *interactiveE2E) dispatch(t *testing.T, prompt string) consult.Started {
 	return s.dispatchFrom(t, prompt, "")
+}
+
+// dispatchKeepingPane opts out of closing the pane once a result is
+// collected (release_on_finish), for tests that use the pane after leo_wait.
+func (s *interactiveE2E) dispatchKeepingPane(t *testing.T, prompt string) consult.Started {
+	t.Helper()
+	var out consult.Started
+	s.request(t, http.MethodPost, "/api/dispatch", map[string]any{"template": "interactive", "prompt": prompt, "cwd": s.ws, "mode": "interactive", "release_on_finish": false}, &out)
+	return out
 }
 func (s *interactiveE2E) dispatchFrom(t *testing.T, prompt, from string) consult.Started {
 	t.Helper()
@@ -531,6 +618,36 @@ func (s *interactiveE2E) record(t *testing.T, id string) consult.Record {
 func (s *interactiveE2E) cancel(t *testing.T, id string) {
 	t.Helper()
 	s.request(t, http.MethodPost, "/api/dispatch/"+id+"/cancel", nil, &struct{}{})
+}
+
+// waitForParked waits for id to close with its pane gone and its session
+// kept for a reopen.
+func (s *interactiveE2E) waitForParked(t *testing.T, id string) consult.Record {
+	t.Helper()
+	var rec consult.Record
+	s.waitFor(t, func() bool {
+		rec = s.record(t, id)
+		return rec.Status == consult.StatusClosed && rec.Retained && rec.PaneID == ""
+	})
+	if rec.WorktreeState != consult.WorktreePresent {
+		t.Fatalf("parked worktree state = %q", rec.WorktreeState)
+	}
+	if info, err := os.Stat(rec.Worktree); rec.Worktree != "" && (err != nil || !info.IsDir()) {
+		t.Fatalf("parked worktree %q: %v", rec.Worktree, err)
+	}
+	return rec
+}
+func (s *interactiveE2E) paneCwd(t *testing.T, pane string) string {
+	t.Helper()
+	out, err := exec.Command(s.tmux, tmux.Args("display-message", "-p", "-t", pane, "#{pane_current_path}")...).Output()
+	if err != nil {
+		t.Fatalf("pane %s cwd: %v", pane, err)
+	}
+	cwd, err := filepath.EvalSymlinks(strings.TrimSpace(string(out)))
+	if err != nil {
+		t.Fatalf("pane %s cwd: %v", pane, err)
+	}
+	return cwd
 }
 func (s *interactiveE2E) paneAlive(pane string) bool {
 	out, err := exec.Command(s.tmux, tmux.Args("display-message", "-p", "-t", pane, "#{pane_dead}")...).Output()
