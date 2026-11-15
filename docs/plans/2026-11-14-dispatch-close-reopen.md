@@ -277,3 +277,6 @@ The steps run in the order listed. Step 7 doesn't depend on Steps 3–6 and can 
 
 ## Orchestrator decisions (2026-11-14)
 D1–D10 accepted as recommended. Step 0 gates the never-fresh guard: if `claude --resume <id> "msg"` does not keep the session id, stop and report before Step 7.
+
+## Addendum (planner, late): e2e
+Step 2 defaults release_on_finish on, so e2e/interactive_dispatch_test.go `TestInteractiveDispatchLifecycle` (:87) and `TestInteractiveReleasePane` (:24) should pass `release_on_finish: false` explicitly. Add one e2e case for close → reopen → release. The Step 13 gate runs e2e with the `env -i` recipe, never from a dispatch pane.
