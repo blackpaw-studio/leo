@@ -160,6 +160,9 @@ type runState struct {
 	// Dispatcher.headlessChildMCP); it carries the daemon token, so it is
 	// process env only and never persisted or logged.
 	mcpEnv map[string]string
+	// mcpConfigFile is the private MCP config written for the headless
+	// child (claude mcp_servers); complete removes it. Guarded by d.mu.
+	mcpConfigFile string
 	// scrub replaces the run's resolved secret values in what its child
 	// printed before any of it is recorded or returned. It holds values, so
 	// it lives in memory only: an interactive run adopted after a daemon
@@ -399,8 +402,9 @@ func (d *Dispatcher) Start(_ context.Context, cfg *config.Config, req Request) (
 	if err != nil {
 		return Started{}, invalidf("template %q: %v", req.Template, err)
 	}
+	var warnings []string
 	if opts, ok := decoded.(claudeharness.Options); ok {
-		decoded = resolveClaudeDispatchProfile(cfg, tmpl, requestKind(req), opts, tmplEnv, d.LeoMCP)
+		decoded, warnings = resolveClaudeDispatchOptions(cfg, tmpl, requestKind(req), opts, tmplEnv, d.LeoMCP)
 	}
 	if req.Cwd == "" || !filepath.IsAbs(req.Cwd) {
 		return Started{}, invalidf("cwd must be an existing absolute directory")
@@ -457,7 +461,7 @@ func (d *Dispatcher) Start(_ context.Context, cfg *config.Config, req Request) (
 	rec := Record{
 		ID: newID(), Caller: caller, ParentDispatchID: parentID, Template: req.Template, Role: req.Role, Profile: req.Profile,
 		Kind: kind, Harness: h.Name(), Model: model, Cwd: req.Cwd, Name: req.Name, Timeout: timeout,
-		Effort: req.Effort,
+		Effort: req.Effort, Warnings: warnings,
 		Prompt: req.Prompt, Status: StatusQueued, StartedAt: d.now(), Mode: mode,
 		Notify: notify, Isolation: req.Isolation, SourceCwd: req.Cwd,
 		ReleaseOnFinish: mode == ModeInteractive && kind == "dispatch" && ResolveReleaseOnFinish(req.Role, req.ReleaseOnFinish),
@@ -476,6 +480,7 @@ func (d *Dispatcher) Start(_ context.Context, cfg *config.Config, req Request) (
 		fmt.Fprintf(os.Stderr, "consult %s: recording: %v\n", rec.ID, err)
 		handle = nopHandle{}
 	}
+	logDispatchWarnings(rec.ID, req.Template, warnings)
 	runCtx, cancel := context.WithCancel(d.daemonCtx)
 	state := newRunState(rec, handle, make(chan struct{}), cancel)
 	state.scrub = redact.NewSecrets(secretValues)
@@ -517,6 +522,14 @@ func (d *Dispatcher) Start(_ context.Context, cfg *config.Config, req Request) (
 	}
 	if spec.Name == "" {
 		spec.Name = "dispatch"
+	}
+	if mode == ModeInteractive {
+		spec.Options = withoutPrivateMCP(spec.Options)
+	} else if err := d.materializeMCPConfig(state, cfg, &spec); err != nil {
+		d.complete(state, StatusFailed, "", err)
+		close(state.done)
+		d.cleanupWorktree(rec.ID)
+		return Started{}, invalidf("writing the %s MCP config: %v", h.Name(), err)
 	}
 	args, err := h.Args(spec)
 	if err != nil {
@@ -565,7 +578,27 @@ func (d *Dispatcher) Start(_ context.Context, cfg *config.Config, req Request) (
 	// overtake this run while its goroutine is still being scheduled.
 	waiter, _ := d.slotsFor(state).AcquireOrEnqueue()
 	go d.runInvocation(runCtx, state, state.done, h, model, tmplEnv, args, harnessEnv, req.Cwd, timeout, waiter, nil)
-	return Started{ID: rec.ID, Harness: h.Name(), Model: model, Cwd: req.Cwd}, nil
+	return Started{ID: rec.ID, Harness: h.Name(), Model: model, Cwd: req.Cwd, Warnings: warnings}, nil
+}
+
+// materializeMCPConfig writes the run's private MCP config (claude
+// mcp_servers) and points spec at it. complete removes the file with the run;
+// nothing is written when the options hold no private config.
+func (d *Dispatcher) materializeMCPConfig(state *runState, cfg *config.Config, spec *harness.LaunchSpec) error {
+	opts, ok := spec.Options.(claudeharness.Options)
+	if !ok || !opts.StrictMCPConfigPrivate {
+		return nil
+	}
+	d.mu.Lock()
+	path := dispatchMCPConfigPath(cfg.HomePath, state.record.ID)
+	state.mcpConfigFile = path
+	d.mu.Unlock()
+	opts, err := claudeharness.MaterializeStrictMCPConfig(opts, path)
+	if err != nil {
+		return err
+	}
+	spec.Options = opts
+	return nil
 }
 
 func (d *Dispatcher) run(parent context.Context, state *runState, h harness.Harness, model string, env map[string]string, args []string, harnessEnv map[string]string, cwd string, timeout time.Duration) {

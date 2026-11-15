@@ -67,6 +67,11 @@ func dispatchSpillPath(homePath, id string) string {
 	return claudeharness.SettingsSpillPath(homePath, dispatchSpillPrefix+id)
 }
 
+// dispatchMCPConfigPath is run id's private MCP config file ("" if unusable).
+func dispatchMCPConfigPath(homePath, id string) string {
+	return claudeharness.MCPConfigSpillPath(homePath, dispatchSpillPrefix+id)
+}
+
 func (r *TmuxInteractiveRuntime) spillHome() string {
 	cfg, err := r.config()
 	if err != nil || cfg == nil {

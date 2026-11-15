@@ -87,6 +87,9 @@ type Started struct {
 	// resolves to interactive, and Note says why it ran headless instead.
 	Mode Mode   `json:"mode,omitempty"`
 	Note string `json:"note,omitempty"`
+	// Warnings are non-fatal problems with the launch, such as an
+	// mcp_servers name the account config does not define.
+	Warnings []string `json:"warnings,omitempty"`
 }
 
 func requestKind(req Request) string {
