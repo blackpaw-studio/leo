@@ -1,5 +1,27 @@
 package consult
 
+import (
+	"fmt"
+	"time"
+)
+
+// resumableRetention is how long a parked run is kept for a follow-up
+// before the retention sweep releases it (D1).
+var resumableRetention = 7 * 24 * time.Hour
+
+// retentionText is d in whole days when it is some, else as shortDuration
+// words it.
+func retentionText(d time.Duration) string {
+	const day = 24 * time.Hour
+	if d >= day && d%day == 0 {
+		if d == day {
+			return "1 day"
+		}
+		return fmt.Sprintf("%d days", d/day)
+	}
+	return shortDuration(d)
+}
+
 // Why a released run was released (Record.ReleaseReason).
 const (
 	ReleaseReasonManual    = "manual"

@@ -122,13 +122,18 @@ func (d *Dispatcher) noteResultCollectedLocked(id, turnID string) {
 	}
 }
 
-// releasedSendError explains a send to a released run. Only a run that
-// released itself says why; a manually released run keeps its generic error.
+// releasedSendError explains a send to a released run: why it was released
+// and that a follow-up needs a new dispatch.
 func releasedSendError(rec Record) error {
-	if rec.ReleasedOnFinish {
+	switch {
+	case rec.ReleaseReason == ReleaseReasonManual:
+		return fmt.Errorf("dispatch %s was released (leo_release); start a new dispatch", rec.ID)
+	case rec.ReleaseReason == ReleaseReasonRetention:
+		return fmt.Errorf("dispatch %s was released after %s without a follow-up (retention); start a new dispatch", rec.ID, retentionText(resumableRetention))
+	case rec.ReleasedOnFinish:
 		return fmt.Errorf("dispatch %s was released after finishing (release_on_finish); start a new dispatch", rec.ID)
 	}
-	return nil
+	return fmt.Errorf("dispatch %s was released; start a new dispatch", rec.ID)
 }
 
 // WaitAndClose is Wait followed by deliver, the transport write of the

@@ -732,9 +732,7 @@ func (d *Dispatcher) Send(ctx context.Context, id, message string) (SendResult, 
 	}
 	rec, s, err := d.lookup(id)
 	if err == nil && rec.Status == StatusReleased {
-		if releasedErr := releasedSendError(rec); releasedErr != nil {
-			return SendResult{}, releasedErr
-		}
+		return SendResult{}, releasedSendError(rec)
 	}
 	if err != nil || s == nil {
 		return SendResult{}, fmt.Errorf("unknown dispatch %s", id)

@@ -6,10 +6,13 @@ import (
 	"time"
 )
 
+// Release ends interactive run id for good: its pane is killed, its
+// retained worktree goes through cleanup under the usual safeguards, and a
+// later follow-up is rejected.
 func (d *Dispatcher) Release(id string) (Record, error) {
 	unlock := d.serialLocks([]string{id})
 	defer unlock()
-	return d.releaseLocked(id, nil)
+	return d.releaseLocked(id, nil, ReleaseReasonManual)
 }
 
 // releasable reports whether a run in status may be released: one with no
@@ -68,7 +71,9 @@ func (d *Dispatcher) endWaitingTurnsForReleaseLocked(s *runState) {
 	d.persistLocked(s, "status")
 }
 
-func (d *Dispatcher) releaseLocked(id string, layout func(string) error) (Record, error) {
+// releaseLocked releases run id for reason (ReleaseReasonManual or
+// ReleaseReasonRetention). The caller holds the run's serial lock.
+func (d *Dispatcher) releaseLocked(id string, layout func(string) error, reason string) (Record, error) {
 	rec, state, err := d.lookup(id)
 	if err != nil {
 		return Record{}, fmt.Errorf("unknown dispatch %s", id)
@@ -92,7 +97,7 @@ func (d *Dispatcher) releaseLocked(id string, layout func(string) error) (Record
 			}
 			return nil
 		}
-		rec, err = d.retirePaneLocked(state, layout, admit, d.commitReleaseLocked)
+		rec, err = d.retirePaneLocked(state, layout, admit, func(s *runState) { d.commitReleaseLocked(s, reason) })
 		if err != nil {
 			if errors.As(err, new(*ValidationError)) {
 				return rec, err
@@ -116,6 +121,7 @@ func (d *Dispatcher) releaseLocked(id string, layout func(string) error) (Record
 			}
 		}
 		rec.Status, rec.PaneID, rec.ViewerPaneID, rec.ViewerKind = StatusReleased, "", "", ""
+		rec.Retained, rec.ReleaseReason = false, reason
 		if rec.EndedAt.IsZero() {
 			rec.EndedAt = d.now()
 		}
@@ -136,20 +142,22 @@ func (d *Dispatcher) releaseLocked(id string, layout func(string) error) (Record
 	d.mu.Lock()
 	d.releaseRunFilesLocked(id)
 	d.mu.Unlock()
-	// The pane is gone, so a cleanup deferred (or kept) while it was alive
-	// can finally be decided. This is the path manual release and the
-	// release of a closed run both take.
+	// The pane is gone, so a cleanup deferred (or kept) while it was alive,
+	// or held for a parked run's follow-up, can finally be decided. Dirty,
+	// unmerged or unverifiable work is kept.
 	if rec.Isolation == "worktree" {
 		rec = d.cleanupWorktree(id)
 	}
 	return rec, nil
 }
 
-// commitReleaseLocked marks s released once its pane is gone. The caller
+// commitReleaseLocked marks s released for reason once its pane is gone; a
+// parked run stops being retained, so its worktree is cleaned up. The caller
 // holds d.mu.
-func (d *Dispatcher) commitReleaseLocked(s *runState) {
+func (d *Dispatcher) commitReleaseLocked(s *runState, reason string) {
 	current := s.record
 	current.Status, current.PaneID, current.ViewerPaneID, current.ViewerKind = StatusReleased, "", "", ""
+	current.Retained, current.ReleaseReason = false, reason
 	if current.EndedAt.IsZero() {
 		current.EndedAt = d.now()
 	}
