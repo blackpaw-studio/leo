@@ -213,6 +213,9 @@ func watchConsult(ctx context.Context, stateDir, prefix string, out io.Writer) e
 
 	fmt.Fprintf(out, "[consult %s · %s/%s%s · %s]\n",
 		record.ID, record.Harness, record.Model, callerSuffix(record), record.Status)
+	for _, w := range record.Warnings {
+		fmt.Fprintf(out, "warning: %s\n", w)
+	}
 	if record.Prompt != "" {
 		fmt.Fprintf(out, "%s\n\n", harness.FirstLine(record.Prompt))
 	}

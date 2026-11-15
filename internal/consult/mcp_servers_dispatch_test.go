@@ -237,3 +237,21 @@ func TestHeadlessContinuationRewritesAndRemovesMCPFile(t *testing.T) {
 		t.Fatalf("file should be gone after the continuation: %v", err)
 	}
 }
+
+func TestInteractiveStartReturnsMCPServerWarnings(t *testing.T) {
+	f := newMCPDispatchFixture(t, map[string]any{"mcp_servers": []any{"chrome", "nope"}})
+	d := NewDispatcher(newFakeRecorder())
+	d.SetInteractiveRuntime(&fakeInteractiveRuntime{arm: true, empty: true, alive: true})
+
+	started, err := d.Start(context.Background(), f.cfg, Request{Template: "claude", Prompt: "x", Cwd: t.TempDir(), Mode: ModeInteractive})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if len(started.Warnings) != 1 || !strings.Contains(started.Warnings[0], `"nope"`) {
+		t.Fatalf("Started.Warnings = %v", started.Warnings)
+	}
+	if _, err := os.Stat(f.path(started.ID)); !os.IsNotExist(err) {
+		t.Fatalf("Start itself must not write the file for an interactive run: %v", err)
+	}
+}

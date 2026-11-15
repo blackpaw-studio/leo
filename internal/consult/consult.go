@@ -547,6 +547,7 @@ func (d *Dispatcher) Start(_ context.Context, cfg *config.Config, req Request) (
 	}
 	if mode == ModeInteractive {
 		started, startErr := d.startInteractive(runCtx, state, req, h.Name(), model, cfg)
+		started.Warnings = warnings
 		if startErr != nil && req.Isolation == "worktree" {
 			d.cleanupWorktree(rec.ID)
 		}

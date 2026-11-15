@@ -692,3 +692,26 @@ func TestWriteTestRecordIsAtomic(t *testing.T) {
 	default:
 	}
 }
+
+func TestDispatchWatchHeaderShowsRecordWarnings(t *testing.T) {
+	state := t.TempDir()
+	dir := filepath.Join(state, "dispatches")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	record := consult.Record{ID: "d-warn", Template: "coding", Harness: "claude", Model: "opus", Mode: consult.ModeInteractive, Status: consult.StatusClosed, StartedAt: time.Now().Add(-time.Second), EndedAt: time.Now(), Warnings: []string{`mcp_servers: "nope" skipped`}}
+	writeTestRecord(t, dir, record)
+	line := `{"t":0,"d":{"type":"status","seq":1,"data":"closed"}}` + "\n"
+	if err := os.WriteFile(consult.StreamPath(state, record.ID), []byte(line), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var out bytes.Buffer
+
+	if err := watchConsult(t.Context(), state, record.ID, &out); err != nil {
+		t.Fatal(err)
+	}
+
+	if !strings.Contains(out.String(), `warning: mcp_servers: "nope" skipped`) {
+		t.Fatalf("watch output lacks the warning: %s", out.String())
+	}
+}
