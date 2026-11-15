@@ -143,3 +143,36 @@ func TestConsultLoopHoldsPruneUntilRestartReconciled(t *testing.T) {
 		t.Fatal("prune resumed before the restart reconcile logged its summary")
 	}
 }
+
+func TestConsultLoopSweepsRetentionOnlyOnceRestartReconciled(t *testing.T) {
+	var log lineLog
+	var swept atomic.Int32
+	ticks := make(chan time.Time)
+	s := restartReconcileServer(t, log.logf, func(s *Server) {
+		s.viewerTicks = ticks
+		s.pruneConsults = func() {}
+		s.sweepRetention = func(time.Time) { swept.Add(1) }
+	})
+	t.Cleanup(func() { _ = s.Shutdown() })
+	tick := func() {
+		t.Helper()
+		select {
+		case ticks <- time.Now():
+		case <-time.After(5 * time.Second):
+			t.Fatal("the consult loop stopped taking viewer ticks")
+		}
+	}
+
+	tick()
+	tick()
+	if n := swept.Load(); n != 0 {
+		t.Fatalf("retention swept %d times before the restart reconcile ran", n)
+	}
+	s.StartRestartReconcile()
+	for deadline := time.Now().Add(5 * time.Second); swept.Load() == 0; {
+		if time.Now().After(deadline) {
+			t.Fatal("the retention sweep never ran after the restart reconcile finished")
+		}
+		tick()
+	}
+}

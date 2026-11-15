@@ -169,6 +169,10 @@ func (s *Server) setupConsultRuntime(opts Options, resolveCallerSession func(str
 	if prune == nil {
 		prune = s.consults.Prune
 	}
+	sweepRetention := s.sweepRetention
+	if sweepRetention == nil {
+		sweepRetention = s.consults.SweepRetention
+	}
 	loopCtx, cancel := context.WithCancel(opts.ParentContext)
 	gitDone := s.startGitPoller(loopCtx)
 	codexDone := s.startCodexUsagePoller(loopCtx)
@@ -251,6 +255,10 @@ func (s *Server) setupConsultRuntime(opts Options, resolveCallerSession func(str
 				select {
 				case <-reconciled:
 					prune()
+					// Parked runs nobody followed up are released; the
+					// sweep paces itself, and its first pass follows the
+					// restart reconcile.
+					sweepRetention(now)
 				default:
 				}
 			case <-stateTicker.C:

@@ -84,6 +84,8 @@ type Dispatcher struct {
 	runs               map[string]*runState
 	onStart            func(Record) string
 	onCollect          func(Record)
+	// retentionSweptAt is when SweepRetention last read the records.
+	retentionSweptAt   time.Time
 	interactiveRuntime InteractiveRuntime
 	now                func() time.Time
 	waits              map[string]int

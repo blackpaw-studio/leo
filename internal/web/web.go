@@ -188,6 +188,9 @@ type Server struct {
 	// pruneConsults the dispatcher's Prune, when set (test seams).
 	viewerTicks   <-chan time.Time
 	pruneConsults func()
+	// sweepRetention replaces the dispatcher's SweepRetention when set (a
+	// test seam).
+	sweepRetention func(time.Time)
 	// stopConsultLoop cancels the consult runtime loop and waits for it to
 	// exit. nil when no loop was started (no ParentContext).
 	stopConsultLoop func()
