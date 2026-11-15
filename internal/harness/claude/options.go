@@ -19,6 +19,7 @@ var optionKeys = []string{
 	"permission_mode",
 	"remote_control",
 	"mcp",
+	"mcp_servers",
 	"plugins",
 }
 
@@ -60,6 +61,8 @@ func (Claude) DecodeOptions(raw map[string]any) (any, error) {
 			o.AppendSystemPrompt, err = stringOption(key, val)
 		case "mcp":
 			o.MCP, err = profileOption(key, val)
+		case "mcp_servers":
+			o.MCPServers, err = mcpServersOption(key, val)
 		case "plugins":
 			o.Plugins, err = profileOption(key, val)
 		default:
@@ -92,6 +95,8 @@ func (Claude) OptionsSchema() []harness.OptionField {
 		{Key: "append_system_prompt", Label: "Append system prompt", Type: harness.OptionText,
 			Help: "--append-system-prompt"},
 		{Key: "mcp", Label: "MCP profile", Type: harness.OptionEnum, EnumValues: []string{"inherit", "none"}, Help: "inherit global MCP servers or use Leo-only"},
+		{Key: "mcp_servers", Label: "MCP servers", Type: harness.OptionStringList,
+			Help: "with mcp: none, also load these user-scope servers from the account's .claude.json"},
 		{Key: "plugins", Label: "Plugin profile", Type: harness.OptionEnum, EnumValues: []string{"inherit", "none"}, Help: "inherit installed plugins or disable them"},
 	}
 }
@@ -132,6 +137,27 @@ func stringSliceOption(key string, val any) ([]string, error) {
 			return nil, fmt.Errorf("option %q must be a list of strings, got %T element", key, item)
 		}
 		out = append(out, s)
+	}
+	return out, nil
+}
+
+// mcpServersOption decodes mcp_servers: a list of non-empty server names,
+// duplicates dropped, order kept.
+func mcpServersOption(key string, val any) ([]string, error) {
+	names, err := stringSliceOption(key, val)
+	if err != nil {
+		return nil, err
+	}
+	seen := make(map[string]bool, len(names))
+	out := make([]string, 0, len(names))
+	for _, name := range names {
+		if name == "" {
+			return nil, fmt.Errorf("option %q must not contain an empty name", key)
+		}
+		if !seen[name] {
+			seen[name] = true
+			out = append(out, name)
+		}
 	}
 	return out, nil
 }

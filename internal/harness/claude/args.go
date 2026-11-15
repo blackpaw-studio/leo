@@ -26,7 +26,7 @@ func mergeSystemPrompt(systemContext, userPrompt string) string {
 // structurally: agentArgs ignores Options.BypassPermissions by design (unlike
 // appendPermissionFlags, used by the other two kinds) rather than relying on
 // callers to leave it false.
-func agentArgs(spec harness.LaunchSpec, o Options) []string {
+func agentArgs(spec harness.LaunchSpec, o Options) ([]string, error) {
 	o = dispatchedOptions(spec.Dispatched, o)
 	var args []string
 	args = append(args, "--model", spec.Model)
@@ -47,7 +47,11 @@ func agentArgs(spec harness.LaunchSpec, o Options) []string {
 		}
 	}
 	args = append(args, "--name", spec.Name)
-	args = append(args, strictMCPArgs(o)...)
+	strict, err := strictMCPArgs(o)
+	if err != nil {
+		return nil, err
+	}
+	args = append(args, strict...)
 	profiled := o.MCP == "none" || o.Plugins == "none"
 	if !profiled {
 		args = append(args, "--settings", `{"crossSessionInbound":"accept"}`)
@@ -77,11 +81,11 @@ func agentArgs(spec harness.LaunchSpec, o Options) []string {
 	if profiled {
 		args = append(args, "--settings", settingsJSON(map[string]any{"crossSessionInbound": "accept"}, o))
 	}
-	return args
+	return args, nil
 }
 
 // taskArgs reproduces internal/run.buildArgs flag order exactly.
-func taskArgs(spec harness.LaunchSpec, o Options) []string {
+func taskArgs(spec harness.LaunchSpec, o Options) ([]string, error) {
 	o = dispatchedOptions(spec.Dispatched, o)
 	args := []string{
 		"-p", spec.Prompt,
@@ -98,7 +102,11 @@ func taskArgs(spec harness.LaunchSpec, o Options) []string {
 	}
 	args = append(args, Claude{}.SessionArgs(spec.Session)...)
 	args = appendPermissionFlags(args, o)
-	args = append(args, strictMCPArgs(o)...)
+	strict, err := strictMCPArgs(o)
+	if err != nil {
+		return nil, err
+	}
+	args = append(args, strict...)
 	if o.MCP != "none" && o.MCPConfigPath != "" {
 		args = append(args, "--mcp-config", o.MCPConfigPath)
 	}
@@ -113,7 +121,7 @@ func taskArgs(spec harness.LaunchSpec, o Options) []string {
 	if o.Plugins == "none" {
 		args = append(args, "--settings", settingsJSON(map[string]any{}, o))
 	}
-	return args
+	return args, nil
 }
 
 func dispatchedOptions(dispatched bool, o Options) Options {

@@ -2,19 +2,29 @@ package claude
 
 import (
 	"encoding/json"
+	"errors"
 	"sort"
 	"strings"
 )
 
-func strictMCPArgs(o Options) []string {
+// strictMCPArgs is the strict MCP flags for a MCP "none" run. A config that
+// may carry secrets (Private) is passed by file path only; without a file it
+// fails closed instead of inlining it into argv.
+func strictMCPArgs(o Options) ([]string, error) {
 	if o.MCP != "none" {
-		return nil
+		return nil, nil
+	}
+	if o.StrictMCPConfigFile != "" {
+		return []string{"--strict-mcp-config", "--mcp-config", o.StrictMCPConfigFile}, nil
+	}
+	if o.StrictMCPConfigPrivate {
+		return nil, errors.New("claude: private MCP config has no file; refusing to put it in argv")
 	}
 	config := o.StrictMCPConfig
 	if config == "" {
-		config = `{"mcpServers":{}}`
+		config = emptyStrictMCPConfig
 	}
-	return []string{"--strict-mcp-config", "--mcp-config", config}
+	return []string{"--strict-mcp-config", "--mcp-config", config}, nil
 }
 
 func settingsJSON(base map[string]any, o Options) string {
