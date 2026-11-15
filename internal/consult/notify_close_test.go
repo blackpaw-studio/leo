@@ -56,16 +56,11 @@ func closeNotice(t *testing.T, d *Dispatcher, id string) Notification {
 	return rec.Notifications[id+"#closed"]
 }
 
+// requireCloseNotice asserts the one close notice of a run whose last
+// turn's result its notice already delivered: header only.
 func requireCloseNotice(t *testing.T, calls []string, id, reason, turnText string) {
 	t.Helper()
-	if len(calls) != 1 {
-		t.Fatalf("calls=%q, want exactly one close notice", calls)
-	}
-	for _, want := range []string{"closed: " + reason, id + "#1", turnText, closeNoticeTail} {
-		if !strings.Contains(calls[0], want) {
-			t.Fatalf("notice %q lacks %q", calls[0], want)
-		}
-	}
+	requireHeaderOnlyCloseNotice(t, calls, id, reason, turnText)
 }
 
 func TestIdleCloseNotifiesTheCallerOnceWithReasonAndLastTurn(t *testing.T) {
@@ -158,12 +153,10 @@ func TestRestartClosedRunNotifiesOnceAcrossReloads(t *testing.T) {
 	if len(calls) != 2 {
 		t.Fatalf("calls=%q, want the turn notice and the close notice", calls)
 	}
-	closed := calls[len(calls)-1]
-	for _, want := range []string{"closed: daemon restarted", "d-restart#1", "waiting on the luma run", closeNoticeTail} {
-		if !strings.Contains(closed, want) {
-			t.Fatalf("notice %q lacks %q", closed, want)
-		}
+	if !strings.Contains(calls[0], "waiting on the luma run") {
+		t.Fatalf("turn notice %q lacks its result", calls[0])
 	}
+	requireHeaderOnlyCloseNotice(t, calls[1:], "d-restart", "daemon restarted", "waiting on the luma run")
 	reloaded := NewDispatcher(NewFileRecorder(state))
 	markInterruptedAndReconcile(t, reloaded)
 	again := &fakeNotificationDelivery{ready: true}

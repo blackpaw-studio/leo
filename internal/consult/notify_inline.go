@@ -36,11 +36,12 @@ func carriesResultInline(rec Record, transport string) bool {
 // deliveryMessage is the text to send for notification key over transport.
 func deliveryMessage(rec Record, key string, n Notification, transport string) string {
 	pointer := notificationMessage(rec, key, n)
-	if !carriesResultInline(rec, transport) {
-		return pointer
-	}
+	inline := carriesResultInline(rec, transport)
 	if isCloseNoticeKey(rec, key) {
-		return closeNoticeMessage(rec, pointer)
+		return closeNoticeMessage(rec, pointer, inline)
+	}
+	if !inline {
+		return pointer
 	}
 	if isWaitingNoticeKey(rec, key) {
 		// No turn has a result to carry: the notice is its header alone.
