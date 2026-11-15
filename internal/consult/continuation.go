@@ -99,6 +99,9 @@ func (d *Dispatcher) continueHeadless(cfg *config.Config, rec Record, message st
 	launching := false
 	if claudeOpts, ok := spec.Options.(claudeharness.Options); ok && claudeOpts.StrictMCPConfigPrivate {
 		mcpConfigFile = dispatchMCPConfigPath(cfg.HomePath, rec.ID)
+		// The file exists before this run is published as non-terminal
+		// (below); guard it from the startup sweep until then.
+		defer d.guardRunFiles(rec.ID)()
 		defer func() {
 			if !launching {
 				removeIfExists(mcpConfigFile, "mcp config", rec.ID)
@@ -109,6 +112,9 @@ func (d *Dispatcher) continueHeadless(cfg *config.Config, rec Record, message st
 			return SendResult{}, fmt.Errorf("writing the %s MCP config: %w", h.Name(), err)
 		}
 		spec.Options = opts
+		if d.afterContinuationMCPWrite != nil {
+			d.afterContinuationMCPWrite()
+		}
 	}
 	_, err = h.Args(spec)
 	if err != nil {

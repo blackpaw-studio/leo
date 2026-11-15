@@ -193,6 +193,11 @@ func isInlineSettings(value string) bool {
 // writePrivateFile replaces path with data, readable only by the owner,
 // via a same-directory temp file and rename so claude never reads a
 // partial write.
+// PrivateFileTempPrefix starts the name of the temp file writePrivateFile
+// creates beside its target before renaming it into place; a crash in between
+// leaves it behind, and sweeps recognize it by this prefix.
+const PrivateFileTempPrefix = ".settings-"
+
 func writePrivateFile(path string, data []byte) error {
 	if path == "" {
 		return fmt.Errorf("a settings file was given but no private settings path is available; refusing to inline it into argv")
@@ -206,7 +211,7 @@ func writePrivateFile(path string, data []byte) error {
 	if err := os.Chmod(dir, 0o700); err != nil {
 		return err
 	}
-	tmp, err := os.CreateTemp(dir, ".settings-*.json") // created 0600
+	tmp, err := os.CreateTemp(dir, PrivateFileTempPrefix+"*.json") // created 0600
 	if err != nil {
 		return err
 	}

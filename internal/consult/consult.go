@@ -55,6 +55,13 @@ func invalidf(format string, args ...any) error {
 }
 
 type Dispatcher struct {
+	// pendingRunFiles holds ids whose private run files are written ahead of
+	// the run being published as non-terminal (a headless continuation), so
+	// the startup sweep keeps them. Guarded by mu.
+	pendingRunFiles map[string]int
+	// afterContinuationMCPWrite, when set, runs right after a continuation
+	// writes its MCP file; tests use it to interleave a sweep.
+	afterContinuationMCPWrite func()
 	// trackLog receives the background tracker's one-line decisions (ids
 	// and fixed reasons only); nil means the daemon log, os.Stderr.
 	trackLog io.Writer

@@ -96,6 +96,7 @@ type TmuxInteractiveRuntime struct {
 	LeoMCP              leomcp.Server
 	ExecCommandContext  func(context.Context, string, ...string) *exec.Cmd
 	Timeout             time.Duration
+	now                 func() time.Time // nil reads the wall clock
 	StartupTimeout      time.Duration
 	StartupPollInterval time.Duration
 	mu                  sync.RWMutex
