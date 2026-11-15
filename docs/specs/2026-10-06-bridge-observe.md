@@ -56,7 +56,7 @@ WebFetch → host; MCP and everything else → tool name only.
 - `agent_usage {agent, usage}`: only when usage changes outside a turn completion
 - `dispatch_changed {dispatch}`: full record; terminal `status` marks the end
 - `agent_activity` (existing): `current_action.kind` gains `"tool"`; `attention` gains
-  optional `reason {kind, tool, detail}` and `outstanding {dispatches, subagents}`
+  optional `reason {kind, tool, detail}` and `outstanding {dispatches, subagents, tasks?}`
 
 Throttling: `agent_activity` is coalesced to at most one per agent per second, and the
 trailing edge is always published. Turn, attention, compaction, and dispatch events are
@@ -70,7 +70,7 @@ sanitiser (strip ANSI, fold newlines).
 
 - `Agent.usage {session_id, session{tokens, cost_usd}, incarnation{tokens, cost_usd}, context{tokens, window, percent}}`:
   `session` resets when `session_id` changes; `incarnation` resets on respawn.
-- `Agent.outstanding {dispatches, subagents}`
+- `Agent.outstanding {dispatches, subagents, tasks?}`: `tasks` (background tasks left by the last turn, omitted at 0) is documented in `docs/configuration/api-clients.md`
 - `Agent.bridge: connected|absent`: omitted for non-claude harnesses
 - `Snapshot.dispatches[]`: `{id, name, role, template, model, status, stalled, caller_agent, parent_dispatch_id, started_at, ended_at?, tokens_in, tokens_out, cost_usd}`.
   Includes live dispatches plus those finished within the last 60 s. `parent_dispatch_id` is set when

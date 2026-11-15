@@ -278,13 +278,14 @@ func (f *BridgeFeed) OnBridgeEvent(ev bridge.Event) {
 		}
 	case bridge.EventTurnStart:
 		f.publish(EventAgentTurnStarted, &AgentTurnStartedPayload{Agent: name, SessionID: ev.SessionID})
-		f.attention.AdvanceBridge(st.key, st.launch, AttentionWorking)
+		f.attention.BeginBridgeTurn(st.key, st.launch)
 	case bridge.EventTurnComplete:
 		f.turnCompleteLocked(name, st, ev)
 		return
 	case bridge.EventSessionEnd:
 		st.action, st.reason = nil, nil
 		f.publish(EventAgentSessionEnded, &AgentSessionEndedPayload{Agent: name, SessionID: ev.SessionID, Reason: ClampDetail(ev.Reason)})
+		f.attention.ClearBridgeTasks(st.key, st.launch)
 	case bridge.EventActivity:
 		f.activityLocked(name, st, ev.Activity)
 	case bridge.EventAttention:
@@ -332,7 +333,21 @@ func (f *BridgeFeed) turnCompleteLocked(name string, st *feedAgent, ev bridge.Ev
 		// carry (model, rate limits) is published as usage.
 		f.publishUsageLocked(name, st)
 	}
-	f.attention.AdvanceBridge(st.key, st.launch, AttentionFinished)
+	f.attention.CompleteBridgeTurn(st.key, st.launch, pendingTasks(ev))
+}
+
+// pendingTasks is how many background tasks the completed turn left
+// running. Only tasks count: a wakeup (cron or timer) is idle waiting. An
+// aborted turn is an interrupt, which lets go of what the turn started.
+func pendingTasks(ev bridge.Event) int {
+	if ev.Pending == nil || ev.Reason == "aborted" {
+		return 0
+	}
+	n := 0
+	for _, count := range ev.Pending.Tasks {
+		n += max(count, 0) // the parser bounds both the types and each count
+	}
+	return n
 }
 
 func (f *BridgeFeed) activityLocked(name string, st *feedAgent, r *bridge.ActivityReport) {

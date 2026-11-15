@@ -621,3 +621,28 @@ func TestAgentHookDroppedStopIsLogged(t *testing.T) {
 		t.Fatalf("log = %q, want only Stop drops logged", out)
 	}
 }
+
+func TestAgentHookInterruptReleasesBackgroundTaskHold(t *testing.T) {
+	for _, hook := range []string{"Interrupt", "Stop"} {
+		t.Run(hook, func(t *testing.T) {
+			s := newHookServer(t)
+			s.attention.BindBridgeKey("key-a", "launch-a", "leo-a")
+			s.attention.Set("leo-a", observe.AttentionWorking)
+			s.attention.CompleteBridgeTurn("key-a", "launch-a", 2)
+			if att, _ := s.attention.Get("leo-a"); att.Outstanding == nil || att.Outstanding.Tasks != 2 {
+				t.Fatalf("setup attention = %+v; want held on 2 tasks", att)
+			}
+
+			postHook(t, s, "tok-a", `{"hook_event_name":"`+hook+`","session_id":"sid-a"}`)
+
+			att, _ := s.attention.Get("leo-a")
+			released := att.State == observe.AttentionFinished && att.Outstanding == nil
+			if hook == "Interrupt" && !released {
+				t.Fatalf("after interrupt attention = %+v; want finished, tasks gone", att)
+			}
+			if hook == "Stop" && att.State != observe.AttentionWorking {
+				t.Fatalf("after Stop attention = %+v; a plain stop keeps the hold", att)
+			}
+		})
+	}
+}

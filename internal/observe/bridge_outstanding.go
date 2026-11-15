@@ -26,9 +26,13 @@ type bridgeOutstanding struct {
 	byLaunch map[string]string      // launch id → bridge key, while bound
 	// subagents counts the bound launch's subagents by key; dispatches
 	// counts every caller launch's dispatches by launch id, bound or not,
-	// as the newest dispatch snapshot reported them.
+	// as the newest dispatch snapshot reported them. tasks counts the
+	// background tasks the bound launch's last completed turn left running,
+	// by key: like subagents they die with the launch, and a new turn
+	// replaces the report (see AttentionStore.CompleteBridgeTurn).
 	subagents  map[string]int
 	dispatches map[string]int
+	tasks      map[string]int
 }
 
 // boundLaunch is the launch a bridge key belongs to and its agent.
@@ -43,6 +47,7 @@ func newBridgeOutstanding() bridgeOutstanding {
 		byLaunch:   map[string]string{},
 		subagents:  map[string]int{},
 		dispatches: map[string]int{},
+		tasks:      map[string]int{},
 	}
 }
 
@@ -68,6 +73,7 @@ func (b *bridgeOutstanding) unbind(agent string) {
 	delete(b.byLaunch, b.launches[key].launch)
 	delete(b.launches, key)
 	delete(b.subagents, key)
+	delete(b.tasks, key)
 }
 
 // unbindLaunch unbinds key if launch is still the launch bound to it.
@@ -141,7 +147,7 @@ func (b *bridgeOutstanding) of(agent string) Outstanding {
 	if !ok {
 		return Outstanding{}
 	}
-	return Outstanding{Dispatches: b.dispatches[b.launches[key].launch], Subagents: b.subagents[key]}
+	return Outstanding{Dispatches: b.dispatches[b.launches[key].launch], Subagents: b.subagents[key], Tasks: b.tasks[key]}
 }
 
 // setSubagents records launch's subagents while it is the launch bound to
@@ -153,6 +159,24 @@ func (b *bridgeOutstanding) setSubagents(key, launch string, n int) bool {
 		return false
 	}
 	return setCount(b.subagents, key, n)
+}
+
+// setTasks records key's background tasks while launch is the launch bound
+// to it, reporting whether that changed anything.
+func (b *bridgeOutstanding) setTasks(key, launch string, n int) bool {
+	if _, bound := b.boundAgent(key, launch); !bound {
+		return false
+	}
+	return setCount(b.tasks, key, n)
+}
+
+// clearTasks drops agent's background tasks, reporting whether it had any.
+func (b *bridgeOutstanding) clearTasks(agent string) bool {
+	key, ok := b.keyOf[agent]
+	if !ok {
+		return false
+	}
+	return setCount(b.tasks, key, 0)
 }
 
 // setDispatches records launch's dispatches, reporting whether that
@@ -184,4 +208,4 @@ func setCount(m map[string]int, k string, n int) bool {
 	return true
 }
 
-func (o Outstanding) total() int { return o.Dispatches + o.Subagents }
+func (o Outstanding) total() int { return o.Dispatches + o.Subagents + o.Tasks }

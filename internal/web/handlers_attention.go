@@ -163,6 +163,8 @@ func (s *Server) handleAPIAgentHook(w http.ResponseWriter, r *http.Request) {
 		// The SetByToken family re-resolves the token atomically, so a stop
 		// or rename since the name was read still wins.
 		switch {
+		case payload.HookEventName == "Interrupt":
+			s.attention.SetByTokenInterrupted(req.Token)
 		case payload.HookEventName == "Stop":
 			s.attention.SetByTokenFinished(req.Token, payload.LastAssistantMessage)
 		case tr.reason != nil:

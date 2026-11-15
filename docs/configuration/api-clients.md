@@ -181,6 +181,26 @@ nothing until its first turn. `incarnation.tokens` counts the rollout's token
 deltas stamped since the agent's current process started. `/new` typed inside
 codex leaves the stored id on the old rollout until leo next stores one.
 
+## Agent attention and held work
+
+`attention.state` on `/api/v1` agents (and `agent_activity` events) goes `finished` when a turn ends, unless the agent still has work running. Then it stays `working`, and `attention.outstanding` says why:
+
+```json
+{"state": "working", "outstanding": {"dispatches": 0, "subagents": 1, "tasks": 2}}
+```
+
+- `dispatches`: leo dispatches the agent started that have not finished.
+- `subagents`: native background subagents still running.
+- `tasks`: background tasks the last turn left running (`Bash` with `run_in_background`, `Monitor`, and so on). It is the sum of the bridge's `pending.tasks` on that `turn.complete`, and is omitted when 0, so existing output is unchanged.
+
+Rules for the `tasks` hold:
+
+- Only `pending.tasks` hold. `pending.wakeups` (session crons and timers) never do: waiting on a timer is idle.
+- `pending` is read on every `turn.complete` and replaces the previous count; it never carries over to a later turn.
+- The hold drops at the next `turn.start` (the task's wake turn or a user prompt), at `session.end`, when the turn is interrupted (an aborted `turn.complete` ignores its `pending`, and so does a native-hook `Interrupt`; the web, API and `leo_interrupt` paths end in one of those two), and when the agent stops or its launch changes. That turn's own `turn.complete` then decides again: `finished`, or held again if tasks remain.
+- Never-ending tasks (dev servers, watchers) hold too, and a task that never wakes the session keeps the agent `working` until one of the releases above. `Working` is accurate for live work, so there is no per-type exclusion.
+- A needs-input prompt answered during a hold keeps the hold.
+
 ## Reachability
 
 Two settings decide whether a client can reach the daemon at all, and both fail

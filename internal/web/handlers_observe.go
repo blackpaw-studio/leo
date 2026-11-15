@@ -328,7 +328,13 @@ func mergeBridge(a *observe.Agent, views agentViews) {
 	case views.bridgeWired && a.Harness == "claude":
 		a.Bridge = observe.BridgeAbsent
 	}
-	if o := (observe.Outstanding{Dispatches: views.dispatches[a.Name], Subagents: bs.Subagents}); o.Dispatches > 0 || o.Subagents > 0 {
+	o := observe.Outstanding{Dispatches: views.dispatches[a.Name], Subagents: bs.Subagents}
+	if a.Attention != nil && a.Attention.Outstanding != nil {
+		// Background tasks are held by the attention store, which drops
+		// them on every release the bridge feed does not see.
+		o.Tasks = a.Attention.Outstanding.Tasks
+	}
+	if o.Dispatches > 0 || o.Subagents > 0 || o.Tasks > 0 {
 		a.Outstanding = &o
 	}
 }
