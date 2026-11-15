@@ -163,7 +163,7 @@ tasks:
 
 ## Claude option reference
 
-These are the nine `harness_options` keys the `claude` adapter accepts.
+These are the ten `harness_options` keys the `claude` adapter accepts.
 Unknown keys are rejected.
 
 | Key | Type | Meaning |
@@ -175,7 +175,8 @@ Unknown keys are rejected.
 | `allowed_tools` | list of strings | Tool whitelist, passed via `--allowed-tools`. |
 | `disallowed_tools` | list of strings | Tool blacklist, passed via `--disallowed-tools`. |
 | `append_system_prompt` | string | Extra text appended to the system prompt. |
-| `mcp` | `inherit` or `none` | `none` starts Claude with a strict inline MCP configuration containing only Leo's bridge, or no servers at all when the run has no bridge; `inherit` leaves Claude's MCP configuration unchanged. |
+| `mcp` | `inherit` or `none` | `none` starts Claude with a strict inline MCP configuration containing only Leo's bridge, or no servers at all when the run has no bridge; `inherit` leaves Claude's MCP configuration unchanged. See `mcp_servers` to add named servers under `none`. |
+| `mcp_servers` | list of strings | With `mcp: none`, also load these user-scope servers, looked up by name in the run's own account config (top-level `mcpServers` of `$CLAUDE_CONFIG_DIR/.claude.json`, else `~/.claude.json`; `CLAUDE_CONFIG_DIR` comes from the environment the run launches with). The strict config then holds exactly the leo bridge plus the named servers, written to a private `0600` file under `state/mcp/` and passed as `--mcp-config <path>`, so definitions (which can carry tokens) never reach argv or logs; the file is removed when the dispatch is released or closed and stale ones are swept at daemon start. A name the account config does not define is skipped with a warning (daemon log, plus `leo_dispatch` and `leo dispatch run` output and the `leo dispatch watch` header); `leo` is reserved for the bridge. Ignored with a warning under an explicit `mcp: inherit`, which already loads every server. Dispatches (and consults) only: agents and scheduled tasks ignore it and log a notice. A more specific scope's list replaces the inherited one. |
 | `plugins` | `inherit` or `none` | `none` disables every installed Claude plugin while preserving Leo lifecycle hooks; `inherit` leaves plugins enabled. |
 
 For `leo_dispatch` only, both values default to `none` when neither the
@@ -184,6 +185,17 @@ defaults nor selected template explicitly sets that key. Set either key to
 interactive dispatches; ordinary agents and scheduled tasks retain their
 existing argv and inherited configuration. The options follow the normal
 defaults → template cascade.
+
+For example, to give a lean dispatch template the headed Chrome server and
+nothing else from the user scope:
+
+```yaml
+templates:
+  research:
+    harness: claude
+    harness_options:
+      mcp_servers: [chrome]   # mcp defaults to none for dispatches
+```
 
 Model validation is also delegated to the adapter. For `claude`, `model:` is
 a **format check only** — any whitespace-free string passes, and empty means

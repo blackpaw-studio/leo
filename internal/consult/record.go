@@ -154,19 +154,21 @@ type Record struct {
 	Effort   string `json:"effort,omitempty"`
 	// ObservedEffort is the effort the harness last reported running at,
 	// which may be its default (no Effort requested) or a downgrade.
-	ObservedEffort string        `json:"observed_effort,omitempty"`
-	Kind           string        `json:"kind"`
-	Cwd            string        `json:"cwd"`
-	Name           string        `json:"name,omitempty"`
-	Prompt         string        `json:"prompt"`
-	Status         Status        `json:"status"`
-	StartedAt      time.Time     `json:"started_at"`
-	EndedAt        time.Time     `json:"ended_at,omitzero"`
-	ActiveSeconds  float64       `json:"active_seconds"`
-	RunningSince   *time.Time    `json:"running_since"`
-	Error          string        `json:"error,omitempty"`
-	Text           string        `json:"text,omitempty"`
-	Timeout        time.Duration `json:"timeout,omitempty"`
+	ObservedEffort string `json:"observed_effort,omitempty"`
+	Kind           string `json:"kind"`
+	Cwd            string `json:"cwd"`
+	Name           string `json:"name,omitempty"`
+	// Warnings are the non-fatal launch problems Started reported.
+	Warnings      []string      `json:"warnings,omitempty"`
+	Prompt        string        `json:"prompt"`
+	Status        Status        `json:"status"`
+	StartedAt     time.Time     `json:"started_at"`
+	EndedAt       time.Time     `json:"ended_at,omitzero"`
+	ActiveSeconds float64       `json:"active_seconds"`
+	RunningSince  *time.Time    `json:"running_since"`
+	Error         string        `json:"error,omitempty"`
+	Text          string        `json:"text,omitempty"`
+	Timeout       time.Duration `json:"timeout,omitempty"`
 	// ViewerWindowID identifies the optional tmux viewer so lifecycle cleanup
 	// can survive a daemon restart.
 	ViewerWindowID string `json:"viewer_window_id,omitempty"`

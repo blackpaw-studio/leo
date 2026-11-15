@@ -1,6 +1,9 @@
 package agent
 
 import (
+	"bytes"
+	"log"
+	"os"
 	"reflect"
 	"strconv"
 	"strings"
@@ -501,5 +504,27 @@ func TestResolveTemplateLaunchSkipsProgressGuidanceWithoutTheDaemon(t *testing.T
 
 	if strings.Contains(spec.SystemContext, "leo_progress") {
 		t.Fatalf("leo_progress needs the daemon; SystemContext = %q", spec.SystemContext)
+	}
+}
+
+func TestBuildTemplateArgsMCPServersIsIgnoredWithNotice(t *testing.T) {
+	cfg := &config.Config{HomePath: t.TempDir(), Web: config.WebConfig{Enabled: true}}
+	plain := config.TemplateConfig{HarnessOptions: map[string]any{"mcp": "none"}}
+	withServers := config.TemplateConfig{HarnessOptions: map[string]any{"mcp": "none", "mcp_servers": []any{"chrome"}}}
+	var logs bytes.Buffer
+	log.SetOutput(&logs)
+	t.Cleanup(func() { log.SetOutput(os.Stderr) })
+
+	want, _ := BuildTemplateArgs(cfg, plain, "agent-x", "/tmp/ws", "", "", leomcp.Server{})
+	if strings.Contains(logs.String(), "mcp_servers") {
+		t.Fatalf("no list, no notice: %q", logs.String())
+	}
+	got, _ := BuildTemplateArgs(cfg, withServers, "agent-x", "/tmp/ws", "", "", leomcp.Server{})
+
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("mcp_servers changed agent argv:\n got %q\nwant %q", got, want)
+	}
+	if !strings.Contains(logs.String(), "[agent:agent-x] mcp_servers applies to dispatches only; ignored") {
+		t.Fatalf("log = %q", logs.String())
 	}
 }

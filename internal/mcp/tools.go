@@ -580,7 +580,11 @@ func newRegistry(client *daemonClient, processName string, perms leotools.Permis
 		if role != "" {
 			prefix = role + "→" + resolvedTemplate + " · "
 		}
-		return fmt.Sprintf("%s%s (%s/%s) · %s%s\nwatch: leo dispatch watch %s", prefix, started.ID, started.Harness, started.Model, started.Cwd, placement, started.ID), nil
+		text := fmt.Sprintf("%s%s (%s/%s) · %s%s\nwatch: leo dispatch watch %s", prefix, started.ID, started.Harness, started.Model, started.Cwd, placement, started.ID)
+		for _, w := range started.Warnings {
+			text += "\nwarning: " + w
+		}
+		return text, nil
 	})
 
 	r.registerChat(client, processName, objectSchema)

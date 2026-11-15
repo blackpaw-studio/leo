@@ -173,6 +173,9 @@ func newDispatchRunCmd() *cobra.Command {
 		if started.Note != "" {
 			fmt.Fprintln(os.Stderr, started.Note)
 		}
+		for _, w := range started.Warnings {
+			fmt.Fprintln(os.Stderr, "warning: "+w)
+		}
 		if err := dispatchHTTP(cmd.Context(), cfg, http.MethodGet, "/api/dispatch/wait?id="+url.QueryEscape(waitID)+"&timeout="+fmt.Sprintf("%g", timeout.Seconds()), nil, &entries); err != nil {
 			return err
 		}

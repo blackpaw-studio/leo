@@ -213,3 +213,64 @@ func TestDispatchCallerFieldsAttributeChildrenToTheirParentDispatch(t *testing.T
 		}
 	}
 }
+
+func TestDispatchRunPrintsStartWarningsToStderr(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/dispatch":
+			_, _ = w.Write([]byte(`{"ok":true,"data":{"id":"d-x","warnings":["mcp_servers: \"nope\" skipped"]}}`))
+		case "/api/dispatch/wait":
+			_, _ = w.Write([]byte(`{"ok":true,"data":[{"id":"d-x","status":"done","text":"ok"}]}`))
+		}
+	})}
+	go func() { _ = server.Serve(listener) }()
+	t.Cleanup(func() { _ = server.Close() })
+	home := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(home, "state"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(home, "state", "api.token"), []byte("tok"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	configPath := filepath.Join(home, "leo.yaml")
+	if err := os.WriteFile(configPath, []byte(fmt.Sprintf("web:\n  port: %d\ntasks: {}\n", listener.Addr().(*net.TCPAddr).Port)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	oldCfg, oldOut := cfgFile, consultStdout
+	cfgFile, consultStdout = configPath, io.Discard
+	t.Cleanup(func() { cfgFile, consultStdout = oldCfg, oldOut })
+	cmd := newDispatchRunCmd()
+	cmd.SetArgs([]string{"coding", "work", "--cwd", home})
+	stderr := captureStderr(t, func() {
+		if err := cmd.Execute(); err != nil {
+			t.Fatal(err)
+		}
+	})
+	if !strings.Contains(stderr, `warning: mcp_servers: "nope" skipped`) {
+		t.Fatalf("stderr = %q", stderr)
+	}
+}
+
+// captureStderr runs fn with os.Stderr redirected and returns what it wrote.
+func captureStderr(t *testing.T, fn func()) string {
+	t.Helper()
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	old := os.Stderr
+	os.Stderr = w
+	done := make(chan string)
+	go func() {
+		b, _ := io.ReadAll(r)
+		done <- string(b)
+	}()
+	fn()
+	os.Stderr = old
+	_ = w.Close()
+	return <-done
+}

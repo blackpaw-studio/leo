@@ -1,9 +1,11 @@
 package run
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -2355,5 +2357,27 @@ func TestRunWithExpandsTaskEnvAndFailsOnUnsetVariable(t *testing.T) {
 	data, _ := os.ReadFile(logFiles[0])
 	if !strings.Contains(string(data), "CLAUDE_CONFIG_DIR=/acct/.claude-b") {
 		t.Errorf("log missing expanded env:\n%s", data)
+	}
+}
+
+func TestBuildArgsMCPServersIsIgnoredWithNotice(t *testing.T) {
+	cfg := makeTestConfig(t.TempDir(), false)
+	plain := config.TaskConfig{HarnessOptions: map[string]any{"mcp": "none"}}
+	withServers := config.TaskConfig{HarnessOptions: map[string]any{"mcp": "none", "mcp_servers": []any{"chrome"}}}
+	var logs bytes.Buffer
+	log.SetOutput(&logs)
+	t.Cleanup(func() { log.SetOutput(os.Stderr) })
+
+	want, _ := buildArgs(cfg, plain, "mytask", "p", "", nil, leomcp.Server{})
+	if strings.Contains(logs.String(), "mcp_servers") {
+		t.Fatalf("no list, no notice: %q", logs.String())
+	}
+	got, _ := buildArgs(cfg, withServers, "mytask", "p", "", nil, leomcp.Server{})
+
+	if strings.Join(got, "\x00") != strings.Join(want, "\x00") {
+		t.Fatalf("mcp_servers changed task argv:\n got %q\nwant %q", got, want)
+	}
+	if !strings.Contains(logs.String(), "[task:mytask] mcp_servers applies to dispatches only; ignored") {
+		t.Fatalf("log = %q", logs.String())
 	}
 }

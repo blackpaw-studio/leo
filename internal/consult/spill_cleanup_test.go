@@ -121,6 +121,10 @@ func TestTmuxRuntimeRunFileCleanup(t *testing.T) {
 	briefGone := writeBrief(t, home, "d-a")
 	briefKept := writeBrief(t, home, "d-b")
 	briefOrphan := writeBrief(t, home, "d-c")
+	// The private MCP config (claude mcp_servers) is per-dispatch too.
+	mcpGone := writeMCPConfig(t, home, "d-a")
+	mcpKept := writeMCPConfig(t, home, "d-b")
+	mcpOrphan := writeMCPConfig(t, home, "d-c")
 
 	rt.ReleaseRunFiles("d-a")
 	rt.ReleaseRunFiles("../../escape")
@@ -130,7 +134,9 @@ func TestTmuxRuntimeRunFileCleanup(t *testing.T) {
 	assertGone(t, orphan)
 	assertGone(t, briefGone)
 	assertGone(t, briefOrphan)
-	for _, p := range []string{kept, agentFile, briefKept} {
+	assertGone(t, mcpGone)
+	assertGone(t, mcpOrphan)
+	for _, p := range []string{kept, agentFile, briefKept, mcpKept} {
 		if _, err := os.Stat(p); err != nil {
 			t.Fatalf("%s removed: %v", p, err)
 		}
@@ -155,6 +161,9 @@ func TestDispatcherSweepRunFilesRemovesBriefFilesForTerminalAndUnknownRuns(t *te
 	live := writeBrief(t, home, "d-live")
 	terminal := writeBrief(t, home, "d-terminal")
 	unknown := writeBrief(t, home, "d-unknown") // never in d.runs at all
+	mcpLive := writeMCPConfig(t, home, "d-live")
+	mcpTerminal := writeMCPConfig(t, home, "d-terminal")
+	mcpUnknown := writeMCPConfig(t, home, "d-unknown")
 
 	d.SweepRunFiles()
 
@@ -163,6 +172,24 @@ func TestDispatcherSweepRunFilesRemovesBriefFilesForTerminalAndUnknownRuns(t *te
 	}
 	assertGone(t, terminal)
 	assertGone(t, unknown)
+	if _, err := os.Stat(mcpLive); err != nil {
+		t.Fatalf("live run's mcp config removed: %v", err)
+	}
+	assertGone(t, mcpTerminal)
+	assertGone(t, mcpUnknown)
+}
+
+// writeMCPConfig writes a dispatch id's private MCP config file directly.
+func writeMCPConfig(t *testing.T, home, id string) string {
+	t.Helper()
+	path := dispatchMCPConfigPath(home, id)
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(`{"mcpServers":{}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return path
 }
 
 // writeBrief writes a dispatch id's opening-brief file directly (bypassing

@@ -28,12 +28,20 @@ type Options struct {
 	Plugins            string   // inherit or none
 	EnabledPlugins     []string // plugin IDs disabled when Plugins is none
 	StrictMCPConfig    string   // inline Leo-only config when MCP is none
+	MCPServers         []string // mcp_servers: user-scope servers to add under MCP none
 	MCPConfigPath      string   // user MCP config; empty when absent or serverless
 	LeoMCPArgs         []string // precomputed leomcp.Server.AppendArg(nil, cfg); nil when gated off
 	// LeoMCPToolTimeout is leo's per-tool MCP ceiling (leomcp.ToolTimeout).
 	// Applied only when the leo bridge is actually wired (LeoMCPArgs
 	// non-empty), since Claude Code's knob is process-global.
 	LeoMCPToolTimeout time.Duration
+	// StrictMCPConfigPrivate marks StrictMCPConfig as carrying server
+	// definitions that may hold secrets (set by ApplyMCPServers). It must
+	// reach claude through StrictMCPConfigFile, never argv.
+	StrictMCPConfigPrivate bool
+	// StrictMCPConfigFile is the 0600 file holding StrictMCPConfig, set by
+	// MaterializeStrictMCPConfig; argv then carries only its path.
+	StrictMCPConfigFile string
 }
 
 // Claude is the Claude Code adapter.
@@ -134,9 +142,9 @@ func (c Claude) Args(spec harness.LaunchSpec) ([]string, error) {
 	}
 	switch spec.Kind {
 	case harness.KindAgent:
-		return agentArgs(spec, opts), nil
+		return agentArgs(spec, opts)
 	case harness.KindTask:
-		return taskArgs(spec, opts), nil
+		return taskArgs(spec, opts)
 	default:
 		return nil, fmt.Errorf("claude: unknown launch kind %q", spec.Kind)
 	}

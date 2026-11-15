@@ -330,6 +330,11 @@ func (d *Dispatcher) launchInteractive(ctx context.Context, s *runState, req Req
 	d.mu.Unlock()
 	<-publishing
 	if !published {
+		// The launch wrote its run files (the MCP config) possibly after a
+		// cancel's own cleanup ran, and its pane is gone: drop them here.
+		d.mu.Lock()
+		d.releaseRunFilesLocked(s.record.ID)
+		d.mu.Unlock()
 		return Started{}, context.Canceled
 	}
 	if harnessName == "claude" {

@@ -65,6 +65,26 @@ func TestDecodeOptions(t *testing.T) {
 			want: Options{MCP: "none", Plugins: "inherit"},
 		},
 		{
+			name: "mcp_servers keeps order and drops duplicates",
+			raw:  map[string]any{"mcp_servers": []any{"chrome", "docs", "chrome"}},
+			want: Options{MCPServers: []string{"chrome", "docs"}},
+		},
+		{
+			name:    "mcp_servers not a list",
+			raw:     map[string]any{"mcp_servers": "chrome"},
+			wantErr: `option "mcp_servers" must be a list of strings, got string`,
+		},
+		{
+			name:    "mcp_servers non-string element",
+			raw:     map[string]any{"mcp_servers": []any{"chrome", 3}},
+			wantErr: `option "mcp_servers" must be a list of strings, got int element`,
+		},
+		{
+			name:    "mcp_servers empty name",
+			raw:     map[string]any{"mcp_servers": []any{""}},
+			wantErr: `option "mcp_servers" must not contain an empty name`,
+		},
+		{
 			name:    "invalid mcp",
 			raw:     map[string]any{"mcp": "all"},
 			wantErr: `mcp "all" is not valid (use inherit or none)`,
@@ -72,7 +92,7 @@ func TestDecodeOptions(t *testing.T) {
 		{
 			name:    "unknown key",
 			raw:     map[string]any{"bogus": "x"},
-			wantErr: `unknown option "bogus" (valid: agent, allowed_tools, append_system_prompt, bypass_permissions, disallowed_tools, permission_mode, remote_control, mcp, plugins)`,
+			wantErr: `unknown option "bogus" (valid: agent, allowed_tools, append_system_prompt, bypass_permissions, disallowed_tools, permission_mode, remote_control, mcp, mcp_servers, plugins)`,
 		},
 		{
 			name:    "permission_mode wrong type",

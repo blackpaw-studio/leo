@@ -2,6 +2,8 @@ package claude
 
 import (
 	"reflect"
+	"slices"
+	"strings"
 	"testing"
 
 	"github.com/blackpaw-studio/leo/internal/harness"
@@ -288,4 +290,42 @@ func TestTaskArgsMCPNoneExcludesOtherMCPConfigs(t *testing.T) {
 	if !reflect.DeepEqual(inherit, []string{"-p", "P", "--model", "fable", "--max-turns", "1", "--output-format", "stream-json", "--verbose", "--mcp-config", "/user.json", "--mcp-config", "/leo.json", "--add-dir", "/ws", "--disallowed-tools", "Agent"}) {
 		t.Fatalf("inherit argv = %#v", inherit)
 	}
+}
+
+func TestTaskArgsPrivateStrictConfigUsesFilePathOnly(t *testing.T) {
+	base := harness.LaunchSpec{Kind: harness.KindTask, Model: "fable", Workspace: "/ws", Prompt: "P", MaxTurns: 1}
+	opts := Options{MCP: "none", StrictMCPConfig: `{"mcpServers":{"chrome":{"x":"` + secretSentinel + `"}}}`, StrictMCPConfigPrivate: true}
+
+	t.Run("with file", func(t *testing.T) {
+		spec := base
+		opts := opts
+		opts.StrictMCPConfigFile = "/state/mcp/d.json"
+		spec.Options = opts
+		got, err := (Claude{}).Args(spec)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !slices.Contains(got, "/state/mcp/d.json") {
+			t.Fatalf("argv lacks the path: %#v", got)
+		}
+		for _, a := range got {
+			if strings.Contains(a, "mcpServers") || strings.Contains(a, secretSentinel) {
+				t.Fatalf("argv leaks the config: %#v", got)
+			}
+		}
+	})
+	t.Run("without file fails closed", func(t *testing.T) {
+		spec := base
+		spec.Options = opts
+		_, err := (Claude{}).Args(spec)
+		if err == nil || strings.Contains(err.Error(), secretSentinel) {
+			t.Fatalf("err = %v, want an error free of the secret", err)
+		}
+	})
+	t.Run("agent kind too", func(t *testing.T) {
+		spec := harness.LaunchSpec{Kind: harness.KindAgent, Model: "fable", Workspace: "/ws", Name: "a", Options: opts}
+		if _, err := (Claude{}).Args(spec); err == nil {
+			t.Fatal("want error")
+		}
+	})
 }

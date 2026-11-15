@@ -900,3 +900,20 @@ func TestDispatchMCPOmittedModeSendsNoModeAndShowsFallbackNote(t *testing.T) {
 		t.Fatalf("dispatch reply lacks the fallback note: %q", got)
 	}
 }
+
+func TestLeoDispatchToolShowsStartWarnings(t *testing.T) {
+	d := newFakeDaemon(func(method, path string, body []byte) (int, string) {
+		return 200, `{"ok":true,"data":{"id":"d-test","harness":"claude","model":"opus","cwd":"/tmp","warnings":["mcp_servers: \"nope\" is not defined; skipped","second"]}}`
+	})
+	defer d.close()
+	reg := newRegistry(newDaemonClient(d.port(), "tok"), "assistant", leotools.Permissions{})
+
+	resp := runRequest(t, reg, map[string]any{"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": map[string]any{"name": "leo_dispatch", "arguments": map[string]any{"template": "claude", "prompt": "do it"}}})
+
+	text := resp["result"].(map[string]any)["content"].([]any)[0].(map[string]any)["text"].(string)
+	for _, want := range []string{"\nwarning: mcp_servers: \"nope\" is not defined; skipped", "\nwarning: second", "leo dispatch watch d-test"} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("result %q lacks %q", text, want)
+		}
+	}
+}

@@ -26,6 +26,7 @@ func cloneRecord(record Record) Record {
 		record.Notifications = notifications
 	}
 	record.OpenTools = maps.Clone(record.OpenTools)
+	record.Warnings = slices.Clone(record.Warnings)
 	record.InputTokens = clonePtr(record.InputTokens)
 	record.OutputTokens = clonePtr(record.OutputTokens)
 	record.CostUSD = clonePtr(record.CostUSD)
@@ -96,7 +97,9 @@ func (d *Dispatcher) complete(state *runState, status Status, text string, cause
 		d.persistRecordLocked(state)
 	}
 	recordID := state.record.ID
+	mcpConfigFile := state.mcpConfigFile
 	d.mu.Unlock()
+	removeIfExists(mcpConfigFile, "mcp config", recordID)
 	if text != "" {
 		_ = state.handle.SetText(text)
 	}

@@ -80,7 +80,9 @@ func (d *Dispatcher) continueHeadless(cfg *config.Config, rec Record, message st
 		return SendResult{}, fmt.Errorf("template %q: %w", rec.Template, err)
 	}
 	if opts, ok := decoded.(claudeharness.Options); ok {
-		decoded = resolveClaudeDispatchProfile(cfg, tmpl, "dispatch", opts, tmplEnv, d.LeoMCP)
+		var warnings []string
+		decoded, warnings = resolveClaudeDispatchOptions(cfg, tmpl, "dispatch", opts, tmplEnv, d.LeoMCP)
+		logDispatchWarnings(rec.ID, rec.Template, warnings)
 	}
 	decoded, childEnv := d.headlessChildMCP(cfg, tmpl, decoded, rec.ID)
 	cwd, recreate, err := d.resumeWorkspace(rec)
@@ -90,6 +92,29 @@ func (d *Dispatcher) continueHeadless(cfg *config.Config, rec Record, message st
 	spec := harness.LaunchSpec{Kind: harness.KindTask, Name: rec.Name, Model: rec.Model, Effort: rec.Effort, MaxTurns: cfg.TemplateMaxTurns(tmpl), Workspace: cwd, Prompt: message, Options: decoded, Dispatched: true, Session: harness.SessionState{Mode: harness.SessionResume, ID: rec.SessionID}}
 	if spec.Name == "" {
 		spec.Name = "dispatch"
+	}
+	// The private MCP config file lives with the turn: removed again unless
+	// the turn launches (complete removes it once the turn ends).
+	mcpConfigFile := ""
+	launching := false
+	if claudeOpts, ok := spec.Options.(claudeharness.Options); ok && claudeOpts.StrictMCPConfigPrivate {
+		mcpConfigFile = dispatchMCPConfigPath(cfg.HomePath, rec.ID)
+		// The file exists before this run is published as non-terminal
+		// (below); guard it from the startup sweep until then.
+		defer d.guardRunFiles(rec.ID)()
+		defer func() {
+			if !launching {
+				removeIfExists(mcpConfigFile, "mcp config", rec.ID)
+			}
+		}()
+		opts, err := claudeharness.MaterializeStrictMCPConfig(claudeOpts, mcpConfigFile)
+		if err != nil {
+			return SendResult{}, fmt.Errorf("writing the %s MCP config: %w", h.Name(), err)
+		}
+		spec.Options = opts
+		if d.afterContinuationMCPWrite != nil {
+			d.afterContinuationMCPWrite()
+		}
 	}
 	_, err = h.Args(spec)
 	if err != nil {
@@ -188,12 +213,14 @@ func (d *Dispatcher) continueHeadless(cfg *config.Config, rec Record, message st
 	}
 	state.record, state.handle = prospective, handle
 	state.mcpEnv = childEnv
+	state.mcpConfigFile = mcpConfigFile
 	state.scrub = state.scrub.With(secretValues)
 	state.done, state.cancel = done, cancel
 	d.persistLocked(state, "turn")
 	d.mu.Unlock()
 	d.nestMu.Unlock()
 	nestHeld = false
+	launching = true
 	// A turn that holds its slot launches at once, so its start outcome is
 	// the send's outcome: delivered only after cmd.Start succeeds, and a
 	// start failure is an error. A queued turn launches whenever a slot

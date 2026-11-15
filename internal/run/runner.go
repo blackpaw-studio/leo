@@ -1124,6 +1124,9 @@ func buildArgs(cfg *config.Config, task config.TaskConfig, taskName, prompt, ses
 
 	switch opts := decoded.(type) {
 	case claudeharness.Options:
+		if opts.MCP == "none" && len(opts.MCPServers) > 0 {
+			log.Printf("[task:%s] mcp_servers applies to dispatches only; ignored", taskName)
+		}
 		mcpConfig := ""
 		if p := cfg.TaskMCPConfigPath(task); config.HasMCPServers(p) {
 			mcpConfig = p
