@@ -171,6 +171,7 @@ func (d *Dispatcher) reopenState(rec Record, plan reopenPlan, exempt bool, cance
 	}
 	state := newRunState(prospective, handle, make(chan struct{}), cancel)
 	state.scrub = redact.NewSecrets(plan.secrets)
+	state.reopenUnconfirmed, state.reopenedAt = true, d.now()
 	if plan.transcript != "" {
 		d.primeLiveUsage(state, rec.SessionID, plan.transcript)
 	}

@@ -206,6 +206,11 @@ type runState struct {
 	// releasing marks a run whose pane is being retired, by a release or by
 	// closing on a delivered result (see retirePaneLocked).
 	releasing bool
+	// reopenUnconfirmed is set while a reopen has yet to hear its harness
+	// name the session it resumed; reopenedAt is when it was reopened, which
+	// its timeout counts from.
+	reopenUnconfirmed bool
+	reopenedAt        time.Time
 	// pgid is the headless command's private process group. It is retained
 	// after Wait so worktree cleanup can prove no detached child remains.
 	pgid            int

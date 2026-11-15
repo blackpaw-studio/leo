@@ -14,9 +14,16 @@ import (
 // opening turn with text. Its notice is left unswept.
 func startParkable(t *testing.T, stateDir string, isolated bool, text string) (*Dispatcher, *paneRuntime, *fakeNotificationDelivery, string) {
 	t.Helper()
-	d := NewDispatcher(NewFileRecorder(stateDir))
 	now := time.Date(2026, time.November, 14, 12, 0, 0, 0, time.UTC)
-	d.now = sharedClock(&now)
+	return startParkableAt(t, stateDir, isolated, text, &now)
+}
+
+// startParkableAt is startParkable on a clock the test advances (under
+// testClockMu).
+func startParkableAt(t *testing.T, stateDir string, isolated bool, text string, now *time.Time) (*Dispatcher, *paneRuntime, *fakeNotificationDelivery, string) {
+	t.Helper()
+	d := NewDispatcher(NewFileRecorder(stateDir))
+	d.now = sharedClock(now)
 	rt := newPaneRuntime(true)
 	rt.arm, rt.empty = true, true
 	d.SetInteractiveRuntime(rt)

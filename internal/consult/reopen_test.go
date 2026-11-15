@@ -157,10 +157,10 @@ func TestSendToParkedRunReopensWithResume(t *testing.T) {
 
 // queuedReopen parks a run, fills the pool's only slot, queues an earlier
 // dispatch behind it, then sends the parked run a follow-up.
-func queuedReopen(t *testing.T) (d *Dispatcher, rt *paneRuntime, id, earlier string, parkedRec Record) {
+func queuedReopen(t *testing.T, stateDir string) (d *Dispatcher, rt *paneRuntime, id, earlier string, parkedRec Record) {
 	t.Helper()
 	configDir := claudeConfigDir(t)
-	d, rt, _, id = startParkable(t, t.TempDir(), false, "the answer")
+	d, rt, _, id = startParkable(t, stateDir, false, "the answer")
 	d.SweepNotifications(context.Background())
 	parkedRec = requireParked(t, d, id, id+"#1")
 	writeTranscript(t, configDir, parkedRec.Cwd, parkedRec.SessionID, nil)
@@ -184,7 +184,7 @@ func queuedReopen(t *testing.T) (d *Dispatcher, rt *paneRuntime, id, earlier str
 }
 
 func TestReopenQueuesUnderCap(t *testing.T) {
-	d, rt, id, earlier, parkedRec := queuedReopen(t)
+	d, rt, id, earlier, parkedRec := queuedReopen(t, t.TempDir())
 	if n := len(rt.launchRequests()); n != 1 {
 		t.Fatalf("launches = %d while every slot is taken, want only the opening", n)
 	}
@@ -204,10 +204,11 @@ func TestReopenQueuesUnderCap(t *testing.T) {
 	if l := rt.launchRequests()[2]; l.ID != id || l.ResumeSessionID != parkedRec.SessionID || l.Prompt != "more" {
 		t.Fatalf("reopen launch = %+v", l)
 	}
+	waitForArmed(t, d, id)
 }
 
 func TestSecondSendWhileReopenQueuedRejected(t *testing.T) {
-	d, rt, id, _, _ := queuedReopen(t)
+	d, rt, id, _, _ := queuedReopen(t, t.TempDir())
 
 	_, err := d.SendWithConfig(context.Background(), testConfigMax(1), id, "and another")
 
