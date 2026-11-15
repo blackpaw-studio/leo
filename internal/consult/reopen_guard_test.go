@@ -9,6 +9,9 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/blackpaw-studio/leo/internal/bridge"
+	"github.com/blackpaw-studio/leo/internal/harness"
 )
 
 // sessionHook is a claude hook payload naming the session it came from.
@@ -178,6 +181,9 @@ func TestRestartWithQueuedReopenRevertsToParked(t *testing.T) {
 	if _, ok := got.Notifications[closeNoticeKey(id)]; ok {
 		t.Fatalf("restart sent a close notice for a queued reopen: %+v", got.Notifications)
 	}
+	if len(got.UsageInvocations) != len(before.UsageInvocations) {
+		t.Fatalf("usage invocations = %d, want the parked run's %d: the queued reopen reported nothing", len(got.UsageInvocations), len(before.UsageInvocations))
+	}
 	turn := turnByID(got, id+"#2")
 	if turn.Outcome != TurnInterrupted || !strings.Contains(turn.Text, "daemon restarted") {
 		t.Fatalf("turn #2 outcome=%q text=%q", turn.Outcome, turn.Text)
@@ -318,5 +324,40 @@ func TestRestartKeepsAParkedRunsUnkillablePane(t *testing.T) {
 	_, err := d.SendWithConfig(context.Background(), testConfig(), rec.ID, "more")
 	if err == nil || !strings.Contains(err.Error(), "previous pane") {
 		t.Fatalf("reopen beside an unkillable pane = %v, want a refusal", err)
+	}
+}
+
+// A failed reopen continued nothing, so it leaves no usage of its own: the
+// next reopen's usage adds to the earlier panes' and the totals stay known.
+func TestFailedReopenLeavesUsageTotalsKnown(t *testing.T) {
+	configDir := claudeConfigDir(t)
+	stateDir := t.TempDir()
+	rec := seedReopenable(t, stateDir, configDir, "d-totals", func(r *Record) {
+		r.UsageInvocations = []InvocationUsage{{InputTokens: harness.Int64(2000), OutputTokens: harness.Int64(60), CostUSD: harness.Float64(1.0), Completed: true}}
+		r.InputTokens, r.OutputTokens, r.CostUSD = harness.Int64(2000), harness.Int64(60), harness.Float64(1.0)
+	})
+	d, rt, _ := reopenDispatcher(t, stateDir)
+	rt.mu.Lock()
+	rt.launchErr = errors.New("tmux: no server running")
+	rt.mu.Unlock()
+	if _, err := d.SendWithConfig(context.Background(), testConfig(), rec.ID, "more"); err == nil {
+		t.Fatal("precondition: the first reopen did not fail")
+	}
+	rt.mu.Lock()
+	rt.launchErr = nil
+	rt.mu.Unlock()
+
+	if _, err := d.SendWithConfig(context.Background(), testConfig(), rec.ID, "more, again"); err != nil {
+		t.Fatal(err)
+	}
+	waitForArmed(t, d, rec.ID)
+	d.ApplyBridgeTokens(rec.ID, "turn.complete:t3", &bridge.TurnTokens{Input: 100, Output: 10})
+	d.ApplyBridgeUsage(rec.ID, json.RawMessage(`{"cost":{"usd":1.25}}`))
+
+	got := recordOf(t, d, rec.ID)
+	wantTokens(t, got, 2100, 70, false)
+	wantCost(t, d, rec.ID, 1.25)
+	if n := len(got.UsageInvocations); n != 2 {
+		t.Fatalf("usage invocations = %d, want the first pane's and the successful reopen's", n)
 	}
 }

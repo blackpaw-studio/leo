@@ -3,6 +3,7 @@ package consult
 import (
 	"fmt"
 	"os"
+	"slices"
 	"time"
 )
 
@@ -73,6 +74,7 @@ func (d *Dispatcher) parkFailedReopenLocked(s *runState, outcome TurnOutcome, re
 	s.reopenUnconfirmed, s.awaitingSlot = false, false
 	s.record.foldActive(now)
 	s.record.Status, s.record.EndedAt, s.record.Retained = StatusClosed, now, true
+	s.record.UsageInvocations = withoutUnreportedReopen(s.record.UsageInvocations)
 	s.killPending = s.record.PaneID != ""
 	d.persistLocked(s, "status")
 	d.releaseRunFilesLocked(s.record.ID)
@@ -138,11 +140,24 @@ func (d *Dispatcher) parkRestartedReopen(rec Record) int {
 	}
 	rec.PendingWork, rec.BackgroundTasks, rec.OpenTools, rec.NeedsInput = nil, nil, nil, nil
 	rec.Status, rec.EndedAt = StatusClosed, markedAt
+	rec.UsageInvocations = withoutUnreportedReopen(rec.UsageInvocations)
 	rec.foldActive(markedAt)
 	d.mu.Lock()
 	d.addRestartTurnCandidates(&rec)
 	d.mu.Unlock()
 	return d.persistRestartSettle(recorder, rec)
+}
+
+// withoutUnreportedReopen drops the usage invocation a failed reopen
+// appended when it reported nothing: the reopen continued nothing, and an
+// empty invocation would make the run's usage totals read as unknown. One
+// that reported something (the harness ran before the reopen failed) stays.
+func withoutUnreportedReopen(invocations []InvocationUsage) []InvocationUsage {
+	n := len(invocations)
+	if n == 0 || invocations[n-1] != (InvocationUsage{}) {
+		return invocations
+	}
+	return slices.Clone(invocations[:n-1])
 }
 
 // timeoutStart is when a run's timeout counts from: its start, or its
