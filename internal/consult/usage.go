@@ -39,7 +39,7 @@ func (d *Dispatcher) ApplyBridgeUsage(id string, raw json.RawMessage) {
 	if s.record.Mode != ModeInteractive || s.record.Status.Terminal() {
 		return
 	}
-	s.bridgedUsage.cost = harness.Float64(usd)
+	s.bridgedUsage.setCost(usd)
 	d.applyBridgedUsageLocked(s)
 }
 

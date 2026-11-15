@@ -2,7 +2,9 @@ package consult
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"slices"
@@ -393,4 +395,54 @@ func TestReopenUsageNotDoubleCounted(t *testing.T) {
 	refreshLive(t, d, rec.ID)
 
 	wantTokens(t, recordOf(t, d, rec.ID), 2000+1323, 60+9, true)
+}
+
+// reopenedWithCost reopens a parked run whose earlier panes counted cost.
+func reopenedWithCost(t *testing.T, cost float64) (*Dispatcher, string) {
+	t.Helper()
+	configDir := claudeConfigDir(t)
+	stateDir := t.TempDir()
+	rec := seedReopenable(t, stateDir, configDir, "d-cost", func(r *Record) {
+		r.UsageInvocations = []InvocationUsage{{CostUSD: harness.Float64(cost), Completed: true}}
+		r.CostUSD = harness.Float64(cost)
+	})
+	d, _, _ := reopenDispatcher(t, stateDir)
+	if _, err := d.SendWithConfig(context.Background(), testConfig(), rec.ID, "more"); err != nil {
+		t.Fatal(err)
+	}
+	waitForArmed(t, d, rec.ID)
+	return d, rec.ID
+}
+
+func wantCost(t *testing.T, d *Dispatcher, id string, want float64) {
+	t.Helper()
+	got := recordOf(t, d, id).CostUSD
+	if got == nil {
+		t.Fatalf("cost = nil, want %v", want)
+	}
+	if math.Abs(*got-want) > 1e-9 {
+		t.Fatalf("cost = %v, want %v", *got, want)
+	}
+}
+
+// Claude restores a resumed session's running cost, so a reopened pane's
+// reports already include what the earlier panes counted.
+func TestReopenCostNotDoubleCounted(t *testing.T) {
+	d, id := reopenedWithCost(t, 1.0)
+
+	d.ApplyBridgeUsage(id, json.RawMessage(`{"cost":{"usd":1.25}}`))
+	wantCost(t, d, id, 1.25)
+	d.ApplyBridgeUsage(id, json.RawMessage(`{"cost":{"usd":1.5}}`))
+	wantCost(t, d, id, 1.5)
+}
+
+// A resumed session reporting less than the earlier panes counted did not
+// carry its cost over: its reports are its own.
+func TestReopenCostNotCarriedCountsWhole(t *testing.T) {
+	d, id := reopenedWithCost(t, 1.0)
+
+	d.ApplyBridgeUsage(id, json.RawMessage(`{"cost":{"usd":0.25}}`))
+	wantCost(t, d, id, 1.25)
+	d.ApplyBridgeUsage(id, json.RawMessage(`{"cost":{"usd":0.5}}`))
+	wantCost(t, d, id, 1.5)
 }

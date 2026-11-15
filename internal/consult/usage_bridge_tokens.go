@@ -9,7 +9,14 @@ import (
 // its usage: the claude session's running cost, and the token counts its
 // turns reported one by one, summed.
 type bridgedUsage struct {
+	// cost is this pane's share of the session's running cost (setCost).
 	cost *float64
+	// carried is the running cost a resumed session starts from: what the
+	// run's earlier panes already counted, nil for its first pane. The first
+	// report decides it (carryDecided): a running total below it means the
+	// session did not carry its cost over, so its reports are its own.
+	carried      *float64
+	carryDecided bool
 	// input counts cached reads and writes too, as the headless path does.
 	input, output int64
 	// hasTokens: some turn reported its tokens. isShort: some turn ended
@@ -29,6 +36,37 @@ func (u *bridgedUsage) usage() *harness.Usage {
 		out.InputTokens, out.OutputTokens = harness.Int64(u.input), harness.Int64(u.output)
 	}
 	return out
+}
+
+// setCost records the session's running cost, less what a resumed session
+// carried over from the run's earlier panes, which counted it already.
+func (u *bridgedUsage) setCost(usd float64) {
+	if u.carried != nil && !u.carryDecided {
+		u.carryDecided = true
+		if usd < *u.carried {
+			u.carried = nil
+		}
+	}
+	if u.carried != nil {
+		usd = max(usd-*u.carried, 0)
+	}
+	u.cost = harness.Float64(usd)
+}
+
+// countedCost is the cost a run's usage invocations counted, nil when none
+// counted any.
+func countedCost(invocations []InvocationUsage) *float64 {
+	var total float64
+	var counted bool
+	for _, inv := range invocations {
+		if inv.CostUSD != nil {
+			total, counted = total+*inv.CostUSD, true
+		}
+	}
+	if !counted {
+		return nil
+	}
+	return &total
 }
 
 // isReplay reports whether eventID was counted already, and remembers it.
