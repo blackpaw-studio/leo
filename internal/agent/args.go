@@ -87,6 +87,9 @@ func resolveTemplateLaunch(cfg *config.Config, tmpl config.TemplateConfig, agent
 
 	switch opts := decoded.(type) {
 	case claudeharness.Options:
+		if opts.MCP == "none" && len(opts.MCPServers) > 0 {
+			log.Printf("[agent:%s] mcp_servers applies to dispatches only; ignored", agentName)
+		}
 		opts.RemoteControl = cfg.TemplateRemoteControl(tmpl)
 		opts.MCPConfigPath = mcpConfig
 		opts.LeoMCPArgs = mcp.AppendArg(nil, cfg)

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"testing"
 )
@@ -134,10 +135,6 @@ func TestResolveMCPServersFallsBackToHomeWhenConfigDirEmpty(t *testing.T) {
 
 const bridgeConfig = `{"mcpServers":{"leo":{"command":"leo","args":["mcp"]}}}`
 
-func chromeDefs() MCPServerDefs {
-	return MCPServerDefs{"chrome": json.RawMessage(`{"command":"npx","headers":{"Authorization":"` + secretSentinel + `"}}`)}
-}
-
 func serverNames(t *testing.T, config string) []string {
 	t.Helper()
 	var doc struct {
@@ -150,18 +147,8 @@ func serverNames(t *testing.T, config string) []string {
 	for n := range doc.MCPServers {
 		names = append(names, n)
 	}
-	sortStrings(names)
+	sort.Strings(names)
 	return names
-}
-
-func sortStrings(s []string) {
-	for i := range s {
-		for j := i + 1; j < len(s); j++ {
-			if s[j] < s[i] {
-				s[i], s[j] = s[j], s[i]
-			}
-		}
-	}
 }
 
 func accountEnv(t *testing.T) map[string]string {
