@@ -170,7 +170,9 @@ func runDispatchInteractive() {
 			continue
 		}
 		turn++
-		turnID := fmt.Sprintf("fake-turn-%d", turn)
+		// Unique across processes, as codex's own (UUIDv7) are: a resumed
+		// session's turns must not reuse an earlier pane's turn ids.
+		turnID := fmt.Sprintf("fake-turn-%d-%d", os.Getpid(), turn)
 		runHookEvent("UserPromptSubmit", turnID, "")
 		if ms, _ := strconv.Atoi(os.Getenv("FAKECLAUDE_REPLY_DELAY_MS")); ms > 0 {
 			time.Sleep(time.Duration(ms) * time.Millisecond)

@@ -168,8 +168,8 @@ func TestInteractiveDispatchCloseReopenRelease(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cwd := s.paneCwd(t, reopened.PaneID); cwd != wantCwd {
-		t.Fatalf("reopened pane cwd = %q, want the worktree %q", cwd, wantCwd)
+	if cwd := s.paneStartPath(t, reopened.PaneID); cwd != wantCwd {
+		t.Fatalf("reopened pane start path = %q, want the worktree %q", cwd, wantCwd)
 	}
 	second := s.wait(t, sent.TurnID)
 	if second.Outcome != consult.TurnFinished || second.Text != "FAKE-REPLY: follow up" {
@@ -637,9 +637,14 @@ func (s *interactiveE2E) waitForParked(t *testing.T, id string) consult.Record {
 	}
 	return rec
 }
-func (s *interactiveE2E) paneCwd(t *testing.T, pane string) string {
+
+// paneStartPath is the directory pane was launched in (tmux -c). Not
+// pane_current_path: a systemd-enabled tmux (Ubuntu's) moves a new pane's
+// process into its own cgroup before it changes directory, so for a moment
+// after the launch returns the process still reports the tmux server's cwd.
+func (s *interactiveE2E) paneStartPath(t *testing.T, pane string) string {
 	t.Helper()
-	out, err := exec.Command(s.tmux, tmux.Args("display-message", "-p", "-t", pane, "#{pane_current_path}")...).Output()
+	out, err := exec.Command(s.tmux, tmux.Args("display-message", "-p", "-t", pane, "#{pane_start_path}")...).Output()
 	if err != nil {
 		t.Fatalf("pane %s cwd: %v", pane, err)
 	}
