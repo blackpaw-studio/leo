@@ -442,3 +442,27 @@ func TestDispatchesReportAdoptedAt(t *testing.T) {
 		t.Fatalf("a dispatch never adopted reports adopted_at %v", at)
 	}
 }
+
+func TestObservedDispatchMarksParkedResumable(t *testing.T) {
+	now := time.Date(2026, time.November, 14, 12, 0, 0, 0, time.UTC)
+	parkedRec := Record{ID: "d-park", Kind: "dispatch", Mode: ModeInteractive, Harness: "claude", Status: StatusClosed, Retained: true, SessionID: "s-1", EndedAt: now}
+	failed := parkedRec
+	failed.ResumeError = "could not resume session s-1 (harness started s-2)"
+	released := parkedRec
+	released.Status, released.Retained = StatusReleased, false
+	for _, c := range []struct {
+		name string
+		rec  Record
+		want bool
+	}{
+		{"parked", parkedRec, true},
+		{"parked after a failed reopen", failed, false},
+		{"released", released, false},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			if got := observedDispatch(c.rec, now).Resumable; got != c.want {
+				t.Fatalf("resumable = %v, want %v", got, c.want)
+			}
+		})
+	}
+}

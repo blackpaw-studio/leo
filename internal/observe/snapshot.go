@@ -328,11 +328,15 @@ type Dispatch struct {
 	// dispatch: an interactive dispatch whose TUI is alone in its own tmux
 	// window. TmuxTarget is its tmux pane id (%N) on Leo's tmux server,
 	// reported whenever the dispatch has a pane, attachable or not.
-	Attachable bool    `json:"attachable"`
-	TmuxTarget string  `json:"tmux_target,omitempty"`
-	TokensIn   int64   `json:"tokens_in"`
-	TokensOut  int64   `json:"tokens_out"`
-	CostUSD    float64 `json:"cost_usd"`
+	Attachable bool   `json:"attachable"`
+	TmuxTarget string `json:"tmux_target,omitempty"`
+	// Resumable is true for a closed interactive dispatch whose pane closed
+	// once its result was delivered: a follow-up (leo_send_dispatch) reopens
+	// its session in the same cwd or worktree.
+	Resumable bool    `json:"resumable,omitempty"`
+	TokensIn  int64   `json:"tokens_in"`
+	TokensOut int64   `json:"tokens_out"`
+	CostUSD   float64 `json:"cost_usd"`
 }
 
 // ActionKind names the provenance of an Action's detail, so consumers can tell how much
