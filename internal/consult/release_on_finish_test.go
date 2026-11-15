@@ -10,7 +10,7 @@ import (
 
 func boolPtr(b bool) *bool { return &b }
 
-func TestResolveReleaseOnFinishDefaults(t *testing.T) {
+func TestResolveReleaseOnFinishDefaultsOnForEveryRole(t *testing.T) {
 	cases := []struct {
 		name     string
 		role     string
@@ -21,12 +21,13 @@ func TestResolveReleaseOnFinishDefaults(t *testing.T) {
 		{"plan defaults on", "plan", nil, true},
 		{"review defaults on", "review", nil, true},
 		{"review subrole defaults on", "review.security", nil, true},
-		{"implement defaults off", "implement", nil, false},
-		{"implement.hard defaults off", "implement.hard", nil, false},
-		{"no role defaults off", "", nil, false},
-		{"unknown role defaults off", "reviewer-ish", nil, false},
+		{"implement defaults on", "implement", nil, true},
+		{"implement.hard defaults on", "implement.hard", nil, true},
+		{"no role (template dispatch) defaults on", "", nil, true},
+		{"unknown role defaults on", "reviewer-ish", nil, true},
 		{"explicit false wins on a read-only role", "explore", boolPtr(false), false},
-		{"explicit true wins on implement", "implement", boolPtr(true), true},
+		{"explicit false wins on implement", "implement", boolPtr(false), false},
+		{"explicit false wins without a role", "", boolPtr(false), false},
 		{"explicit true wins without a role", "", boolPtr(true), true},
 	}
 	for _, c := range cases {
@@ -45,10 +46,10 @@ func TestStartRecordsResolvedReleaseOnFinish(t *testing.T) {
 		want bool
 	}{
 		{"read-only role", Request{Role: "explore"}, true},
-		{"implement role", Request{Role: "implement"}, false},
-		{"template escape hatch", Request{}, false},
+		{"implement role", Request{Role: "implement"}, true},
+		{"template dispatch", Request{}, true},
 		{"explicit opt-out", Request{Role: "review", ReleaseOnFinish: boolPtr(false)}, false},
-		{"explicit opt-in", Request{Role: "implement", ReleaseOnFinish: boolPtr(true)}, true},
+		{"explicit opt-out on implement", Request{Role: "implement", ReleaseOnFinish: boolPtr(false)}, false},
 		{"headless is a no-op", Request{Role: "explore", Mode: ModeHeadless}, false},
 	}
 	for _, c := range cases {

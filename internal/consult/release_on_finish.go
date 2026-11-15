@@ -6,18 +6,18 @@ import (
 	"os"
 	"strings"
 	"time"
-
-	"github.com/blackpaw-studio/leo/internal/config"
 )
 
 // ResolveReleaseOnFinish is a dispatch's release_on_finish setting: the
-// explicit value when given, else on for the read-only roles (which rarely
-// get a follow-up) and off for every other dispatch, role-less included.
-func ResolveReleaseOnFinish(role string, explicit *bool) bool {
+// explicit value when given, else on for every interactive dispatch, whatever
+// its role. On, the pane closes once each result has reached the caller and a
+// follow-up reopens it on the same session; an explicit false keeps the pane
+// open until the idle close. The role no longer changes the default.
+func ResolveReleaseOnFinish(_ string, explicit *bool) bool {
 	if explicit != nil {
 		return *explicit
 	}
-	return config.IsReadOnlyRole(role)
+	return true
 }
 
 // releasableOnFinishLocked reports whether rec is an interactive run that

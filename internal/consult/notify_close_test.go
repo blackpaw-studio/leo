@@ -9,7 +9,8 @@ import (
 
 // startNotifyingClaudeUndelivered starts an interactive claude dispatch that
 // notifies a claude caller and finishes its first turn with text, leaving
-// that turn's notice unswept.
+// that turn's notice unswept. It opts out of release_on_finish, so its pane
+// stays open after the result is delivered and the idle close still applies.
 func startNotifyingClaudeUndelivered(t *testing.T, now *time.Time, text string) (*Dispatcher, *fakeInteractiveRuntime, *fakeNotificationDelivery, string) {
 	t.Helper()
 	d := NewDispatcher(newFakeRecorder())
@@ -18,7 +19,7 @@ func startNotifyingClaudeUndelivered(t *testing.T, now *time.Time, text string) 
 	d.SetInteractiveRuntime(rt)
 	delivery := &fakeNotificationDelivery{ready: true}
 	d.SetNotificationDelivery(delivery)
-	started, err := d.Start(context.Background(), testConfig(), Request{Template: "claude", Prompt: "hello", Cwd: t.TempDir(), Mode: ModeInteractive, Kind: "dispatch", CallerPaneID: "%9", CallerHarness: "claude", CallerSessionID: "$1"})
+	started, err := d.Start(context.Background(), testConfig(), Request{Template: "claude", Prompt: "hello", Cwd: t.TempDir(), Mode: ModeInteractive, Kind: "dispatch", CallerPaneID: "%9", CallerHarness: "claude", CallerSessionID: "$1", ReleaseOnFinish: boolPtr(false)})
 	if err != nil {
 		t.Fatal(err)
 	}
