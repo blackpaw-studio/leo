@@ -646,3 +646,67 @@ func TestAgentHookInterruptReleasesBackgroundTaskHold(t *testing.T) {
 		})
 	}
 }
+
+// A /clear whose SessionStart context call never reached the daemon (hook
+// failed, daemon down, token not yet registered) leaves the agent's stored
+// session at S1. The new session's hooks carry the launch's own token, so they
+// must still move attention, and the agent must not stay errored.
+func TestAgentHookAfterClearStillTransitionsAttention(t *testing.T) {
+	s := newHookServer(t)
+	home := filepath.Dir(s.configPath)
+	if err := agentstore.Save(home, agentstore.Record{Name: "leo-a"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := agentstore.SetAttentionToken(home, "leo-a", "tok-a"); err != nil {
+		t.Fatal(err)
+	}
+	s.attention.Set("leo-a", observe.AttentionErrored)
+	errored, _ := s.attention.Get("leo-a")
+
+	postHook(t, s, "tok-a", `{"hook_event_name":"UserPromptSubmit","session_id":"sid-s2"}`)
+	working, _ := s.attention.Get("leo-a")
+	if working.State != observe.AttentionWorking || working.Revision <= errored.Revision {
+		t.Fatalf("after UserPromptSubmit from S2: state=%s rev=%d, want working with rev > %d", working.State, working.Revision, errored.Revision)
+	}
+
+	postHook(t, s, "tok-a", `{"hook_event_name":"Stop","session_id":"sid-s2"}`)
+	if got, _ := s.attention.Get("leo-a"); got.State != observe.AttentionFinished {
+		t.Fatalf("after Stop from S2: state=%s, want finished", got.State)
+	}
+
+	// Guard: a session no launch token vouches for stays ignored.
+	before, _ := s.attention.Get("leo-a")
+	postHook(t, s, "tok-unknown", `{"hook_event_name":"UserPromptSubmit","session_id":"sid-foreign"}`)
+	postHook(t, s, "tok-b", `{"hook_event_name":"UserPromptSubmit","session_id":"sid-foreign"}`) // another agent's token never touches leo-a
+	if got, _ := s.attention.Get("leo-a"); got.State != before.State || got.Revision != before.Revision {
+		t.Fatalf("foreign hook moved leo-a: %+v -> %+v", before, got)
+	}
+}
+
+// Recovery from a missed SessionStart is claude-only (codex hooks are
+// home-global) and token-bound (a retired token never claims).
+func TestAgentHookSessionAdoptionStaysStrictWhereItMust(t *testing.T) {
+	s := newHookServer(t)
+	home := filepath.Dir(s.configPath)
+	for _, name := range []string{"leo-a", "leo-b"} {
+		if err := agentstore.Save(home, agentstore.Record{Name: name}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := agentstore.SetAttentionToken(home, "leo-a", "tok-a2"); err != nil { // tok-a is a retired launch's
+		t.Fatal(err)
+	}
+
+	s.agentSvc.(*mockAgentService).handles["leo-b"] = resolvedHandle{harnessName: "codex", handle: harness.SessionHandle{Name: "leo-b", IDs: staticIDs("sid-b")}}
+	s.attention.Set("leo-b", observe.AttentionErrored)
+	postHook(t, s, "tok-b", `{"hook_event_name":"UserPromptSubmit","session_id":"sid-foreign"}`)
+	if got, _ := s.attention.Get("leo-b"); got.State != observe.AttentionErrored {
+		t.Fatalf("codex foreign session adopted: state = %s", got.State)
+	}
+
+	s.attention.Set("leo-a", observe.AttentionErrored)
+	postHook(t, s, "tok-a", `{"hook_event_name":"UserPromptSubmit","session_id":"sid-s2"}`)
+	if got := agentstore.ClaimedSession(home, "leo-a", "tok-a2"); got != "" {
+		t.Fatalf("retired token claimed %q for the current launch", got)
+	}
+}

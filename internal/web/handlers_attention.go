@@ -154,7 +154,7 @@ func (s *Server) handleAPIAgentHook(w http.ResponseWriter, r *http.Request) {
 	if s.attention != nil {
 		name, known = s.attention.AgentForToken(req.Token)
 	}
-	ours := known && s.isAgentHookSession(name, req.Token, payload.SessionID)
+	ours := known && s.adoptHookSession(name, req.Token, payload.SessionID)
 	if !ours && payload.HookEventName == "Stop" {
 		logDroppedStop(known, name, payload.SessionID)
 	}
@@ -253,4 +253,37 @@ func (s *Server) isAgentHookSession(name, token, sessionID string) bool {
 	}
 	known := h.IDs.Get()
 	return known == "" || known == sessionID || s.sessionClaimedBy(name, token) == sessionID
+}
+
+// claudeHarness is the harness whose hooks are per-launch: its settings carry
+// the launch's token. Codex hooks are home-global, so a foreign session there
+// is never adopted.
+const claudeHarness = "claude"
+
+// adoptHookSession is isAgentHookSession plus a recovery for a /clear or fork
+// whose SessionStart context call never reached the daemon (hook failed,
+// daemon down, token not yet registered): the agent's stored session is then
+// stale and every later hook would be dropped, leaving it errored for good.
+// The strict check cannot simply be dropped for a live token, since child
+// harness processes inherit the token and report sessions of their own. So a
+// claude launch whose attention is already errored (the daemon has no live
+// evidence for it) takes a hook bearing its live token as the launch's own,
+// and the session becomes its claim, durably, so later hooks pass the strict
+// check. A stale token never reaches here (the caller resolved it to a live
+// launch), and claimSession persists only against the record's current token.
+func (s *Server) adoptHookSession(name, token, sessionID string) bool {
+	if s.isAgentHookSession(name, token, sessionID) {
+		return true
+	}
+	if s.agentSvc == nil || s.attention == nil || sessionID == "" {
+		return false
+	}
+	if harnessName, _, ok := s.agentSvc.ResolveHandle(name); !ok || harnessName != claudeHarness {
+		return false
+	}
+	if cur, ok := s.attention.Get(name); !ok || cur.State != observe.AttentionErrored {
+		return false
+	}
+	s.claimSession(name, token, sessionID)
+	return true
 }
