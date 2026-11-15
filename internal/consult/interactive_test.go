@@ -30,6 +30,8 @@ type fakeInteractiveRuntime struct {
 	layouts      []string
 	layoutErr    map[string]error
 	commandIDs   []string
+	launches     []LaunchRequest
+	launchErr    error
 }
 
 type recoveringInteractiveRuntime struct {
@@ -60,6 +62,10 @@ func (r *fakeInteractiveRuntime) Launch(_ context.Context, req LaunchRequest) (s
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	r.launches = append(r.launches, req)
+	if r.launchErr != nil {
+		return "", "", r.launchErr
+	}
 	if r.pane == "" {
 		r.pane = "%1"
 	}
@@ -67,6 +73,11 @@ func (r *fakeInteractiveRuntime) Launch(_ context.Context, req LaunchRequest) (s
 	r.placements = append(r.placements, req.Placement.Kind)
 	r.callers = append(r.callers, req.Caller)
 	return r.pane, "w", nil
+}
+func (r *fakeInteractiveRuntime) launchRequests() []LaunchRequest {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([]LaunchRequest(nil), r.launches...)
 }
 func (r *fakeInteractiveRuntime) SessionAlive(string) (bool, error) {
 	if r.sessionAlive == nil {

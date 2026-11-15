@@ -41,7 +41,21 @@ func parked(rec Record) bool {
 // known, no earlier reopen found it unresumable, and its harness resumes an
 // interactive session.
 func resumable(rec Record) bool {
-	return parked(rec) && rec.SessionID != "" && rec.ResumeError == "" && harnessResumesInteractive(rec.Harness)
+	return parked(rec) && notResumableReason(rec) == ""
+}
+
+// notResumableReason says why a parked run's session cannot be reopened, or
+// "" when nothing in the record stops it.
+func notResumableReason(rec Record) string {
+	switch {
+	case rec.SessionID == "":
+		return "no session id was recorded"
+	case rec.ResumeError != "":
+		return rec.ResumeError
+	case !harnessResumesInteractive(rec.Harness):
+		return fmt.Sprintf("harness %q cannot resume an interactive session", rec.Harness)
+	}
+	return ""
 }
 
 // harnessResumesInteractive reports whether harnessName can relaunch an

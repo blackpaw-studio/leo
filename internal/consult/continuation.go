@@ -23,7 +23,7 @@ func (d *Dispatcher) SendWithConfig(ctx context.Context, cfg *config.Config, id,
 		return SendResult{}, fmt.Errorf("unknown dispatch %s", id)
 	}
 	if rec.Mode == ModeInteractive {
-		return d.Send(ctx, id, message)
+		return d.sendInteractive(ctx, cfg, id, message)
 	}
 	return d.continueHeadless(cfg, rec, message)
 }

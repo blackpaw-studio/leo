@@ -263,6 +263,11 @@ func (d *Dispatcher) launchWhenSlotFree(ctx context.Context, s *runState, req Re
 // launchInteractive opens turnID's pane. turnID must already hold a slot.
 func (d *Dispatcher) launchInteractive(ctx context.Context, s *runState, req Request, harnessName, model string, cfg *config.Config, rt InteractiveRuntime, turnID string) (Started, error) {
 	prompt := requestPrompt(req)
+	if req.resumeSessionID != "" {
+		// A reopen's opening turn is the follow-up as sent (D8): the
+		// resumed session already holds the dispatch brief.
+		prompt = req.Prompt
+	}
 	bridgesOpening := false
 	if b, ok := rt.(bridgeOpeningRuntime); ok {
 		bridgesOpening = b.BridgesOpening(ctx, harnessName)
@@ -317,7 +322,7 @@ func (d *Dispatcher) launchInteractive(ctx context.Context, s *runState, req Req
 	// as the opening brief (see TmuxInteractiveRuntime.Launch), so it must
 	// already be what the model should see, identical to what a tmux paste
 	// would have delivered.
-	pane, window, err := rt.Launch(ctx, LaunchRequest{ID: s.record.ID, Harness: harnessName, Model: model, Effort: req.Effort, Cwd: req.Cwd, Name: req.Name, Template: req.Template, Caller: req.Caller, Prompt: prompt, Timeout: req.Timeout, Dispatched: true, CallerPaneID: req.CallerPaneID, CallerSessionID: req.CallerSessionID, CallerWindowID: req.CallerWindowID, Placement: placement, Environments: placementRecord.InheritedEnvironments})
+	pane, window, err := rt.Launch(ctx, LaunchRequest{ID: s.record.ID, Harness: harnessName, Model: model, Effort: req.Effort, Cwd: req.Cwd, Name: req.Name, Template: req.Template, Caller: req.Caller, Prompt: prompt, Timeout: req.Timeout, Dispatched: true, CallerPaneID: req.CallerPaneID, CallerSessionID: req.CallerSessionID, CallerWindowID: req.CallerWindowID, Placement: placement, Environments: placementRecord.InheritedEnvironments, ResumeSessionID: req.resumeSessionID, Reopen: req.resumeSessionID != ""})
 	if err != nil {
 		d.placement.Cancel(placementRecord.ID)
 		d.mu.Lock()
@@ -728,7 +733,15 @@ func clearPendingLocked(s *runState) {
 	s.record.PendingWork = nil
 }
 
+// Send sends a follow-up to a live interactive run. A parked run needs the
+// configuration to reopen, so it goes through SendWithConfig.
 func (d *Dispatcher) Send(ctx context.Context, id, message string) (SendResult, error) {
+	return d.sendInteractive(ctx, nil, id, message)
+}
+
+// sendInteractive injects message into a live run's pane, or reopens a
+// parked run's session with it (reopenLocked).
+func (d *Dispatcher) sendInteractive(ctx context.Context, cfg *config.Config, id, message string) (SendResult, error) {
 	unlockSerial := d.serialLocks([]string{id})
 	defer unlockSerial()
 	for _, ch := range message {
@@ -739,6 +752,9 @@ func (d *Dispatcher) Send(ctx context.Context, id, message string) (SendResult, 
 	rec, s, err := d.lookup(id)
 	if err == nil && rec.Status == StatusReleased {
 		return SendResult{}, releasedSendError(rec)
+	}
+	if err == nil && parked(rec) {
+		return d.reopenLocked(cfg, rec, message)
 	}
 	if err != nil || s == nil {
 		return SendResult{}, fmt.Errorf("unknown dispatch %s", id)
