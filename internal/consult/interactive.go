@@ -42,6 +42,12 @@ type LaunchRequest struct {
 	// Environments is the dispatch's inherited environment layer (see
 	// Record.InheritedEnvironments), layered over the template's.
 	Environments []string
+	// ResumeSessionID relaunches the harness on this earlier session instead
+	// of a fresh one (claude --resume <id>, codex resume <id>). Reopen marks
+	// the launch of a parked run's follow-up: Prompt is the raw follow-up,
+	// not a dispatch brief.
+	ResumeSessionID string
+	Reopen          bool
 }
 type InteractiveRuntime interface {
 	Launch(context.Context, LaunchRequest) (paneID, window string, err error)

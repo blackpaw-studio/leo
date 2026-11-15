@@ -3,6 +3,8 @@ package consult
 import (
 	"fmt"
 	"time"
+
+	"github.com/blackpaw-studio/leo/internal/harness"
 )
 
 // resumableRetention is how long a parked run is kept for a follow-up
@@ -43,8 +45,14 @@ func resumable(rec Record) bool {
 }
 
 // harnessResumesInteractive reports whether harnessName can relaunch an
-// interactive dispatch on its earlier session: claude (--resume <id>) and
-// codex (resume <id>). Opencode has no interactive dispatch.
+// interactive dispatch on its earlier session (harness.InteractiveResumer):
+// claude (--resume <id>) and codex (resume <id>). Opencode has no
+// interactive dispatch.
 func harnessResumesInteractive(harnessName string) bool {
-	return harnessName == "claude" || harnessName == "codex"
+	h, err := harness.Get(harnessName)
+	if err != nil {
+		return false
+	}
+	_, ok := h.(harness.InteractiveResumer)
+	return ok
 }

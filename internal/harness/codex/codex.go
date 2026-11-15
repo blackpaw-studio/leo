@@ -187,3 +187,10 @@ func execPermissionArgs(mode string) []string {
 	}
 	return sandboxArgs(mode)
 }
+
+// InteractiveResumeArgs is args opening with codex's resume subcommand for
+// sessionID, replacing any resume prefix already there (the subcommand must
+// lead; flags stay valid after it).
+func (Codex) InteractiveResumeArgs(args []string, sessionID string) []string {
+	return refreshSessionArgs(args, sessionID)
+}

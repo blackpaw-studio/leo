@@ -149,3 +149,11 @@ func (c Claude) Args(spec harness.LaunchSpec) ([]string, error) {
 		return nil, fmt.Errorf("claude: unknown launch kind %q", spec.Kind)
 	}
 }
+
+// InteractiveResumeArgs is args with claude's --resume flag for sessionID.
+// The flag's position is free; the opening positional, when there is one, is
+// appended after it by the caller.
+func (c Claude) InteractiveResumeArgs(args []string, sessionID string) []string {
+	out := append([]string(nil), args...)
+	return append(out, c.SessionArgs(harness.SessionState{Mode: harness.SessionResume, ID: sessionID})...)
+}
