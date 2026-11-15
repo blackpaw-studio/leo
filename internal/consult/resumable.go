@@ -1,0 +1,28 @@
+package consult
+
+// Why a released run was released (Record.ReleaseReason).
+const (
+	ReleaseReasonManual    = "manual"
+	ReleaseReasonRetention = "retention"
+)
+
+// parked reports a closed interactive run whose pane closed on a delivered
+// result: the run keeps its session, cwd and worktree for a follow-up to
+// reopen. Records written before Retained existed read as not parked.
+func parked(rec Record) bool {
+	return rec.Mode == ModeInteractive && rec.Status == StatusClosed && rec.Retained
+}
+
+// resumable reports a parked run a follow-up can reopen: its session is
+// known, no earlier reopen found it unresumable, and its harness resumes an
+// interactive session.
+func resumable(rec Record) bool {
+	return parked(rec) && rec.SessionID != "" && rec.ResumeError == "" && harnessResumesInteractive(rec.Harness)
+}
+
+// harnessResumesInteractive reports whether harnessName can relaunch an
+// interactive dispatch on its earlier session: claude (--resume <id>) and
+// codex (resume <id>). Opencode has no interactive dispatch.
+func harnessResumesInteractive(harnessName string) bool {
+	return harnessName == "claude" || harnessName == "codex"
+}
