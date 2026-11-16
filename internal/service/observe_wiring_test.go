@@ -59,6 +59,12 @@ func TestObservabilityWiringEndToEnd(t *testing.T) {
 	// catch a regression in the wiring itself, not just in a hand-copied
 	// reproduction of it.
 	obs := wireObservability(ctx, sv, fakeTmux)
+	// The attention writer flushes once more when ctx ends; wait it out before
+	// the test's home is removed.
+	t.Cleanup(func() {
+		cancel()
+		obs.Attention.WaitPersistence()
+	})
 	bus, runLog, messageLog, tracker := obs.Bus, obs.RunLog, obs.MessageLog, obs.Tracker
 
 	dir := t.TempDir()

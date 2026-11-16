@@ -5,9 +5,12 @@ import (
 	"encoding/hex"
 	"fmt"
 	"os"
+	"path/filepath"
+	"time"
 
 	"github.com/blackpaw-studio/leo/internal/agentstore"
 	"github.com/blackpaw-studio/leo/internal/harness"
+	"github.com/blackpaw-studio/leo/internal/observe"
 )
 
 // reportCmdFor is the hook callback argv for the leo that executable
@@ -106,4 +109,36 @@ func launchAttentionToken(homePath, name string) (string, bool) {
 		return "", false
 	}
 	return token, true
+}
+
+// attentionFilePath is where the attention store persists at-rest attention.
+func attentionFilePath(homePath string) string {
+	return filepath.Join(homePath, "state", "attention.json")
+}
+
+// attentionFlushBound caps how long shutdown waits for the attention file's
+// final write, so a stuck disk cannot hang the daemon's exit.
+const attentionFlushBound = 2 * time.Second
+
+// awaitBounded runs wait, returning when it does or after bound (timer is the
+// injected clock, time.After in production), logging when the bound was hit.
+func awaitBounded(what string, wait func(), bound time.Duration, timer func(time.Duration) <-chan time.Time, logf func(string, ...any)) {
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		wait()
+	}()
+	select {
+	case <-done:
+	case <-timer(bound):
+		logf("shutdown: %s not finished after %s; exiting without it", what, bound)
+	}
+}
+
+// awaitAttentionFlush is the shutdown step that holds the daemon's exit for
+// the attention store's final flush (see AttentionStore.WaitPersistence).
+func awaitAttentionFlush(store *observe.AttentionStore, timer func(time.Duration) <-chan time.Time) {
+	awaitBounded("attention flush", store.WaitPersistence, attentionFlushBound, timer, func(format string, args ...any) {
+		fmt.Fprintf(os.Stderr, format+"\n", args...)
+	})
 }

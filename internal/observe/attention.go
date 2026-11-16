@@ -85,6 +85,18 @@ type AttentionStore struct {
 	// snapshot generation applied; an older one arriving late is ignored.
 	dispatches  DispatchSnapshotter
 	dispatchGen uint64
+
+	// Persistence (see EnablePersistence). lastToken is the newest token
+	// registered for each agent, kept past UnregisterToken/UnregisterAgent so
+	// a daemon shutdown still persists the launch a surviving session carries.
+	// pending holds the previous lifetime's restorable records until an adopt
+	// claims or rejects them. floor is the highest revision served before
+	// this lifetime and ceiling the highest this one may have served.
+	persist   *attentionPersister
+	lastToken map[string]string
+	pending   map[string]persistedAttention
+	floor     uint64
+	ceiling   uint64
 }
 
 // NewAttentionStore creates an empty store. publisher may be nil.
@@ -93,6 +105,8 @@ func NewAttentionStore(publisher Publisher) *AttentionStore {
 		states:    make(map[string]AttentionState),
 		revisions: make(map[string]uint64),
 		tokens:    make(map[string]string),
+		lastToken: make(map[string]string),
+		pending:   make(map[string]persistedAttention),
 		publisher: publisher,
 
 		bridge:  newBridgeOutstanding(),
@@ -168,6 +182,13 @@ func (s *AttentionStore) setLocked(agent string, state AttentionState) AgentAtte
 // setPreviewLocked is setLocked for a transition that may carry the finished
 // turn's preview. The preview is kept only if the agent ends up finished.
 func (s *AttentionStore) setPreviewLocked(agent string, state AttentionState, preview string) AgentAttention {
+	att := s.applyPreviewLocked(agent, state, preview)
+	s.publishLocked(agent, att)
+	return att
+}
+
+// applyPreviewLocked is setPreviewLocked without publishing the transition.
+func (s *AttentionStore) applyPreviewLocked(agent string, state AttentionState, preview string) AgentAttention {
 	prev := s.states[agent]
 	switch {
 	case state == AttentionFinished && s.bridge.of(agent).total() > 0:
@@ -187,11 +208,11 @@ func (s *AttentionStore) setPreviewLocked(agent string, state AttentionState, pr
 	if state == AttentionFinished && preview != "" {
 		s.previews[agent] = ClampPreview(preview)
 	}
-	s.revisions[agent]++
+	delete(s.pending, agent)
+	s.nextRevisionLocked(agent)
 	s.states[agent] = state
-	att := s.attentionLocked(agent)
-	s.publishLocked(agent, att)
-	return att
+	s.markDirtyLocked()
+	return s.attentionLocked(agent)
 }
 
 // attentionLocked is agent's current wire attention; agent must be tracked.
@@ -367,7 +388,7 @@ func (s *AttentionStore) outstandingChangedLocked(agent string) {
 		s.setLocked(agent, AttentionFinished)
 		return
 	}
-	s.revisions[agent]++
+	s.nextRevisionLocked(agent)
 	s.publishLocked(agent, s.attentionLocked(agent))
 }
 
@@ -530,7 +551,11 @@ func (s *AttentionStore) Remove(agent string) {
 	delete(s.states, agent)
 	delete(s.held, agent)
 	delete(s.reasons, agent)
+	delete(s.previews, agent)
+	delete(s.pending, agent)
+	delete(s.lastToken, agent)
 	s.unregisterAgentLocked(agent)
+	s.markDirtyLocked()
 	s.mu.Unlock()
 }
 
@@ -542,6 +567,10 @@ func (s *AttentionStore) RegisterToken(token, agent string) {
 	}
 	s.mu.Lock()
 	s.tokens[token] = agent
+	if s.lastToken[agent] != token {
+		s.lastToken[agent] = token
+		s.markDirtyLocked()
+	}
 	s.mu.Unlock()
 }
 
@@ -671,6 +700,11 @@ func (s *AttentionStore) Move(oldName, newName string) {
 		}
 	}
 	s.bridge.move(oldName, newName)
+	if token, ok := s.lastToken[oldName]; ok {
+		delete(s.lastToken, oldName)
+		s.lastToken[newName] = token
+	}
+	delete(s.pending, oldName)
 	state, ok := s.states[oldName]
 	if !ok {
 		return
@@ -678,10 +712,12 @@ func (s *AttentionStore) Move(oldName, newName string) {
 	moveKey(s.held, oldName, newName)
 	moveKey(s.reasons, oldName, newName)
 	moveKey(s.previews, oldName, newName)
-	rev := max(s.revisions[oldName], s.revisions[newName]) + 1
+	rev := max(s.revisions[oldName], s.revisions[newName], s.floor) + 1
 	delete(s.states, oldName)
 	s.states[newName] = state
 	s.revisions[newName] = rev
+	s.reserveRevisionLocked(rev)
+	s.markDirtyLocked()
 	s.publishLocked(newName, s.attentionLocked(newName))
 }
 

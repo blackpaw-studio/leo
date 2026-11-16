@@ -201,6 +201,16 @@ Rules for the `tasks` hold:
 - Never-ending tasks (dev servers, watchers) hold too, and a task that never wakes the session keeps the agent `working` until one of the releases above. `Working` is accurate for live work, so there is no per-type exclusion.
 - A needs-input prompt answered during a hold keeps the hold.
 
+### Across a daemon restart
+
+An agent at rest keeps its attention when the daemon restarts. `finished`, `needs_input` and `errored` (with their `reason` and `preview`) are written to `state/attention.json` under the leo home as they happen, together with the launch's attention token. On a restart the daemon adopts each surviving session and restores that record only when its stored token equals the adopted launch's token, so a fresh launch, a reset or a recreated agent starts `unknown`.
+
+- `working` is never restored: it comes back `unknown`, so a lost `Stop` hook cannot leave an agent stuck as working. The next hook (for example `UserPromptSubmit`) sets the real state.
+- Restored attention is served at a revision above anything served before the restart, on `/state` and the event stream. The file also keeps a revision ceiling for this.
+- The JSON shapes and the boot id are unchanged: a new boot id still means "re-baseline from `/state`". Restoring publishes no `agent_activity` event, so it does not re-send push notifications.
+- A `Stop` hook that fires while the daemon is down is lost; the agent shows its pre-restart state until its next hook.
+- A missing or corrupt `attention.json` is logged and ignored; every agent then starts `unknown`.
+
 ## Reachability
 
 Two settings decide whether a client can reach the daemon at all, and both fail

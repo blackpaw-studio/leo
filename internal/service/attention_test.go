@@ -39,6 +39,12 @@ func TestWireObservabilitySharesAttentionStore(t *testing.T) {
 	sv.homePath = t.TempDir()
 
 	obs := wireObservability(ctx, sv, writeFakeTmuxScript(t))
+	// The attention writer flushes once more when ctx ends; wait it out before
+	// the test's home is removed.
+	t.Cleanup(func() {
+		cancel()
+		obs.Attention.WaitPersistence()
+	})
 
 	if obs.Attention == nil || sv.attentionStore() != obs.Attention {
 		t.Fatal("supervisor not wired to the returned attention store")

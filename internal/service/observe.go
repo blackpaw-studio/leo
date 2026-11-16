@@ -111,6 +111,18 @@ func (s *Supervisor) launchAttention(name string, id *procIdentity, state observ
 	s.attention.SetIfUntracked(name, state)
 }
 
+// restoreAttention re-establishes name's at-rest attention from before a
+// daemon restart for the adopted launch carrying token, for the live
+// generation only. It is a no-op when SpawnAgent already restored it.
+func (s *Supervisor) restoreAttention(name string, id *procIdentity, token string) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if cur, ok := s.identities[name]; !ok || cur != id {
+		return
+	}
+	s.attention.Restore(name, token)
+}
+
 // dropAttention removes name's attention when its live generation launched
 // without hooks, so the field reads absent rather than stale.
 func (s *Supervisor) dropAttention(name string, id *procIdentity) {
