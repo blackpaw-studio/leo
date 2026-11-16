@@ -70,11 +70,22 @@ type bridgeOpeningRuntime interface {
 	// BridgesOpening reports whether a launch of harnessName will deliver
 	// its opening over the bridge, which claude then submits itself.
 	BridgesOpening(ctx context.Context, harnessName string) bool
-	// AwaitOpening settles a launched pane's opening: handled is false for
-	// a pane the bridge does not carry; paste says the opening still needs
-	// a paste (the bridge never connected and the legacy relaunch could
-	// not carry it on argv).
-	AwaitOpening(ctx context.Context, paneID string) (handled, paste bool, err error)
+	// AwaitOpening settles a launched pane's opening (see OpeningOutcome).
+	AwaitOpening(ctx context.Context, paneID string) (OpeningOutcome, error)
+}
+
+// OpeningOutcome is how a bridged launch's opening settled.
+type OpeningOutcome struct {
+	// Handled is false for a pane the bridge does not carry.
+	Handled bool
+	// Paste says the opening still needs a paste (the bridge never
+	// connected and the legacy relaunch could not carry it on argv).
+	Paste bool
+	// Relaunched says the bridged claude was killed and the pane relaunched
+	// the legacy way: a new claude, under SessionID when the relaunch pinned
+	// one ("" when it could not, as when it resumes the run's session).
+	Relaunched bool
+	SessionID  string
 }
 
 // messageFramer rewrites a follow-up into the text the pane will actually
@@ -464,13 +475,16 @@ func (d *Dispatcher) injectOpening(ctx context.Context, s *runState, rt Interact
 // connects is relaunched the legacy way, which may still need the paste.
 func (d *Dispatcher) openingNeedsPaste(ctx context.Context, s *runState, rt InteractiveRuntime, harnessName, turnID, pane, prompt string) bool {
 	if b, ok := rt.(bridgeOpeningRuntime); ok {
-		handled, paste, err := b.AwaitOpening(ctx, pane)
+		opening, err := b.AwaitOpening(ctx, pane)
+		if opening.Relaunched {
+			d.bindRelaunchedSession(s, opening.SessionID)
+		}
 		switch {
-		case !handled:
+		case !opening.Handled:
 		case err != nil:
 			d.failOpening(s, turnID, err)
 			return false
-		case paste:
+		case opening.Paste:
 			return true
 		default:
 			d.reconcileOpeningPane(s, rt, pane)
@@ -900,6 +914,9 @@ func (d *Dispatcher) Report(id string, r HookReport) error {
 	event := str(p, "hook_event_name")
 	event = normalizeHookEvent(event)
 	if event == "" {
+		return nil
+	}
+	if d.fromRetiredSessionLocked(s, event, p) {
 		return nil
 	}
 	if s.pendingCloses == nil {

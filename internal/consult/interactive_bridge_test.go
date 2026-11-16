@@ -293,9 +293,9 @@ func TestAwaitOpeningKeepsAConnectedBridge(t *testing.T) {
 		time.Sleep(20 * time.Millisecond)
 		_, _ = g.hub.Connect("dispatch.d-ok", launch)
 	}()
-	handled, paste, err := g.r.AwaitOpening(context.Background(), rigPane)
-	if !handled || paste || err != nil {
-		t.Fatalf("AwaitOpening = %v, %v, %v; want handled, no paste", handled, paste, err)
+	got, err := g.r.AwaitOpening(context.Background(), rigPane)
+	if !got.Handled || got.Paste || got.Relaunched || err != nil {
+		t.Fatalf("AwaitOpening = %+v, %v; want handled, no paste, no relaunch", got, err)
 	}
 	if n := g.callCount("respawn-pane"); n != 0 {
 		t.Fatalf("a connected bridge was relaunched %d times", n)
@@ -310,9 +310,9 @@ func TestAwaitOpeningRelaunchesLegacyWhenTheBridgeNeverConnects(t *testing.T) {
 	g.r.SetBridge(InteractiveBridge{Hub: g.hub, Launcher: g.r.bridge.Launcher, ConnectTimeout: 30 * time.Millisecond})
 	g.launch(t, "d-slow", "claude", "brief text")
 
-	handled, paste, err := g.r.AwaitOpening(context.Background(), rigPane)
-	if !handled || paste || err != nil {
-		t.Fatalf("AwaitOpening = %v, %v, %v; want handled, brief on argv", handled, paste, err)
+	got, err := g.r.AwaitOpening(context.Background(), rigPane)
+	if !got.Handled || got.Paste || !got.Relaunched || got.SessionID == "" || err != nil {
+		t.Fatalf("AwaitOpening = %+v, %v; want a pinned relaunch, brief on argv", got, err)
 	}
 	respawn := g.lastCall("respawn-pane")
 	if respawn == nil {
@@ -342,6 +342,14 @@ func TestAwaitOpeningRelaunchesLegacyWhenTheBridgeNeverConnects(t *testing.T) {
 	if !strings.HasSuffix(command, claudeBriefArgvWord(dispatchBriefPath(g.dir, "d-slow"))) {
 		t.Fatalf("legacy relaunch lacks the brief word: %q", command)
 	}
+	// The relaunch is a fresh claude pinned to the session the dispatcher
+	// binds, so the killed claude's late hooks are told from its own.
+	if pin := "'--session-id' " + shellQuote(got.SessionID) + " "; !strings.Contains(command, pin) {
+		t.Fatalf("legacy relaunch is not pinned to session %q: %q", got.SessionID, command)
+	}
+	if strings.Contains(g.lastCall("new-window")[len(g.lastCall("new-window"))-1], "--session-id") {
+		t.Fatal("the bridged launch itself was pinned")
+	}
 	if !startCommandHasDispatchID(command, "d-slow") {
 		t.Fatalf("relaunched pane no longer findable by dispatch id: %q", command)
 	}
@@ -366,9 +374,9 @@ func TestOversizedOpeningRidesTheBridgeAndNeedsAPasteAfterFallback(t *testing.T)
 	if st := g.hub.State("dispatch.d-big"); st.Pending != 1 {
 		t.Fatalf("oversized opening not queued on the bridge (pending %d)", st.Pending)
 	}
-	handled, paste, err := g.r.AwaitOpening(context.Background(), rigPane)
-	if !handled || !paste || err != nil {
-		t.Fatalf("AwaitOpening = %v, %v, %v; want handled and a paste", handled, paste, err)
+	got, err := g.r.AwaitOpening(context.Background(), rigPane)
+	if !got.Handled || !got.Paste || err != nil {
+		t.Fatalf("AwaitOpening = %+v, %v; want handled and a paste", got, err)
 	}
 	if command := g.lastCall("respawn-pane"); strings.Contains(command[len(command)-1], "$(cat") {
 		t.Fatalf("oversized brief put on argv: %q", command[len(command)-1])
@@ -378,7 +386,7 @@ func TestOversizedOpeningRidesTheBridgeAndNeedsAPasteAfterFallback(t *testing.T)
 func TestAwaitOpeningIgnoresUnbridgedPanes(t *testing.T) {
 	g := newBridgeRig(t, "2.1.286")
 	g.launch(t, "d-legacy", "claude", "brief")
-	if handled, _, _ := g.r.AwaitOpening(context.Background(), rigPane); handled {
+	if got, _ := g.r.AwaitOpening(context.Background(), rigPane); got.Handled {
 		t.Fatal("AwaitOpening handled a legacy pane")
 	}
 }
@@ -392,7 +400,7 @@ func TestAwaitOpeningAfterReleaseDoesNotRelaunch(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		_, _, _ = g.r.AwaitOpening(context.Background(), rigPane)
+		_, _ = g.r.AwaitOpening(context.Background(), rigPane)
 	}()
 	g.r.ReleaseRunFiles("d-gone")
 	<-done
@@ -751,7 +759,7 @@ func TestFallbackRefusesTheKilledClaudesLateReports(t *testing.T) {
 	g := newBridgeRig(t, "2.1.289")
 	g.r.SetBridge(InteractiveBridge{Hub: g.hub, Launcher: g.r.bridge.Launcher, ConnectTimeout: 30 * time.Millisecond})
 	g.launch(t, "d-late", "claude", "brief")
-	if _, _, err := g.r.AwaitOpening(context.Background(), rigPane); err != nil {
+	if _, err := g.r.AwaitOpening(context.Background(), rigPane); err != nil {
 		t.Fatal(err)
 	}
 	err := g.apply(t, "dispatch.d-late", bridge.Report{Type: bridge.ReportHello, SessionID: "s-dead", ClaudeVersion: "2.1.289"})

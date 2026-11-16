@@ -46,7 +46,7 @@ func TestAwaitOpeningFallbackUntagsThePaneBeforeTheRespawn(t *testing.T) {
 	g := newBridgeRig(t, "2.1.289")
 	g.r.SetBridge(InteractiveBridge{Hub: g.hub, Launcher: g.r.bridge.Launcher, ConnectTimeout: time.Nanosecond})
 	g.launch(t, "d-untag", "claude", "brief")
-	if _, _, err := g.r.AwaitOpening(context.Background(), rigPane); err != nil {
+	if _, err := g.r.AwaitOpening(context.Background(), rigPane); err != nil {
 		t.Fatal(err)
 	}
 	want := tmux.Args("set-option", "-p", "-u", "-t", rigPane, adoptLaunchOption)
