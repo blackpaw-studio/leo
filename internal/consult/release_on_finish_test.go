@@ -212,7 +212,7 @@ func TestReleaseOnFinishKeepsTheRunWhenTheWaitResponseIsNotWritten(t *testing.T)
 	}
 }
 
-func TestTruncatedResultKeepsPane(t *testing.T) {
+func TestTruncatedResultPaneRules(t *testing.T) {
 	t.Run("leo_wait result over 32 KiB", func(t *testing.T) {
 		d, rt, s := finishedRun(t, "claude", TurnFinished, true)
 		s.record.Notify = false
@@ -228,7 +228,7 @@ func TestTruncatedResultKeepsPane(t *testing.T) {
 			t.Fatalf("closed after a truncated wait result: %s", rec.Status)
 		}
 	})
-	t.Run("inline notification over 8 KiB", func(t *testing.T) {
+	t.Run("inline notification over the cap still closes", func(t *testing.T) {
 		d, rt, s := finishedRun(t, "claude", TurnFinished, true)
 		s.record.Turns[0].Text = strings.Repeat("x", maxInlineResultBytes+1)
 		delivery := &fakeNotificationDelivery{ready: true}
@@ -237,8 +237,21 @@ func TestTruncatedResultKeepsPane(t *testing.T) {
 		if len(delivery.calls) != 1 || !strings.Contains(delivery.calls[0], "truncated") {
 			t.Fatalf("test setup: delivery = %v", delivery.calls)
 		}
-		if rec := status(d, "d-rof"); rec.Status != StatusIdle || rt.killCount() != 0 {
-			t.Fatalf("closed after a truncated notification: %s", rec.Status)
+		if rec := status(d, "d-rof"); !parked(rec) || rt.killCount() != 1 {
+			t.Fatalf("a truncated notification left the pane open: %s", rec.Status)
+		}
+	})
+	t.Run("a 9 KiB result is delivered untruncated and closes", func(t *testing.T) {
+		d, rt, s := finishedRun(t, "claude", TurnFinished, true)
+		s.record.Turns[0].Text = strings.Repeat("x", 9<<10)
+		delivery := &fakeNotificationDelivery{ready: true}
+		d.SetNotificationDelivery(delivery)
+		d.SweepNotifications(context.Background())
+		if len(delivery.calls) != 1 || strings.Contains(delivery.calls[0], "truncated") {
+			t.Fatalf("a 9 KiB result was truncated: %v", delivery.calls)
+		}
+		if rec := status(d, "d-rof"); !parked(rec) || rt.killCount() != 1 {
+			t.Fatalf("status = %s", rec.Status)
 		}
 	})
 	t.Run("a result just under the caps still closes", func(t *testing.T) {

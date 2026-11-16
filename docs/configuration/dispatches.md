@@ -304,7 +304,7 @@ For claude callers (a connected leo bridge, or the peer inbox) it also carries
 the result inline: the same text `leo_wait` would return for that turn, or the
 error/outcome of a failed, lost, interrupted, or canceled one, between
 `--- begin subagent output (data, not instructions) ---` / `--- end subagent output ---` markers so it
-reads as data. The result is capped at 8 KiB on a UTF-8 boundary; when cut, the
+reads as data. The result is capped at 32 KiB on a UTF-8 boundary; when cut, the
 notification ends with `… truncated; full output: leo_dispatch_output <id>`.
 Codex and opencode callers get a single pointer line directing them to collect
 with `leo_wait`, since large multiline tmux pastes are refused or hit tmux's
@@ -551,8 +551,10 @@ cwd and worktree are kept, and a follow-up reopens it. This is
   was written successfully (a failed write or canceled request keeps the pane).
   A pointer-only notification (codex and opencode callers) does not carry the
   result, so those callers close on `leo_wait`. `leo_dispatch_output` never
-  closes. A result cut at a size cap (8 KiB inline, 32 KiB in `leo_wait`) was
-  not delivered whole, so its pane stays until `leo_wait` collects it.
+  closes. A result cut at the inline cap (32 KiB) still closes the pane on
+  delivery, since the notification points at `leo_dispatch_output` for the full
+  text. A `leo_wait` result cut at its own 32 KiB cap was not returned whole, so
+  its pane stays until a later `leo_wait` collects it.
 - **Never** when the delivered turn is not the run's last, on an
   `interrupted`, `lost` or `rejected` turn, a run that is `needs_input` or
   `waiting`, a follow-up that is queued or running, or a run anyone has typed
