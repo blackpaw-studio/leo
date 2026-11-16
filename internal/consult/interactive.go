@@ -42,6 +42,9 @@ type LaunchRequest struct {
 	// Environments is the dispatch's inherited environment layer (see
 	// Record.InheritedEnvironments), layered over the template's.
 	Environments []string
+	// AdditionalMCPServers is the dispatch's caller-requested extra MCP
+	// servers (Record.AdditionalMCPServers), added to the template's list.
+	AdditionalMCPServers []string
 	// ResumeSessionID relaunches the harness on this earlier session instead
 	// of a fresh one (claude --resume <id>, codex resume <id>). Reopen marks
 	// the launch of a parked run's follow-up: Prompt is the raw follow-up,
@@ -322,7 +325,7 @@ func (d *Dispatcher) launchInteractive(ctx context.Context, s *runState, req Req
 	// as the opening brief (see TmuxInteractiveRuntime.Launch), so it must
 	// already be what the model should see, identical to what a tmux paste
 	// would have delivered.
-	pane, window, err := rt.Launch(ctx, LaunchRequest{ID: s.record.ID, Harness: harnessName, Model: model, Effort: req.Effort, Cwd: req.Cwd, Name: req.Name, Template: req.Template, Caller: req.Caller, Prompt: prompt, Timeout: req.Timeout, Dispatched: true, CallerPaneID: req.CallerPaneID, CallerSessionID: req.CallerSessionID, CallerWindowID: req.CallerWindowID, Placement: placement, Environments: placementRecord.InheritedEnvironments, ResumeSessionID: req.resumeSessionID, Reopen: req.resumeSessionID != ""})
+	pane, window, err := rt.Launch(ctx, LaunchRequest{ID: s.record.ID, Harness: harnessName, Model: model, Effort: req.Effort, Cwd: req.Cwd, Name: req.Name, Template: req.Template, Caller: req.Caller, Prompt: prompt, Timeout: req.Timeout, Dispatched: true, CallerPaneID: req.CallerPaneID, CallerSessionID: req.CallerSessionID, CallerWindowID: req.CallerWindowID, Placement: placement, Environments: placementRecord.InheritedEnvironments, AdditionalMCPServers: placementRecord.AdditionalMCPServers, ResumeSessionID: req.resumeSessionID, Reopen: req.resumeSessionID != ""})
 	if err != nil {
 		d.placement.Cancel(placementRecord.ID)
 		d.mu.Lock()
