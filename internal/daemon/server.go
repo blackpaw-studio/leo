@@ -461,6 +461,12 @@ func (s *Server) Handler() http.Handler { return s.httpServer.Handler }
 
 // Start binds the Unix socket and begins serving requests.
 func (s *Server) Start() error {
+	// Prime the agent-name cache off the request path so the first
+	// /config/schema call usually has data (the probe can take 10 s).
+	if s.configSvc != nil {
+		s.configSvc.WarmAgentList()
+	}
+
 	// Remove stale socket if present. If removal fails, net.Listen below will
 	// return a useful "address in use" error — but surface any non-ENOENT
 	// error here so a permissions problem on the state dir is not masked.
