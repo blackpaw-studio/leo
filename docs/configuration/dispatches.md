@@ -177,7 +177,7 @@ bridged claude session can fork: its leo-bridge mod answers the call in-session,
 so a fork consult never reaches the daemon and leaves no consult record. Any
 other caller gets "fork consult needs a bridged claude session".
 
-`leo_dispatch(template? | role?, prompt, model?, effort?, cwd?, name?, mode?, timeout_seconds?, notify?, release_on_finish?, isolation?)`
+`leo_dispatch(template? | role?, prompt, model?, effort?, cwd?, name?, mode?, timeout_seconds?, notify?, release_on_finish?, isolation?, additional_mcp_servers?)`
 starts work asynchronously and immediately returns an ID. Use it for
 implementation, review, or exploration that can proceed while the caller does
 other work. The prompt must say exactly what the subagent should do; it has no
@@ -195,6 +195,51 @@ unmerged work and reports their path and branch when the result is collected;
 clean worktrees are removed (see [Worktree cleanup](#worktree-cleanup)).
 A subagent that deliberately daemonizes a writer outside its process group can
 outlive collection; such writes after a clean removal are lost.
+
+#### Additional MCP servers
+
+`leo_dispatch(..., additional_mcp_servers: [name, ...])`, or the repeatable CLI
+flag `--additional-mcp-server <name>`, adds MCP servers to one run on top of
+its template's `mcp_servers` (see [harnesses](harnesses.md#claude-option-reference)). Use it when
+a one-off run needs a server the role's template doesn't list, such as `chrome`
+for a bot-blocked page. `leo_consult` and `leo_send_dispatch` don't take it.
+
+```console
+leo dispatch run --role explore --additional-mcp-server chrome "Read the page at https://example.com/blocked"
+```
+
+- **It only adds.** The run's server set is the leo bridge, plus the template's
+  resolved `mcp_servers`, plus your list, with duplicates removed. You can't
+  remove the template's servers.
+- **Names resolve as in `mcp_servers`:** against the top-level `mcpServers` of
+  `$CLAUDE_CONFIG_DIR/.claude.json` from the run's environment, or
+  `~/.claude.json` when that variable is unset. The servers go into the same
+  private `0600` file under `state/mcp/`; argv carries only its path.
+- **A name the account doesn't define is a warning,** never an error. It shows
+  in the daemon log, on the dispatch result, and in the `leo dispatch watch`
+  header. The run still launches.
+- **Limits:** at most 16 names after duplicates are removed, each 1-64
+  characters of `[A-Za-z0-9_.-]`. Anything else is rejected with a 400 before
+  the run starts.
+- **`mcp: inherit`:** the list is ignored with a warning, because every server
+  is already loaded.
+- **Codex and opencode:** the list is ignored and the run launches with a
+  warning naming the harness. A caller can't see which harness a role resolves
+  to, so this is not an error.
+- **Follow-ups keep it.** The requested list is stored on the dispatch record.
+  A `leo_send_dispatch` follow-up, headless continuation or reopen rebuilds the
+  same effective set, re-resolved against the account config at that time.
+- **Visibility.** `leo dispatch show` prints the field
+  (`additional_mcp_servers`), and `leo dispatch watch` prints
+  `additional MCP servers: ...` under its header, so you can see when a dispatch
+  got more than its template gives it.
+
+**There is no operator allowlist, and read-only roles (`explore`, `plan`,
+`review*`) get no exception.** A read-only role's harness permissions still
+block file writes, but an added MCP server can act on external systems: a
+browser server can sign in, submit forms or post. Any caller allowed to
+dispatch can name any server in the run account's config, so keep servers you
+don't want agents to use out of that account's `mcpServers`.
 
 #### Worktree cleanup
 
@@ -317,6 +362,7 @@ leo dispatch run codex-implementer "Add the parser tests" --cwd "$PWD"
 leo dispatch run --role implement --effort high "Add the parser tests"
 leo dispatch run codex-implementer "Inspect only" --notify=false
 leo dispatch run --role explore "Where is X handled?" --release-on-finish=false
+leo dispatch run --role explore --additional-mcp-server chrome "Read this bot-blocked page"
 leo dispatch list
 leo dispatch watch d-12ab34
 leo dispatch attach d-12ab34

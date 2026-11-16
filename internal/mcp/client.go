@@ -300,6 +300,9 @@ func (c *daemonClient) dispatch(ctx context.Context, request consult.Request) (c
 	if request.Environments != nil {
 		body["environments"] = request.Environments
 	}
+	if len(request.AdditionalMCPServers) > 0 {
+		body["additional_mcp_servers"] = request.AdditionalMCPServers
+	}
 	if request.CallerPaneID != "" {
 		body["caller_pane_id"] = request.CallerPaneID
 	}

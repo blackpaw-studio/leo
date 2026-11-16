@@ -149,7 +149,7 @@ func (r *TmuxInteractiveRuntime) Launch(ctx context.Context, req LaunchRequest) 
 	childEnv := leomcp.DispatchChildEnv(cfg, tmpl, req.ID)
 	if claudeOpts, ok := opts.(claudeharness.Options); ok && req.Dispatched {
 		var warnings []string
-		opts, warnings = resolveClaudeDispatchOptions(cfg, tmpl, "dispatch", claudeOpts, tmplEnv, r.LeoMCP)
+		opts, warnings = resolveClaudeDispatchOptions(cfg, tmpl, "dispatch", claudeOpts, tmplEnv, r.LeoMCP, req.AdditionalMCPServers)
 		logDispatchWarnings(req.ID, req.Template, warnings)
 	} else if req.Dispatched {
 		opts = withLeoMCPBridge(opts, r.LeoMCP, tmpl, childEnv)

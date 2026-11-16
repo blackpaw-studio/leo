@@ -38,9 +38,17 @@ func (s *Server) handleAPIDispatch(w http.ResponseWriter, r *http.Request) {
 		// Environments overrides the inherited environment layer: absent or
 		// null inherits, [] inherits nothing.
 		Environments []string `json:"environments"`
+		// AdditionalMCPServers adds account MCP servers to the template's
+		// own list for this dispatch (see docs/configuration/dispatches.md).
+		AdditionalMCPServers []string `json:"additional_mcp_servers"`
 	}
 	if err := decodeDispatchJSON(r, &req); err != nil {
 		writeJSON(w, http.StatusBadRequest, apiResponse{Error: fmt.Sprintf("invalid request: %v", err)})
+		return
+	}
+	additionalMCP, err := consult.NormalizeAdditionalMCPServers(req.AdditionalMCPServers)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, apiResponse{Error: fmt.Sprintf("invalid additional_mcp_servers: %v", err)})
 		return
 	}
 	if req.Cwd == "" {
@@ -100,7 +108,7 @@ func (s *Server) handleAPIDispatch(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, apiResponse{Error: err.Error()})
 		return
 	}
-	dispatchReq := consult.Request{Caller: req.From, Template: req.Template, Model: req.Model, Effort: req.Effort, Role: req.Role, Profile: profile, Prompt: req.Prompt, Cwd: req.Cwd, Name: req.Name, Timeout: timeout, Mode: mode, Notify: req.Notify, ReleaseOnFinish: req.ReleaseOnFinish, Isolation: req.Isolation, CallerPaneID: caller.PaneID, CallerSessionID: caller.SessionID, CallerWindowID: caller.WindowID, CallerHarness: caller.Harness, CallerBridgeKey: req.CallerBridgeKey, CallerBridgeLaunch: s.bridgeLaunchID(req.CallerBridgeKey), ParentDispatchID: req.ParentDispatchID, Environments: req.Environments, CallerEnvironments: s.callerEnvironments(cfg, req.From)}
+	dispatchReq := consult.Request{Caller: req.From, Template: req.Template, Model: req.Model, Effort: req.Effort, Role: req.Role, Profile: profile, Prompt: req.Prompt, Cwd: req.Cwd, Name: req.Name, Timeout: timeout, Mode: mode, Notify: req.Notify, ReleaseOnFinish: req.ReleaseOnFinish, Isolation: req.Isolation, CallerPaneID: caller.PaneID, CallerSessionID: caller.SessionID, CallerWindowID: caller.WindowID, CallerHarness: caller.Harness, CallerBridgeKey: req.CallerBridgeKey, CallerBridgeLaunch: s.bridgeLaunchID(req.CallerBridgeKey), ParentDispatchID: req.ParentDispatchID, Environments: req.Environments, AdditionalMCPServers: additionalMCP, CallerEnvironments: s.callerEnvironments(cfg, req.From)}
 	started, err := s.consults.Start(r.Context(), cfg, dispatchReq)
 	var validationErr *consult.ValidationError
 	if err != nil && req.Mode == "" && mode == consult.ModeInteractive && !errors.As(err, &validationErr) && !errors.Is(err, context.Canceled) {

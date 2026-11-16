@@ -81,7 +81,7 @@ func (d *Dispatcher) continueHeadless(cfg *config.Config, rec Record, message st
 	}
 	if opts, ok := decoded.(claudeharness.Options); ok {
 		var warnings []string
-		decoded, warnings = resolveClaudeDispatchOptions(cfg, tmpl, "dispatch", opts, tmplEnv, d.LeoMCP)
+		decoded, warnings = resolveClaudeDispatchOptions(cfg, tmpl, "dispatch", opts, tmplEnv, d.LeoMCP, rec.AdditionalMCPServers)
 		logDispatchWarnings(rec.ID, rec.Template, warnings)
 	}
 	decoded, childEnv := d.headlessChildMCP(cfg, tmpl, decoded, rec.ID)

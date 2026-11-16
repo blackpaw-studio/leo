@@ -212,6 +212,9 @@ type Record struct {
 	Environments          []string `json:"environments,omitempty"`
 	EnvironmentsSource    string   `json:"environments_source,omitempty"`
 	InheritedEnvironments []string `json:"inherited_environments,omitempty"`
+	// AdditionalMCPServers is the caller-requested extra MCP server list,
+	// kept so continuations and reopens rebuild the same effective set.
+	AdditionalMCPServers []string `json:"additional_mcp_servers,omitempty"`
 	// SlotExempt marks a run started under a live dispatch: it takes no slot
 	// from the shared pool (its parent holds its own while it waits), and is
 	// bounded by the per-root descendant cap instead.

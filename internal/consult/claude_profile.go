@@ -53,11 +53,41 @@ func resolveClaudeDispatchProfile(cfg *config.Config, tmpl config.TemplateConfig
 var installedClaudePlugins = claudeharness.InstalledPluginIDs
 
 // resolveClaudeDispatchOptions is resolveClaudeDispatchProfile plus the
-// template's mcp_servers, resolved from the launch env's account config. The
-// warnings describe names that could not be added; they never carry server
-// definitions. It applies to every kind: only a "none" profile can use them.
-func resolveClaudeDispatchOptions(cfg *config.Config, tmpl config.TemplateConfig, kind string, o claudeharness.Options, env map[string]string, mcp leomcp.Server) (claudeharness.Options, []string) {
-	return claudeharness.ApplyMCPServers(resolveClaudeDispatchProfile(cfg, tmpl, kind, o, env, mcp), env)
+// template's mcp_servers and the caller's additional list, resolved from the
+// launch env's account config. The warnings describe names that could not be
+// added; they never carry server definitions. It applies to every kind: only a
+// "none" profile can use them. A nil additional leaves the result exactly as
+// the template alone would produce it.
+func resolveClaudeDispatchOptions(cfg *config.Config, tmpl config.TemplateConfig, kind string, o claudeharness.Options, env map[string]string, mcp leomcp.Server, additional []string) (claudeharness.Options, []string) {
+	o = resolveClaudeDispatchProfile(cfg, tmpl, kind, o, env, mcp)
+	var extraWarnings []string
+	if len(additional) > 0 {
+		switch o.MCP {
+		case "none":
+			o.MCPServers = mergeServerNames(o.MCPServers, additional)
+		default:
+			// "inherit", or an explicit empty mcp, which loads the same
+			// user-scope servers: there is nothing to add to.
+			extraWarnings = []string{"additional_mcp_servers ignored under mcp: inherit (inherit already loads every user-scope server)"}
+		}
+	}
+	o, warnings := claudeharness.ApplyMCPServers(o, env)
+	return o, append(warnings, extraWarnings...)
+}
+
+// mergeServerNames returns base then extra with duplicates removed, in a new
+// slice so the template's own list is never aliased or mutated.
+func mergeServerNames(base, extra []string) []string {
+	out := make([]string, 0, len(base)+len(extra))
+	seen := make(map[string]struct{}, len(base)+len(extra))
+	for _, n := range append(append([]string(nil), base...), extra...) {
+		if _, dup := seen[n]; dup {
+			continue
+		}
+		seen[n] = struct{}{}
+		out = append(out, n)
+	}
+	return out
 }
 
 // withoutPrivateMCP drops the private-config marker from decoded claude

@@ -52,6 +52,9 @@ type Request struct {
 	// Environments, when non-nil, replaces the inherited environment layer
 	// for this dispatch (an empty list inherits nothing). Nil inherits.
 	Environments []string
+	// AdditionalMCPServers names account MCP servers added to the template's
+	// own mcp_servers for this dispatch (a claude "none" profile only).
+	AdditionalMCPServers []string
 	// CallerEnvironments is the requesting agent's effective environment
 	// list, inherited when there is no override and no parent dispatch.
 	CallerEnvironments []string
