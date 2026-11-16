@@ -422,6 +422,10 @@ func (d *Dispatcher) Start(_ context.Context, cfg *config.Config, req Request) (
 	var warnings []string
 	if opts, ok := decoded.(claudeharness.Options); ok {
 		decoded, warnings = resolveClaudeDispatchOptions(cfg, tmpl, requestKind(req), opts, tmplEnv, d.LeoMCP, additional)
+	} else if len(additional) > 0 {
+		// The caller cannot see which harness a role resolves to, so this
+		// is a warning, not an error.
+		warnings = append(warnings, fmt.Sprintf("additional_mcp_servers ignored: harness %s does not support them", h.Name()))
 	}
 	if req.Cwd == "" || !filepath.IsAbs(req.Cwd) {
 		return Started{}, invalidf("cwd must be an existing absolute directory")

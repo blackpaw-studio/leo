@@ -1,9 +1,12 @@
 package consult
 
 import (
+	"context"
+	"os/exec"
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestNormalizeAdditionalMCPServers(t *testing.T) {
@@ -47,6 +50,34 @@ func TestNormalizeAdditionalMCPServers(t *testing.T) {
 			}
 			if !reflect.DeepEqual(got, tc.want) {
 				t.Fatalf("got %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestNonClaudeDispatchAdditionalMCPServersWarnsAndLaunches(t *testing.T) {
+	for _, template := range []string{"codex", "opencode"} {
+		t.Run(template, func(t *testing.T) {
+			t.Setenv("HOME", t.TempDir())
+			d := NewDispatcher(NewFileRecorder(t.TempDir()))
+			launched := false
+			d.ExecCommandContext = func(ctx context.Context, _ string, _ ...string) *exec.Cmd {
+				launched = true
+				return exec.CommandContext(ctx, "sh", "-c", `echo '{"type":"result","result":"ok","is_error":false}'`)
+			}
+			started, err := d.Start(context.Background(), testConfig(), Request{Template: template, Prompt: "q", Cwd: t.TempDir(), Kind: "dispatch", AdditionalMCPServers: []string{"chrome"}})
+			if err != nil {
+				t.Fatalf("Start: %v", err)
+			}
+			d.Wait(context.Background(), []string{started.ID}, 3*time.Second)
+			if !launched {
+				t.Fatal("run never launched")
+			}
+			if len(started.Warnings) != 1 || !strings.Contains(started.Warnings[0], "additional_mcp_servers ignored") || !strings.Contains(started.Warnings[0], template) {
+				t.Fatalf("Started.Warnings = %v", started.Warnings)
+			}
+			if rec, _ := d.Get(started.ID); len(rec.Warnings) != 1 {
+				t.Fatalf("Record.Warnings = %v", rec.Warnings)
 			}
 		})
 	}
