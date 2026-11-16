@@ -1,141 +1,176 @@
 package web
 
 import (
-	"sync"
+	"net/http"
+	"net/http/httptest"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
 )
 
-// TestAgentList_ConcurrentCallerGetsStaleCacheImmediately verifies that a
-// caller which arrives while a refresh is already shelling out gets the
-// previous cached value back right away, instead of blocking until the
-// slow fetch completes. This is the behavior that regressed when
-// fetchAgentList (a `claude agents` shell-out with up to a 10s timeout) ran
-// while agentMu was held.
-func TestAgentList_ConcurrentCallerGetsStaleCacheImmediately(t *testing.T) {
-	s, _ := newTestServer(t)
-
-	// Seed a stale cache so the next call is due for a refresh.
+// seedAgentCache sets the cache and its fetch stamp under the lock.
+func seedAgentCache(s *Server, names []string, fetched time.Time) {
 	s.agentMu.Lock()
-	s.agentCache = []string{"old-agent"}
-	s.agentsFetched = time.Now().Add(-2 * time.Minute)
+	s.agentCache = names
+	s.agentsFetched = fetched
 	s.agentMu.Unlock()
+}
 
-	fetchStarted := make(chan struct{})
-	releaseFetch := make(chan struct{})
-	var fetchCalls int32
+func awaitClosed(t *testing.T, ch <-chan struct{}, what string) {
+	t.Helper()
+	select {
+	case <-ch:
+	case <-time.After(5 * time.Second):
+		t.Fatalf("timed out waiting for %s", what)
+	}
+}
 
+// A cold cache must not make GET /config/schema wait for `claude agents`.
+func TestConfigSchema_ColdAgentCacheDoesNotBlock(t *testing.T) {
+	s, _ := newTestServer(t)
+	release := make(chan struct{})
+	t.Cleanup(func() { close(release) })
+	started := make(chan struct{}, 4)
 	s.fetchAgentListFn = func() []string {
-		atomic.AddInt32(&fetchCalls, 1)
-		close(fetchStarted)
-		<-releaseFetch
+		started <- struct{}{}
+		<-release
+		return []string{"slow-agent"}
+	}
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		rec := httptest.NewRecorder()
+		s.handleConfigSchema(rec, httptest.NewRequest(http.MethodGet, "/config/schema", nil))
+		if rec.Code != http.StatusOK {
+			t.Errorf("status = %d", rec.Code)
+		}
+	}()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("schema request blocked on the agent probe")
+	}
+}
+
+// Once the background refresh lands, the next call sees the names.
+func TestAgentList_BackgroundFetchPopulatesNextCall(t *testing.T) {
+	s, _ := newTestServer(t)
+	done := make(chan struct{})
+	s.fetchAgentListFn = func() []string {
+		defer close(done)
+		return []string{"alpha", "beta"}
+	}
+
+	if got := s.agentList(); len(got) != 0 {
+		t.Fatalf("cold agentList() = %v, want empty", got)
+	}
+	awaitClosed(t, done, "background fetch")
+	// The fetch goroutine stores the result after fn returns; poll the lock.
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		if got := s.agentList(); len(got) == 2 && got[0] == "alpha" {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("cache never populated")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	body := httptest.NewRecorder()
+	s.handleConfigSchema(body, httptest.NewRequest(http.MethodGet, "/config/schema", nil))
+	if !strings.Contains(body.Body.String(), "alpha") {
+		t.Fatalf("schema lacks agent names: %s", body.Body.String())
+	}
+}
+
+// Concurrent stale callers get the old cache and share one refresh.
+func TestAgentList_StaleReturnsOldCacheSingleFlight(t *testing.T) {
+	s, _ := newTestServer(t)
+	seedAgentCache(s, []string{"old-agent"}, time.Now().Add(-2*time.Minute))
+
+	started := make(chan struct{}, 4)
+	release := make(chan struct{})
+	t.Cleanup(func() { close(release) })
+	var calls int32
+	s.fetchAgentListFn = func() []string {
+		atomic.AddInt32(&calls, 1)
+		started <- struct{}{}
+		<-release
 		return []string{"new-agent"}
 	}
 
-	var wg sync.WaitGroup
-	wg.Add(1)
-	var leaderResult []string
-	go func() {
-		defer wg.Done()
-		leaderResult = s.agentList()
-	}()
-
-	// Wait until the leader is inside the (slow, unlocked) fetch.
-	select {
-	case <-fetchStarted:
-	case <-time.After(2 * time.Second):
-		t.Fatal("timed out waiting for fetch to start")
-	}
-
-	// A concurrent caller during the in-flight refresh must return promptly
-	// with the stale cache, not block on the fetch.
-	done := make(chan []string, 1)
-	go func() {
-		done <- s.agentList()
-	}()
-
-	select {
-	case got := <-done:
+	for i := 0; i < 5; i++ {
+		got := s.agentList()
 		if len(got) != 1 || got[0] != "old-agent" {
-			t.Fatalf("concurrent caller got %v, want stale cache [old-agent]", got)
+			t.Fatalf("call %d = %v, want [old-agent]", i, got)
 		}
-	case <-time.After(500 * time.Millisecond):
-		t.Fatal("concurrent agentList() call blocked on in-flight fetch instead of returning stale cache")
+	}
+	select {
+	case <-started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for fetch start")
 	}
 
-	// Only one shell-out should have been triggered by the two callers.
-	if calls := atomic.LoadInt32(&fetchCalls); calls != 1 {
-		t.Fatalf("fetchAgentListFn called %d times, want 1 (no duplicate concurrent shell-outs)", calls)
-	}
-
-	close(releaseFetch)
-	wg.Wait()
-
-	if len(leaderResult) != 1 || leaderResult[0] != "new-agent" {
-		t.Fatalf("leader agentList() = %v, want [new-agent]", leaderResult)
-	}
-
-	// The cache should now reflect the completed refresh.
-	s.agentMu.Lock()
-	cache := s.agentCache
-	s.agentMu.Unlock()
-	if len(cache) != 1 || cache[0] != "new-agent" {
-		t.Fatalf("s.agentCache = %v after refresh, want [new-agent]", cache)
+	if n := atomic.LoadInt32(&calls); n != 1 {
+		t.Fatalf("fetch calls = %d, want 1", n)
 	}
 }
 
-// TestAgentList_FreshCacheSkipsFetch verifies the fast path: a cache within
-// the TTL is returned without invoking fetchAgentListFn at all.
 func TestAgentList_FreshCacheSkipsFetch(t *testing.T) {
 	s, _ := newTestServer(t)
-
-	s.agentMu.Lock()
-	s.agentCache = []string{"cached-agent"}
-	s.agentsFetched = time.Now()
-	s.agentMu.Unlock()
-
+	seedAgentCache(s, []string{"cached-agent"}, time.Now())
+	var fetches atomic.Int32
 	s.fetchAgentListFn = func() []string {
-		t.Fatal("fetchAgentListFn should not be called for a fresh cache")
+		fetches.Add(1)
 		return nil
 	}
-
-	got := s.agentList()
-	if len(got) != 1 || got[0] != "cached-agent" {
-		t.Fatalf("agentList() = %v, want [cached-agent]", got)
+	if got := s.agentList(); len(got) != 1 || got[0] != "cached-agent" {
+		t.Fatalf("agentList() = %v", got)
+	}
+	if n := fetches.Load(); n != 0 {
+		t.Errorf("fetch ran %d times for a fresh cache, want 0", n)
 	}
 }
 
-// TestAgentList_FailedRefreshKeepsOldCache verifies that a transient
-// fetchAgentListFn failure (nil/empty result — e.g. `claude agents` timed
-// out or errored) does not clobber a previously good cache. The TTL clock
-// still resets (agentsFetched is stamped before the shell-out) so a
-// persistently failing command doesn't get retried on every single call.
+// A failed refresh keeps the old cache and still advances the TTL clock.
 func TestAgentList_FailedRefreshKeepsOldCache(t *testing.T) {
 	s, _ := newTestServer(t)
+	seedAgentCache(s, []string{"good-agent"}, time.Now().Add(-2*time.Minute))
+	done := make(chan struct{})
+	s.fetchAgentListFn = func() []string { defer close(done); return nil }
 
-	s.agentMu.Lock()
-	s.agentCache = []string{"good-agent"}
-	s.agentsFetched = time.Now().Add(-2 * time.Minute)
-	s.agentMu.Unlock()
-
-	s.fetchAgentListFn = func() []string {
-		return nil
+	if got := s.agentList(); len(got) != 1 || got[0] != "good-agent" {
+		t.Fatalf("agentList() = %v", got)
 	}
-
-	got := s.agentList()
-	if len(got) != 1 || got[0] != "good-agent" {
-		t.Fatalf("agentList() = %v, want stale [good-agent] preserved on failed refresh", got)
-	}
-
+	awaitClosed(t, done, "fetch")
 	s.agentMu.Lock()
-	cache := s.agentCache
-	fetched := s.agentsFetched
+	cache, fetched := s.agentCache, s.agentsFetched
 	s.agentMu.Unlock()
 	if len(cache) != 1 || cache[0] != "good-agent" {
-		t.Fatalf("s.agentCache = %v after failed refresh, want [good-agent] preserved", cache)
+		t.Fatalf("cache = %v, want preserved", cache)
 	}
 	if time.Since(fetched) > time.Second {
-		t.Error("agentsFetched should have been stamped at refresh time even though the fetch failed, to avoid hammering the failing command")
+		t.Error("TTL clock should advance even when the fetch fails")
+	}
+}
+
+// WarmAgentList primes the cache without a request.
+func TestWarmAgentList_PopulatesCache(t *testing.T) {
+	s, _ := newTestServer(t)
+	done := make(chan struct{})
+	s.fetchAgentListFn = func() []string { defer close(done); return []string{"warm"} }
+	s.WarmAgentList()
+	awaitClosed(t, done, "warm fetch")
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		if got := s.agentList(); len(got) == 1 && got[0] == "warm" {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("cache never warmed")
+		}
+		time.Sleep(time.Millisecond)
 	}
 }

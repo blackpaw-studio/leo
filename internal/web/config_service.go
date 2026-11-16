@@ -207,39 +207,46 @@ func (c *ConfigService) reloadConfigOrWarn() string {
 	return ""
 }
 
-// agentList returns the claude sub-agent names, refreshing at most once per
-// minute. fetchAgentList shells out to `claude agents`, which can take up to
-// 10s, so the shell-out itself must never run while agentMu is held.
+// agentListTTL is how long the agent-name cache stays fresh.
+const agentListTTL = time.Minute
+
+// agentList returns the claude sub-agent names without ever blocking on the
+// `claude agents` probe (stale-while-revalidate). It returns the current cache
+// immediately (empty on a cold start); when the cache is older than
+// agentListTTL it starts at most one background refresh.
 //
-// The caller that finds the cache stale claims the refresh by stamping
-// agentsFetched immediately and releasing the lock before shelling out.
-// Any concurrent caller that arrives during that window sees a fresh
-// timestamp, so it returns the previous (stale) cache right away instead of
-// blocking on the in-flight fetch or starting a second one.
+// The claimer stamps agentsFetched before launching the refresh, so
+// concurrent callers see a fresh timestamp and start nothing, and a failing
+// command is retried once per TTL rather than on every call. An empty result
+// keeps the previous cache. The refresh goroutine is bounded by
+// fetchAgentList's own exec timeout.
 func (c *ConfigService) agentList() []string {
 	c.agentMu.Lock()
-	if time.Since(c.agentsFetched) <= time.Minute {
-		cache := c.agentCache
-		c.agentMu.Unlock()
-		return cache
-	}
-	c.agentsFetched = time.Now()
-	c.agentMu.Unlock()
-
-	fresh := c.fetchAgentListFn()
-
-	c.agentMu.Lock()
-	if len(fresh) > 0 {
-		c.agentCache = fresh
-	}
-	// agentsFetched was already stamped before the shell-out (above), so a
-	// nil/empty result from a transient failure still resets the TTL clock
-	// — it just keeps the previous (still-valid) cache instead of clobbering
-	// it with nothing, and won't hammer the failing command every call.
 	cache := c.agentCache
+	stale := time.Since(c.agentsFetched) > agentListTTL
+	if stale {
+		c.agentsFetched = time.Now()
+	}
 	c.agentMu.Unlock()
 
+	if stale {
+		go c.refreshAgentList()
+	}
 	return cache
+}
+
+// WarmAgentList primes the agent-list cache in the background so the first
+// schema request usually already has data. A no-op while the cache is fresh.
+func (c *ConfigService) WarmAgentList() { c.agentList() }
+
+func (c *ConfigService) refreshAgentList() {
+	fresh := c.fetchAgentListFn()
+	if len(fresh) == 0 {
+		return
+	}
+	c.agentMu.Lock()
+	c.agentCache = fresh
+	c.agentMu.Unlock()
 }
 
 // fetchAgentList runs `claude agents` and parses the agent names.
@@ -252,7 +259,11 @@ func (c *ConfigService) fetchAgentList() []string {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	out, err := exec.CommandContext(ctx, claudePath, "agents").Output()
+	cmd := exec.CommandContext(ctx, claudePath, "agents")
+	// A grandchild holding stdout open must not block Output() past the
+	// context kill (it would leak the refresh goroutine every TTL).
+	cmd.WaitDelay = time.Second
+	out, err := cmd.Output()
 	if err != nil {
 		return nil
 	}
