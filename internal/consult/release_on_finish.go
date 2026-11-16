@@ -157,7 +157,7 @@ func (d *Dispatcher) closeReturned(ids []string, entries []Entry) {
 	unlock := d.serialLocks(ids)
 	defer unlock()
 	for i, e := range entries {
-		if e.Outcome != TurnFinished || e.truncated {
+		if e.Outcome != TurnFinished {
 			continue
 		}
 		runID := strings.SplitN(ids[i], "#", 2)[0]

@@ -111,32 +111,18 @@ func TestWaitReturnedResultParksRun(t *testing.T) {
 	requireParked(t, d, "d-rof", "d-rof#1")
 }
 
-// TestSecondTurnDeliveryParksAgain: a run whose first result was too big to
-// close on keeps its pane; the follow-up's complete result closes it.
-func TestSecondTurnDeliveryParksAgain(t *testing.T) {
+// TestTruncatedInlineDeliveryParksPane: a result cut at the inline cap still
+// closes the pane on delivery, pointing the caller at leo_dispatch_output.
+func TestTruncatedInlineDeliveryParksPane(t *testing.T) {
 	d, rt, delivery, id := startParkable(t, t.TempDir(), false, strings.Repeat("x", maxInlineResultBytes+1))
 	d.SweepNotifications(context.Background())
-	if rec := status(d, id); rec.Status != StatusIdle || rt.killCount() != 0 {
-		t.Fatalf("a truncated result closed the pane: %s kills=%d", rec.Status, rt.killCount())
-	}
-	sent, err := d.Send(context.Background(), id, "a short follow-up")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := d.Report(id, claudeHook(t, "submit-2", "UserPromptSubmit", "a short follow-up")); err != nil {
-		t.Fatal(err)
-	}
-	if err := d.Report(id, claudeStop(t, "stop-2", "short answer", nil)); err != nil {
-		t.Fatal(err)
-	}
-	d.SweepNotifications(context.Background())
-	if len(delivery.calls) != 2 {
+	if len(delivery.calls) != 1 || !strings.Contains(delivery.calls[0], "truncated; full output: leo_dispatch_output") {
 		t.Fatalf("delivery = %q", delivery.calls)
 	}
-	if rt.killCount() != 1 {
-		t.Fatalf("kills = %d", rt.killCount())
+	if rec := status(d, id); !parked(rec) || rt.killCount() != 1 {
+		t.Fatalf("a truncated result left the pane open: %s kills=%d", rec.Status, rt.killCount())
 	}
-	requireParked(t, d, id, sent.TurnID)
+	requireParked(t, d, id, id+"#1")
 }
 
 func TestStaleTurnDeliveryDoesNotPark(t *testing.T) {
@@ -214,4 +200,31 @@ func TestCollectRunSkipsParkedWorktree(t *testing.T) {
 	if _, err := os.Stat(rec.Worktree); err != nil {
 		t.Fatalf("parked worktree removed: %v", err)
 	}
+}
+
+// TestSecondTurnDeliveryParksAgain: a run whose first notification was not
+// delivered keeps its pane; the follow-up's delivery closes it.
+func TestSecondTurnDeliveryParksAgain(t *testing.T) {
+	d, rt, delivery, id := startParkable(t, t.TempDir(), false, "first answer")
+	delivery.ready = false
+	d.SweepNotifications(context.Background())
+	if rec := status(d, id); rec.Status != StatusIdle || rt.killCount() != 0 {
+		t.Fatalf("an undelivered result closed the pane: %s kills=%d", rec.Status, rt.killCount())
+	}
+	sent, err := d.Send(context.Background(), id, "a short follow-up")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := d.Report(id, claudeHook(t, "submit-2", "UserPromptSubmit", "a short follow-up")); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.Report(id, claudeStop(t, "stop-2", "short answer", nil)); err != nil {
+		t.Fatal(err)
+	}
+	delivery.ready = true
+	d.SweepNotifications(context.Background())
+	if rt.killCount() != 1 {
+		t.Fatalf("kills = %d", rt.killCount())
+	}
+	requireParked(t, d, id, sent.TurnID)
 }

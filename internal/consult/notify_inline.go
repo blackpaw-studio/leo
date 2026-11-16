@@ -12,7 +12,7 @@ import (
 // carries inline. Neither the bridge deliver (outbox: 256 entries / 32 MiB
 // per agent, unframed JSONL) nor the Claude inbox socket (one JSON line,
 // 5 s write deadline) limits a message near this size.
-const maxInlineResultBytes = 8 << 10
+const maxInlineResultBytes = 32 << 10
 
 const (
 	// pointerSuffix ends the pointer-only notification line.
@@ -65,13 +65,6 @@ func inlineNotification(rec Record, key, header string) string {
 		fmt.Fprintf(&b, "\n… truncated; full output: leo_dispatch_output %s", strings.SplitN(rec.ID, "#", 2)[0])
 	}
 	return b.String()
-}
-
-// inlineTruncated reports whether the inline notification for turn key of rec
-// is cut at maxInlineResultBytes.
-func inlineTruncated(rec Record, key string) bool {
-	_, truncated := cappedInlineBody(waitEntryFor(rec, key))
-	return truncated
 }
 
 func waitEntryFor(rec Record, key string) Entry {
@@ -195,14 +188,13 @@ func (d *Dispatcher) collectDelivered(ctx context.Context, item pendingNotificat
 	if rec.Mode == ModeInteractive {
 		// A release_on_finish run closes its pane now that this turn's
 		// result was delivered, and is kept for a follow-up to reopen. A
-		// notification cut at the inline cap did not carry the whole
-		// result, so that run keeps its pane until the result is collected.
-		if !inlineTruncated(rec, item.key) {
-			if err := d.parkDeliveredLocked(rec.ID, item.key); err != nil {
-				fmt.Fprintf(os.Stderr, "dispatch %s: %v\n", rec.ID, err)
-			}
-			rec = d.stateRecord(item.state)
+		// notification cut at the inline cap still closes it: the notice
+		// points at leo_dispatch_output for the full text, and a caller
+		// that never collects must not leak the pane.
+		if err := d.parkDeliveredLocked(rec.ID, item.key); err != nil {
+			fmt.Fprintf(os.Stderr, "dispatch %s: %v\n", rec.ID, err)
 		}
+		rec = d.stateRecord(item.state)
 	}
 	if !waitEntryFor(rec, item.key).Status.Terminal() || isSupersededHeadlessTurn(rec, item.key) {
 		return
