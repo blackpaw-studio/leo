@@ -90,7 +90,7 @@ func dispatchCallerFields(getenv func(string) string) map[string]any {
 func newDispatchRunCmd() *cobra.Command {
 	var model, effort, role, cwd, name, host, mode string
 	var isolation string
-	var environments []string
+	var environments, additionalMCP []string
 	var notify, releaseOnFinish bool
 	var timeout time.Duration
 	cmd := &cobra.Command{Use: "run <template> <prompt> | run --role <role> <prompt>", Args: func(_ *cobra.Command, args []string) error {
@@ -154,6 +154,9 @@ func newDispatchRunCmd() *cobra.Command {
 		if cmd.Flags().Changed("environment") {
 			body["environments"] = append([]string{}, environments...)
 		}
+		if len(additionalMCP) > 0 {
+			body["additional_mcp_servers"] = additionalMCP
+		}
 		if pane := dispatchCallerPane(os.Environ()); pane != "" {
 			body["caller_pane_id"] = pane
 		}
@@ -202,6 +205,7 @@ func newDispatchRunCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&releaseOnFinish, "release-on-finish", false, "interactive only: close the pane once a turn's result was read, keeping the run for a follow-up that reopens it (default on; --release-on-finish=false keeps the pane open)")
 	cmd.Flags().StringVar(&isolation, "isolation", "", "execution isolation (worktree)")
 	cmd.Flags().StringSliceVar(&environments, "environment", nil, "named environments to run under, layered over the template's; replaces the inherited (caller's) list, and --environment= inherits nothing")
+	cmd.Flags().StringArrayVar(&additionalMCP, "additional-mcp-server", nil, "name of an MCP server from the run account's Claude config to add to this run, on top of the template's own list (repeatable; claude with mcp: none only; a missing name is a warning)")
 	addHostFlag(cmd, &host)
 	return cmd
 }

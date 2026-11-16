@@ -213,6 +213,9 @@ func watchConsult(ctx context.Context, stateDir, prefix string, out io.Writer) e
 
 	fmt.Fprintf(out, "[consult %s · %s/%s%s · %s]\n",
 		record.ID, record.Harness, record.Model, callerSuffix(record), record.Status)
+	if len(record.AdditionalMCPServers) > 0 {
+		fmt.Fprintf(out, "additional MCP servers: %s\n", strings.Join(record.AdditionalMCPServers, ", "))
+	}
 	for _, w := range record.Warnings {
 		fmt.Fprintf(out, "warning: %s\n", w)
 	}
