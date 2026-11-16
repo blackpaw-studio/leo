@@ -259,7 +259,11 @@ func (c *ConfigService) fetchAgentList() []string {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	out, err := exec.CommandContext(ctx, claudePath, "agents").Output()
+	cmd := exec.CommandContext(ctx, claudePath, "agents")
+	// A grandchild holding stdout open must not block Output() past the
+	// context kill (it would leak the refresh goroutine every TTL).
+	cmd.WaitDelay = time.Second
+	out, err := cmd.Output()
 	if err != nil {
 		return nil
 	}

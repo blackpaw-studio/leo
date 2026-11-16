@@ -121,12 +121,16 @@ func TestAgentList_StaleReturnsOldCacheSingleFlight(t *testing.T) {
 func TestAgentList_FreshCacheSkipsFetch(t *testing.T) {
 	s, _ := newTestServer(t)
 	seedAgentCache(s, []string{"cached-agent"}, time.Now())
+	var fetches atomic.Int32
 	s.fetchAgentListFn = func() []string {
-		t.Error("fetch should not run for a fresh cache")
+		fetches.Add(1)
 		return nil
 	}
 	if got := s.agentList(); len(got) != 1 || got[0] != "cached-agent" {
 		t.Fatalf("agentList() = %v", got)
+	}
+	if n := fetches.Load(); n != 0 {
+		t.Errorf("fetch ran %d times for a fresh cache, want 0", n)
 	}
 }
 
