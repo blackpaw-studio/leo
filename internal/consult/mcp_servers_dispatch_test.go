@@ -353,6 +353,39 @@ func TestHeadlessDispatchAdditionalIgnoredUnderInheritWarns(t *testing.T) {
 	}
 }
 
+// An explicit empty mcp keeps the user-scope servers loaded like inherit does,
+// so extras have nothing to add to and must warn instead of vanishing.
+func TestHeadlessDispatchAdditionalIgnoredUnderExplicitEmptyMCPWarns(t *testing.T) {
+	f := newMCPDispatchFixture(t, map[string]any{"mcp": ""})
+	d, calls, mu, started, err := startMCPDispatchWith(t, f, []string{"chrome"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	d.Wait(context.Background(), []string{started.ID}, 5*time.Second)
+
+	mu.Lock()
+	run := (*calls)[0]
+	mu.Unlock()
+	if joined := strings.Join(run.args, " "); strings.Contains(joined, "--strict-mcp-config") || strings.Contains(joined, filepath.Join("state", "mcp")) {
+		t.Fatalf("empty-mcp argv changed: %q", run.args)
+	}
+	if len(started.Warnings) != 1 || !strings.Contains(started.Warnings[0], "additional_mcp_servers ignored under mcp: inherit") {
+		t.Fatalf("Warnings = %v", started.Warnings)
+	}
+}
+
+func TestHeadlessDispatchExplicitEmptyMCPWithoutAdditionalStaysSilent(t *testing.T) {
+	f := newMCPDispatchFixture(t, map[string]any{"mcp": ""})
+	d, _, _, started, err := startMCPDispatchWith(t, f, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	d.Wait(context.Background(), []string{started.ID}, 5*time.Second)
+	if len(started.Warnings) != 0 {
+		t.Fatalf("Warnings = %v, want none", started.Warnings)
+	}
+}
+
 func TestHeadlessDispatchWithoutAdditionalIsByteIdentical(t *testing.T) {
 	f := newMCPDispatchFixture(t, map[string]any{"mcp_servers": []any{"chrome"}})
 	cwd := t.TempDir()

@@ -65,7 +65,9 @@ func resolveClaudeDispatchOptions(cfg *config.Config, tmpl config.TemplateConfig
 		switch o.MCP {
 		case "none":
 			o.MCPServers = mergeServerNames(o.MCPServers, additional)
-		case "inherit":
+		default:
+			// "inherit", or an explicit empty mcp, which loads the same
+			// user-scope servers: there is nothing to add to.
 			extraWarnings = []string{"additional_mcp_servers ignored under mcp: inherit (inherit already loads every user-scope server)"}
 		}
 	}
