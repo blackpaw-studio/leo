@@ -407,6 +407,10 @@ func (d *Dispatcher) Start(_ context.Context, cfg *config.Config, req Request) (
 	if err != nil {
 		return Started{}, invalidf("template %q harness_options: %v", req.Template, err)
 	}
+	additional, err := NormalizeAdditionalMCPServers(req.AdditionalMCPServers)
+	if err != nil {
+		return Started{}, invalidf("additional_mcp_servers: %v", err)
+	}
 	inherited, envSource, err := dispatchEnvironments(cfg, req, d.parentRecord(req.ParentDispatchID))
 	if err != nil {
 		return Started{}, err
@@ -417,7 +421,7 @@ func (d *Dispatcher) Start(_ context.Context, cfg *config.Config, req Request) (
 	}
 	var warnings []string
 	if opts, ok := decoded.(claudeharness.Options); ok {
-		decoded, warnings = resolveClaudeDispatchOptions(cfg, tmpl, requestKind(req), opts, tmplEnv, d.LeoMCP)
+		decoded, warnings = resolveClaudeDispatchOptions(cfg, tmpl, requestKind(req), opts, tmplEnv, d.LeoMCP, additional)
 	}
 	if req.Cwd == "" || !filepath.IsAbs(req.Cwd) {
 		return Started{}, invalidf("cwd must be an existing absolute directory")
@@ -474,7 +478,7 @@ func (d *Dispatcher) Start(_ context.Context, cfg *config.Config, req Request) (
 	rec := Record{
 		ID: newID(), Caller: caller, ParentDispatchID: parentID, Template: req.Template, Role: req.Role, Profile: req.Profile,
 		Kind: kind, Harness: h.Name(), Model: model, Cwd: req.Cwd, Name: req.Name, Timeout: timeout,
-		Effort: req.Effort, Warnings: warnings,
+		Effort: req.Effort, Warnings: warnings, AdditionalMCPServers: additional,
 		Prompt: req.Prompt, Status: StatusQueued, StartedAt: d.now(), Mode: mode,
 		Notify: notify, Isolation: req.Isolation, SourceCwd: req.Cwd,
 		ReleaseOnFinish: mode == ModeInteractive && kind == "dispatch" && ResolveReleaseOnFinish(req.Role, req.ReleaseOnFinish),

@@ -3,6 +3,7 @@ package consult
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -253,5 +254,140 @@ func TestInteractiveStartReturnsMCPServerWarnings(t *testing.T) {
 	}
 	if _, err := os.Stat(f.path(started.ID)); !os.IsNotExist(err) {
 		t.Fatalf("Start itself must not write the file for an interactive run: %v", err)
+	}
+}
+
+func startMCPDispatchWith(t *testing.T, f mcpDispatchFixture, additional []string) (*Dispatcher, *[]capturedRun, *sync.Mutex, Started, error) {
+	return startMCPDispatchIn(t, f, additional, t.TempDir())
+}
+
+func startMCPDispatchIn(t *testing.T, f mcpDispatchFixture, additional []string, cwd string) (*Dispatcher, *[]capturedRun, *sync.Mutex, Started, error) {
+	t.Helper()
+	d := NewDispatcher(NewFileRecorder(t.TempDir()))
+	var calls []capturedRun
+	var mu sync.Mutex
+	d.ExecCommandContext = capturingExec(t, &calls, &mu)
+	started, err := d.Start(context.Background(), f.cfg, Request{Template: "claude", Prompt: "go", Cwd: cwd, Kind: "dispatch", AdditionalMCPServers: additional})
+	return d, &calls, &mu, started, err
+}
+
+func TestHeadlessDispatchAdditionalMCPServersOnlyAddsToBridge(t *testing.T) {
+	f := newMCPDispatchFixture(t, nil)
+	d, calls, mu, started, err := startMCPDispatchWith(t, f, []string{"chrome"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	d.Wait(context.Background(), []string{started.ID}, 5*time.Second)
+
+	mu.Lock()
+	run := (*calls)[0]
+	mu.Unlock()
+	assertArgvHasOnlyMCPPath(t, run.args, f.path(started.ID))
+	if names := configServerNames(t, run.file); len(names) != 2 || names[0] != "chrome" || names[1] != "leo" {
+		t.Fatalf("file servers = %v, want [chrome leo]", names)
+	}
+	if run.mode != 0o600 {
+		t.Fatalf("file mode = %v, want 0600", run.mode)
+	}
+	rec, err := d.Get(started.ID)
+	if err != nil || len(rec.AdditionalMCPServers) != 1 || rec.AdditionalMCPServers[0] != "chrome" {
+		t.Fatalf("Record.AdditionalMCPServers = %v err=%v", rec.AdditionalMCPServers, err)
+	}
+}
+
+func TestHeadlessDispatchAdditionalMCPServersUnionWithTemplate(t *testing.T) {
+	f := newMCPDispatchFixture(t, map[string]any{"mcp_servers": []any{"chrome"}})
+	d, calls, mu, started, err := startMCPDispatchWith(t, f, []string{"chrome", "other"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	d.Wait(context.Background(), []string{started.ID}, 5*time.Second)
+
+	mu.Lock()
+	run := (*calls)[0]
+	mu.Unlock()
+	if names := configServerNames(t, run.file); len(names) != 3 || names[0] != "chrome" || names[1] != "leo" || names[2] != "other" {
+		t.Fatalf("file servers = %v, want [chrome leo other]", names)
+	}
+}
+
+func TestHeadlessDispatchAdditionalUnknownNameWarnsAndLaunches(t *testing.T) {
+	f := newMCPDispatchFixture(t, nil)
+	d, calls, mu, started, err := startMCPDispatchWith(t, f, []string{"chrome", "nope"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	d.Wait(context.Background(), []string{started.ID}, 5*time.Second)
+
+	mu.Lock()
+	run := (*calls)[0]
+	mu.Unlock()
+	if names := configServerNames(t, run.file); len(names) != 2 {
+		t.Fatalf("file servers = %v", names)
+	}
+	if len(started.Warnings) != 1 || !strings.Contains(started.Warnings[0], `"nope"`) {
+		t.Fatalf("Started.Warnings = %v", started.Warnings)
+	}
+	rec, _ := d.Get(started.ID)
+	if len(rec.Warnings) != 1 {
+		t.Fatalf("Record.Warnings = %v", rec.Warnings)
+	}
+}
+
+func TestHeadlessDispatchAdditionalIgnoredUnderInheritWarns(t *testing.T) {
+	f := newMCPDispatchFixture(t, map[string]any{"mcp": "inherit"})
+	d, calls, mu, started, err := startMCPDispatchWith(t, f, []string{"chrome"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	d.Wait(context.Background(), []string{started.ID}, 5*time.Second)
+
+	mu.Lock()
+	run := (*calls)[0]
+	mu.Unlock()
+	if joined := strings.Join(run.args, " "); strings.Contains(joined, "--strict-mcp-config") || strings.Contains(joined, filepath.Join("state", "mcp")) {
+		t.Fatalf("inherit argv changed: %q", run.args)
+	}
+	if len(started.Warnings) != 1 || !strings.Contains(started.Warnings[0], "additional_mcp_servers ignored under mcp: inherit") {
+		t.Fatalf("Warnings = %v", started.Warnings)
+	}
+}
+
+func TestHeadlessDispatchWithoutAdditionalIsByteIdentical(t *testing.T) {
+	f := newMCPDispatchFixture(t, map[string]any{"mcp_servers": []any{"chrome"}})
+	cwd := t.TempDir()
+	d1, calls1, mu1, s1, err := startMCPDispatchIn(t, f, nil, cwd)
+	if err != nil {
+		t.Fatal(err)
+	}
+	d1.Wait(context.Background(), []string{s1.ID}, 5*time.Second)
+	d2, calls2, mu2, s2, err := startMCPDispatchIn(t, f, []string{}, cwd)
+	if err != nil {
+		t.Fatal(err)
+	}
+	d2.Wait(context.Background(), []string{s2.ID}, 5*time.Second)
+
+	mu1.Lock()
+	a := (*calls1)[0]
+	mu1.Unlock()
+	mu2.Lock()
+	b := (*calls2)[0]
+	mu2.Unlock()
+	norm := func(args []string, id string) string { return strings.ReplaceAll(strings.Join(args, "\x00"), id, "ID") }
+	if norm(a.args, s1.ID) != norm(b.args, s2.ID) || string(a.file) != string(b.file) {
+		t.Fatalf("argv/config differ:\n%q\n%q", a.args, b.args)
+	}
+	if rec, _ := d1.Get(s1.ID); rec.AdditionalMCPServers != nil {
+		t.Fatalf("record should carry none: %v", rec.AdditionalMCPServers)
+	}
+}
+
+func TestStartRejectsInvalidAdditionalMCPServers(t *testing.T) {
+	f := newMCPDispatchFixture(t, nil)
+	for _, bad := range [][]string{{"a/b"}, {""}} {
+		_, _, _, _, err := startMCPDispatchWith(t, f, bad)
+		if err == nil || !errors.As(err, new(*ValidationError)) {
+			t.Fatalf("names %q: err = %v, want a validation error", bad, err)
+		}
 	}
 }
