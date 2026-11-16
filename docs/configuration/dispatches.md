@@ -551,10 +551,9 @@ cwd and worktree are kept, and a follow-up reopens it. This is
   was written successfully (a failed write or canceled request keeps the pane).
   A pointer-only notification (codex and opencode callers) does not carry the
   result, so those callers close on `leo_wait`. `leo_dispatch_output` never
-  closes. A result cut at the inline cap (32 KiB) still closes the pane on
-  delivery, since the notification points at `leo_dispatch_output` for the full
-  text. A `leo_wait` result cut at its own 32 KiB cap was not returned whole, so
-  its pane stays until a later `leo_wait` collects it.
+  closes. A result cut at a size cap (32 KiB inline, 32 KiB in `leo_wait`)
+  still closes the pane on delivery; the cut text points at
+  `leo_dispatch_output` for the full result.
 - **Never** when the delivered turn is not the run's last, on an
   `interrupted`, `lost` or `rejected` turn, a run that is `needs_input` or
   `waiting`, a follow-up that is queued or running, or a run anyone has typed

@@ -212,8 +212,8 @@ func TestReleaseOnFinishKeepsTheRunWhenTheWaitResponseIsNotWritten(t *testing.T)
 	}
 }
 
-func TestTruncatedResultPaneRules(t *testing.T) {
-	t.Run("leo_wait result over 32 KiB", func(t *testing.T) {
+func TestTruncatedResultClosesPane(t *testing.T) {
+	t.Run("leo_wait result over 32 KiB still closes", func(t *testing.T) {
 		d, rt, s := finishedRun(t, "claude", TurnFinished, true)
 		s.record.Notify = false
 		s.record.Turns[0].Text = strings.Repeat("x", maxWaitEntryBytes+1)
@@ -224,8 +224,8 @@ func TestTruncatedResultPaneRules(t *testing.T) {
 		if !strings.Contains(entry.Text, "[truncated;") {
 			t.Fatal("test setup: the wait result was not truncated")
 		}
-		if rec := status(d, "d-rof"); rec.Status != StatusIdle || rt.killCount() != 0 {
-			t.Fatalf("closed after a truncated wait result: %s", rec.Status)
+		if rec := status(d, "d-rof"); !parked(rec) || rt.killCount() != 1 {
+			t.Fatalf("a truncated wait result left the pane open: %s", rec.Status)
 		}
 	})
 	t.Run("inline notification over the cap still closes", func(t *testing.T) {

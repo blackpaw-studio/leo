@@ -222,3 +222,10 @@ func TestInlineNotificationWaitedResultThatFitsIsUntouched(t *testing.T) {
 		t.Fatalf("got %q", got)
 	}
 }
+
+// inlineTruncated reports whether the inline notification for turn key of rec
+// is cut at maxInlineResultBytes.
+func inlineTruncated(rec Record, key string) bool {
+	_, truncated := cappedInlineBody(waitEntryFor(rec, key))
+	return truncated
+}

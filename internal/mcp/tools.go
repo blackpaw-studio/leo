@@ -780,7 +780,7 @@ func newRegistry(client *daemonClient, processName string, perms leotools.Permis
 // consultDescription is the leo_consult tool description. Named rather than
 // inlined so the permission suffix can be appended without the literal
 // swallowing the call to allowNote.
-const releaseOnFinishSchemaDescription = "interactive only: close the pane once a turn's complete result has reached you (notification delivered, or leo_wait returned it; the pane closes even if the inline text was truncated; read the rest with leo_dispatch_output), keeping the run, its session and worktree, for 7 days: a leo_send_dispatch follow-up reopens it, leo_release ends it. Defaults to true for every role; false keeps the pane open until it idles out."
+const releaseOnFinishSchemaDescription = "interactive only: close the pane once a turn's complete result has reached you (notification delivered, or leo_wait returned it; a truncated result still closes the pane: read the full text with leo_dispatch_output), keeping the run, its session and worktree, for 7 days: a leo_send_dispatch follow-up reopens it, leo_release ends it. Defaults to true for every role; false keeps the pane open until it idles out."
 
 const consultDescription = "Run a one-off consultant subagent for a second opinion from another model. " +
 	"Use this whenever you are asked to consult, ask, check with, or get a second opinion from another model by name — \"consult fable\", \"ask codex about this\", \"what does opus think\". " +
