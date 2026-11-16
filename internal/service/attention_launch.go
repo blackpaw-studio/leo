@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"os"
+	"path/filepath"
 
 	"github.com/blackpaw-studio/leo/internal/agentstore"
 	"github.com/blackpaw-studio/leo/internal/harness"
@@ -106,4 +107,9 @@ func launchAttentionToken(homePath, name string) (string, bool) {
 		return "", false
 	}
 	return token, true
+}
+
+// attentionFilePath is where the attention store persists at-rest attention.
+func attentionFilePath(homePath string) string {
+	return filepath.Join(homePath, "state", "attention.json")
 }

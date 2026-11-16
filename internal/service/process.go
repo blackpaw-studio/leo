@@ -441,7 +441,12 @@ func (s *Supervisor) SpawnAgent(spec daemon.AgentSpawnSpec) error {
 	// states/identities publish it and before agent_spawned, not after the
 	// launch goroutine's tmux round-trip.
 	if hooked {
-		s.attention.Set(spec.Name, observe.AttentionUnknown)
+		// An adopted launch keeps the at-rest attention it had before the
+		// daemon restarted, when it is the same launch (token match).
+		restored := spec.Adopt && s.attention.Restore(spec.Name, storedAttentionToken(s.homePath, spec.Name))
+		if !restored {
+			s.attention.Set(spec.Name, observe.AttentionUnknown)
+		}
 	}
 
 	childCtx, cancel := context.WithCancel(s.ctx) // #nosec G118 -- cancel stored in s.cancels, called by StopAgent
@@ -1284,6 +1289,12 @@ func wireObservability(ctx context.Context, sv *Supervisor, tmuxPath string) obs
 	// tracker copies it onto sweep events; the store reads the tracker's
 	// reading back for its own events, hence the post-construction setter.
 	attention := observe.NewAttentionStore(pub)
+	if sv.homePath != "" {
+		// At-rest attention survives a daemon restart (see Restore).
+		attention.EnablePersistence(ctx, attentionFilePath(sv.homePath), func(format string, args ...any) {
+			fmt.Fprintf(os.Stderr, format+"\n", args...)
+		})
+	}
 	sv.SetAttention(attention)
 	progress := observe.NewProgressStore(nil, pub)
 	sv.SetProgress(progress)
@@ -1546,12 +1557,15 @@ func superviseProcess(ctx context.Context, tmuxPath, claudePath string, spec Pro
 				settleArgvOpening = opening.watchTranscript(launchCtx, spec.WorkDir, conversationArg(currentArgs))
 				settleMail = sv.pasteMail(launchCtx, id, tmuxPath, nil)
 			}
-			// Attention does not survive a daemon restart; an agent launched
-			// with hooks is unknown until its next hook fires, which carries
-			// the token persisted at launch.
+			// Working and unknown attention do not survive a daemon restart:
+			// an agent launched with hooks is unknown until its next hook
+			// fires, which carries the token persisted at launch. At-rest
+			// attention (finished, needs_input, errored) of that same launch
+			// is restored first; launchAttention then leaves it be.
 			if token := storedAttentionToken(homePath, name); token != "" {
 				spec.attentionToken = token
 				sv.registerAttentionToken(name, id, token)
+				sv.restoreAttention(name, id, token)
 				sv.launchAttention(name, id, observe.AttentionUnknown)
 			} else {
 				spec.attentionToken = ""

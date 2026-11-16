@@ -49,6 +49,12 @@ func TestTaskRunObservabilityReachesDaemonOverIPC(t *testing.T) {
 	sv.homePath = homePath
 
 	obs := wireObservability(ctx, sv, fakeTmux)
+	// The attention writer flushes once more when ctx ends; wait it out before
+	// the test's home is removed.
+	t.Cleanup(func() {
+		cancel()
+		obs.Attention.WaitPersistence()
+	})
 	bus, runLog, messageLog := obs.Bus, obs.RunLog, obs.MessageLog
 
 	srv := daemon.New(daemon.SockPath(homePath), filepath.Join(homePath, "leo.yaml"), nil)
