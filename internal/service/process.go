@@ -1055,6 +1055,10 @@ func defaultSupervisedExec(opts RunSupervisedOptions) error {
 
 	stepDone = timer.Step("observability")
 	obs := wireObservability(ctx, supervisor, tmuxPath)
+	// Registered right after the store exists, so it runs last: the daemon
+	// does not exit until the attention file's final write has landed (or the
+	// bound passes), picking up even a hook that arrived during shutdown.
+	defer awaitAttentionFlush(obs.Attention, time.After)
 	stepDone()
 	// Leo Chat's store; nil (chat off, logged) when it cannot open. Closed
 	// after srv.Shutdown, whose defer is registered later.

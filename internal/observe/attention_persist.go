@@ -101,7 +101,8 @@ func (s *AttentionStore) EnablePersistence(ctx context.Context, path string, log
 }
 
 // WaitPersistence blocks until the writer started by EnablePersistence has
-// exited after its context ended, its final flush included.
+// exited after its context ended, its final flush included, then flushes
+// once more so a transition that landed after that flush is not lost.
 func (s *AttentionStore) WaitPersistence() {
 	if s == nil {
 		return
@@ -111,6 +112,7 @@ func (s *AttentionStore) WaitPersistence() {
 	s.mu.Unlock()
 	if p != nil {
 		<-p.done
+		s.FlushPersistence()
 	}
 }
 
