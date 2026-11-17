@@ -54,15 +54,17 @@ func TestBridgeFallbackRelaunchKeepsResume(t *testing.T) {
 	if command := bridged[len(bridged)-1]; !strings.Contains(command, "'--resume' 'sess-abc'") {
 		t.Fatalf("bridged launch does not resume: %q", command)
 	}
-	if handled, _, err := g.r.AwaitOpening(context.Background(), rigPane); !handled || err != nil {
-		t.Fatalf("AwaitOpening = %v, %v", handled, err)
+	// A resume relaunch shares the run's session: it pins none, so the
+	// dispatcher binds none and the reopen guard keeps judging its hooks.
+	if got, err := g.r.AwaitOpening(context.Background(), rigPane); !got.Handled || !got.Relaunched || got.SessionID != "" || err != nil {
+		t.Fatalf("AwaitOpening = %+v, %v; want an unpinned relaunch", got, err)
 	}
 	respawn := g.lastCall("respawn-pane")
 	if respawn == nil {
 		t.Fatal("no legacy relaunch")
 	}
-	if command := respawn[len(respawn)-1]; !strings.Contains(command, "'--resume' 'sess-abc'") {
-		t.Fatalf("legacy relaunch dropped the resume: %q", command)
+	if command := respawn[len(respawn)-1]; !strings.Contains(command, "'--resume' 'sess-abc'") || strings.Contains(command, "--session-id") {
+		t.Fatalf("legacy relaunch dropped the resume or pinned a session: %q", command)
 	}
 }
 

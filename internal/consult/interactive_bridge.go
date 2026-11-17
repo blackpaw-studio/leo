@@ -75,6 +75,10 @@ type bridgedDispatch struct {
 	pane   string // "" until the launch returns it
 	// respawn is the respawn-pane argv (sans pane) of the legacy relaunch.
 	respawn []string
+	// respawnSession is the session id respawn pins its fresh claude to,
+	// "" when it resumes the run's session instead: hooks from the killed
+	// bridged claude are told apart by it (see Dispatcher.Report).
+	respawnSession string
 	// legacyPaste is whether a legacy relaunch needs the opening pasted
 	// (it was too large for argv).
 	legacyPaste bool
@@ -250,42 +254,44 @@ func (r *TmuxInteractiveRuntime) FrameMessage(pane, message string) string {
 	return bridge.Framed(from, message)
 }
 
-// AwaitOpening waits for a bridged launch's mod to connect. handled is false
-// for a pane the bridge never carried (the caller delivers the opening as
-// before). If the mod does not connect in time, the queued opening is
-// dropped and the pane is relaunched the legacy way; paste then says
-// whether that relaunch still needs the opening pasted.
-func (r *TmuxInteractiveRuntime) AwaitOpening(ctx context.Context, pane string) (handled, paste bool, err error) {
+// AwaitOpening waits for a bridged launch's mod to connect. It is not
+// Handled for a pane the bridge never carried (the caller delivers the
+// opening as before). If the mod does not connect in time, the queued
+// opening is dropped and the pane is relaunched the legacy way, under the
+// session id the launch pinned for it: Paste then says whether that
+// relaunch still needs the opening pasted.
+func (r *TmuxInteractiveRuntime) AwaitOpening(ctx context.Context, pane string) (OpeningOutcome, error) {
 	d, ok := r.bridgedByPane(pane)
 	if !ok || d.fellBack {
-		return false, false, nil
+		return OpeningOutcome{}, nil
 	}
+	handled := OpeningOutcome{Handled: true}
 	b := r.bridgeWiring()
 	waitCtx, cancel := context.WithTimeout(ctx, b.connectTimeout())
 	_, waitErr := b.Hub.WaitFor(waitCtx, d.key, func(st bridge.State) bool { return st.HasConnected(d.target) })
 	cancel()
 	switch {
 	case waitErr == nil:
-		return true, false, nil
+		return handled, nil
 	case ctx.Err() != nil:
-		return true, false, ctx.Err()
+		return handled, ctx.Err()
 	case errors.Is(waitErr, bridge.ErrClosed):
-		return true, false, waitErr
+		return handled, waitErr
 	}
 	if !b.Hub.ForgetGenUnlessEverConnected(d.target) {
-		return true, false, nil // connected (if only for a moment), or released
+		return handled, nil // connected (if only for a moment), or released
 	}
 	if !r.markFellBack(d.id) {
-		return true, false, nil // released meanwhile; nothing to relaunch
+		return handled, nil // released meanwhile; nothing to relaunch
 	}
 	fmt.Fprintf(os.Stderr, "dispatch %s: leo bridge did not connect within %s; relaunching without it\n", d.id, b.connectTimeout())
 	// The relaunched claude has no mod: nothing may adopt its bridge.
 	_ = r.run(ctx, "set-option", "-p", "-u", "-t", pane, adoptLaunchOption)
 	argv := append([]string{"respawn-pane", "-k", "-t", pane}, d.respawn...)
 	if err := r.run(ctx, argv...); err != nil {
-		return true, false, fmt.Errorf("relaunching without the leo bridge: %w", err)
+		return handled, fmt.Errorf("relaunching without the leo bridge: %w", err)
 	}
-	return true, d.legacyPaste, nil
+	return OpeningOutcome{Handled: true, Paste: d.legacyPaste, Relaunched: true, SessionID: d.respawnSession}, nil
 }
 
 // markFellBack flags dispatch id as relaunched without the bridge, false if

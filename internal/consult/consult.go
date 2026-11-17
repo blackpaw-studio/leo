@@ -211,6 +211,11 @@ type runState struct {
 	// its timeout counts from.
 	reopenUnconfirmed bool
 	reopenedAt        time.Time
+	// liveSession is the session id the run's pane was relaunched under
+	// when its bridged claude never connected (see bindRelaunchedSession):
+	// a hook naming any other session comes from a claude that pane no
+	// longer runs. Empty for every other run.
+	liveSession string
 	// pgid is the headless command's private process group. It is retained
 	// after Wait so worktree cleanup can prove no detached child remains.
 	pgid            int

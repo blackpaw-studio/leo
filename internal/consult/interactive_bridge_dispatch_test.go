@@ -17,19 +17,19 @@ type bridgedFakeRuntime struct {
 
 	mu         sync.Mutex
 	awaitCalls int
-	await      func() (handled, paste bool, err error)
+	await      func() (OpeningOutcome, error)
 	frame      string
 }
 
 func (r *bridgedFakeRuntime) BridgesOpening(context.Context, string) bool { return r.bridges }
 
-func (r *bridgedFakeRuntime) AwaitOpening(context.Context, string) (bool, bool, error) {
+func (r *bridgedFakeRuntime) AwaitOpening(context.Context, string) (OpeningOutcome, error) {
 	r.mu.Lock()
 	r.awaitCalls++
 	await := r.await
 	r.mu.Unlock()
 	if await == nil {
-		return true, false, nil
+		return OpeningOutcome{Handled: true}, nil
 	}
 	return await()
 }
@@ -87,7 +87,9 @@ func TestInteractiveBridgedOpeningIsArmedBeforeLaunchAndNeverPasted(t *testing.T
 func TestInteractiveBridgedOpeningFallbackPastes(t *testing.T) {
 	d := NewDispatcher(newFakeRecorder())
 	rt := &bridgedFakeRuntime{fakeInteractiveRuntime: &fakeInteractiveRuntime{arm: true, empty: true}, bridges: true}
-	rt.await = func() (bool, bool, error) { return true, true, nil }
+	rt.await = func() (OpeningOutcome, error) {
+		return OpeningOutcome{Handled: true, Paste: true, Relaunched: true}, nil
+	}
 	d.SetInteractiveRuntime(rt)
 	big := strings.Repeat("a", claudeArgvPromptLimit+1)
 	if _, err := d.Start(context.Background(), testConfig(), Request{Template: "claude", Prompt: big, Cwd: t.TempDir(), Mode: ModeInteractive}); err != nil {
@@ -102,7 +104,9 @@ func TestInteractiveBridgedOpeningFallbackPastes(t *testing.T) {
 func TestInteractiveBridgedOpeningRelaunchFailureFailsTheRun(t *testing.T) {
 	d := NewDispatcher(newFakeRecorder())
 	rt := &bridgedFakeRuntime{fakeInteractiveRuntime: &fakeInteractiveRuntime{arm: true, empty: true}, bridges: true}
-	rt.await = func() (bool, bool, error) { return true, false, errors.New("relaunching without the leo bridge: boom") }
+	rt.await = func() (OpeningOutcome, error) {
+		return OpeningOutcome{Handled: true}, errors.New("relaunching without the leo bridge: boom")
+	}
 	d.SetInteractiveRuntime(rt)
 	started, err := d.Start(context.Background(), testConfig(), Request{Template: "claude", Prompt: "hello", Cwd: t.TempDir(), Mode: ModeInteractive})
 	if err != nil {
@@ -119,7 +123,7 @@ func TestInteractiveBridgedOpeningRelaunchFailureFailsTheRun(t *testing.T) {
 func TestInteractiveUnhandledAwaitKeepsTheLegacyOpening(t *testing.T) {
 	d := NewDispatcher(newFakeRecorder())
 	rt := &bridgedFakeRuntime{fakeInteractiveRuntime: &fakeInteractiveRuntime{arm: true, empty: true}}
-	rt.await = func() (bool, bool, error) { return false, false, nil }
+	rt.await = func() (OpeningOutcome, error) { return OpeningOutcome{}, nil }
 	d.SetInteractiveRuntime(rt)
 	if _, err := d.Start(context.Background(), testConfig(), Request{Template: "codex", Prompt: "hello", Cwd: t.TempDir(), Mode: ModeInteractive}); err != nil {
 		t.Fatal(err)

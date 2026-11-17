@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -17,6 +18,7 @@ import (
 	claudeharness "github.com/blackpaw-studio/leo/internal/harness/claude"
 	"github.com/blackpaw-studio/leo/internal/harness/codex"
 	"github.com/blackpaw-studio/leo/internal/leomcp"
+	sessionid "github.com/blackpaw-studio/leo/internal/session"
 	"github.com/blackpaw-studio/leo/internal/tmux"
 )
 
@@ -308,10 +310,22 @@ func (r *TmuxInteractiveRuntime) Launch(ctx context.Context, req LaunchRequest) 
 	}
 	var bd *bridgedDispatch
 	if bridged {
+		// The relaunch is a new claude: a fresh one is pinned to a session id
+		// of its own, so the killed bridged claude's late hooks can be told
+		// from its. A resume relaunch keeps the run's session.
+		respawnSession, respawnWords := "", words
+		if req.ResumeSessionID == "" {
+			respawnSession = sessionid.NewID()
+			respawnWords = launchCommandWords(req.ID, h.Binary(), append(slices.Clone(args), h.SessionArgs(harness.SessionState{Mode: harness.SessionPinned, ID: respawnSession})...), tokenFile)
+			if briefPath != "" {
+				respawnWords = append(respawnWords, claudeBriefArgvWord(briefPath))
+			}
+		}
 		bd = &bridgedDispatch{
 			id: req.ID, key: bridgePlan.Key, launch: bridgePlan.Launch, caller: req.Caller,
-			respawn:     append([]string{"-c", req.Cwd}, append(envArgs(env), strings.Join(words, " "))...),
-			legacyPaste: briefPath == "" && req.Prompt != "",
+			respawn:        append([]string{"-c", req.Cwd}, append(envArgs(env), strings.Join(respawnWords, " "))...),
+			respawnSession: respawnSession,
+			legacyPaste:    briefPath == "" && req.Prompt != "",
 		}
 		if r.queueBridgedOpening(bd, req.Prompt) {
 			words = launchCommandWords(req.ID, h.Binary(), bridgePlan.Args(args), tokenFile)
