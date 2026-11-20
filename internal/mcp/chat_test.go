@@ -353,3 +353,50 @@ func TestChatAskWithdrawCallsTheDaemon(t *testing.T) {
 		}
 	}
 }
+
+func TestChatAskWaitSBoundsTheCallNotTheDeadline(t *testing.T) {
+	d := chatDaemon(t, `{"ok":true,"data":{"values":[],"labels":[],"text":"","timed_out":false,"pending":true,"message_id":"01ASK"}}`)
+	reg := newRegistry(newDaemonClient(d.port(), ""), "assistant", leotools.Permissions{})
+	cases := []struct {
+		name, args string
+		wantWait   any
+		wantNoWait bool
+		wantTimout any
+	}{
+		{"zero", `{"question":"q","options":["a"],"wait_s":0}`, nil, true, nil},
+		{"short", `{"question":"q","options":["a"],"wait_s":45}`, float64(45), false, nil},
+		{"clamped", `{"question":"q","options":["a"],"wait_s":999999}`, chatAskCallWindow.Seconds(), false, nil},
+		{"min with timeout", `{"question":"q","options":["a"],"wait_s":90,"timeout_s":60}`, float64(60), false, float64(60)},
+		{"wait below timeout", `{"question":"q","options":["a"],"wait_s":30,"timeout_s":60}`, float64(30), false, float64(60)},
+		{"zero with timeout", `{"question":"q","options":["a"],"wait_s":0,"timeout_s":60}`, nil, true, float64(60)},
+		{"resume zero", `{"message_id":"01ASK","wait_s":0}`, nil, true, nil},
+		{"resume short", `{"message_id":"01ASK","wait_s":10}`, float64(10), false, nil},
+	}
+	for _, c := range cases {
+		if _, err := reg.call("leo_chat_ask", json.RawMessage(c.args)); err != nil {
+			t.Fatalf("%s: %v", c.name, err)
+		}
+		_, body := lastBody(t, d)
+		if body["wait_s"] != c.wantWait || (body["no_wait"] == true) != c.wantNoWait || body["timeout_s"] != c.wantTimout {
+			t.Errorf("%s: body = %v", c.name, body)
+		}
+	}
+}
+
+func TestChatAskRejectsNegativeOrBadWaitS(t *testing.T) {
+	d := chatDaemon(t, `{"ok":true,"data":{}}`)
+	reg := newRegistry(newDaemonClient(d.port(), ""), "assistant", leotools.Permissions{})
+	for _, args := range []string{
+		`{"question":"q","options":["a"],"wait_s":-1}`,
+		`{"question":"q","options":["a"],"wait_s":1.5}`,
+		`{"question":"q","options":["a"],"wait_s":"soon"}`,
+		`{"message_id":"01ASK","wait_s":-1}`,
+	} {
+		if _, err := reg.call("leo_chat_ask", json.RawMessage(args)); err == nil {
+			t.Errorf("%s accepted", args)
+		}
+	}
+	if len(d.calls) != 0 {
+		t.Fatalf("invalid asks reached the daemon: %+v", d.calls)
+	}
+}

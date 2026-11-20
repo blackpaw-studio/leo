@@ -89,7 +89,7 @@ subagents are refused.
 | Tool | Arguments | Result |
 |------|-----------|--------|
 | `leo_chat_post` | `text`, `files` (paths, up to 10, 50 MB each; relative to the workspace) | `{id, agent}` |
-| `leo_chat_ask` | `question`, `input` (below), `timeout_s` (optional, no default, max 3600); or `message_id` alone to resume | `{values, labels, text, timed_out, closed_reason?, message_id, pending?}` |
+| `leo_chat_ask` | `question`, `input` (below), `timeout_s` (optional, no default, max 3600), `wait_s` (optional, seconds this call blocks; see below); or `message_id` alone to resume | `{values, labels, text, timed_out, closed_reason?, message_id, pending?}` |
 | `leo_chat_ask_withdraw` | `message_id` | `{message_id, withdrawn: true}` |
 | `leo_chat_history` | `limit` (max 200), `before`, `task` | a page (below) |
 | `leo_chat_schedule` | `text` (Markdown), `at` (RFC3339 with an offset) | `{id, at}` |
@@ -161,6 +161,13 @@ to hand a late answer to, so without `timeout_s` it keeps a 300-second deadline.
   call returns `pending: true` with its `message_id`, and calling
   `leo_chat_ask` again with only that `message_id` keeps waiting. The agent
   does not have to: a call the harness abandons leaves the ask open.
+- **`wait_s`.** Bounds only how long one call blocks (clamped to the call
+  window); it never sets or changes the ask's deadline. `wait_s: 0` posts the
+  question and returns `pending: true` with the `message_id` immediately, so an
+  open-ended question need not hold the agent's turn; the answer comes back as
+  a late-answer message. With `timeout_s` too, the call blocks for the shorter
+  of the two. Negative or non-integer values are rejected. Omitted, the call
+  waits as before. It works the same when resuming by `message_id`.
 - **Late answers.** When an ask is answered and no `leo_chat_ask` call is
   blocked on it, the daemon delivers the answer to the asking agent as an
   ordinary inbound chat message that replies to the ask, through the usual

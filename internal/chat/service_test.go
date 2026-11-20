@@ -1476,3 +1476,38 @@ func TestWithdrawWorksFromAnotherTasksContext(t *testing.T) {
 		t.Fatalf("withdraw = %s/%q, %v", got.State, got.ClosedReason, err)
 	}
 }
+
+// NoWait returns pending at once, with no call-window timer, and leaves the
+// ask deadline-free; the late answer is then delivered to the agent.
+func TestAskNoWaitReturnsPendingAndDeliversTheLateAnswer(t *testing.T) {
+	f := newFixture(t)
+	r, err := f.svc.Ask(context.Background(), AskRequest{Caller: "assistant", Question: "Ship it?", Options: []Option{{Value: "y", Label: "Yes"}}, NoWait: true})
+	if err != nil || !r.Pending || r.TimedOut || r.MessageID == "" {
+		t.Fatalf("result = %+v, %v", r, err)
+	}
+	select {
+	case d := <-f.timers.got:
+		t.Fatalf("a timer of %s was armed for a no-wait ask", d)
+	default:
+	}
+	open := f.thread(t, "assistant")[0]
+	if open.State != StateOpen || !open.Deadline.IsZero() {
+		t.Fatalf("ask = %s, deadline %v", open.State, open.Deadline)
+	}
+	if _, err := f.svc.Answer("assistant", open.ID, Answer{Values: []string{"y"}}); err != nil {
+		t.Fatal(err)
+	}
+	f.svc.Flush()
+	if got := f.deliver.delivered(); len(got) != 1 || got[0] != lateAnswerPrompt(open) {
+		t.Fatalf("delivered %q\nwant %q", got, lateAnswerPrompt(open))
+	}
+}
+
+func TestAskNoWaitResumeReturnsPendingWhileOpen(t *testing.T) {
+	f := newFixture(t)
+	open := pendingAsk(t, f, "assistant")
+	r, err := f.svc.Ask(context.Background(), AskRequest{Caller: "assistant", MessageID: open.ID, NoWait: true})
+	if err != nil || !r.Pending || r.MessageID != open.ID {
+		t.Fatalf("resume = %+v, %v", r, err)
+	}
+}

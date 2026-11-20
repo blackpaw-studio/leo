@@ -45,6 +45,8 @@ loop on a `pending: true` result. If you stop waiting, the answer arrives later
 as a `[Leo Chat]` message replying to your `leo_chat_ask` (it names the
 `message_id`). Call `leo_chat_ask_withdraw` with that `message_id` once a
 question no longer matters, so a stale answer does not come back to you.
+To ask without blocking your turn, pass `wait_s` (`0` returns `pending` at once);
+it bounds only the call, never the deadline — do not use `timeout_s` for that.
 
 ## API Endpoints
 
