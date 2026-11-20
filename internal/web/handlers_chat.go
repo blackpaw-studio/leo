@@ -490,6 +490,7 @@ type chatToolRequest struct {
 	Input      *chat.Input   `json:"input"`
 	TimeoutS   float64       `json:"timeout_s"`
 	WaitS      float64       `json:"wait_s"`
+	NoWait     bool          `json:"no_wait"`
 	MessageID  string        `json:"message_id"`
 	Limit      int           `json:"limit"`
 	Before     string        `json:"before"`
@@ -560,6 +561,7 @@ func (s *Server) handleAgentChatAsk(w http.ResponseWriter, r *http.Request) {
 		Question: req.Question, Options: req.Options, Input: req.Input, MessageID: req.MessageID,
 		Timeout: time.Duration(req.TimeoutS * float64(time.Second)),
 		Wait:    time.Duration(req.WaitS * float64(time.Second)),
+		NoWait:  req.NoWait,
 	})
 	if err != nil {
 		writeChatError(w, err)

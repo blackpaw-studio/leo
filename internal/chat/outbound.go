@@ -211,6 +211,9 @@ type AskRequest struct {
 	// cut off sooner than the ask's own deadline — a harness kills a tool
 	// call at its MCP ceiling — so the ask outlives the call and is resumed.
 	Wait time.Duration
+	// NoWait returns Pending at once instead of waiting (Wait is ignored).
+	// The ask's deadline is unaffected.
+	NoWait bool
 }
 
 // AskResult is leo_chat_ask's answer: the chosen values with their labels,
@@ -300,7 +303,7 @@ func (s *Service) Ask(ctx context.Context, req AskRequest) (AskResult, error) {
 		s.active.Add(1)
 		go s.expireAsk(m.ID, wt, deadline)
 	}
-	return s.waitAsk(ctx, m.ID, wt, req.Wait), nil
+	return s.waitAsk(ctx, m.ID, wt, req.Wait, req.NoWait), nil
 }
 
 // expireAsk times ask id out at its deadline unless it settles first.
@@ -336,16 +339,23 @@ func (s *Service) closeAsk(id, reason string) bool {
 // or shutdown, any of which leaves it pending. The call counts as blocked
 // on the ask while it waits, so an answer it receives is not also delivered
 // to the agent as a late one.
-func (s *Service) waitAsk(ctx context.Context, id string, wt *waiter, window time.Duration) AskResult {
+func (s *Service) waitAsk(ctx context.Context, id string, wt *waiter, window time.Duration, noWait bool) AskResult {
 	if !s.waiters.join(wt) {
 		return s.askOutcome(id) // settled before this call could count itself
 	}
 	var windowEnd <-chan time.Time
-	if window > 0 {
+	var poll <-chan struct{}
+	switch {
+	case noWait:
+		closed := make(chan struct{})
+		close(closed)
+		poll = closed
+	case window > 0:
 		windowEnd = s.opts.After(window)
 	}
 	select {
 	case <-wt.done:
+	case <-poll:
 	case <-windowEnd:
 	case <-ctx.Done():
 	case <-s.ctx.Done():
@@ -408,7 +418,7 @@ func (s *Service) resumeAsk(ctx context.Context, req AskRequest) (AskResult, err
 	if !ok {
 		return s.askOutcome(m.ID), nil
 	}
-	return s.waitAsk(ctx, m.ID, wt, req.Wait), nil
+	return s.waitAsk(ctx, m.ID, wt, req.Wait, req.NoWait), nil
 }
 
 // Answer settles an open ask or permission message from the apps. Its

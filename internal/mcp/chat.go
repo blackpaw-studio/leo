@@ -47,6 +47,7 @@ type chatToolRequest struct {
 	Input     *chatInput   `json:"input,omitempty"`
 	TimeoutS  float64      `json:"timeout_s,omitempty"`
 	WaitS     float64      `json:"wait_s,omitempty"`
+	NoWait    bool         `json:"no_wait,omitempty"`
 	MessageID string       `json:"message_id,omitempty"`
 	Limit     int          `json:"limit,omitempty"`
 	Before    string       `json:"before,omitempty"`
@@ -85,6 +86,7 @@ const (
 		"options (1–12 strings or {value, label} objects) are required for buttons/radio/checkboxes and forbidden for text; allow_text adds a free-text answer to a choice type. " +
 		"Omitting input and giving top-level options asks buttons. To ask about a file, leo_chat_post it first, then ask. " +
 		"The question has no deadline: it stays open until it is answered, you withdraw it, or you are stopped. Set timeout_s (1–3600) only if the answer is worthless after that long. " +
+		"To avoid blocking your turn on a question that stays open, set wait_s (not timeout_s): it bounds only how long this call blocks, 0 returns pending at once, and the deadline is unchanged. " +
 		"Returns {values, labels, text, timed_out, closed_reason, message_id}; if it closed without an answer, values is empty, timed_out is true and closed_reason says why (timeout, withdrawn, agent_gone). " +
 		"One call waits at most 30 minutes: if the question is still open then, it returns pending: true. You do not need to keep calling: an answer that arrives later is delivered to you as a [Leo Chat] message replying to the ask, naming its message_id. " +
 		"Call leo_chat_ask again with only that message_id to wait on it again. Withdraw a question that no longer matters with leo_chat_ask_withdraw."
@@ -138,6 +140,7 @@ func (r *registry) registerChat(client *daemonClient, processName string, schema
 				"placeholder": map[string]any{"type": "string", "description": "Hint in the text field."},
 			}, "required": []string{"type"}},
 			"timeout_s": map[string]any{"type": "integer", "minimum": 0, "maximum": int(maxChatAskTimeout.Seconds()), "description": "Seconds the question stays open. Omit or 0: no deadline."},
+			"wait_s":    map[string]any{"type": "integer", "minimum": 0, "description": "Seconds this call blocks (default and max: 30 minutes). 0 returns pending at once. Never changes the question's deadline."},
 		}),
 	}, func(ctx context.Context, args map[string]any) (string, error) {
 		if r.dispatchID != "" {
@@ -282,6 +285,10 @@ func (r *registry) parseChatPost(args map[string]any) (chatToolRequest, error) {
 // one. Either way the call waits at most chatAskCallWindow.
 func (r *registry) parseChatAsk(args map[string]any) (chatToolRequest, error) {
 	req := chatToolRequest{Task: r.task, RunID: r.runID, WaitS: chatAskCallWindow.Seconds()}
+	callWait, err := parseChatAskWait(args)
+	if err != nil {
+		return req, err
+	}
 	id, err := optionalStringArg(args, "message_id")
 	if err != nil {
 		return req, err
@@ -296,6 +303,7 @@ func (r *registry) parseChatAsk(args map[string]any) (chatToolRequest, error) {
 			}
 		}
 		req.MessageID = id
+		applyChatAskWait(&req, callWait, 0)
 		return req, nil
 	}
 	question, err := stringArg(args, "question")
@@ -306,6 +314,7 @@ func (r *registry) parseChatAsk(args map[string]any) (chatToolRequest, error) {
 	if err := parseChatAskInput(args, &req); err != nil {
 		return req, err
 	}
+	var timeout time.Duration
 	if v, ok := args["timeout_s"]; ok {
 		n, ok := v.(float64)
 		if !ok || n != math.Trunc(n) || n < 0 || n > maxChatAskTimeout.Seconds() {
@@ -313,12 +322,45 @@ func (r *registry) parseChatAsk(args map[string]any) (chatToolRequest, error) {
 		}
 		// 0 is "no deadline", the same as leaving it out: the daemon is told
 		// only of a real one.
-		if timeout := time.Duration(n) * time.Second; timeout > 0 {
+		if timeout = time.Duration(n) * time.Second; timeout > 0 {
 			req.TimeoutS = timeout.Seconds()
-			req.WaitS = min(timeout, chatAskCallWindow).Seconds()
 		}
 	}
+	applyChatAskWait(&req, callWait, timeout)
 	return req, nil
+}
+
+// parseChatAskWait reads wait_s: how long this call blocks, never the ask's
+// deadline. Nil means omitted.
+func parseChatAskWait(args map[string]any) (*time.Duration, error) {
+	v, ok := args["wait_s"]
+	if !ok {
+		return nil, nil
+	}
+	n, ok := v.(float64)
+	if !ok || n != math.Trunc(n) || n < 0 {
+		return nil, fmt.Errorf("wait_s must be a non-negative integer number of seconds")
+	}
+	d := time.Duration(min(n, chatAskCallWindow.Seconds())) * time.Second
+	return &d, nil
+}
+
+// applyChatAskWait sets how long the call blocks: the shortest of wait_s,
+// the ask's own timeout (when it has one) and the call window. A zero wait
+// is sent as no_wait, since the daemon reads wait_s 0 as "until settled".
+func applyChatAskWait(req *chatToolRequest, callWait *time.Duration, timeout time.Duration) {
+	wait := chatAskCallWindow
+	if callWait != nil {
+		wait = *callWait
+	}
+	if timeout > 0 {
+		wait = min(wait, timeout)
+	}
+	if callWait != nil && wait == 0 {
+		req.WaitS, req.NoWait = 0, true
+		return
+	}
+	req.WaitS = wait.Seconds()
 }
 
 // parseChatAskInput fills req's input from args: the input object, or the
