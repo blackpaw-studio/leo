@@ -237,7 +237,7 @@ func (r *registry) fallbackDefs() []toolDef {
 	defs := []toolDef{{
 		Name:        leotools.AppToolsTool,
 		Description: "List the tools connected apps (such as the Leo app's browser) currently offer this agent, with their input schemas. Call leo_app_call to use one.",
-		InputSchema: map[string]any{"type": "object", "properties": map[string]any{}},
+		InputSchema: map[string]any{"type": "object", "properties": map[string]any{}, "additionalProperties": false},
 	}, {
 		Name:        leotools.AppCallTool,
 		Description: "Call a tool offered by a connected app, by name, with arguments matching its schema from leo_app_tools. Results may include images.",
@@ -247,7 +247,8 @@ func (r *registry) fallbackDefs() []toolDef {
 				"tool": map[string]any{"type": "string", "description": "Tool name from leo_app_tools."},
 				"args": map[string]any{"type": "object", "description": "Arguments for the tool."},
 			},
-			"required": []string{"tool"},
+			"required":             []string{"tool"},
+			"additionalProperties": false,
 		},
 	}}
 	out := defs[:0]
@@ -267,6 +268,13 @@ func (r *registry) callFallback(ctx context.Context, name string, raw json.RawMe
 	}
 	if r.perms.DeniesTool(name) {
 		return textOutcome(fmt.Sprintf("tool %q is not permitted for this agent", name), true), true
+	}
+	for _, def := range r.fallbackDefs() {
+		if def.Name == name {
+			if err := rejectUnknownArgs(def, raw); err != nil {
+				return textOutcome(err.Error(), true), true
+			}
+		}
 	}
 	if name == leotools.AppToolsTool {
 		return r.appTools(ctx), true

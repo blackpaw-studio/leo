@@ -52,12 +52,19 @@ func TestLeoProgressReportsWithTheLaunchToken(t *testing.T) {
 	}
 }
 
-// The tool has no agent argument: whatever the model passes cannot name
-// another agent, and LEO_PROCESS_NAME never enters the request.
+// The tool has no agent argument: a model that passes one is told so, the
+// call never reaches the daemon, and LEO_PROCESS_NAME never enters a request.
 func TestLeoProgressNeverSendsAnAgentName(t *testing.T) {
 	d := progressDaemon(t, 200, progressReply)
 
-	if _, err := progressRegistry(d).call("leo_progress", json.RawMessage(`{"id":"build","title":"T","agent":"victim"}`)); err != nil {
+	if _, err := progressRegistry(d).call("leo_progress", json.RawMessage(`{"id":"build","title":"T","agent":"victim"}`)); err == nil {
+		t.Fatal("an agent argument was accepted")
+	}
+	if len(d.calls) != 0 {
+		t.Fatalf("a rejected call reached the daemon: %+v", d.calls)
+	}
+
+	if _, err := progressRegistry(d).call("leo_progress", json.RawMessage(`{"id":"build","title":"T"}`)); err != nil {
 		t.Fatal(err)
 	}
 
