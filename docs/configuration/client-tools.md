@@ -66,6 +66,10 @@ Each agent's MCP server shows the tools according to the harness:
   daemon, sampled once when the session first lists tools; an app registering
   for the first time needs an agent restart to be seen.
 
+Leo's own tools, `leo_app_tools` and `leo_app_call` included, reject arguments
+outside their input schema with a tool error; the arguments inside `leo_app_call`'s
+`args` belong to the app's tool and are not checked by Leo.
+
 Results pass through verbatim, images included; failures come back as tool
 errors `"<code>: <message>"` (`no_client`, `timeout`, `cancelled`, or the app's
 own). `deny_tools` can name a client tool or either fallback tool; the names of

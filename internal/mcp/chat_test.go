@@ -75,7 +75,7 @@ func TestChatToolsRefuseDispatchSubagents(t *testing.T) {
 	d := chatDaemon(t, `{"ok":true,"data":{}}`)
 	reg := newRegistry(newDaemonClient(d.port(), ""), "assistant", leotools.Permissions{}, withDispatchID("d-1"))
 	for _, tool := range []string{"leo_chat_post", "leo_chat_ask", "leo_chat_ask_withdraw", "leo_chat_history", "leo_chat_schedule", "leo_chat_schedule_list", "leo_chat_schedule_cancel"} {
-		_, err := reg.call(tool, json.RawMessage(`{"text":"x","question":"q","options":["a"],"at":"2026-10-14T09:00:00Z","id":"01X","message_id":"01X"}`))
+		_, err := reg.call(tool, json.RawMessage(`{}`))
 		if err == nil || !strings.Contains(err.Error(), "leo_dispatch subagent") {
 			t.Errorf("%s: err = %v", tool, err)
 		}

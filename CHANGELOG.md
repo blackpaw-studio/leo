@@ -13,6 +13,12 @@ All notable user-visible changes to Leo are documented here.
 
 ### Fixed
 
+- **Leo's built-in MCP tools reject unknown arguments.** A misspelled or
+  invented parameter (e.g. `leo_chat_history {"thread": "x"}`) used to be
+  dropped silently and the call ran with defaults. It now returns a tool error
+  naming the unknown key(s) and the accepted ones, and the advertised input
+  schemas carry `additionalProperties: false`. Client tools relayed from apps
+  (`browser_*`) keep their app-owned schemas and are not checked by Leo.
 - **Managed installs now start with the web listener on.** The default
   `leo.yaml` created on a managed (Leo.app) first start had no `web:`
   section, so nothing listened on `127.0.0.1:8370` and every agent's `leo_*`

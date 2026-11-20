@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"math"
 	"os"
+	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -130,6 +132,9 @@ func newRegistry(client *daemonClient, processName string, perms leotools.Permis
 		s := map[string]any{
 			"type":       "object",
 			"properties": props,
+			// Mirrors the check in rejectUnknownArgs: an unknown key is an
+			// error, not a silently ignored typo.
+			"additionalProperties": false,
 		}
 		if len(required) > 0 {
 			s["required"] = required
@@ -1014,6 +1019,54 @@ func (r *registry) isClientTool(name string) bool {
 	return !ok
 }
 
+// checkArgs applies rejectUnknownArgs to the built-in tool of that name. A name
+// with no definition falls through to the handler lookup's own error.
+func (r *registry) checkArgs(name string, raw json.RawMessage) error {
+	for _, def := range r.defs {
+		if def.Name == name {
+			return rejectUnknownArgs(def, raw)
+		}
+	}
+	return nil
+}
+
+// rejectUnknownArgs fails a call whose top-level argument keys are not
+// properties of the tool's input schema, naming the stray keys and the
+// accepted ones. Without it a misspelled optional parameter is dropped and the
+// call quietly runs with defaults, so the caller cannot tell. Arguments that
+// are not a JSON object are left for the handler's own decoding error.
+func rejectUnknownArgs(def toolDef, raw json.RawMessage) error {
+	var args map[string]json.RawMessage
+	if len(raw) == 0 || json.Unmarshal(raw, &args) != nil {
+		return nil
+	}
+	props, _ := def.InputSchema["properties"].(map[string]any)
+	var unknown []string
+	for key := range args {
+		if _, ok := props[key]; !ok {
+			unknown = append(unknown, strconv.Quote(key))
+		}
+	}
+	if len(unknown) == 0 {
+		return nil
+	}
+	sort.Strings(unknown)
+	accepted := make([]string, 0, len(props))
+	for key := range props {
+		accepted = append(accepted, key)
+	}
+	sort.Strings(accepted)
+	noun := "parameter"
+	if len(unknown) > 1 {
+		noun = "parameters"
+	}
+	list := strings.Join(accepted, ", ")
+	if list == "" {
+		list = "none"
+	}
+	return fmt.Errorf("%s: unknown %s %s (accepted: %s)", def.Name, noun, strings.Join(unknown, ", "), list)
+}
+
 func (r *registry) call(name string, raw json.RawMessage) (string, error) {
 	return r.callContext(context.Background(), name, raw)
 }
@@ -1021,6 +1074,9 @@ func (r *registry) call(name string, raw json.RawMessage) (string, error) {
 func (r *registry) callContext(ctx context.Context, name string, raw json.RawMessage) (string, error) {
 	if r.denied[name] {
 		return "", fmt.Errorf("tool %q is not permitted for this agent", name)
+	}
+	if err := r.checkArgs(name, raw); err != nil {
+		return "", err
 	}
 	if h, ok := r.contextualHandlers[name]; ok {
 		var args map[string]any
