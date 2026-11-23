@@ -371,6 +371,36 @@
               "advanced": false,
               "constraints": {},
               "default": null,
+              "group": "Execution",
+              "help": "whether a dispatch's cwd must stay in the calling agent's workspace: warn (default) allows it with a warning, enforce refuses it, off skips the check",
+              "key": "dispatch_confinement",
+              "label": "Dispatch cwd confinement",
+              "options": [
+                {
+                  "label": "warn (built-in)",
+                  "value": ""
+                },
+                {
+                  "label": "off",
+                  "value": "off"
+                },
+                {
+                  "label": "warn",
+                  "value": "warn"
+                },
+                {
+                  "label": "enforce",
+                  "value": "enforce"
+                }
+              ],
+              "restart": "agents",
+              "type": "enum",
+              "warning": ""
+            },
+            {
+              "advanced": false,
+              "constraints": {},
+              "default": null,
               "group": "Behavior",
               "help": "Named environments (see the Environments page), comma-separated; merged left to right, later wins",
               "key": "environments",
