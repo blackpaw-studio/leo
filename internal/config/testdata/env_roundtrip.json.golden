@@ -25,7 +25,8 @@
       "Chat": null
     },
     "Session": "",
-    "SessionRotateAfter": 0
+    "SessionRotateAfter": 0,
+    "DispatchConfinement": ""
   },
   "Web": {
     "Enabled": false,
