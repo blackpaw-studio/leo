@@ -153,6 +153,9 @@ type Dispatcher struct {
 	// both are guarded by mu.
 	restartJobs    []restartJob
 	restartPending map[string]int
+	// callerWorkspaces resolves a root caller's workspace for cwd
+	// confinement; guarded by mu.
+	callerWorkspaces CallerWorkspaces
 }
 
 func (d *Dispatcher) SetCloseFinishedViewer(fn func(Record, func(string) error) (Record, error)) {
@@ -352,7 +355,7 @@ func newID() string {
 // Start validates a dispatch and begins it under the dispatcher context.
 // Request contexts govern only validation and the immediate caller, never the
 // lifetime of an accepted run.
-func (d *Dispatcher) Start(_ context.Context, cfg *config.Config, req Request) (Started, error) {
+func (d *Dispatcher) Start(ctx context.Context, cfg *config.Config, req Request) (Started, error) {
 	d.ApplyConfig(cfg)
 	req = withTemplateIsolation(cfg, req)
 	if req.Isolation != "" && req.Isolation != "worktree" {
@@ -457,6 +460,7 @@ func (d *Dispatcher) Start(_ context.Context, cfg *config.Config, req Request) (
 	// record takes it; req.Caller stays the requester's own so viewer
 	// placement never resolves the root agent's tmux session for a subagent.
 	parentID, caller := d.resolveParent(req.ParentDispatchID)
+	parentRootCaller := caller
 	if caller == "" {
 		caller = req.Caller
 	}
@@ -471,6 +475,23 @@ func (d *Dispatcher) Start(_ context.Context, cfg *config.Config, req Request) (
 		return Started{}, err
 	}
 	treeAccess, readOnlyRole := treeAccessFor(req.Role, tree)
+	// The requested cwd is judged before any worktree is made from it, and
+	// against the root caller: a nested dispatch inherits its root's reach.
+	if kind == "dispatch" {
+		// A nested dispatch under a human-started root (no caller) is exempt
+		// like its root, whatever caller name the child inherited.
+		root := caller
+		if parentID != "" {
+			root = parentRootCaller
+		}
+		warning, err := d.confineCwd(ctx, cfg, root, req.Cwd)
+		if err != nil {
+			return Started{}, err
+		}
+		if warning != "" {
+			warnings = append(warnings, warning)
+		}
+	}
 	// Admit a nested start atomically with registering it, so concurrent
 	// starts cannot overshoot the per-root cap. Held until d.runs has the run.
 	d.nestMu.Lock()

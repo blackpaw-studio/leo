@@ -3,6 +3,7 @@ package consult
 import (
 	"context"
 	"fmt"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
@@ -213,4 +214,85 @@ func gitProbes(newCmd func(name string, args ...string) *exec.Cmd) (commonDir, t
 			return run(dir, "rev-parse", "--path-format=absolute", "--git-common-dir")
 		},
 		func(dir string) (string, error) { return run(dir, "rev-parse", "--show-toplevel") }
+}
+
+// confineCwd applies defaults.dispatch_confinement to a dispatch's requested
+// cwd (the source cwd, before any worktree isolation). rootCaller is the root
+// of the dispatch tree. It returns a warning to attach in warn mode and an
+// invalid-request error in enforce mode.
+func (d *Dispatcher) confineCwd(ctx context.Context, cfg *config.Config, rootCaller, cwd string) (string, error) {
+	mode := cfg.DispatchConfinement()
+	if mode == config.ConfinementOff || rootCaller == "" {
+		return "", nil
+	}
+	d.mu.Lock()
+	resolver := d.callerWorkspaces
+	d.mu.Unlock()
+	var home CallerHome
+	resolved := false
+	if resolver != nil {
+		home, resolved = resolver.CallerWorkspace(cfg, rootCaller)
+	}
+	if !resolved {
+		// API clients (leoterm-ios, peers) are identified by config and have
+		// no workspace; anything else named but unresolvable fails closed.
+		if _, ok := cfg.APIClients[rootCaller]; ok {
+			return "", nil
+		}
+		if mode == config.ConfinementEnforce {
+			return "", invalidf("caller %q has no resolvable workspace, so cwd %s cannot be confined (defaults.dispatch_confinement=enforce)", rootCaller, cwd)
+		}
+		return fmt.Sprintf("dispatch caller %q has no resolvable workspace, so cwd %s cannot be confined; defaults.dispatch_confinement=enforce would refuse it", rootCaller, cwd), nil
+	}
+	verdict := checkConfinement(ctx, d.confinementDeps(), confinementInput{
+		Cwd: cwd, RootCaller: rootCaller, Home: home, WorktreesDir: d.worktreesDir(),
+	})
+	if verdict.Allowed {
+		return "", nil
+	}
+	roots := strings.Join(verdict.Roots, "; ")
+	if mode == config.ConfinementEnforce {
+		return "", invalidf("cwd %s is outside caller %q's workspace %s; allowed roots: %s", cwd, rootCaller, home.Workspace, roots)
+	}
+	return fmt.Sprintf("dispatch cwd %s is outside caller %q's workspace %s (allowed roots: %s); defaults.dispatch_confinement=enforce would refuse it", cwd, rootCaller, home.Workspace, roots), nil
+}
+
+// worktreesDir is where isolated dispatches' worktrees live; empty without a
+// file recorder, which also means no isolated dispatch exists to match.
+func (d *Dispatcher) worktreesDir() string {
+	recorder, ok := d.recorder.(*FileRecorder)
+	if !ok {
+		return ""
+	}
+	return filepath.Join(filepath.Dir(recorder.dir), worktreesDirName)
+}
+
+func (d *Dispatcher) confinementDeps() confinementDeps {
+	common, top := gitProbes(d.GitCommand)
+	tmp := os.Getenv("CLAUDE_CODE_TMPDIR")
+	if tmp == "" {
+		tmp = "/tmp"
+	}
+	return confinementDeps{
+		evalSymlinks: filepath.EvalSymlinks,
+		gitCommonDir: common,
+		gitTopLevel:  top,
+		worktreeOwner: func(id string) (string, bool) {
+			rec, _, err := d.lookup(id)
+			if err != nil || rec.Isolation != "worktree" {
+				return "", false
+			}
+			return rec.Caller, true
+		},
+		tmpDir: tmp,
+		uid:    os.Getuid(),
+	}
+}
+
+// SetCallerWorkspaces installs the resolver that maps a root caller to its
+// workspace; without one every named caller is unresolvable.
+func (d *Dispatcher) SetCallerWorkspaces(r CallerWorkspaces) {
+	d.mu.Lock()
+	d.callerWorkspaces = r
+	d.mu.Unlock()
 }
