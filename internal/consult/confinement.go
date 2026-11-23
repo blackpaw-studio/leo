@@ -64,14 +64,19 @@ func within(p, root string) bool {
 }
 
 // claudeScratchKey is how claude names a workspace's directory under its temp
-// dir: every byte outside [A-Za-z0-9] becomes '-'.
+// dir: s.replace(/[^a-zA-Z0-9]/g, "-") in JS, i.e. one '-' per UTF-16 code
+// unit outside [A-Za-z0-9].
 func claudeScratchKey(workspace string) string {
 	var b strings.Builder
-	for i := 0; i < len(workspace); i++ {
-		c := workspace[i]
-		if c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' {
-			b.WriteByte(c)
-		} else {
+	for _, r := range workspace {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9':
+			b.WriteRune(r)
+		case r > 0xFFFF:
+			// JS strings are UTF-16: a supplementary-plane character is a
+			// surrogate pair, two code units, each replaced.
+			b.WriteString("--")
+		default:
 			b.WriteByte('-')
 		}
 	}
@@ -138,15 +143,20 @@ func confinementRoots(deps confinementDeps, in confinementInput, ws string) []co
 }
 
 // workspaceRepoCommonDir returns the resolved Git common dir of the workspace's
-// repository, only when that repository's top level lies inside the workspace:
-// a workspace nested in a larger repo must not grant the whole repo.
+// repository, only when the repository's top level and its common dir both lie
+// inside the workspace: a workspace nested in a larger repo must not grant the
+// whole repo, and an agent that forges .git metadata (a gitdir file or a
+// commondir pointing elsewhere) must not make a foreign repo its own.
 func workspaceRepoCommonDir(deps confinementDeps, ws string) (string, bool) {
 	top, err := resolvedProbe(deps, deps.gitTopLevel, ws)
 	if err != nil || !within(top, ws) {
 		return "", false
 	}
 	common, err := resolvedProbe(deps, deps.gitCommonDir, ws)
-	return common, err == nil
+	if err != nil || !within(common, ws) {
+		return "", false
+	}
+	return common, true
 }
 
 // resolvedProbe runs a git probe on dir and resolves symlinks in its answer.
@@ -173,7 +183,10 @@ func ownedWorktree(deps confinementDeps, worktrees, caller, cwd string) bool {
 }
 
 // scratchRoots are claude's per-workspace temp directories, keyed by the
-// workspace path as configured and as resolved.
+// workspace path as configured and as resolved. A root is the literal
+// <base>/claude-<uid>/<key> beneath the resolved temp base; it is dropped
+// unless every component is a real directory, so a symlink an agent plants in
+// the scratch space can never make another workspace a root.
 func scratchRoots(deps confinementDeps, rawWorkspace, ws string) []confinementRoot {
 	base, err := deps.evalSymlinks(deps.tmpDir)
 	if err != nil {
@@ -187,8 +200,8 @@ func scratchRoots(deps confinementDeps, rawWorkspace, ws string) []confinementRo
 		}
 		seen[key] = true
 		dir := filepath.Join(base, fmt.Sprintf("claude-%d", deps.uid), key)
-		if real, err := deps.evalSymlinks(dir); err == nil {
-			dir = real
+		if !realDirChain(base, dir) {
+			continue
 		}
 		roots = append(roots, confinementRoot{
 			desc: "claude scratch directory " + dir, rule: "harness scratch directory",
@@ -196,6 +209,24 @@ func scratchRoots(deps confinementDeps, rawWorkspace, ws string) []confinementRo
 		})
 	}
 	return roots
+}
+
+// realDirChain reports whether every component of dir below base is a
+// directory and not a symlink.
+func realDirChain(base, dir string) bool {
+	rel, err := filepath.Rel(base, dir)
+	if err != nil || rel == "." || strings.HasPrefix(rel, "..") {
+		return false
+	}
+	cur := base
+	for _, part := range strings.Split(rel, string(filepath.Separator)) {
+		cur = filepath.Join(cur, part)
+		info, err := os.Lstat(cur)
+		if err != nil || !info.IsDir() {
+			return false
+		}
+	}
+	return true
 }
 
 // gitProbes returns the production git probes, run through newCmd (the

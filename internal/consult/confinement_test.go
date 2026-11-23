@@ -290,3 +290,141 @@ func TestConfinementRealGit(t *testing.T) {
 		t.Fatalf("git argv %v never issued; calls: %v", topArgv, calls)
 	}
 }
+
+func TestClaudeScratchKeyMatchesJSUTF16Replacement(t *testing.T) {
+	// claude does s.replace(/[^a-zA-Z0-9]/g, "-"), which works per UTF-16
+	// code unit: é is one unit, a supplementary-plane character is two.
+	cases := map[string]string{
+		"/tmp/café":      "-tmp-caf-",
+		"/a/\U0001F600b": "-a---b",
+		"/日本":            "---",
+	}
+	for in, want := range cases {
+		if got := claudeScratchKey(in); got != want {
+			t.Errorf("claudeScratchKey(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+func TestCheckConfinementScratchSymlinks(t *testing.T) {
+	cases := []struct {
+		name  string
+		setup func(t *testing.T, f *confFixture) string // returns cwd
+		want  bool
+	}{
+		{"normal scratch directory", func(t *testing.T, f *confFixture) string {
+			return f.mk(t, f.tmp, "claude-501", claudeScratchKey(f.ws), "scratchpad")
+		}, true},
+		{"key directory is a symlink to another workspace", func(t *testing.T, f *confFixture) string {
+			f.mk(t, f.tmp, "claude-501")
+			if err := os.Symlink(f.other, filepath.Join(f.tmp, "claude-501", claudeScratchKey(f.ws))); err != nil {
+				t.Fatal(err)
+			}
+			return f.other
+		}, false},
+		{"claude-uid directory is a symlink", func(t *testing.T, f *confFixture) string {
+			inside := f.mk(t, f.other, claudeScratchKey(f.ws))
+			if err := os.Symlink(f.other, filepath.Join(f.tmp, "claude-501")); err != nil {
+				t.Fatal(err)
+			}
+			return inside
+		}, false},
+		{"key is a regular file", func(t *testing.T, f *confFixture) string {
+			f.mk(t, f.tmp, "claude-501")
+			if err := os.WriteFile(filepath.Join(f.tmp, "claude-501", claudeScratchKey(f.ws)), nil, 0o644); err != nil {
+				t.Fatal(err)
+			}
+			return f.ws
+		}, true}, // inside the workspace anyway; the file must not break the check
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newConfFixture(t)
+			cwd := tc.setup(t, f)
+			if got := f.check(cwd); got.Allowed != tc.want {
+				t.Fatalf("Allowed = %v (rule %q), want %v; roots %v", got.Allowed, got.Rule, tc.want, got.Roots)
+			}
+		})
+	}
+}
+
+func gitIn(t *testing.T, dir string, args ...string) {
+	t.Helper()
+	cmd := exec.Command("git", append([]string{"-C", dir}, args...)...)
+	cmd.Env = append(os.Environ(), "GIT_AUTHOR_NAME=t", "GIT_AUTHOR_EMAIL=t@example.com", "GIT_COMMITTER_NAME=t", "GIT_COMMITTER_EMAIL=t@example.com")
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git %v: %v\n%s", args, err, out)
+	}
+}
+
+// realGitDeps is the fixture's deps with the production git probes.
+func realGitDeps(f *confFixture) confinementDeps {
+	deps := f.deps()
+	deps.gitCommonDir, deps.gitTopLevel = gitProbes(exec.Command)
+	return deps
+}
+
+// TestConfinementRealGitForgedMetadata: an agent controls the files under its
+// workspace, including .git, so Git's answer about the workspace must not be
+// trusted unless the common dir lives inside the workspace.
+func TestConfinementRealGitForgedMetadata(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not installed")
+	}
+	verdict := func(f *confFixture, cwd string) confinementVerdict {
+		return checkConfinement(context.Background(), realGitDeps(f), confinementInput{
+			Cwd: cwd, RootCaller: "leo", Home: CallerHome{Workspace: f.ws, Harness: "claude"}, WorktreesDir: f.worktrees,
+		})
+	}
+	newForeign := func(t *testing.T, f *confFixture) string {
+		foreign := f.mk(t, f.root, "foreign")
+		gitIn(t, foreign, "init", "-q")
+		gitIn(t, foreign, "commit", "-q", "--allow-empty", "-m", "init")
+		return foreign
+	}
+
+	t.Run("gitdir file pointing at a foreign repository", func(t *testing.T) {
+		f := newConfFixture(t)
+		foreign := newForeign(t, f)
+		if err := os.WriteFile(filepath.Join(f.ws, ".git"), []byte("gitdir: "+filepath.Join(foreign, ".git")+"\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if got := verdict(f, foreign); got.Allowed {
+			t.Fatalf("forged .git file granted a foreign repository: %+v", got)
+		}
+	})
+
+	t.Run("in-workspace gitdir whose commondir names a foreign repository", func(t *testing.T) {
+		f := newConfFixture(t)
+		foreign := newForeign(t, f)
+		fake := f.mk(t, f.ws, "fake.git")
+		must := func(name, body string) {
+			if err := os.WriteFile(filepath.Join(fake, name), []byte(body), 0o644); err != nil {
+				t.Fatal(err)
+			}
+		}
+		must("HEAD", "ref: refs/heads/main\n")
+		must("commondir", filepath.Join(foreign, ".git")+"\n")
+		if err := os.WriteFile(filepath.Join(f.ws, ".git"), []byte("gitdir: "+fake+"\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		deps := realGitDeps(f)
+		if common, err := resolvedProbe(deps, deps.gitCommonDir, f.ws); err != nil || common != filepath.Join(foreign, ".git") {
+			t.Skipf("git does not follow the forged commondir here (common %q, err %v); the attack does not apply", common, err)
+		}
+		if got := verdict(f, foreign); got.Allowed {
+			t.Fatalf("forged commondir granted a foreign repository: %+v", got)
+		}
+	})
+
+	t.Run("a genuine sibling worktree is still allowed", func(t *testing.T) {
+		f := newConfFixture(t)
+		gitIn(t, f.ws, "init", "-q")
+		gitIn(t, f.ws, "commit", "-q", "--allow-empty", "-m", "init")
+		sibling := filepath.Join(f.root, "checkouts", "leo-wt")
+		gitIn(t, f.ws, "worktree", "add", "-q", "-b", "wt", sibling)
+		if got := verdict(f, sibling); !got.Allowed || !strings.Contains(got.Rule, "git worktree") {
+			t.Fatalf("sibling worktree refused: %+v", got)
+		}
+	})
+}

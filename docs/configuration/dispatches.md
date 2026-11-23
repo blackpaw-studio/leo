@@ -204,7 +204,9 @@ and is exempt. The path is checked, then launched, so a symlink swapped in
 between by the agent itself can win the race. Paths differing only in case on a
 case-insensitive filesystem are refused, not allowed. Claude's scratchpad key is
 lossy (`/a/b-c` and `/a/b/c` collide) and Claude truncates very long keys, so
-the scratchpad rule can miss for very deep workspace paths.
+the scratchpad rule can miss for very deep workspace paths. A per-caller
+`CLAUDE_CODE_TMPDIR` set only in an agent's own environment is not seen by the
+daemon, so the scratchpad rule misses for that agent (it fails closed).
 
 ## MCP tools
 
