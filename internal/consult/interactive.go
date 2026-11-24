@@ -12,6 +12,7 @@ import (
 
 	"github.com/blackpaw-studio/leo/internal/bridge"
 	"github.com/blackpaw-studio/leo/internal/config"
+	"github.com/blackpaw-studio/leo/internal/harness"
 )
 
 const (
@@ -51,6 +52,9 @@ type LaunchRequest struct {
 	// not a dispatch brief.
 	ResumeSessionID string
 	Reopen          bool
+	// ReadOnly runs the pane in the harness's read-only sandbox (a run under
+	// a read grant, see Record.TargetAgent); nil for every other run.
+	ReadOnly *harness.ReadOnlySandbox
 }
 type InteractiveRuntime interface {
 	Launch(context.Context, LaunchRequest) (paneID, window string, err error)
@@ -336,7 +340,7 @@ func (d *Dispatcher) launchInteractive(ctx context.Context, s *runState, req Req
 	// as the opening brief (see TmuxInteractiveRuntime.Launch), so it must
 	// already be what the model should see, identical to what a tmux paste
 	// would have delivered.
-	pane, window, err := rt.Launch(ctx, LaunchRequest{ID: s.record.ID, Harness: harnessName, Model: model, Effort: req.Effort, Cwd: req.Cwd, Name: req.Name, Template: req.Template, Caller: req.Caller, Prompt: prompt, Timeout: req.Timeout, Dispatched: true, CallerPaneID: req.CallerPaneID, CallerSessionID: req.CallerSessionID, CallerWindowID: req.CallerWindowID, Placement: placement, Environments: placementRecord.InheritedEnvironments, AdditionalMCPServers: placementRecord.AdditionalMCPServers, ResumeSessionID: req.resumeSessionID, Reopen: req.resumeSessionID != ""})
+	pane, window, err := rt.Launch(ctx, LaunchRequest{ID: s.record.ID, Harness: harnessName, Model: model, Effort: req.Effort, Cwd: req.Cwd, Name: req.Name, Template: req.Template, Caller: req.Caller, Prompt: prompt, Timeout: req.Timeout, Dispatched: true, CallerPaneID: req.CallerPaneID, CallerSessionID: req.CallerSessionID, CallerWindowID: req.CallerWindowID, Placement: placement, Environments: placementRecord.InheritedEnvironments, AdditionalMCPServers: placementRecord.AdditionalMCPServers, ResumeSessionID: req.resumeSessionID, Reopen: req.resumeSessionID != "", ReadOnly: readOnlyFor(placementRecord)})
 	if err != nil {
 		d.placement.Cancel(placementRecord.ID)
 		d.mu.Lock()

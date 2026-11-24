@@ -157,7 +157,10 @@ func (r *TmuxInteractiveRuntime) Launch(ctx context.Context, req LaunchRequest) 
 		opts = withLeoMCPBridge(opts, r.LeoMCP, tmpl, childEnv)
 	}
 	paneLaunched := false
-	spec := harness.LaunchSpec{Kind: harness.KindAgent, Name: req.Name, Model: req.Model, Effort: req.Effort, MaxTurns: cfg.TemplateMaxTurns(tmpl), Workspace: req.Cwd, Options: opts, Dispatched: req.Dispatched}
+	spec := harness.LaunchSpec{Kind: harness.KindAgent, Name: req.Name, Model: req.Model, Effort: req.Effort, MaxTurns: cfg.TemplateMaxTurns(tmpl), Workspace: req.Cwd, Options: opts, Dispatched: req.Dispatched, ReadOnly: req.ReadOnly}
+	if spec.ReadOnly != nil && !harness.SupportsReadOnlySandbox(h) {
+		return "", "", fmt.Errorf("harness %q has no enforceable read-only sandbox for this read-granted run", h.Name())
+	}
 	// Claude delivers the opening brief as a launch-time argv positional
 	// instead of a tmux paste: a pasted brief arrives wrapped as
 	// <pasted_content>, which the model can refuse as untrusted (see
