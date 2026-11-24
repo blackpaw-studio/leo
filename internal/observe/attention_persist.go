@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"time"
 )
 
 // revisionReserve is how far past the highest revision issued the persisted
@@ -29,6 +30,7 @@ type persistedAttention struct {
 	Revision uint64           `json:"revision"`
 	Reason   *AttentionReason `json:"reason,omitempty"`
 	Preview  string           `json:"preview,omitempty"`
+	At       time.Time        `json:"at,omitzero"`
 }
 
 // attentionFile is the on-disk shape of the persisted attention.
@@ -161,7 +163,7 @@ func (s *AttentionStore) snapshotFile() attentionFile {
 			delete(agents, name)
 			continue
 		}
-		rec := persistedAttention{Token: token, State: state, Revision: s.revisions[name], Preview: s.previews[name]}
+		rec := persistedAttention{Token: token, State: state, Revision: s.revisions[name], Preview: s.previews[name], At: s.ats[name]}
 		if r, ok := s.reasons[name]; ok {
 			rec.Reason = &r
 		}
@@ -200,6 +202,9 @@ func (s *AttentionStore) Restore(agent, token string) bool {
 	// pushed to phones), before the restart. Clients re-baseline from /state
 	// and agent_spawned, which carry the restored attention.
 	s.applyPreviewLocked(agent, rec.State, rec.Preview)
+	if !rec.At.IsZero() {
+		s.ats[agent] = rec.At.UTC() // the change happened before the restart
+	}
 	return true
 }
 

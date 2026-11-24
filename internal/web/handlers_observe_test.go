@@ -894,7 +894,7 @@ func TestBuildSnapshotAttentionIncludedOnlyWhenPresent(t *testing.T) {
 	snap := buildSnapshot(in)
 
 	a, b := snap.Agents[0], snap.Agents[1]
-	if a.Attention == nil || *a.Attention != (observe.AgentAttention{State: observe.AttentionNeedsInput, Revision: 2}) {
+	if a.Attention == nil || a.Attention.State != observe.AttentionNeedsInput || a.Attention.Revision != 2 || a.Attention.At.IsZero() {
 		t.Errorf("agent-a attention = %+v", a.Attention)
 	}
 	if b.Attention != nil {

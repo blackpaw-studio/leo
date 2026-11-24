@@ -115,7 +115,9 @@ func attentionForHook(p agentHookPayload, home string) (hookTransition, bool) {
 		}
 		server, _ := observe.ToolActivity(p.MCPServerName, nil, home)
 		return needsInput(observe.AttentionReason{Kind: observe.AttentionReasonElicitation, Detail: server}), true
-	case "Stop", "Interrupt", "StopFailure":
+	case "StopFailure":
+		return hookTransition{state: observe.AttentionErrored}, true
+	case "Stop", "Interrupt":
 		return hookTransition{state: observe.AttentionFinished}, true
 	case "Notification":
 		switch p.NotificationType {
@@ -167,6 +169,8 @@ func (s *Server) handleAPIAgentHook(w http.ResponseWriter, r *http.Request) {
 			s.attention.SetByTokenInterrupted(req.Token)
 		case payload.HookEventName == "Stop":
 			s.attention.SetByTokenFinished(req.Token, payload.LastAssistantMessage)
+		case payload.HookEventName == "StopFailure":
+			s.attention.SetByTokenErrored(req.Token, hookError(payload.Error))
 		case tr.reason != nil:
 			s.attention.SetByTokenNeedsInput(req.Token, *tr.reason)
 		default:
@@ -266,8 +270,8 @@ const claudeHarness = "claude"
 // stale and every later hook would be dropped, leaving it errored for good.
 // The strict check cannot simply be dropped for a live token, since child
 // harness processes inherit the token and report sessions of their own. So a
-// claude launch whose attention is already errored (the daemon has no live
-// evidence for it) takes a hook bearing its live token as the launch's own,
+// claude launch whose attention is already errored by a harness exit (the
+// daemon has no live evidence for it) takes a hook bearing its live token as the launch's own,
 // and the session becomes its claim, durably, so later hooks pass the strict
 // check. A stale token never reaches here (the caller resolved it to a live
 // launch), and claimSession persists only against the record's current token.
@@ -281,7 +285,10 @@ func (s *Server) adoptHookSession(name, token, sessionID string) bool {
 	if harnessName, _, ok := s.agentSvc.ResolveHandle(name); !ok || harnessName != claudeHarness {
 		return false
 	}
-	if cur, ok := s.attention.Get(name); !ok || cur.State != observe.AttentionErrored {
+	// A failed turn is errored too, but its launch is alive and vouched for
+	// by its own session: only an errored with no live evidence (a harness
+	// exit) opens the recovery.
+	if cur, ok := s.attention.Get(name); !ok || cur.State != observe.AttentionErrored || cur.TurnFailed() {
 		return false
 	}
 	s.claimSession(name, token, sessionID)

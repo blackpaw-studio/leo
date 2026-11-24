@@ -15,6 +15,13 @@ type staticActivity map[string]AgentActivity
 
 func (s staticActivity) Activities() map[string]AgentActivity { return s }
 
+// withoutAt drops the wall-clock stamp so a test can compare the rest of an
+// attention by value; At has its own tests with a pinned clock.
+func withoutAt(a AgentAttention) AgentAttention {
+	a.At = time.Time{}
+	return a
+}
+
 func TestAttentionSetBumpsRevisionEveryTimeIncludingSameState(t *testing.T) {
 	s := NewAttentionStore(nil)
 
@@ -25,7 +32,7 @@ func TestAttentionSetBumpsRevisionEveryTimeIncludingSameState(t *testing.T) {
 		t.Fatalf("revisions = %d, %d; want 1, 2", first.Revision, second.Revision)
 	}
 	got, ok := s.Get("a")
-	if !ok || got != (AgentAttention{State: AttentionFinished, Revision: 2}) {
+	if !ok || withoutAt(got) != (AgentAttention{State: AttentionFinished, Revision: 2}) {
 		t.Fatalf("Get = %+v, %v", got, ok)
 	}
 }
@@ -74,7 +81,7 @@ func TestAttentionMoveBumpsPastBothNames(t *testing.T) {
 		t.Fatal("old name still present after Move")
 	}
 	got, ok := s.Get("new")
-	if !ok || got != (AgentAttention{State: AttentionNeedsInput, Revision: 4}) {
+	if !ok || withoutAt(got) != (AgentAttention{State: AttentionNeedsInput, Revision: 4}) {
 		t.Fatalf("Get(new) = %+v, %v; want needs_input rev 4 (max(1,3)+1)", got, ok)
 	}
 	if len(pub.events) != 1 {
@@ -116,7 +123,7 @@ func TestAttentionSetPublishesActivityWithAttention(t *testing.T) {
 	if p.Agent != "a" || p.Activity != ActivityIdle || p.CurrentAction == nil || p.CurrentAction.Detail != "x" {
 		t.Fatalf("payload activity = %+v", p)
 	}
-	if p.Attention == nil || *p.Attention != (AgentAttention{State: AttentionNeedsInput, Revision: 1}) {
+	if p.Attention == nil || withoutAt(*p.Attention) != (AgentAttention{State: AttentionNeedsInput, Revision: 1}) {
 		t.Fatalf("payload attention = %+v", p.Attention)
 	}
 }
@@ -178,7 +185,7 @@ func TestTrackerSweepCopiesAttentionWithoutBumping(t *testing.T) {
 		t.Fatalf("events = %d, want 1", len(pub.events))
 	}
 	p := pub.events[0].Payload.(*AgentActivityPayload)
-	if p.Attention == nil || *p.Attention != (AgentAttention{State: AttentionFinished, Revision: 1}) {
+	if p.Attention == nil || withoutAt(*p.Attention) != (AgentAttention{State: AttentionFinished, Revision: 1}) {
 		t.Fatalf("sweep attention = %+v", p.Attention)
 	}
 	if got, _ := store.Get("a"); got.Revision != 1 {
@@ -204,7 +211,7 @@ func TestAttentionSetIfTrackedOnlyTransitionsTrackedAgents(t *testing.T) {
 	got, ok := s.SetIfTracked("tracked", AttentionErrored)
 	_, untrackedOK := s.SetIfTracked("untracked", AttentionErrored)
 
-	if !ok || got != (AgentAttention{State: AttentionErrored, Revision: 2}) {
+	if !ok || withoutAt(got) != (AgentAttention{State: AttentionErrored, Revision: 2}) {
 		t.Fatalf("tracked = %+v, %v", got, ok)
 	}
 	if untrackedOK {
@@ -225,10 +232,10 @@ func TestAttentionSetIfUntrackedKeepsExistingState(t *testing.T) {
 	if trackedOK {
 		t.Fatal("tracked agent was overwritten")
 	}
-	if att, _ := s.Get("tracked"); att != (AgentAttention{State: AttentionWorking, Revision: 1}) {
+	if att, _ := s.Get("tracked"); withoutAt(att) != (AgentAttention{State: AttentionWorking, Revision: 1}) {
 		t.Fatalf("tracked = %+v, want working rev 1", att)
 	}
-	if !ok || got != (AgentAttention{State: AttentionUnknown, Revision: 1}) {
+	if !ok || withoutAt(got) != (AgentAttention{State: AttentionUnknown, Revision: 1}) {
 		t.Fatalf("untracked = %+v, %v", got, ok)
 	}
 }
@@ -300,7 +307,7 @@ func TestAttentionSetByTokenFromGuard(t *testing.T) {
 		t.Fatalf("guarded no-op churned revision: %+v", got)
 	}
 	s.Set("a", AttentionNeedsInput)
-	if att, ok := s.SetByToken("tok", AttentionWorking, AttentionNeedsInput); !ok || att != (AgentAttention{State: AttentionWorking, Revision: 3}) {
+	if att, ok := s.SetByToken("tok", AttentionWorking, AttentionNeedsInput); !ok || withoutAt(att) != (AgentAttention{State: AttentionWorking, Revision: 3}) {
 		t.Fatalf("guarded transition from needs_input = %+v, %v", att, ok)
 	}
 }
@@ -339,5 +346,93 @@ func TestHeldFinishedCarriesNoPreview(t *testing.T) {
 
 	if att.State != AttentionWorking || att.Preview != "" {
 		t.Fatalf("held finished = %+v, want working without a preview", att)
+	}
+}
+
+// steppedClock returns a clock that advances one minute per reading.
+func steppedClock(start time.Time) func() time.Time {
+	t := start
+	return func() time.Time {
+		now := t
+		t = t.Add(time.Minute)
+		return now
+	}
+}
+
+func TestAttentionAtIsTheDaemonClockAtTheLastStateChange(t *testing.T) {
+	start := time.Date(2026, 11, 24, 12, 0, 0, 0, time.UTC)
+	s := NewAttentionStore(nil)
+	s.SetClock(steppedClock(start))
+	s.RegisterToken("tok", "a")
+
+	working := s.Set("a", AttentionWorking)
+	fin, _ := s.SetByTokenFinished("tok", "done")
+	got, _ := s.Get("a")
+
+	if !working.At.Equal(start) {
+		t.Fatalf("working at = %v, want %v", working.At, start)
+	}
+	if !fin.At.Equal(start.Add(time.Minute)) || !got.At.Equal(fin.At) {
+		t.Fatalf("finished at = %v, Get at = %v; want %v and no change on read", fin.At, got.At, start.Add(time.Minute))
+	}
+}
+
+func TestAttentionAtSerializesAsRFC3339AndIsAbsentWhenUnset(t *testing.T) {
+	at := time.Date(2026, 11, 24, 12, 0, 0, 0, time.UTC)
+	b, _ := json.Marshal(AgentAttention{State: AttentionFinished, At: at})
+	if !strings.Contains(string(b), `"at":"2026-11-24T12:00:00Z"`) {
+		t.Fatalf("json = %s, want an RFC 3339 at", b)
+	}
+	b, _ = json.Marshal(AgentAttention{State: AttentionFinished})
+	if strings.Contains(string(b), `"at"`) {
+		t.Fatalf("json = %s, want at omitted when unset", b)
+	}
+}
+
+func TestAttentionAtFollowsARename(t *testing.T) {
+	start := time.Date(2026, 11, 24, 12, 0, 0, 0, time.UTC)
+	s := NewAttentionStore(nil)
+	s.SetClock(steppedClock(start))
+	s.Set("a", AttentionFinished)
+
+	s.Move("a", "b")
+
+	if got, _ := s.Get("b"); !got.At.Equal(start) {
+		t.Fatalf("at after Move = %v, want the original %v", got.At, start)
+	}
+}
+
+func TestErroredFromAFailedTurnCarriesAClampedSummary(t *testing.T) {
+	s := NewAttentionStore(nil)
+	s.RegisterToken("tok", "a")
+
+	att, ok := s.SetByTokenErrored("tok", "rate\nlimit   "+strings.Repeat("x", 5000))
+	if !ok || att.State != AttentionErrored {
+		t.Fatalf("errored = %+v, %v", att, ok)
+	}
+	if strings.ContainsAny(att.Preview, "\n") || !strings.HasPrefix(att.Preview, "rate limit ") || len([]rune(att.Preview)) > MaxTurnPreview {
+		t.Fatalf("preview = %q, want a clamped single line", att.Preview)
+	}
+	if !att.TurnFailed() {
+		t.Fatal("TurnFailed = false for an errored attention with a summary")
+	}
+	if next, _ := s.SetByToken("tok", AttentionWorking); next.Preview != "" || next.TurnFailed() {
+		t.Fatalf("working = %+v, want the summary gone", next)
+	}
+}
+
+func TestErroredFromALifecycleExitIsNotATurnFailure(t *testing.T) {
+	s := NewAttentionStore(nil)
+	if att := s.Set("a", AttentionErrored); att.TurnFailed() {
+		t.Fatalf("lifecycle errored = %+v, want TurnFailed false", att)
+	}
+}
+
+func TestErroredWithoutDetailStillSaysTheTurnFailed(t *testing.T) {
+	s := NewAttentionStore(nil)
+	s.RegisterToken("tok", "a")
+	att, _ := s.SetByTokenErrored("tok", "  ")
+	if att.Preview == "" || !att.TurnFailed() {
+		t.Fatalf("errored = %+v, want a fallback summary so the failure stays distinguishable", att)
 	}
 }
