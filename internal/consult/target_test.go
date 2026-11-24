@@ -411,3 +411,39 @@ func TestStartTargetWarnsWhenCodexPermissionModeIsOverridden(t *testing.T) {
 		t.Fatalf("codex argv = %s", argv)
 	}
 }
+
+// A run inside a granted tree may only drive runs under the same grant: an
+// ordinary explore run has no sandbox, so continuing or reopening it would
+// let the granted tree write files or read secrets.
+func TestSendFromGrantedTreeOnlyReachesTheSameGrant(t *testing.T) {
+	h := newTargetHarness(t)
+	granted, err := h.start(t, "enforce", Request{Caller: "mk-1", TargetAgent: "leo"})
+	if err != nil {
+		t.Fatalf("granted: %v", err)
+	}
+	sibling, err := h.start(t, "enforce", Request{Caller: "mk-1", TargetAgent: "leo"})
+	if err != nil {
+		t.Fatalf("sibling: %v", err)
+	}
+	nested, err := h.start(t, "enforce", Request{Caller: "dispatch", ParentDispatchID: granted.ID})
+	if err != nil {
+		t.Fatalf("nested: %v", err)
+	}
+	plain, err := h.start(t, "enforce", Request{Caller: "mk-1", Cwd: h.callerWS})
+	if err != nil {
+		t.Fatalf("plain: %v", err)
+	}
+	plain2, err := h.start(t, "enforce", Request{Caller: "mk-1", Cwd: h.callerWS})
+	if err != nil {
+		t.Fatalf("plain2: %v", err)
+	}
+	for _, sender := range []string{granted.ID, nested.ID} {
+		wantInvalid(t, h.d.CheckSendAllowed(sender, plain.ID), "read grant", `"leo"`)
+		if err := h.d.CheckSendAllowed(sender, sibling.ID); err != nil {
+			t.Fatalf("granted sender %s -> same grant: %v", sender, err)
+		}
+	}
+	if err := h.d.CheckSendAllowed(plain.ID, plain2.ID); err != nil {
+		t.Fatalf("ungranted sender -> ungranted receiver: %v", err)
+	}
+}

@@ -146,3 +146,46 @@ func (d *Dispatcher) logf(format string, args ...any) {
 	}
 	fmt.Fprintf(os.Stderr, format+"\n", args...)
 }
+
+// senderGrant is the read grant the dispatch senderID runs under: its own,
+// or the nearest ancestor's (children inherit it, so the walk only matters
+// for records that predate inheritance).
+func (d *Dispatcher) senderGrant(senderID string) readGrant {
+	id := senderID
+	for range maxGrantWalk {
+		rec, ok := d.dispatchRecord(id)
+		if !ok {
+			return readGrant{}
+		}
+		if rec.TargetAgent != "" {
+			return grantFromParent(&rec)
+		}
+		id = rec.ParentDispatchID
+	}
+	return readGrant{}
+}
+
+// maxGrantWalk bounds senderGrant's ancestor walk; dispatch trees are far
+// shallower than this.
+const maxGrantWalk = 64
+
+// checkSendGrant refuses a follow-up from a run inside a granted tree to a
+// run not under the same grant: continuing or reopening an ordinary run
+// would hand the granted tree an unsandboxed harness.
+func (d *Dispatcher) checkSendGrant(senderID, targetID string) error {
+	if senderID == "" {
+		return nil
+	}
+	grant := d.senderGrant(senderID)
+	if !grant.active() {
+		return nil
+	}
+	target, _, err := d.lookup(targetID)
+	if err != nil {
+		return nil // an unknown target is reported by the send itself
+	}
+	if target.TargetAgent == grant.Agent && slices.Equal(target.TargetWorkspaces, grant.Workspaces) {
+		return nil
+	}
+	return invalidf("%s: dispatch %s runs under a read grant on agent %q and may only message runs under the same grant; %s is not one", PolicyRefusedCode, senderID, grant.Agent, target.ID)
+}
