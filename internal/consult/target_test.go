@@ -394,3 +394,20 @@ func TestConsultUnderGrantSkipsTemplateDefaultIsolation(t *testing.T) {
 		t.Fatalf("consult err = %v, want it to start and time out", err)
 	}
 }
+
+func TestStartTargetWarnsWhenCodexPermissionModeIsOverridden(t *testing.T) {
+	h := newTargetHarness(t)
+	cfg := targetConfig("enforce")
+	cfg.Templates["codex-ww"] = config.TemplateConfig{Harness: "codex", Model: "gpt-5.3-codex", HarnessOptions: map[string]any{"permission_mode": "workspace-write"}}
+	started, err := h.d.Start(context.Background(), cfg, Request{Template: "codex-ww", Role: "explore", Prompt: "q", Kind: "dispatch", Caller: "mk-1", TargetAgent: "leo"})
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	h.started = append(h.started, started.ID)
+	if !hasWarning(started.Warnings, `permission_mode "workspace-write" overridden`) {
+		t.Fatalf("warnings = %v, want the codex override named", started.Warnings)
+	}
+	if argv := strings.Join(h.lastArgv(t, 1), " "); !strings.Contains(argv, "--sandbox read-only") || strings.Contains(argv, "workspace-write") {
+		t.Fatalf("codex argv = %s", argv)
+	}
+}
