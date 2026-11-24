@@ -65,6 +65,11 @@ type LaunchSpec struct {
 	// developer_instructions). Empty to omit. opencode cannot argv-inject
 	// and ignores it.
 	SystemContext string
+
+	// ReadOnly, when set, runs the launch in the adapter's read-only sandbox
+	// (granted cross-workspace reads). Only adapters implementing
+	// ReadOnlySandboxer honor it; leo never sets it for any other.
+	ReadOnly *ReadOnlySandbox
 }
 
 // Result is the parsed outcome of a one-shot run's output stream.
