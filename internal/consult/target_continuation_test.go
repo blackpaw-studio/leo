@@ -22,8 +22,8 @@ func shellWords(t *testing.T, cmd string) []string {
 	var cur strings.Builder
 	inWord := false
 	for i := 0; i < len(cmd); i++ {
-		switch c := cmd[i]; {
-		case c == '\'':
+		switch c := cmd[i]; c {
+		case '\'':
 			end := strings.IndexByte(cmd[i+1:], '\'')
 			if end < 0 {
 				t.Fatalf("unterminated quote in %q", cmd)
@@ -31,7 +31,7 @@ func shellWords(t *testing.T, cmd string) []string {
 			cur.WriteString(cmd[i+1 : i+1+end])
 			i += end + 1
 			inWord = true
-		case c == '"':
+		case '"':
 			end := strings.IndexByte(cmd[i+1:], '"')
 			if end < 0 {
 				t.Fatalf("unterminated double quote in %q", cmd)
@@ -39,7 +39,7 @@ func shellWords(t *testing.T, cmd string) []string {
 			cur.WriteString(cmd[i+1 : i+1+end])
 			i += end + 1
 			inWord = true
-		case c == ' ':
+		case ' ':
 			if inWord {
 				words = append(words, cur.String())
 				cur.Reset()

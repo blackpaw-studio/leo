@@ -37,7 +37,7 @@ func ParseGrant(entry string) (GrantKind, string, error) {
 	switch kind {
 	case GrantAgent, GrantTemplate, GrantTask:
 	default:
-		return "", "", fmt.Errorf("%q has unknown prefix %q; use agent:, template: or task:", entry, prefix)
+		return "", "", fmt.Errorf("%q has unknown prefix %q (want agent, template or task)", entry, prefix)
 	}
 	if name == "" {
 		return "", "", fmt.Errorf("%q names nothing after %q", entry, prefix+":")
