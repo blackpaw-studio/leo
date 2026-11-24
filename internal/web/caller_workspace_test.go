@@ -35,7 +35,7 @@ func TestCallerWorkspace(t *testing.T) {
 		want   consult.CallerHome
 		ok     bool
 	}{
-		{"exact agent name", "marketing", consult.CallerHome{Workspace: "/ws/marketing", Harness: "codex"}, true},
+		{"exact agent name", "marketing", consult.CallerHome{Workspace: "/ws/marketing", Harness: "codex", Template: "coding"}, true},
 		{"fuzzy suffix does not resolve", "market", consult.CallerHome{}, false},
 		{"agent without a workspace", "homeless", consult.CallerHome{}, false},
 		{"task with its own workspace", "task:nightly", consult.CallerHome{Workspace: "/ws/nightly", Harness: "opencode"}, true},
@@ -51,6 +51,28 @@ func TestCallerWorkspace(t *testing.T) {
 				t.Fatalf("CallerWorkspace(%q) = %+v, %v; want %+v, %v", tc.caller, got, ok, tc.want, tc.ok)
 			}
 		})
+	}
+}
+
+func TestCallerWorkspaceReportsSpawnedTemplate(t *testing.T) {
+	s, _, svc := newTestServerWithAgents(t)
+	svc.records = append(svc.records, agent.Record{Name: "mk-1", Template: "marketing", Workspace: "/ws/mk", Status: "running", StartedAt: time.Now()})
+	got, ok := s.CallerWorkspace(&config.Config{}, "mk-1")
+	if !ok || got.Template != "marketing" {
+		t.Fatalf("CallerWorkspace(mk-1) = %+v, %v; want template marketing", got, ok)
+	}
+	task, ok := s.CallerWorkspace(&config.Config{Tasks: map[string]config.TaskConfig{"n": {}}}, "task:n")
+	if !ok || task.Template != "" {
+		t.Fatalf("task caller = %+v, %v; want no template", task, ok)
+	}
+}
+
+func TestCallerWorkspaceResolvesStoppedAgent(t *testing.T) {
+	s, _, svc := newTestServerWithAgents(t)
+	svc.records = append(svc.records, agent.Record{Name: "leo", Template: "coding", Workspace: "/ws/leo", Status: "stopped"})
+	got, ok := s.CallerWorkspace(&config.Config{}, "leo")
+	if !ok || got.Workspace != "/ws/leo" || got.Template != "coding" {
+		t.Fatalf("stopped agent = %+v, %v; want its workspace and template", got, ok)
 	}
 }
 

@@ -17,10 +17,13 @@ import (
 const gitProbeTimeout = 5 * time.Second
 
 // CallerHome is where a root caller lives: the workspace its cwd must stay in
-// and the harness it runs under (which decides its scratch directory).
+// and the harness it runs under (which decides its scratch directory). For an
+// agent, Template is the template it was spawned from (read grants match
+// template:<t> against it); tasks leave it empty.
 type CallerHome struct {
 	Workspace string
 	Harness   string
+	Template  string
 }
 
 // confinementDeps are the filesystem, git and record lookups the checker
