@@ -486,6 +486,9 @@ type TemplateConfig struct {
 	// Move adds this template's excludes and hooks to the global move block
 	// (see move.go).
 	Move MoveConfig `yaml:"move,omitempty"`
+	// Share grants read-only dispatches into this template's agents'
+	// workspaces (see share.go).
+	Share ShareConfig `yaml:"share,omitempty"`
 }
 
 // IsClientOnly reports whether the config is a client-only install: one
@@ -796,6 +799,7 @@ func (c *Config) validateTemplate(name string, tmpl TemplateConfig, hr harnessRe
 		errs = append(errs, fmt.Sprintf("templates.%s.isolation %q must be empty or \"worktree\"", name, tmpl.Isolation))
 	}
 	errs = append(errs, validatePermissions(name, tmpl.Permissions, c.knownTemplates(), c.persistedClientTool)...)
+	errs = append(errs, validateShare(name, tmpl.Share)...)
 	return errs
 }
 
