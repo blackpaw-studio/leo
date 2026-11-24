@@ -25,7 +25,7 @@ func (s *Server) CallerWorkspace(cfg *config.Config, caller string) (consult.Cal
 	}
 	for _, rec := range s.agentSvc.List() {
 		if rec.Name == caller && rec.Workspace != "" {
-			return consult.CallerHome{Workspace: rec.Workspace, Harness: cfg.TemplateHarness(cfg.Templates[rec.Template])}, true
+			return consult.CallerHome{Workspace: rec.Workspace, Harness: cfg.TemplateHarness(cfg.Templates[rec.Template]), Template: rec.Template}, true
 		}
 	}
 	return consult.CallerHome{}, false

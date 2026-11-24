@@ -143,6 +143,7 @@ var configResources = []*configResource{
 		Subs: []configSub{
 			{Key: "permissions", Section: schema.SectionPermissions, of: func(t any) any { return &t.(*config.TemplateConfig).Permissions }},
 			{Key: "push", Section: schema.SectionPushTemplate, of: func(t any) any { return &t.(*config.TemplateConfig).Push }},
+			{Key: "share", Section: schema.SectionShare, LiveApplied: true, of: func(t any) any { return &t.(*config.TemplateConfig).Share }},
 		},
 		locate: func(cfg *config.Config, name string) (any, bool) {
 			t, ok := cfg.Templates[name]

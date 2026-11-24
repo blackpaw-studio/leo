@@ -52,6 +52,9 @@ var Excluded = map[Section][]string{
 		"permission_mode", "remote_control", "agent",
 		"allowed_tools", "disallowed_tools", "append_system_prompt",
 		"permissions", "push",
+		// share (read grants) is a nested struct rendered from SectionShare
+		// as an extra field group, like permissions.
+		"share",
 		// move (excludes and hooks for leo agent move/copy) is yaml-only:
 		// nested lists the flat form can't render. A form save keeps it,
 		// since the form edits a copy of the stored template.
@@ -183,6 +186,14 @@ var registry = map[Section][]Field{
 			Help: "Templates this template may spawn. Empty means any"},
 		{Key: "can_consult", Label: "Can consult", Group: "Advanced", Advanced: true,
 			Help: "Templates this template may consult. Empty means any"},
+	},
+
+	// templates.*.share: who may run read-only dispatches (target_agent) in
+	// this template's agents' workspaces. Same Advanced grouping as
+	// SectionPermissions.
+	SectionShare: {
+		{Key: "readable_by", Label: "Readable by", Group: "Advanced", Advanced: true,
+			Help: "Root callers allowed read-only dispatches into this template's agents' workspaces: agent:<name>, template:<name> or task:<name>. No wildcards; empty grants no one"},
 	},
 
 	// Defaults show toggles: an unset state is on, so a checked toggle clears

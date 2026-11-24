@@ -257,7 +257,13 @@ func (c *daemonClient) consult(ctx context.Context, from, parentDispatchID, temp
 }
 
 func (c *daemonClient) dispatch(ctx context.Context, request consult.Request) (consult.Started, error) {
-	body := map[string]any{"from": request.Caller, "prompt": request.Prompt, "cwd": request.Cwd}
+	body := map[string]any{"from": request.Caller, "prompt": request.Prompt}
+	if request.Cwd != "" {
+		body["cwd"] = request.Cwd
+	}
+	if request.TargetAgent != "" {
+		body["target_agent"] = request.TargetAgent
+	}
 	if request.Template != "" && request.Role == "" {
 		body["template"] = request.Template
 	}

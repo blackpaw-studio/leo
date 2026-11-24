@@ -65,6 +65,10 @@ type Request struct {
 	// CallerEnvironments is the requesting agent's effective environment
 	// list, inherited when there is no override and no parent dispatch.
 	CallerEnvironments []string
+	// TargetAgent names a local agent whose workspace this read-only dispatch
+	// runs in, under a read grant from that agent's template
+	// (share.readable_by). Exclusive with Cwd and Isolation.
+	TargetAgent string
 	// resumeSessionID, set only by a reopen, launches the pane on this
 	// earlier session with Prompt as the raw follow-up (no dispatch brief).
 	resumeSessionID string

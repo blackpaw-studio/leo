@@ -99,10 +99,10 @@ func (c Codex) Args(spec harness.LaunchSpec) ([]string, error) {
 		if spec.Effort != "" {
 			args = append(args, "-c", "model_reasoning_effort="+tomlString(spec.Effort))
 		}
-		args = append(args, execPermissionArgs(opts.PermissionMode)...)
+		args = append(args, execPermissionArgs(readOnlyMode(spec, opts.PermissionMode))...)
 		args = append(args, developerInstructionsArgs(spec.SystemContext)...)
 		args = append(args, dispatchedArgs(spec.Dispatched)...)
-		args = append(args, sandboxWritableRootsArgs(spec.Workspace)...)
+		args = append(args, writableRootsArgs(spec)...)
 		args = append(args, shellEnvPolicyArgs()...)
 		args = append(args, opts.LeoMCP.configArgs()...)
 		args = append(args, c.SessionArgs(spec.Session)...)
@@ -112,17 +112,18 @@ func (c Codex) Args(spec harness.LaunchSpec) ([]string, error) {
 	// Interactive TUI argv. Resume tokens are added by the supervisor via
 	// RefreshSessionArgs once a session id is discovered; the opening
 	// prompt is injected by the driver's Start.
-	args := approvalPolicyArgs(opts.PermissionMode)
+	mode := readOnlyMode(spec, opts.PermissionMode)
+	args := approvalPolicyArgs(mode)
 	if spec.Model != "" {
 		args = append(args, "--model", spec.Model)
 	}
 	if spec.Effort != "" {
 		args = append(args, "-c", "model_reasoning_effort="+tomlString(spec.Effort))
 	}
-	args = append(args, sandboxArgs(opts.PermissionMode)...)
+	args = append(args, sandboxArgs(mode)...)
 	args = append(args, developerInstructionsArgs(spec.SystemContext)...)
 	args = append(args, dispatchedArgs(spec.Dispatched)...)
-	args = append(args, sandboxWritableRootsArgs(spec.Workspace)...)
+	args = append(args, writableRootsArgs(spec)...)
 	args = append(args, shellEnvPolicyArgs()...)
 	return append(args, opts.LeoMCP.configArgs()...), nil
 }

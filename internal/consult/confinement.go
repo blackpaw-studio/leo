@@ -17,10 +17,13 @@ import (
 const gitProbeTimeout = 5 * time.Second
 
 // CallerHome is where a root caller lives: the workspace its cwd must stay in
-// and the harness it runs under (which decides its scratch directory).
+// and the harness it runs under (which decides its scratch directory). For an
+// agent, Template is the template it was spawned from (read grants match
+// template:<t> against it); tasks leave it empty.
 type CallerHome struct {
 	Workspace string
 	Harness   string
+	Template  string
 }
 
 // confinementDeps are the filesystem, git and record lookups the checker
@@ -45,6 +48,9 @@ type confinementInput struct {
 	RootCaller   string
 	Home         CallerHome
 	WorktreesDir string
+	// ExtraRoots are further allowed roots for this run's tree only: the
+	// granted target workspace under a read grant.
+	ExtraRoots []string
 }
 
 type confinementVerdict struct {
@@ -138,6 +144,16 @@ func confinementRoots(deps confinementDeps, in confinementInput, ws string) []co
 	}
 	if in.Home.Harness == "" || in.Home.Harness == config.DefaultHarnessName {
 		roots = append(roots, scratchRoots(deps, in.Home.Workspace, ws)...)
+	}
+	for _, extra := range in.ExtraRoots {
+		dir, err := deps.evalSymlinks(extra)
+		if err != nil {
+			continue
+		}
+		roots = append(roots, confinementRoot{
+			desc: "granted target workspace " + dir, rule: "granted target workspace",
+			contains: func(cwd string) bool { return within(cwd, dir) },
+		})
 	}
 	return roots
 }
@@ -249,9 +265,10 @@ func gitProbes(newCmd func(name string, args ...string) *exec.Cmd) (commonDir, t
 
 // confineCwd applies defaults.dispatch_confinement to a dispatch's requested
 // cwd (the source cwd, before any worktree isolation). rootCaller is the root
-// of the dispatch tree. It returns a warning to attach in warn mode and an
+// of the dispatch tree; extraRoots are allowed beside its workspace (a read
+// grant's target workspace, for runs under it). It returns a warning to attach in warn mode and an
 // invalid-request error in enforce mode.
-func (d *Dispatcher) confineCwd(ctx context.Context, cfg *config.Config, rootCaller, cwd string) (string, error) {
+func (d *Dispatcher) confineCwd(ctx context.Context, cfg *config.Config, rootCaller, cwd string, extraRoots ...string) (string, error) {
 	mode := cfg.DispatchConfinement()
 	if mode == config.ConfinementOff || rootCaller == "" {
 		return "", nil
@@ -276,7 +293,7 @@ func (d *Dispatcher) confineCwd(ctx context.Context, cfg *config.Config, rootCal
 		return fmt.Sprintf("dispatch caller %q has no resolvable workspace, so cwd %s cannot be confined; defaults.dispatch_confinement=enforce would refuse it", rootCaller, cwd), nil
 	}
 	verdict := checkConfinement(ctx, d.confinementDeps(), confinementInput{
-		Cwd: cwd, RootCaller: rootCaller, Home: home, WorktreesDir: d.worktreesDir(),
+		Cwd: cwd, RootCaller: rootCaller, Home: home, WorktreesDir: d.worktreesDir(), ExtraRoots: extraRoots,
 	})
 	if verdict.Allowed {
 		return "", nil

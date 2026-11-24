@@ -215,6 +215,15 @@ type Record struct {
 	// AdditionalMCPServers is the caller-requested extra MCP server list,
 	// kept so continuations and reopens rebuild the same effective set.
 	AdditionalMCPServers []string `json:"additional_mcp_servers,omitempty"`
+	// TargetAgent is the agent whose workspace this run reads under a read
+	// grant (target_agent), set on the granted run and inherited by every
+	// run beneath it. TargetGrant is the share.readable_by entry that
+	// admitted it ("caller:none" / "api_client:<name>" for exempt callers),
+	// and TargetWorkspaces the target workspace as configured and
+	// symlink-resolved: the read-only sandbox continuations reapply.
+	TargetAgent      string   `json:"target_agent,omitempty"`
+	TargetGrant      string   `json:"target_grant,omitempty"`
+	TargetWorkspaces []string `json:"target_workspaces,omitempty"`
 	// SlotExempt marks a run started under a live dispatch: it takes no slot
 	// from the shared pool (its parent holds its own while it waits), and is
 	// bounded by the per-root descendant cap instead.

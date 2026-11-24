@@ -481,6 +481,7 @@ func (s *Server) handleTemplateEditPage(w http.ResponseWriter, r *http.Request) 
 	// can parse the same submitted form independently on save.
 	form.Fields = append(form.Fields, s.permissionFields(&tmpl.Permissions, cfg, name)...)
 	form.Fields = append(form.Fields, s.pushFields(schema.SectionPushTemplate, &tmpl.Push, cfg, scopeSuffix(schema.SectionTemplate, name), name)...)
+	form.Fields = append(form.Fields, s.shareFields(&tmpl.Share, cfg, name)...)
 	lockToLead(&form, cfg, config.KindTemplate, name, "/web/template/"+url.PathEscape(name)+"/override")
 
 	srcLabel, srcKey := entrySourceLabels(cfg, config.KindTemplate, name)

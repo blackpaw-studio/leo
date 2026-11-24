@@ -55,6 +55,10 @@ const (
 	// those forms, like SectionPermissions.
 	SectionPushDefaults Section = "push_defaults"
 	SectionPushTemplate Section = "push_template"
+	// SectionShare is the nested templates.*.share struct (cross-workspace
+	// read grants), rendered inside the template form like
+	// SectionPermissions.
+	SectionShare Section = "share"
 	// SectionDispatchViewer is defaults.dispatch.viewer (JSON key
 	// dispatch_viewer under defaults). API-only: the dispatch settings menu has
 	// its own endpoint, so no form renders it.
@@ -78,7 +82,7 @@ func AllSections() []Section {
 		SectionDefaults, SectionTask, SectionTemplate,
 		SectionClientHost, SectionWeb,
 		SectionClient, SectionPermissions, SectionPushDefaults, SectionPushTemplate,
-		SectionDispatchViewer, SectionEnvironment,
+		SectionShare, SectionDispatchViewer, SectionEnvironment,
 	}
 }
 
@@ -101,6 +105,8 @@ func StructFor(s Section) reflect.Type {
 		return reflect.TypeOf(leotools.Permissions{})
 	case SectionPushDefaults, SectionPushTemplate:
 		return reflect.TypeOf(config.PushConfig{})
+	case SectionShare:
+		return reflect.TypeOf(config.ShareConfig{})
 	case SectionDispatchViewer:
 		return reflect.TypeOf(config.DispatchViewerConfig{})
 	case SectionEnvironment:

@@ -508,7 +508,7 @@ func newRegistry(client *daemonClient, processName string, perms leotools.Permis
 
 	r.addContext(toolDef{
 		Name: "leo_dispatch", Description: allowNote("Run a subagent on the template's harness/model in your project directory. By default (mode interactive) it runs a real TUI, usually split as a pane in your current tmux window (falling back to a separate window, or a background session if your caller can't be resolved), that the user may watch; the result comes from the harness's own turn hooks. Pass mode headless for a plain background run with no TUI (the daemon also falls back to headless, and says so, when interactive is impossible). Send every follow-up through leo_send_dispatch; never ask the user to type into the pane. Returns immediately. With notify on (default), end your turn: the completion message carries the result. leo_wait only to block within this turn; if the notification says truncated, read the full text with leo_dispatch_output; codex/opencode callers collect with leo_wait. An interactive pane closes as soon as a turn's complete result reaches you (release_on_finish, on by default for every role), but the run is kept for 7 days with its session, cwd and worktree: a leo_send_dispatch follow-up reopens it. leo_release it once you are done with it; pass release_on_finish false to keep the pane open instead. A subagent running as a read-only role may dispatch role explore only (the daemon refuses implement, template dispatches and the rest).", "dispatch to these templates", perms.CanConsult),
-		InputSchema: objectSchema(map[string]any{"template": map[string]any{"type": "string"}, "role": map[string]any{"type": "string"}, "prompt": map[string]any{"type": "string"}, "model": map[string]any{"type": "string"}, "effort": map[string]any{"type": "string"}, "cwd": map[string]any{"type": "string"}, "name": map[string]any{"type": "string"}, "mode": map[string]any{"type": "string", "enum": []string{"headless", "interactive"}, "description": "defaults to interactive; headless runs without a TUI"}, "notify": map[string]any{"type": "boolean", "description": "notify the caller when complete; defaults to true"}, "release_on_finish": map[string]any{"type": "boolean", "description": releaseOnFinishSchemaDescription}, "isolation": map[string]any{"type": "string", "enum": []string{"worktree"}, "description": "run from a managed Git worktree created at the current committed HEAD"}, "timeout_seconds": map[string]any{"type": "number", "description": "optional run cap in seconds; unlimited when omitted"}, "environments": map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": dispatchEnvironmentsParamDescription}, "additional_mcp_servers": map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": dispatchAdditionalMCPServersParamDescription}}, "prompt"),
+		InputSchema: objectSchema(map[string]any{"template": map[string]any{"type": "string"}, "role": map[string]any{"type": "string"}, "prompt": map[string]any{"type": "string"}, "model": map[string]any{"type": "string"}, "effort": map[string]any{"type": "string"}, "cwd": map[string]any{"type": "string"}, "name": map[string]any{"type": "string"}, "mode": map[string]any{"type": "string", "enum": []string{"headless", "interactive"}, "description": "defaults to interactive; headless runs without a TUI"}, "notify": map[string]any{"type": "boolean", "description": "notify the caller when complete; defaults to true"}, "release_on_finish": map[string]any{"type": "boolean", "description": releaseOnFinishSchemaDescription}, "isolation": map[string]any{"type": "string", "enum": []string{"worktree"}, "description": "run from a managed Git worktree created at the current committed HEAD"}, "timeout_seconds": map[string]any{"type": "number", "description": "optional run cap in seconds; unlimited when omitted"}, "environments": map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": dispatchEnvironmentsParamDescription}, "additional_mcp_servers": map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": dispatchAdditionalMCPServersParamDescription}, "target_agent": map[string]any{"type": "string", "description": dispatchTargetAgentParamDescription}}, "prompt"),
 	}, func(ctx context.Context, args map[string]any) (string, error) {
 		template, _ := args["template"].(string)
 		role, _ := args["role"].(string)
@@ -533,7 +533,10 @@ func newRegistry(client *daemonClient, processName string, perms leotools.Permis
 		model, _ := args["model"].(string)
 		effort, _ := args["effort"].(string)
 		cwd, _ := args["cwd"].(string)
-		if cwd == "" {
+		targetAgent, _ := args["target_agent"].(string)
+		// A target_agent run's cwd is the target's workspace, chosen by the
+		// daemon; only a plain dispatch defaults to this server's cwd.
+		if cwd == "" && targetAgent == "" {
 			cwd, _ = os.Getwd()
 		}
 		name, _ := args["name"].(string)
@@ -573,7 +576,7 @@ func newRegistry(client *daemonClient, processName string, perms leotools.Permis
 		if r.dispatchID != "" {
 			caller = ""
 		}
-		request := consult.Request{Caller: caller, ParentDispatchID: r.dispatchID, CallerPaneID: callerPane, CallerBridgeKey: os.Getenv(bridgemod.EnvAgent), Template: template, Role: role, Model: model, Effort: effort, Prompt: prompt, Cwd: cwd, Name: name, Timeout: timeout, Mode: mode, Notify: notify, ReleaseOnFinish: releaseOnFinish, Isolation: isolation, Environments: environments, AdditionalMCPServers: additionalMCPServers}
+		request := consult.Request{Caller: caller, ParentDispatchID: r.dispatchID, CallerPaneID: callerPane, CallerBridgeKey: os.Getenv(bridgemod.EnvAgent), Template: template, Role: role, Model: model, Effort: effort, Prompt: prompt, Cwd: cwd, Name: name, Timeout: timeout, Mode: mode, Notify: notify, ReleaseOnFinish: releaseOnFinish, Isolation: isolation, Environments: environments, AdditionalMCPServers: additionalMCPServers, TargetAgent: targetAgent}
 		if role != "" {
 			request.Template = resolvedTemplate
 		}
@@ -1130,6 +1133,9 @@ const environmentsParamDescription = "Ordered named environments from leo.yaml (
 // dispatchAdditionalMCPServersParamDescription documents leo_dispatch's
 // additional_mcp_servers.
 const dispatchAdditionalMCPServersParamDescription = "Names of MCP servers (from the run account's Claude config, top-level mcpServers) to add to this run on top of its template's own list, e.g. [\"chrome\"] for a bot-blocked page. Only adds; it cannot remove the template's servers. At most 16 names of [A-Za-z0-9_.-]. Applies to claude runs with mcp: none (the default); a name the account doesn't define is skipped with a warning, and a non-claude harness ignores the list with a warning. Read-only roles get no exception: added servers can act on external systems, so name only what the task needs. The list is kept for leo_send_dispatch follow-ups."
+
+// dispatchTargetAgentParamDescription documents leo_dispatch's target_agent.
+const dispatchTargetAgentParamDescription = "Run in another local agent's workspace (exact agent name) to read its code, under a read grant from that agent's template (templates.<t>.share.readable_by). Read-only roles only (explore, plan, review*), with role, not template; omit cwd and isolation. The run is sandboxed read-only (claude also cannot read secret files such as .env); an ungranted request is refused."
 
 // dispatchEnvironmentsParamDescription documents leo_dispatch's environments.
 const dispatchEnvironmentsParamDescription = "Ordered named environments from leo.yaml to run the subagent under, layered over the template's. Omit to inherit yours (the default); [] inherits nothing."

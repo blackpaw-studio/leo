@@ -122,8 +122,14 @@ func (d *Dispatcher) checkReadOnlyParent(cfg *config.Config, parent treeVerdict,
 // that names no dispatch is refused.
 func (d *Dispatcher) CheckSendAllowed(senderID, targetID string) error {
 	sender, err := d.treeOf(senderID)
-	if err != nil || !sender.restricted {
+	if err != nil {
 		return err
+	}
+	if err := d.checkSendGrant(senderID, targetID); err != nil {
+		return err
+	}
+	if !sender.restricted {
+		return nil
 	}
 	target, _, err := d.lookup(targetID)
 	if err != nil {

@@ -195,7 +195,8 @@ daemon-chosen directory and is not checked.
 | `warn` (default) | The dispatch starts; the result's `warnings` and the daemon log carry `dispatch cwd <cwd> is outside caller "<c>"'s workspace <ws> (allowed roots: ...)`. |
 | `enforce` | The dispatch is refused with `cwd <cwd> is outside caller "<c>"'s workspace <ws>; allowed roots: ...` (HTTP 400, never retried). Nothing is recorded. |
 
-There is no per-template override and no extra-roots allowlist.
+There is no per-template override and no extra-roots allowlist. To let an agent
+read another agent's workspace, use a [read grant](#cross-workspace-read-grants).
 
 Accepted limits: the check trusts the `from` a client sends, so a process that
 can reach the daemon socket can name another caller (the same class as the
@@ -207,6 +208,88 @@ lossy (`/a/b-c` and `/a/b/c` collide) and Claude truncates very long keys, so
 the scratchpad rule can miss for very deep workspace paths. A per-caller
 `CLAUDE_CODE_TMPDIR` set only in an agent's own environment is not seen by the
 daemon, so the scratchpad rule misses for that agent (it fails closed).
+
+## Cross-workspace read grants
+
+An agent can ask a read-only question of another agent's code (marketing asking
+how a leo feature works, say) without regaining raw access to that workspace:
+
+```text
+leo_dispatch(role: "explore", target_agent: "leo", prompt: "How does X work?")
+leo dispatch run --role explore --target-agent leo "How does X work?"
+```
+
+`target_agent` is an exact local agent name; Leo resolves its workspace (a
+stopped agent is fine) and runs the dispatch there. It needs a read-only role
+(`explore`, `plan`, `review`, `review.*`) given as `role`, not `template`, and
+excludes `cwd` and `isolation` (a template's default `isolation: worktree` is
+skipped, never a worktree of the target). Unknown agents, remote `agent@host`
+targets, consults and other combinations are refused (HTTP 400).
+
+The target opts in on its **template**:
+
+```yaml
+templates:
+  leo:
+    share:
+      readable_by: [template:marketing, agent:leoterm, task:weekly-digest]
+```
+
+Entries are `agent:<exact agent name>`, `template:<template name>` or
+`task:<task name>`; an unprefixed entry, an unknown prefix, a wildcard, a
+remote agent or a duplicate fails config validation. Entries are matched
+against the dispatch tree's **root caller**, as in
+[cwd confinement](#cwd-confinement): an agent matches `agent:` by name and
+`template:` by the template it was spawned from; a oneshot task matches
+`task:`; a persistent task is an agent. Without a matching entry the dispatch
+is refused, in every `dispatch_confinement` mode including `off`:
+`target_agent` is an explicit request, never a silent fallback. The `leo
+dispatch` CLI (no caller) and `api_clients` callers may target any agent
+without a grant, still under the sandbox below. Grants are checked when a
+dispatch starts; continuations of a granted run are not re-checked.
+
+A granted run is read-only at the OS level, not only by role:
+
+| Harness | Sandbox |
+| --- | --- |
+| `claude` | Claude Code's sandbox, merged into the run's `--settings`: enabled, `failIfUnavailable`, no unsandboxed escape (`allowUnsandboxedCommands: false`), writes denied in the target workspace (as configured and symlink-resolved), reads denied for the secret denylist below; matching `Edit(...)`/`Read(...)` permission deny rules for the built-in file tools, which hold in every permission mode. `--setting-sources user` drops the target repo's project and local settings, so its hooks and sandbox exclusions never load. |
+| `codex` | `--sandbox read-only`, whatever the template's `permission_mode` (a warning names the overridden mode), and no `writable_roots` grant. |
+| `opencode` | Refused: it has no enforceable sandbox. |
+
+Secret denylist (claude only, anywhere inside the target workspace, not
+configurable): `.env`, `.env.*`, `*.local`, `*.pem`, `*.key`, `id_*`, `.netrc`,
+`.npmrc`, `Secrets.xcconfig`. **Codex cannot deny reads, so a codex granted run
+can read those files.**
+
+Every run beneath a granted run (the read-only tree limits dispatches to
+`explore`) inherits the target, its sandbox and its denylist, and may use the
+target workspace as its cwd (confinement treats it as an extra root for that
+tree only; an omitted cwd defaults to it). A nested run cannot target a
+different agent and cannot use `isolation`. Continuations, reopens and
+relaunches keep the sandbox.
+
+The record keeps `target_agent`, `target_grant` (the matching entry, or
+`caller:none` / `api_client:<name>` for exempt callers) and
+`target_workspaces`; `leo dispatch list` shows them in its `TARGET` column and
+`leo dispatch show` in its JSON. The daemon logs one line per granted start:
+`dispatch <id>: read grant caller=<root> target=<agent> role=<role> grant=<entry>`.
+The target agent is not notified.
+
+Leo pins the sandbox's weakening switches to `false` in the run's
+`--settings` (`filesystem.disabled`, `enableWeakerNestedSandbox`,
+`allowNestedUserNamespaces`, `enableWeakerNetworkIsolation`,
+`allowAppleEvents`, and `network.allowAllUnixSockets` / `allowLocalBinding`), so
+the run account's user-scope settings cannot turn them on.
+Run messages are confined too: a run inside a granted tree can only continue
+or reopen runs under the same grant.
+
+Accepted risks: MCP tools, hooks and mods run outside Claude Code's sandbox;
+list-valued sandbox settings in the run account's user scope still apply
+(`excludedCommands`, `filesystem.allowWrite` / `allowRead`,
+`network.allowedDomains` / `allowUnixSockets`; lists merge across scopes, so
+`--settings` cannot clear them), as do user-scope proxy ports; Claude Code itself may create an empty
+`.claude/.cc-writes/` directory in the target workspace; and the codex
+read gap above.
 
 ## MCP tools
 
@@ -222,12 +305,13 @@ bridged claude session can fork: its leo-bridge mod answers the call in-session,
 so a fork consult never reaches the daemon and leaves no consult record. Any
 other caller gets "fork consult needs a bridged claude session".
 
-`leo_dispatch(template? | role?, prompt, model?, effort?, cwd?, name?, mode?, timeout_seconds?, notify?, release_on_finish?, isolation?, additional_mcp_servers?)`
+`leo_dispatch(template? | role?, prompt, model?, effort?, cwd?, name?, mode?, timeout_seconds?, notify?, release_on_finish?, isolation?, additional_mcp_servers?, target_agent?)`
 starts work asynchronously and immediately returns an ID. Use it for
 implementation, review, or exploration that can proceed while the caller does
 other work. The prompt must say exactly what the subagent should do; it has no
 access to the caller's conversation. `cwd` defaults to the caller's working
-directory. `mode` is `interactive` by default, which starts a TUI the user may
+directory (with `target_agent`, it is the target's workspace; see
+[Cross-workspace read grants](#cross-workspace-read-grants)). `mode` is `interactive` by default, which starts a TUI the user may
 watch (see [Interactive mode](#interactive-mode)); set `mode: headless` for a
 plain background run with no TUI.
 
@@ -408,6 +492,7 @@ leo dispatch run --role implement --effort high "Add the parser tests"
 leo dispatch run codex-implementer "Inspect only" --notify=false
 leo dispatch run --role explore "Where is X handled?" --release-on-finish=false
 leo dispatch run --role explore --additional-mcp-server chrome "Read this bot-blocked page"
+leo dispatch run --role explore --target-agent leo "How does the scheduler pick a slot?"
 leo dispatch list
 leo dispatch watch d-12ab34
 leo dispatch attach d-12ab34

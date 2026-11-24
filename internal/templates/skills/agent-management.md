@@ -2,6 +2,11 @@
 
 Leo can spawn and manage ephemeral coding agents two ways: the HTTP API (used by channel plugins and the web UI) and the `leo agent` CLI (Bash tool, SSH). Both share one in-memory manager so state is always consistent. Agents run in tmux with `--remote-control` and appear in claude.ai/code.
 
+To read another agent's code, dispatch a read-only role with
+`target_agent: "<agent name>"` (and no `cwd`): it runs sandboxed read-only in
+that agent's workspace if its template grants you in `share.readable_by`, and
+is refused otherwise.
+
 For bounded work that does not need a persistent agent or a branch, use
 `leo_dispatch`: it starts a template asynchronously and returns an ID. With
 notifications on (the default), end your turn: a claude caller's completion

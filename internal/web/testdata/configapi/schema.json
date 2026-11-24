@@ -828,6 +828,24 @@
               ],
               "key": "push",
               "section": "push_template"
+            },
+            {
+              "fields": [
+                {
+                  "advanced": true,
+                  "constraints": {},
+                  "default": null,
+                  "group": "Advanced",
+                  "help": "Root callers allowed read-only dispatches into this template's agents' workspaces: agent:\u003cname\u003e, template:\u003cname\u003e or task:\u003cname\u003e. No wildcards; empty grants no one",
+                  "key": "readable_by",
+                  "label": "Readable by",
+                  "restart": "agents",
+                  "type": "list",
+                  "warning": ""
+                }
+              ],
+              "key": "share",
+              "section": "share"
             }
           ]
         },
