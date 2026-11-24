@@ -11,6 +11,13 @@ const preamble = "You are a one-off consultant: another agent is asking for your
 
 const dispatchPreamble = "You are a subagent dispatched by an orchestrator. You may dispatch your own subagents when your brief calls for it. Do not self-certify your work; the orchestrator reviews it. Before you end your final turn, stop any background shells, monitors or wakeups you started; if you end a turn deliberately waiting on background work, say so explicitly. Start long jobs with Bash run_in_background, not `&`/nohup; detached jobs never wake you. When the orchestrator has finished with you, it releases this pane."
 
+// CallerWorkspaces resolves a root caller (an agent name or "task:<name>") to
+// the workspace its dispatches are confined to. The second result is false
+// when the caller has none.
+type CallerWorkspaces interface {
+	CallerWorkspace(cfg *config.Config, caller string) (CallerHome, bool)
+}
+
 type Request struct {
 	Template string
 	Model    string

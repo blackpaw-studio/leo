@@ -85,6 +85,7 @@ func (s *Server) setupConsultRuntime(opts Options, resolveCallerSession func(str
 	s.consults.LeoMCP = opts.LeoMCP
 	s.consults.GitCommand = calls.Wrap(s.consults.GitCommand)
 	s.consults.SetStartupLog(opts.Startup.Logf)
+	s.consults.SetCallerWorkspaces(s)
 	if cfg, err := s.loadConfig(); err == nil {
 		s.consults.ApplyConfig(cfg)
 	}

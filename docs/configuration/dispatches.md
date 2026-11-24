@@ -163,6 +163,51 @@ stops a read-only subagent's honest tool use, not a hostile one with shell
 access. Pairing it with a read-only template (`permission_mode`, sandbox) is
 what makes the restriction a hard boundary.
 
+## cwd confinement
+
+A dispatch's child harness is sandboxed to the `cwd` the daemon gives it, so an
+agent confined to its own workspace could otherwise escape by dispatching into
+another agent's workspace. `defaults.dispatch_confinement` closes that: Leo
+checks the requested `cwd` (the source `cwd`, before `isolation: worktree`)
+against the **root caller** of the dispatch tree. A nested dispatch is judged
+against the root agent or task, not its parent's `cwd`.
+
+After resolving symlinks, the `cwd` is allowed when it is:
+
+1. inside the root caller's workspace;
+2. inside a Git worktree that shares the workspace repository's Git common dir
+   (a workspace nested inside a larger repository does not grant that repository);
+3. inside a Leo dispatch worktree created by a dispatch in the same root
+   caller's tree;
+4. inside the root caller's Claude scratchpad, `claude-<uid>/<workspace key>`
+   under `$CLAUDE_CODE_TMPDIR` (default `/tmp`), for claude callers only.
+
+Exempt: dispatches from the `leo dispatch` CLI (and any tree rooted there), and
+callers named in `api_clients`. Any other named caller whose workspace cannot be
+resolved (a stale agent, an unknown `task:` name) is not exempt: `warn` warns,
+`enforce` refuses. Continuations (`leo_send_dispatch`) reuse an already
+validated `cwd` and are not re-checked, and `leo_consult` runs in a
+daemon-chosen directory and is not checked.
+
+| Mode | Effect |
+| --- | --- |
+| `off` | No check. |
+| `warn` (default) | The dispatch starts; the result's `warnings` and the daemon log carry `dispatch cwd <cwd> is outside caller "<c>"'s workspace <ws> (allowed roots: ...)`. |
+| `enforce` | The dispatch is refused with `cwd <cwd> is outside caller "<c>"'s workspace <ws>; allowed roots: ...` (HTTP 400, never retried). Nothing is recorded. |
+
+There is no per-template override and no extra-roots allowlist.
+
+Accepted limits: the check trusts the `from` a client sends, so a process that
+can reach the daemon socket can name another caller (the same class as the
+read-only-tree parent-id caveat above); the `leo dispatch` CLI sends no caller
+and is exempt. The path is checked, then launched, so a symlink swapped in
+between by the agent itself can win the race. Paths differing only in case on a
+case-insensitive filesystem are refused, not allowed. Claude's scratchpad key is
+lossy (`/a/b-c` and `/a/b/c` collide) and Claude truncates very long keys, so
+the scratchpad rule can miss for very deep workspace paths. A per-caller
+`CLAUDE_CODE_TMPDIR` set only in an agent's own environment is not seen by the
+daemon, so the scratchpad rule misses for that agent (it fails closed).
+
 ## MCP tools
 
 `leo_consult(template, prompt, model?)` is for a quick second opinion. It

@@ -295,6 +295,9 @@ type DefaultsConfig struct {
 	// TaskConfig.Session.
 	Session            string `yaml:"session,omitempty"`
 	SessionRotateAfter int    `yaml:"session_rotate_after,omitempty"`
+	// DispatchConfinement controls whether a dispatch's cwd must stay inside
+	// the root caller's workspace: off, warn (default) or enforce.
+	DispatchConfinement string `yaml:"dispatch_confinement,omitempty"`
 }
 
 type DispatchConfig struct {
@@ -589,6 +592,15 @@ func (c *Config) TemplateMaxTurns(t TemplateConfig) int {
 	return DefaultMaxTurns
 }
 
+// DispatchConfinement returns the effective dispatch cwd confinement mode,
+// warn when unset.
+func (c *Config) DispatchConfinement() string {
+	if c.Defaults.DispatchConfinement == "" {
+		return ConfinementWarn
+	}
+	return c.Defaults.DispatchConfinement
+}
+
 // TaskSession returns the effective session mode for a task: task → defaults →
 // resume. Persistent tasks never inherit the default.
 func (c *Config) TaskSession(t TaskConfig) string {
@@ -675,6 +687,7 @@ func (c *Config) validateDefaults(hr harnessResolver) []string {
 	}
 
 	errs = append(errs, validateDefaultsSession(c.Defaults)...)
+	errs = append(errs, validateDefaultsDispatchConfinement(c.Defaults)...)
 	errs = append(errs, c.validateEnvironmentList("defaults.environments", c.Defaults.Environments)...)
 	return errs
 }
@@ -1550,6 +1563,22 @@ func validatePermissions(name string, p leotools.Permissions, templates map[stri
 	checkTemplates("can_consult", p.CanConsult)
 
 	return errs
+}
+
+// Dispatch cwd confinement modes (DefaultsConfig.DispatchConfinement).
+const (
+	ConfinementOff     = "off"
+	ConfinementWarn    = "warn"
+	ConfinementEnforce = "enforce"
+)
+
+// validateDefaultsDispatchConfinement checks defaults.dispatch_confinement.
+func validateDefaultsDispatchConfinement(d DefaultsConfig) []string {
+	switch d.DispatchConfinement {
+	case "", ConfinementOff, ConfinementWarn, ConfinementEnforce:
+		return nil
+	}
+	return []string{fmt.Sprintf("defaults.dispatch_confinement %q is not valid (use \"off\", \"warn\" or \"enforce\")", d.DispatchConfinement)}
 }
 
 // Task session modes (TaskConfig.Session).

@@ -120,6 +120,8 @@ var registry = map[Section][]Field{
 			Help: "default for oneshot tasks that set no session: resume continues the stored session, fresh starts a new one every run; empty = resume"},
 		{Key: "session_rotate_after", Label: "Rotate session after", Group: "Execution", Constraints: Constraints{Min: intp(0)},
 			Help: "default for oneshot tasks: start a fresh session after this many runs; 0 = never (ignored when the effective session is fresh)"},
+		{Key: "dispatch_confinement", Label: "Dispatch cwd confinement", Kind: KindSelect, Options: "dispatch_confinements", Group: "Execution",
+			Help: "whether a dispatch's cwd must stay in the calling agent's workspace: warn (default) allows it with a warning, enforce refuses it, off skips the check"},
 		fEnvironments("Behavior", false),
 	},
 

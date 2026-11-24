@@ -1459,3 +1459,42 @@ func TestTaskSessionCascade(t *testing.T) {
 		t.Errorf("built-in = %q, want resume", got)
 	}
 }
+
+func TestValidateDefaultsDispatchConfinement(t *testing.T) {
+	tests := []struct {
+		value   string
+		wantErr string
+	}{
+		{"", ""},
+		{"off", ""},
+		{"warn", ""},
+		{"enforce", ""},
+		{"strict", "defaults.dispatch_confinement"},
+		{"ENFORCE", "defaults.dispatch_confinement"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.value, func(t *testing.T) {
+			cfg := &Config{Defaults: DefaultsConfig{DispatchConfinement: tc.value}}
+			err := cfg.Validate()
+			if tc.wantErr == "" {
+				if err != nil {
+					t.Fatalf("Validate() = %v, want nil", err)
+				}
+				return
+			}
+			if err == nil || !contains(err.Error(), tc.wantErr) {
+				t.Fatalf("Validate() = %v, want error containing %q", err, tc.wantErr)
+			}
+		})
+	}
+}
+
+func TestDispatchConfinementDefault(t *testing.T) {
+	cases := map[string]string{"": ConfinementWarn, "off": ConfinementOff, "warn": ConfinementWarn, "enforce": ConfinementEnforce}
+	for set, want := range cases {
+		cfg := &Config{Defaults: DefaultsConfig{DispatchConfinement: set}}
+		if got := cfg.DispatchConfinement(); got != want {
+			t.Errorf("DispatchConfinement() with %q = %q, want %q", set, got, want)
+		}
+	}
+}

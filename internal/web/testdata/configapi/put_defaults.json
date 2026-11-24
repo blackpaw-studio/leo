@@ -5,6 +5,7 @@
         "effective_harness": "claude",
         "revision": "sha256:d511645b4d4464bd9c246ba8090b7ae3c2ef3de24ab99b18beea21a314793cac",
         "values": {
+          "dispatch_confinement": "",
           "dispatch_viewer": {
             "placement": ""
           },

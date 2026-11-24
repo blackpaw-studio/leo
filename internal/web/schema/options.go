@@ -45,6 +45,8 @@ func (o OptionSources) TryFor(name string) []Option {
 		return []Option{{"", "inherit"}, {"resume", "resume"}, {"fresh", "fresh"}}
 	case "default_sessions":
 		return []Option{{"", "resume (built-in)"}, {"resume", "resume"}, {"fresh", "fresh"}}
+	case "dispatch_confinements":
+		return []Option{{"", "warn (built-in)"}, {"off", "off"}, {"warn", "warn"}, {"enforce", "enforce"}}
 	case "dispatch_placements":
 		return []Option{{"", "default"}, {"pane", "pane"}, {"window", "window"}, {"background", "background"}}
 	case "isolations":
