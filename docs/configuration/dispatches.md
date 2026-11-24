@@ -287,7 +287,8 @@ Accepted risks: MCP tools, hooks and mods run outside Claude Code's sandbox;
 list-valued sandbox settings in the run account's user scope still apply
 (`excludedCommands`, `filesystem.allowWrite` / `allowRead`,
 `network.allowedDomains` / `allowUnixSockets`; lists merge across scopes, so
-`--settings` cannot clear them), as do user-scope proxy ports; and the codex
+`--settings` cannot clear them), as do user-scope proxy ports; Claude Code itself may create an empty
+`.claude/.cc-writes/` directory in the target workspace; and the codex
 read gap above.
 
 ## MCP tools
