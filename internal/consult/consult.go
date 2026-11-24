@@ -55,6 +55,9 @@ func invalidf(format string, args ...any) error {
 }
 
 type Dispatcher struct {
+	// Logf writes one daemon log line (audit lines for read grants); nil
+	// writes to os.Stderr.
+	Logf func(format string, args ...any)
 	// pendingRunFiles holds ids whose private run files are written ahead of
 	// the run being published as non-terminal (a headless continuation), so
 	// the startup sweep keeps them. Guarded by mu.
@@ -357,7 +360,15 @@ func newID() string {
 // lifetime of an accepted run.
 func (d *Dispatcher) Start(ctx context.Context, cfg *config.Config, req Request) (Started, error) {
 	d.ApplyConfig(cfg)
-	req = withTemplateIsolation(cfg, req)
+	grant := grantFromParent(d.parentRecord(req.ParentDispatchID))
+	if err := checkTargetRequest(req, grant); err != nil {
+		return Started{}, err
+	}
+	// A granted read runs in the target workspace itself, never a worktree
+	// of it, so a template's default isolation does not apply.
+	if req.TargetAgent == "" && !grant.active() {
+		req = withTemplateIsolation(cfg, req)
+	}
 	if req.Isolation != "" && req.Isolation != "worktree" {
 		return Started{}, invalidf("isolation must be empty or \"worktree\"")
 	}
@@ -383,6 +394,9 @@ func (d *Dispatcher) Start(ctx context.Context, cfg *config.Config, req Request)
 	}
 	if !h.SupportsKind(harness.KindTask) {
 		return Started{}, invalidf("harness %q does not support one-shot runs", h.Name())
+	}
+	if err := checkSandboxHarness(grant, req.TargetAgent, h); err != nil {
+		return Started{}, err
 	}
 	if mode == ModeInteractive {
 		if h.Name() == "opencode" {
@@ -435,6 +449,30 @@ func (d *Dispatcher) Start(ctx context.Context, cfg *config.Config, req Request)
 		// is a warning, not an error.
 		warnings = append(warnings, fmt.Sprintf("additional_mcp_servers ignored: harness %s does not support them", h.Name()))
 	}
+	// The tree's root caller, exactly as confinement judges it: a nested
+	// dispatch inherits its root's identity, whatever name it was given.
+	parentID, caller := d.resolveParent(req.ParentDispatchID)
+	parentRootCaller := caller
+	if caller == "" {
+		caller = req.Caller
+	}
+	rootCaller := caller
+	if parentID != "" {
+		rootCaller = parentRootCaller
+	}
+	if req.TargetAgent != "" && !grant.active() {
+		if grant, err = d.resolveReadGrant(cfg, req, rootCaller); err != nil {
+			return Started{}, err
+		}
+	}
+	if grant.active() {
+		if req.Cwd == "" {
+			req.Cwd = grant.Workspaces[0]
+		}
+		if w := codexPermissionWarning(cfg, tmpl, h); w != "" {
+			warnings = append(warnings, w)
+		}
+	}
 	if req.Cwd == "" || !filepath.IsAbs(req.Cwd) {
 		return Started{}, invalidf("cwd must be an existing absolute directory")
 	}
@@ -455,15 +493,11 @@ func (d *Dispatcher) Start(ctx context.Context, cfg *config.Config, req Request)
 	if notify && req.Notify != nil {
 		notify = *req.Notify
 	}
-	// A nested dispatch is filed under the root agent: whatever name the
-	// calling subagent inherited, its parent's caller is the root's. Only the
-	// record takes it; req.Caller stays the requester's own so viewer
-	// placement never resolves the root agent's tmux session for a subagent.
-	parentID, caller := d.resolveParent(req.ParentDispatchID)
-	parentRootCaller := caller
-	if caller == "" {
-		caller = req.Caller
-	}
+	// A nested dispatch is filed under the root agent (caller, above):
+	// whatever name the calling subagent inherited, its parent's caller is
+	// the root's. Only the record takes it; req.Caller stays the requester's
+	// own so viewer placement never resolves the root agent's tmux session
+	// for a subagent.
 	// A parent the caller named but the daemon cannot resolve is refused, not
 	// filed as top-level: otherwise forging or losing the id would shed the
 	// read-only restriction. An empty id stays a top-level start.
@@ -477,14 +511,17 @@ func (d *Dispatcher) Start(ctx context.Context, cfg *config.Config, req Request)
 	treeAccess, readOnlyRole := treeAccessFor(req.Role, tree)
 	// The requested cwd is judged before any worktree is made from it, and
 	// against the root caller: a nested dispatch inherits its root's reach.
-	if kind == "dispatch" {
+	// A freshly granted read's cwd is the target workspace Leo chose, so it
+	// is not confined; a run under an inherited grant may also use the
+	// target workspace.
+	if kind == "dispatch" && (!grant.active() || grant.Inherited) {
 		// A nested dispatch under a human-started root (no caller) is exempt
 		// like its root, whatever caller name the child inherited.
-		root := caller
-		if parentID != "" {
-			root = parentRootCaller
+		var extraRoots []string
+		if grant.active() {
+			extraRoots = grant.Workspaces
 		}
-		warning, err := d.confineCwd(ctx, cfg, root, req.Cwd)
+		warning, err := d.confineCwd(ctx, cfg, rootCaller, req.Cwd, extraRoots...)
 		if err != nil {
 			return Started{}, err
 		}
@@ -516,6 +553,7 @@ func (d *Dispatcher) Start(ctx context.Context, cfg *config.Config, req Request)
 		CallerBridgeKey: req.CallerBridgeKey, CallerBridgeLaunch: req.CallerBridgeLaunch,
 		SlotExempt: exempt, TreeAccess: treeAccess, ReadOnlyRole: readOnlyRole,
 		Environments: cfg.DispatchEnvironmentNames(tmpl, inherited), EnvironmentsSource: envSource, InheritedEnvironments: inherited,
+		TargetAgent: grant.Agent, TargetGrant: grant.Grant, TargetWorkspaces: grant.Workspaces,
 	}
 	handle, err := d.recorder.Open(rec)
 	if err != nil {
@@ -528,6 +566,9 @@ func (d *Dispatcher) Start(ctx context.Context, cfg *config.Config, req Request)
 		handle = nopHandle{}
 	}
 	logDispatchWarnings(rec.ID, req.Template, warnings)
+	if grant.active() && !grant.Inherited {
+		d.logGrant(rec, rootCaller)
+	}
 	runCtx, cancel := context.WithCancel(d.daemonCtx)
 	state := newRunState(rec, handle, make(chan struct{}), cancel)
 	state.scrub = redact.NewSecrets(secretValues)
@@ -566,6 +607,7 @@ func (d *Dispatcher) Start(ctx context.Context, cfg *config.Config, req Request)
 		Kind: harness.KindTask, Name: req.Name, Model: model, Effort: req.Effort,
 		MaxTurns: cfg.TemplateMaxTurns(tmpl), Workspace: req.Cwd,
 		Prompt: requestPrompt(req), Options: decoded, Dispatched: true,
+		ReadOnly: readOnlyFor(rec),
 	}
 	if spec.Name == "" {
 		spec.Name = "dispatch"
@@ -1298,7 +1340,11 @@ func (d *Dispatcher) currentInvocationCancelLocked(state *runState, done chan st
 func (d *Dispatcher) Consult(ctx context.Context, cfg *config.Config, req Request) (Result, error) {
 	d.ApplyConfig(cfg)
 	req.Kind, req.Preamble = "consult", true
-	req = withTemplateIsolation(cfg, req)
+	// Under a read grant there is no worktree (Start skips the template's
+	// default isolation there too).
+	if !grantFromParent(d.parentRecord(req.ParentDispatchID)).active() {
+		req = withTemplateIsolation(cfg, req)
+	}
 	started, err := d.Start(ctx, cfg, req)
 	if err != nil {
 		return Result{}, err
