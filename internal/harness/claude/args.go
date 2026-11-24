@@ -81,7 +81,7 @@ func agentArgs(spec harness.LaunchSpec, o Options) ([]string, error) {
 	if profiled {
 		args = append(args, "--settings", settingsJSON(map[string]any{"crossSessionInbound": "accept"}, o))
 	}
-	return args, nil
+	return appendReadOnly(args, spec)
 }
 
 // taskArgs reproduces internal/run.buildArgs flag order exactly.
@@ -121,7 +121,7 @@ func taskArgs(spec harness.LaunchSpec, o Options) ([]string, error) {
 	if o.Plugins == "none" {
 		args = append(args, "--settings", settingsJSON(map[string]any{}, o))
 	}
-	return args, nil
+	return appendReadOnly(args, spec)
 }
 
 func dispatchedOptions(dispatched bool, o Options) Options {
