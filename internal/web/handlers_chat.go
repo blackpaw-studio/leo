@@ -187,12 +187,14 @@ func (s *Server) registerChatRoutes(mux *http.ServeMux, prefix string, wrap func
 const chatAPIPrefix = "/api/v1/chat"
 
 // ChatHandler serves the app routes unauthenticated at the same
-// /api/v1/chat paths, for the daemon to mount on its unix socket, whose
+// /api/v1/chat paths (and the agent-seen routes under /api/v1/agents), for the daemon to mount on its unix socket, whose
 // 0600 mode is the auth. It also serves the CLI-only routes that the TCP
 // listener never registers.
 func (s *Server) ChatHandler() http.Handler {
 	mux := http.NewServeMux()
-	s.registerChatRoutes(mux, chatAPIPrefix, func(h http.HandlerFunc) http.HandlerFunc { return h })
+	noAuth := func(h http.HandlerFunc) http.HandlerFunc { return h }
+	s.registerChatRoutes(mux, chatAPIPrefix, noAuth)
+	s.registerSeenRoutes(mux, noAuth)
 	mux.HandleFunc("POST /chat/task-failure", s.handleChatTaskFailure)
 	return mux
 }

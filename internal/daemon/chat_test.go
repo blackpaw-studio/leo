@@ -26,6 +26,10 @@ func TestSocketChatRoutesDelegateToTheWebServer(t *testing.T) {
 		httptest.NewRequest("GET", "/api/v1/chat/threads", nil),
 		httptest.NewRequest("POST", "/api/v1/chat/assistant/messages", nil),
 		httptest.NewRequest("GET", "/api/v1/chat/attachments/01X", nil),
+		httptest.NewRequest("GET", "/api/v1/chat/asks?state=open", nil),
+		httptest.NewRequest("GET", "/api/v1/agents/seen", nil),
+		httptest.NewRequest("PUT", "/api/v1/agents/seen", nil),
+		httptest.NewRequest("PUT", "/api/v1/agents/assistant/seen", nil),
 	} {
 		w := httptest.NewRecorder()
 		s.Handler().ServeHTTP(w, req)
@@ -33,7 +37,7 @@ func TestSocketChatRoutesDelegateToTheWebServer(t *testing.T) {
 			t.Fatalf("%s %s: status = %d", req.Method, req.URL.Path, w.Code)
 		}
 	}
-	if len(got) != 3 || got[1] != "POST /api/v1/chat/assistant/messages" {
+	if len(got) != 7 || got[1] != "POST /api/v1/chat/assistant/messages" || got[6] != "PUT /api/v1/agents/assistant/seen" {
 		t.Fatalf("delegated %v", got)
 	}
 }

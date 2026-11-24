@@ -11,6 +11,14 @@ import (
 // the TCP API, for the Mac app. The 0600 socket is the auth.
 const chatSocketPrefix = "/api/v1/chat/"
 
+// The agent-seen routes the apps share their read state through. The socket
+// serves them at the same /api/v1/agents paths as TCP, like the chat routes,
+// because the Mac app's chat client speaks to its own daemon over the socket.
+const (
+	seenSocketList  = "/api/v1/agents/seen"
+	seenSocketAgent = "/api/v1/agents/{name}/seen"
+)
+
 // clientToolsSocketPath is where the socket serves the client-tools relay:
 // the same paths as the TCP API. The 0600 socket is the auth.
 const clientToolsSocketPath = "/api/v1/client-tools"
@@ -32,7 +40,7 @@ func (s *Server) setChat(h http.Handler) {
 	s.chatHandler.Store(&controlHolder{h: h})
 }
 
-// handleChat serves /api/v1/chat/* by delegating to the web server, or 503
+// handleChat serves /api/v1/chat/* and the agent-seen routes by delegating to the web server, or 503
 // until it exists (or with web.enabled off or chat unavailable).
 func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 	holder := s.chatHandler.Load()

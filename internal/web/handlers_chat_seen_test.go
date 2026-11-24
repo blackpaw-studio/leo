@@ -2,6 +2,7 @@ package web
 
 import (
 	"net/http"
+	"net/http/httptest"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -183,4 +184,37 @@ func TestChatOpenAsksRequiresTheOpenStateFilter(t *testing.T) {
 			t.Errorf("asks%s = %d, want 400 (only state=open is served)", q, w.Code)
 		}
 	}
+}
+
+// The Mac app reaches its own daemon over the unix socket at the same paths
+// as TCP, with no token (the 0600 socket is the auth), as for the chat routes.
+func TestSocketServesSeenAndOpenAsksWithoutAToken(t *testing.T) {
+	cs := newChatServer(t)
+	handler := cs.s.ChatHandler()
+	do := func(method, path, body string) *httptest.ResponseRecorder {
+		w := httptest.NewRecorder()
+		handler.ServeHTTP(w, httptest.NewRequest(method, path, strings.NewReader(body)))
+		return w
+	}
+
+	if w := do(http.MethodPut, "/api/v1/agents/assistant/seen", ""); w.Code != http.StatusOK {
+		t.Fatalf("socket PUT seen = %d %s", w.Code, w.Body)
+	}
+	if w := do(http.MethodPut, "/api/v1/agents/seen", `{"agents":["web"]}`); w.Code != http.StatusOK {
+		t.Fatalf("socket batch = %d %s", w.Code, w.Body)
+	}
+	w := do(http.MethodGet, "/api/v1/agents/seen", "")
+	var all map[string]string
+	decodeChatData(t, w, &all)
+	if len(all) != 2 || all["assistant"] == "" || all["web"] == "" {
+		t.Fatalf("socket GET seen = %v, want both agents", all)
+	}
+	if w := do(http.MethodGet, "/api/v1/chat/asks?state=open", ""); w.Code != http.StatusOK {
+		t.Fatalf("socket asks = %d %s", w.Code, w.Body)
+	}
+	if w := do(http.MethodPut, "/api/v1/agents/Bad_Name/seen", ""); w.Code != http.StatusBadRequest {
+		t.Fatalf("socket bad name = %d, want 400", w.Code)
+	}
+	// A write over the socket reaches the TCP side's apps through the bus.
+	nextEvent(t, cs.events, chat.EventAgentSeen)
 }
