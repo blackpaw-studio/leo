@@ -175,10 +175,14 @@ func withOpts(spec harness.LaunchSpec, o Options) harness.LaunchSpec {
 // pinnedSandbox are the sandbox booleans a user-scope setting could flip to
 // weaken a granted run (scalars: a --settings value wins over user settings).
 var pinnedSandbox = map[string]map[string]any{
-	"":           {"enableWeakerNestedSandbox": false, "allowNestedUserNamespaces": false, "enableWeakerNetworkIsolation": false},
+	"":           {"enableWeakerNestedSandbox": false, "allowNestedUserNamespaces": false, "enableWeakerNetworkIsolation": false, "allowAppleEvents": false},
 	"filesystem": {"disabled": false},
-	"network":    {"allowAllUnixSockets": false, "allowAppleEvents": false, "allowLocalBinding": false},
+	"network":    {"allowAllUnixSockets": false, "allowLocalBinding": false},
 }
+
+// misplacedSandbox are keys Claude Code ignores at these paths; pinning them
+// there would leave the real setting unpinned.
+var misplacedSandbox = map[string][]string{"network": {"allowAppleEvents"}}
 
 func assertPinnedSandbox(t *testing.T, sb map[string]any) {
 	t.Helper()
@@ -197,12 +201,20 @@ func assertPinnedSandbox(t *testing.T, sb map[string]any) {
 			}
 		}
 	}
+	for section, keys := range misplacedSandbox {
+		m, _ := sb[section].(map[string]any)
+		for _, key := range keys {
+			if _, set := m[key]; set {
+				t.Errorf("sandbox.%s.%s is set; Claude Code reads it from sandbox.%s", section, key, key)
+			}
+		}
+	}
 }
 
 // An earlier --settings that weakens the sandbox (as a user-scope file
 // would) loses to the read-only settings folded after it.
 func TestReadOnlyOverridesConflictingSandboxSettings(t *testing.T) {
-	weak := `{"sandbox":{"enabled":false,"allowUnsandboxedCommands":true,"enableWeakerNestedSandbox":true,"filesystem":{"disabled":true},"network":{"allowAllUnixSockets":true,"allowAppleEvents":true}}}`
+	weak := `{"sandbox":{"enabled":false,"allowUnsandboxedCommands":true,"enableWeakerNestedSandbox":true,"filesystem":{"disabled":true},"allowAppleEvents":true,"network":{"allowAllUnixSockets":true}}}`
 	args, err := appendReadOnly([]string{"--model", "sonnet", "--settings", weak}, readOnlySpec(harness.KindTask))
 	if err != nil {
 		t.Fatal(err)

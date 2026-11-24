@@ -277,8 +277,8 @@ The target agent is not notified.
 
 Leo pins the sandbox's weakening switches to `false` in the run's
 `--settings` (`filesystem.disabled`, `enableWeakerNestedSandbox`,
-`allowNestedUserNamespaces`, `enableWeakerNetworkIsolation`, and
-`network.allowAllUnixSockets` / `allowLocalBinding` / `allowAppleEvents`), so
+`allowNestedUserNamespaces`, `enableWeakerNetworkIsolation`,
+`allowAppleEvents`, and `network.allowAllUnixSockets` / `allowLocalBinding`), so
 the run account's user-scope settings cannot turn them on.
 Run messages are confined too: a run inside a granted tree can only continue
 or reopen runs under the same grant.

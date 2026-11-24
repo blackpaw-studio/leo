@@ -46,6 +46,7 @@ func readOnlySettings(ro *harness.ReadOnlySandbox) map[string]any {
 			"enableWeakerNestedSandbox":    false,
 			"allowNestedUserNamespaces":    false,
 			"enableWeakerNetworkIsolation": false,
+			"allowAppleEvents":             false,
 			"filesystem": map[string]any{
 				"disabled":  false,
 				"denyWrite": denyWrite,
@@ -54,7 +55,6 @@ func readOnlySettings(ro *harness.ReadOnlySandbox) map[string]any {
 			"network": map[string]any{
 				"allowAllUnixSockets": false,
 				"allowLocalBinding":   false,
-				"allowAppleEvents":    false,
 			},
 		},
 		"permissions": map[string]any{"deny": deny},
