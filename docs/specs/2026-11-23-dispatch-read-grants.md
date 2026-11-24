@@ -1,6 +1,6 @@
 # Cross-workspace read grants for dispatches
 
-Status: draft 2026-11-23. Follow-up to #348 (dispatch cwd confinement); must land before the next release.
+Status: approved 2026-11-23 (Evan). Follow-up to #348 (dispatch cwd confinement); must land before the next release.
 
 ## Problem
 
