@@ -39,6 +39,21 @@ type AgentAttention struct {
 	At time.Time `json:"at,omitzero"`
 }
 
+// WithoutInput returns a with its reason's Input dropped, for a reader that
+// may not see a permission prompt's command. The receiver and its reason
+// are never modified (a stream's payload is shared by every subscriber); a
+// nil attention, or one without an input, is returned as is.
+func (a *AgentAttention) WithoutInput() *AgentAttention {
+	if a == nil || a.Reason == nil || a.Reason.Input == "" {
+		return a
+	}
+	reason := *a.Reason
+	reason.Input = ""
+	out := *a
+	out.Reason = &reason
+	return &out
+}
+
 // turnFailedFallback is the summary of a failed turn whose hook gave no
 // error text, so it stays distinguishable from a lifecycle errored.
 const turnFailedFallback = "Turn failed"

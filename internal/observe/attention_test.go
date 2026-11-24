@@ -517,3 +517,33 @@ func TestBridgeFinishedStillOverwritesALifecycleErrored(t *testing.T) {
 		t.Fatalf("turn.complete = %+v, %v; want finished over a lifecycle errored", att, ok)
 	}
 }
+
+func TestWithoutInputDropsOnlyTheInputAndNeverMutates(t *testing.T) {
+	in := &AgentAttention{State: AttentionNeedsInput, Revision: 3, Reason: &AttentionReason{Kind: AttentionReasonPermission, Tool: "Bash", Detail: "rm", Input: "rm -rf x"}}
+
+	out := in.WithoutInput()
+
+	if out.Reason.Input != "" || out.Reason.Detail != "rm" || out.Reason.Tool != "Bash" || out.Revision != 3 {
+		t.Fatalf("out = %+v / %+v, want only the input dropped", out, out.Reason)
+	}
+	if in.Reason.Input != "rm -rf x" {
+		t.Fatal("WithoutInput mutated the shared attention")
+	}
+	if (*AgentAttention)(nil).WithoutInput() != nil {
+		t.Fatal("nil attention must stay nil")
+	}
+	plain := &AgentAttention{State: AttentionFinished}
+	if plain.WithoutInput() != plain {
+		t.Fatal("an attention without an input should be returned as is")
+	}
+}
+
+func TestSnapshotWithoutAttentionInputLeavesTheOriginalIntact(t *testing.T) {
+	in := Snapshot{Agents: []Agent{{Name: "a", Attention: &AgentAttention{Reason: &AttentionReason{Input: "secret"}}}, {Name: "b"}}}
+
+	out := in.WithoutAttentionInput()
+
+	if out.Agents[0].Attention.Reason.Input != "" || in.Agents[0].Attention.Reason.Input != "secret" || out.Agents[1].Attention != nil {
+		t.Fatalf("out = %+v, in = %+v", out.Agents, in.Agents)
+	}
+}

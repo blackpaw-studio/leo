@@ -61,7 +61,7 @@ func (s *Server) handleAPIState(w http.ResponseWriter, r *http.Request) {
 			cronEntries = s.scheduler.List()
 		}
 
-		return buildSnapshot(snapshotInput{
+		snap := buildSnapshot(snapshotInput{
 			Config:        cfg,
 			Records:       records,
 			ProcessStates: processStates,
@@ -77,7 +77,11 @@ func (s *Server) handleAPIState(w http.ResponseWriter, r *http.Request) {
 			LeoVersion:    s.version,
 			Seq:           seq,
 			Now:           time.Now(),
-		}), nil
+		})
+		if !s.seesAttentionInput(r) {
+			snap = snap.WithoutAttentionInput()
+		}
+		return snap, nil
 	}, func(w http.ResponseWriter, status int, data any, err error) {
 		if err != nil {
 			writeJSON(w, status, apiResponse{Error: err.Error()})
@@ -86,6 +90,12 @@ func (s *Server) handleAPIState(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, status, apiResponse{OK: true, Data: data})
 	})
 }
+
+// seesAttentionInput reports whether r may read a permission prompt's full
+// command (attention reason input): the operator, a paired device or an SSO
+// identity, as for Leo Chat's permission rows. The agent token also passes
+// the /api bearer check, as does any other caller, and neither gets it.
+func (s *Server) seesAttentionInput(r *http.Request) bool { return s.isOperator(r) }
 
 // seqSource is an eventSource that also reports its last published seq
 // (observe.Bus does).
@@ -536,6 +546,7 @@ func (s *Server) handleAPIEvents(w http.ResponseWriter, r *http.Request) {
 	defer release()
 	opts := httpapi.EventsOptions{
 		Source: s.events, Heartbeat: s.sseHeartbeat, WriteTimeout: s.sseWriteTimeout, Buffer: sseSubscriberBuffer,
+		HideAttentionInput: !s.seesAttentionInput(r),
 	}
 	// A provider stream (?client_tools=1) registers a client with the relay
 	// for its length; agents' tokens pass the API auth but may not open one.

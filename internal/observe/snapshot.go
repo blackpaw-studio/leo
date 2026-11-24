@@ -45,6 +45,19 @@ type Snapshot struct {
 }
 
 // SnapshotMeta is the snapshot's place in the event stream.
+// WithoutAttentionInput returns the snapshot with every agent's permission
+// reason stripped of its input (see AgentAttention.WithoutInput); the
+// receiver is not modified.
+func (s Snapshot) WithoutAttentionInput() Snapshot {
+	agents := make([]Agent, len(s.Agents))
+	for i, a := range s.Agents {
+		a.Attention = a.Attention.WithoutInput()
+		agents[i] = a
+	}
+	s.Agents = agents
+	return s
+}
+
 type SnapshotMeta struct {
 	Seq uint64 `json:"seq"`
 }
