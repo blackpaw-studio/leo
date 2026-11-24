@@ -27,7 +27,8 @@
     "agent_progress",
     "agent_shell",
     "agent_seen",
-    "chat.open_asks"
+    "chat.open_asks",
+    "attention.turn_failed"
   ],
   "client_id": "ct_01JC8Z3K4M5N6P7Q8R9S0T1V2W"
 }

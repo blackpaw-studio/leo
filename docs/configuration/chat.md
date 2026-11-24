@@ -354,7 +354,7 @@ The socket serves the seen routes at the same `/api/v1/agents` paths, like the c
 stamped with the daemon's clock and never moves backwards, so a stale write
 returns the stamp already held. It is the per-agent "last looked at" the apps
 share to decide which finished agents are unread (compare it with the agent's
-`attention.at`); marking chat messages read stays with `/read`.
+`attention.at`); marking chat messages read stays with `/read`. Events can arrive out of order, so a client keeps the greatest `seen_at` it has seen per agent.
 
 The agent tools use `POST /api/agent/{name}/chat/{post,ask,ask/withdraw,history}`
 (agent token); `ask/withdraw` takes `{message_id}` and answers

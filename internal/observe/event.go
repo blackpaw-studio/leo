@@ -126,11 +126,16 @@ const (
 	// FeatureChatOpenAsks: `GET /api/v1/chat/asks?state=open` lists every open
 	// ask and permission message on the host.
 	FeatureChatOpenAsks = "chat.open_asks"
+	// FeatureAttentionTurnFailed: a turn that fails (a StopFailure hook) moves
+	// the agent to `errored` with the error text in attention.preview. Such an
+	// errored is recoverable: the agent is alive and the next prompt clears it.
+	// An errored without a preview is a harness exit or failed relaunch.
+	FeatureAttentionTurnFailed = "attention.turn_failed"
 )
 
 // Features returns the hello's features list, a fresh copy each call.
 func Features() []string {
-	return []string{FeatureBridgeTurns, FeatureAttentionReason, FeatureDispatchTree, FeatureAgentUsage, FeatureAgentControl, FeatureDispatchAttach, FeatureDispatchRemoved, FeatureStateSeq, FeatureAttachDispatchPlacement, FeatureDispatchPlacementLive, FeatureAgentEnvironments, FeatureChatQuestions, FeatureMachineStats, FeatureConfigAPI, FeatureAgentStatusRestoring, FeatureClientTools, FeatureAgentAppearance, FeatureAgentMove, FeatureAgentMoveFreshSession, FeatureAgentProgress, FeatureAgentShell, FeatureAgentSeen, FeatureChatOpenAsks}
+	return []string{FeatureBridgeTurns, FeatureAttentionReason, FeatureDispatchTree, FeatureAgentUsage, FeatureAgentControl, FeatureDispatchAttach, FeatureDispatchRemoved, FeatureStateSeq, FeatureAttachDispatchPlacement, FeatureDispatchPlacementLive, FeatureAgentEnvironments, FeatureChatQuestions, FeatureMachineStats, FeatureConfigAPI, FeatureAgentStatusRestoring, FeatureClientTools, FeatureAgentAppearance, FeatureAgentMove, FeatureAgentMoveFreshSession, FeatureAgentProgress, FeatureAgentShell, FeatureAgentSeen, FeatureChatOpenAsks, FeatureAttentionTurnFailed}
 }
 
 // ActivityMinInterval is the most often agent_activity is published per
