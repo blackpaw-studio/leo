@@ -108,7 +108,8 @@ func attentionForHook(p agentHookPayload, home string) (hookTransition, bool) {
 			return hookTransition{}, false
 		}
 		tool, summary := observe.ToolActivity(p.ToolName, p.ToolInput, home)
-		return needsInput(observe.AttentionReason{Kind: observe.AttentionReasonPermission, Tool: tool, Detail: summary}), true
+		input := observe.PermissionInput(p.ToolName, p.ToolInput, home)
+		return needsInput(observe.AttentionReason{Kind: observe.AttentionReasonPermission, Tool: tool, Detail: summary, Input: input}), true
 	case "Elicitation":
 		if p.AgentID != "" {
 			return hookTransition{}, false

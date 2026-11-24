@@ -350,7 +350,7 @@ without a token for the Mac app.
 | `PUT /api/v1/agents/seen` | `{agents: [name]}` (1 to 200) | `{agent: seen_at}` for each; one bad name rejects the batch with `400` |
 | `GET /api/v1/agents/seen` | | `{agent: seen_at}` for every agent ever marked |
 
-The seen routes are TCP only (not on the socket). `seen_at` is RFC 3339,
+The socket serves the seen routes at the same `/api/v1/agents` paths, like the chat routes. `seen_at` is RFC 3339,
 stamped with the daemon's clock and never moves backwards, so a stale write
 returns the stamp already held. It is the per-agent "last looked at" the apps
 share to decide which finished agents are unread (compare it with the agent's

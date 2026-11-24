@@ -183,6 +183,8 @@ codex leaves the stored id on the old rollout until leo next stores one.
 
 ## Agent attention and held work
 
+A `needs_input` attention's `reason` is `{kind, tool?, detail?, input?}`. For `kind: "permission"`, `detail` stays the one-word summary (a Bash command's first word) and `input` is the most useful argument of the call: the full Bash command, a file tool's path, a search's pattern and where it looks, or a fetched URL without credentials, query or fragment. `Write` and `Edit` give their path only, never the content. `input` is escape-stripped, control characters folded to spaces, clamped to 500 characters, and omitted when there is none. It carries what a Leo Chat permission row already shows.
+
 Every `attention` carries `at`, the daemon-clock time (RFC 3339) of the last state change; it is omitted only for an attention the daemon has no stamp for. `at` survives a daemon restart with the rest of an at-rest attention. A turn that fails (a `StopFailure` hook) moves the agent to `errored` with the clamped error text in `preview` (`Turn failed` when the hook carried none), where it used to read `finished`; an `errored` without a `preview` is a harness exit or failed relaunch. The `errored` push alert carries that text as its body, and a failed turn still pushes while either `push.errored` or `push.finished` is on.
 
 `attention.state` on `/api/v1` agents (and `agent_activity` events) goes `finished` when a turn ends, unless the agent still has work running. Then it stays `working`, and `attention.outstanding` says why:

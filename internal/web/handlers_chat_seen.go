@@ -9,8 +9,9 @@ import (
 
 // Cross-device read state and the open-asks list that back the apps'
 // Needs-you inbox (docs/configuration/chat.md). The seen routes live under
-// /api/v1/agents like the other per-agent app routes, on the TCP listener
-// with the operator or a paired device's token.
+// /api/v1/agents like the other per-agent app routes: on the TCP listener
+// with the operator or a paired device's token, and on the daemon's socket
+// (see ChatHandler) without one, which the Mac app's chat client uses.
 
 // registerSeenRoutes registers the agent-seen routes on mux, each wrapped by
 // wrap. PUT /agents/seen and PUT /agents/{name}/seen differ in segment

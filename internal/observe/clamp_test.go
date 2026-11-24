@@ -1,6 +1,7 @@
 package observe
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 	"unicode/utf8"
@@ -73,5 +74,30 @@ func TestFeaturesMatchContract(t *testing.T) {
 	got[0] = "mutated"
 	if Features()[0] != want[0] {
 		t.Fatal("Features() must return a copy")
+	}
+}
+
+func TestClampAttentionReasonInput(t *testing.T) {
+	long := strings.Repeat("x", 2*MaxAttentionInput)
+	got := ClampAttentionReason(AttentionReason{Kind: AttentionReasonPermission, Detail: "rm", Input: "\x1b[1mrm\x1b[0m -rf\n\x00/tmp/\x07x " + long})
+	if utf8.RuneCountInString(got.Input) != MaxAttentionInput || !strings.HasPrefix(got.Input, "rm -rf /tmp/ x xxx") {
+		t.Fatalf("input = %q (%d runes), want escapes removed, control characters folded to spaces, and %d runes", got.Input, utf8.RuneCountInString(got.Input), MaxAttentionInput)
+	}
+	if strings.ContainsFunc(got.Input, func(r rune) bool { return r < 0x20 || r == 0x7f }) {
+		t.Fatalf("input %q still holds control characters", got.Input)
+	}
+	if got.Detail != "rm" {
+		t.Fatalf("detail = %q, want it unchanged", got.Detail)
+	}
+}
+
+func TestAttentionReasonInputIsOmittedWhenEmpty(t *testing.T) {
+	b, _ := json.Marshal(AttentionReason{Kind: AttentionReasonPermission, Tool: "Bash", Detail: "rm"})
+	if strings.Contains(string(b), "input") {
+		t.Fatalf("json = %s, want no input key for a reason without one", b)
+	}
+	b, _ = json.Marshal(AttentionReason{Kind: AttentionReasonPermission, Input: "rm -rf x"})
+	if !strings.Contains(string(b), `"input":"rm -rf x"`) {
+		t.Fatalf("json = %s, want the input", b)
 	}
 }

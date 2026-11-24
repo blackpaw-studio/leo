@@ -65,6 +65,11 @@ type AttentionReason struct {
 	Kind   AttentionReasonKind `json:"kind"`
 	Tool   string              `json:"tool,omitempty"`
 	Detail string              `json:"detail,omitempty"`
+	// Input is, for a permission prompt, the most useful argument of the
+	// call it asks about (the full Bash command, a file path), clamped to
+	// MaxAttentionInput; Detail keeps its one-word summary. Absent when
+	// there is none.
+	Input string `json:"input,omitempty"`
 }
 
 // AttentionStore holds every agent's attention state. Each Set is a semantic
