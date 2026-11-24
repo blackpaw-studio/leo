@@ -393,6 +393,8 @@ pinned.
 | `chat.updated` | `agent`, `message` (with `closed_reason` once an ask closes), `change` (`transcript`, `state` or `answer`) |
 | `agent_seen` | `agent`, `seen_at`: published for every seen write, with the stamp now held |
 
+These three follow the REST chat and seen routes' access rule: only the operator token, a paired device or a trusted proxy's SSO identity receives them on `/api/v1/events`. A stream opened with the agent token never carries them (they hold other agents' asks and permission prompts), so its `seq` has gaps where they were; refetch the snapshot rather than replaying gaps, as for any dropped stream.
+
 ### Push
 
 An agent's outbound messages (not permission prompts or system notes) push

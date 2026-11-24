@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/blackpaw-studio/leo/internal/agent"
+	"github.com/blackpaw-studio/leo/internal/chat"
 	"github.com/blackpaw-studio/leo/internal/config"
 	"github.com/blackpaw-studio/leo/internal/cron"
 	"github.com/blackpaw-studio/leo/internal/history"
@@ -96,6 +97,16 @@ func (s *Server) handleAPIState(w http.ResponseWriter, r *http.Request) {
 // identity, as for Leo Chat's permission rows. The agent token also passes
 // the /api bearer check, as does any other caller, and neither gets it.
 func (s *Server) seesAttentionInput(r *http.Request) bool { return s.isOperator(r) }
+
+// isChatEvent reports whether t is one of the Leo Chat event types, whose
+// payloads the operator-only chat routes serve.
+func isChatEvent(t observe.EventType) bool {
+	switch t {
+	case chat.EventMessage, chat.EventUpdated, chat.EventAgentSeen:
+		return true
+	}
+	return false
+}
 
 // seqSource is an eventSource that also reports its last published seq
 // (observe.Bus does).
@@ -547,6 +558,12 @@ func (s *Server) handleAPIEvents(w http.ResponseWriter, r *http.Request) {
 	opts := httpapi.EventsOptions{
 		Source: s.events, Heartbeat: s.sseHeartbeat, WriteTimeout: s.sseWriteTimeout, Buffer: sseSubscriberBuffer,
 		HideAttentionInput: !s.seesAttentionInput(r),
+	}
+	// The REST chat and agent-seen routes refuse the agent token (and any
+	// other non-operator caller), so their events stay off its stream too:
+	// they carry other agents' asks and permission prompts.
+	if !s.seesAttentionInput(r) {
+		opts.Withhold = isChatEvent
 	}
 	// A provider stream (?client_tools=1) registers a client with the relay
 	// for its length; agents' tokens pass the API auth but may not open one.

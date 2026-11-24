@@ -78,6 +78,11 @@ type EventsOptions struct {
 	// reason's input) from agent_activity and agent_spawned frames, for a
 	// reader that may see agents' state but not their commands.
 	HideAttentionInput bool
+	// Withhold, when non-nil, names event types this stream must not carry
+	// at all: they are dropped before writing, not redacted. The stream's
+	// seq then has gaps, which the wire contract already tells consumers to
+	// handle by refetching the snapshot.
+	Withhold func(observe.EventType) bool
 }
 
 // ServeEvents streams the local event source. Every connection starts with a
@@ -151,6 +156,9 @@ func ServeEvents(w http.ResponseWriter, r *http.Request, opts EventsOptions) {
 		case ev, ok := <-events:
 			if !ok {
 				return
+			}
+			if opts.Withhold != nil && opts.Withhold(ev.Type) {
+				continue
 			}
 			deadline()
 			if WriteEvent(w, string(ev.Type), payloadFor(ev, opts)) != nil || rc.Flush() != nil {
