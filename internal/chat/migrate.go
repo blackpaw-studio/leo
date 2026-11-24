@@ -98,6 +98,14 @@ UPDATE messages SET state = 'expired', closed_reason = 'timeout' WHERE kind = 'a
 	// itself, as client:<name> for an API client. Empty for agent messages and
 	// every message stored before this step.
 	{version: 5, sql: `ALTER TABLE messages ADD COLUMN sender TEXT NOT NULL DEFAULT '';`},
+	// When each agent was last looked at in any app, shared across the
+	// user's devices (unix ms, server time). Separate from reads: that marks
+	// chat messages read, this marks the agent's whole state seen.
+	{version: 6, sql: `
+CREATE TABLE agent_seen (
+	agent   TEXT PRIMARY KEY,
+	seen_at INTEGER NOT NULL
+);`},
 }
 
 // schemaVersion is the user_version of a database with every migration

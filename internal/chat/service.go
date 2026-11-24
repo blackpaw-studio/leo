@@ -322,6 +322,47 @@ func (s *Service) MarkRead(agent, id string) error {
 	return s.opts.Store.MarkRead(agent, id)
 }
 
+// MaxSeenBatch caps how many agents one MarkSeen call may name.
+const MaxSeenBatch = 200
+
+// MarkSeen stamps each named agent seen now, in server time, and returns
+// the stamps held (an earlier-clock write never moves one back). Every
+// agent_seen event is published after the whole batch is stored. The batch
+// is validated up front: one bad name rejects it all.
+func (s *Service) MarkSeen(agents []string) (map[string]time.Time, error) {
+	if err := s.enter(); err != nil {
+		return nil, err
+	}
+	defer s.leave()
+	if len(agents) == 0 || len(agents) > MaxSeenBatch {
+		return nil, fmt.Errorf("%w: between 1 and %d agents required", ErrInvalid, MaxSeenBatch)
+	}
+	for _, a := range agents {
+		if !config.IsAgentName(a) {
+			return nil, fmt.Errorf("%w: agent name %q", ErrInvalid, a)
+		}
+	}
+	now := s.opts.Now()
+	held := make(map[string]time.Time, len(agents))
+	for _, a := range agents {
+		at, err := s.opts.Store.MarkSeen(a, now)
+		if err != nil {
+			return nil, err
+		}
+		held[a] = at
+	}
+	for _, a := range agents {
+		s.publish(EventAgentSeen, &AgentSeenPayload{Agent: a, SeenAt: held[a]})
+	}
+	return held, nil
+}
+
+// Seen returns every agent's last-seen stamp.
+func (s *Service) Seen() (map[string]time.Time, error) { return s.opts.Store.Seen() }
+
+// OpenAsks returns every open ask and permission message, oldest first.
+func (s *Service) OpenAsks() ([]Message, error) { return s.opts.Store.OpenAsks() }
+
 // Attachment returns an attachment's record for serving.
 func (s *Service) Attachment(id string) (Attachment, error) {
 	if !validID(id) {

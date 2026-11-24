@@ -60,6 +60,8 @@ type recordingPublisher struct {
 	// upds carries every EventUpdated payload to waitUpdate; a full buffer
 	// drops, as no test that waits on it publishes that many.
 	upds chan UpdatedPayload
+	// next, when set, receives every event too (a real bus in one test).
+	next observe.Publisher
 }
 
 func newRecordingPublisher() *recordingPublisher {
@@ -70,6 +72,9 @@ func (p *recordingPublisher) Publish(ev observe.Event) {
 	p.mu.Lock()
 	p.events = append(p.events, ev)
 	p.mu.Unlock()
+	if p.next != nil {
+		p.next.Publish(ev)
+	}
 	if mp, ok := ev.Payload.(*MessagePayload); ok && ev.Type == EventMessage {
 		p.msgs <- mp.Message
 	}
@@ -105,6 +110,19 @@ func (p *recordingPublisher) waitMessage(t *testing.T) Message {
 		t.Fatal("no chat.message event")
 		return Message{}
 	}
+}
+
+// eventsOf returns the events published so far under type t, in order.
+func (p *recordingPublisher) eventsOf(t observe.EventType) []observe.Event {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	var out []observe.Event
+	for _, e := range p.events {
+		if e.Type == t {
+			out = append(out, e)
+		}
+	}
+	return out
 }
 
 func (p *recordingPublisher) types() []observe.EventType {

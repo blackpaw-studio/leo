@@ -174,6 +174,7 @@ func (d chatDeliverer) start(ctx context.Context, name, harnessName, prompt stri
 // rejects the two as overlapping patterns.
 func (s *Server) registerChatRoutes(mux *http.ServeMux, prefix string, wrap func(http.HandlerFunc) http.HandlerFunc) {
 	mux.HandleFunc("GET "+prefix+"/threads", wrap(s.handleChatThreads))
+	mux.HandleFunc("GET "+prefix+"/asks", wrap(s.handleChatOpenAsks))
 	mux.HandleFunc("GET "+prefix+"/{seg}/{rest}", wrap(s.handleChatGet))
 	mux.HandleFunc("POST "+prefix+"/uploads", wrap(s.handleChatUpload))
 	mux.HandleFunc("POST "+prefix+"/{agent}/messages", wrap(s.handleChatSend))

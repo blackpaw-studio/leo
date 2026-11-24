@@ -364,6 +364,63 @@ func (s *Store) MarkRead(agent, id string) error {
 	return nil
 }
 
+// MarkSeen records that agent was seen at at, moving the stamp only forward,
+// and returns the stamp now held (the existing one when at is older).
+func (s *Store) MarkSeen(agent string, at time.Time) (time.Time, error) {
+	var ms int64
+	err := s.db.QueryRow(`INSERT INTO agent_seen (agent, seen_at) VALUES (?, ?)
+		ON CONFLICT(agent) DO UPDATE SET seen_at = MAX(agent_seen.seen_at, excluded.seen_at)
+		RETURNING seen_at`, agent, at.UnixMilli()).Scan(&ms)
+	if err != nil {
+		return time.Time{}, fmt.Errorf("marking agent seen: %w", err)
+	}
+	return time.UnixMilli(ms).UTC(), nil
+}
+
+// Seen returns every agent's last-seen stamp; empty, never nil.
+func (s *Store) Seen() (map[string]time.Time, error) {
+	rows, err := s.db.Query(`SELECT agent, seen_at FROM agent_seen`)
+	if err != nil {
+		return nil, fmt.Errorf("reading agent seen: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	out := map[string]time.Time{}
+	for rows.Next() {
+		var agent string
+		var ms int64
+		if err := rows.Scan(&agent, &ms); err != nil {
+			return nil, fmt.Errorf("reading agent seen: %w", err)
+		}
+		out[agent] = time.UnixMilli(ms).UTC()
+	}
+	return out, rows.Err()
+}
+
+// OpenAsks returns every open ask and permission message across all agents,
+// oldest first; empty, never nil.
+func (s *Store) OpenAsks() ([]Message, error) {
+	rows, err := s.db.Query(`SELECT `+messageColumns+` FROM messages WHERE kind IN (?, ?) AND state = ? ORDER BY id`,
+		KindAsk, KindPermission, StateOpen)
+	if err != nil {
+		return nil, fmt.Errorf("reading open asks: %w", err)
+	}
+	out := []Message{}
+	for rows.Next() {
+		m, err := scanMessage(rows)
+		if err != nil {
+			_ = rows.Close()
+			return nil, err
+		}
+		out = append(out, m)
+	}
+	err = rows.Err()
+	_ = rows.Close()
+	if err != nil {
+		return nil, fmt.Errorf("reading open asks: %w", err)
+	}
+	return s.attachTo(out)
+}
+
 // Transition moves message id from one of from to state, recording answer
 // when it is not nil. It reports false, without error, when the message was not
 // in one of from — someone else settled it first.

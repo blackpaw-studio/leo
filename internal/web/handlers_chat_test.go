@@ -44,6 +44,7 @@ type chatServer struct {
 	deliver *chatDeliveries
 	events  chan observe.Event
 	svc     *mockAgentService
+	store   *chat.Store
 }
 
 // newChatServer is a token-split server (auth exercised for real) with chat
@@ -58,7 +59,7 @@ func newChatServer(t *testing.T) chatServer {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = store.Close() })
-	cs := chatServer{s: s, deliver: &chatDeliveries{}, events: make(chan observe.Event, 64), svc: svc}
+	cs := chatServer{s: s, deliver: &chatDeliveries{}, events: make(chan observe.Event, 64), svc: svc, store: store}
 	s.chat = chat.NewService(chat.Options{
 		Store:   store,
 		Files:   chat.Files{Root: t.TempDir(), MaxBytes: 64},

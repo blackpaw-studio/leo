@@ -219,8 +219,8 @@ func TestOpenStoreUpgradesAV4DatabaseAddsSender(t *testing.T) {
 		t.Fatalf("upgrade: %v", err)
 	}
 	defer func() { _ = st.Close() }()
-	if v := userVersion(t, st); v != 5 {
-		t.Fatalf("user_version = %d, want 5", v)
+	if v := userVersion(t, st); v != schemaVersion {
+		t.Fatalf("user_version = %d, want %d", v, schemaVersion)
 	}
 	old, err := st.Message("01A")
 	if err != nil || old.Sender != "" {
@@ -237,5 +237,34 @@ func TestOpenStoreUpgradesAV4DatabaseAddsSender(t *testing.T) {
 	page, _, err := st.Messages("assistant", Page{})
 	if err != nil || len(page) != 2 || page[0].Sender != "client:pipe" || page[1].Sender != "" {
 		t.Fatalf("Messages = %+v, %v; want the senders to survive paging", page, err)
+	}
+}
+
+func TestOpenStoreUpgradesAV5DatabaseKeepingItsRowsAndAddsAgentSeen(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "chat.db")
+	raw, err := sql.Open("sqlite", "file:"+path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw.SetMaxOpenConns(1)
+	if err := migrate(raw, migrations[:5]); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := raw.Exec(`INSERT INTO messages (id, agent, direction, kind, text, state, ts) VALUES
+		('01A', 'assistant', 'out', 'text', 'hello', '', 1000)`); err != nil {
+		t.Fatal(err)
+	}
+	_ = raw.Close()
+
+	st, err := OpenStore(path)
+	if err != nil {
+		t.Fatalf("upgrade: %v", err)
+	}
+	defer func() { _ = st.Close() }()
+	if m, err := st.Message("01A"); err != nil || m.Text != "hello" {
+		t.Fatalf("pre-v6 row = %+v, %v", m, err)
+	}
+	if seen, err := st.Seen(); err != nil || len(seen) != 0 {
+		t.Fatalf("Seen on an upgraded database = %v, %v; want empty", seen, err)
 	}
 }

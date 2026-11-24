@@ -776,6 +776,8 @@ func New(configPath string, processes ProcessStateProvider, scheduler SchedulerP
 	// paired-device token only — the agent token reaches its own thread
 	// through the /api/agent/{name}/chat tool routes instead.
 	s.registerChatRoutes(apiMux, chatAPIPrefix, s.requireOperatorToken)
+	// Cross-device agent read state for the apps' inbox, same tokens.
+	s.registerSeenRoutes(apiMux, s.requireOperatorToken)
 	// Client-tools relay: the apps' routes take the operator or a paired
 	// device's token, the agents' list and call routes the agent token.
 	s.registerClientToolsRoutes(apiMux)
