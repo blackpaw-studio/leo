@@ -35,6 +35,9 @@ func (s *Server) handleAPIDispatch(w http.ResponseWriter, r *http.Request) {
 		CallerPaneID                                           string       `json:"caller_pane_id"`
 		CallerBridgeKey                                        string       `json:"caller_bridge_key"`
 		ParentDispatchID                                       string       `json:"parent_dispatch_id"`
+		// TargetAgent runs a read-only role in that agent's workspace under
+		// a read grant; the workspace is the cwd, so cwd must be omitted.
+		TargetAgent string `json:"target_agent"`
 		// Environments overrides the inherited environment layer: absent or
 		// null inherits, [] inherits nothing.
 		Environments []string `json:"environments"`
@@ -51,7 +54,7 @@ func (s *Server) handleAPIDispatch(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, apiResponse{Error: fmt.Sprintf("invalid additional_mcp_servers: %v", err)})
 		return
 	}
-	if req.Cwd == "" {
+	if req.Cwd == "" && req.TargetAgent == "" {
 		writeJSON(w, http.StatusBadRequest, apiResponse{Error: "cwd is required"})
 		return
 	}
@@ -108,7 +111,7 @@ func (s *Server) handleAPIDispatch(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, apiResponse{Error: err.Error()})
 		return
 	}
-	dispatchReq := consult.Request{Caller: req.From, Template: req.Template, Model: req.Model, Effort: req.Effort, Role: req.Role, Profile: profile, Prompt: req.Prompt, Cwd: req.Cwd, Name: req.Name, Timeout: timeout, Mode: mode, Notify: req.Notify, ReleaseOnFinish: req.ReleaseOnFinish, Isolation: req.Isolation, CallerPaneID: caller.PaneID, CallerSessionID: caller.SessionID, CallerWindowID: caller.WindowID, CallerHarness: caller.Harness, CallerBridgeKey: req.CallerBridgeKey, CallerBridgeLaunch: s.bridgeLaunchID(req.CallerBridgeKey), ParentDispatchID: req.ParentDispatchID, Environments: req.Environments, AdditionalMCPServers: additionalMCP, CallerEnvironments: s.callerEnvironments(cfg, req.From)}
+	dispatchReq := consult.Request{Caller: req.From, Template: req.Template, Model: req.Model, Effort: req.Effort, Role: req.Role, Profile: profile, Prompt: req.Prompt, Cwd: req.Cwd, Name: req.Name, Timeout: timeout, Mode: mode, Notify: req.Notify, ReleaseOnFinish: req.ReleaseOnFinish, Isolation: req.Isolation, CallerPaneID: caller.PaneID, CallerSessionID: caller.SessionID, CallerWindowID: caller.WindowID, CallerHarness: caller.Harness, CallerBridgeKey: req.CallerBridgeKey, CallerBridgeLaunch: s.bridgeLaunchID(req.CallerBridgeKey), ParentDispatchID: req.ParentDispatchID, Environments: req.Environments, AdditionalMCPServers: additionalMCP, CallerEnvironments: s.callerEnvironments(cfg, req.From), TargetAgent: req.TargetAgent}
 	started, err := s.consults.Start(r.Context(), cfg, dispatchReq)
 	var validationErr *consult.ValidationError
 	if err != nil && req.Mode == "" && mode == consult.ModeInteractive && !errors.As(err, &validationErr) && !errors.Is(err, context.Canceled) {

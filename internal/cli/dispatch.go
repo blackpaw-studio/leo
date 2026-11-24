@@ -89,7 +89,7 @@ func dispatchCallerFields(getenv func(string) string) map[string]any {
 
 func newDispatchRunCmd() *cobra.Command {
 	var model, effort, role, cwd, name, host, mode string
-	var isolation string
+	var isolation, targetAgent string
 	var environments, additionalMCP []string
 	var notify, releaseOnFinish bool
 	var timeout time.Duration
@@ -112,15 +112,21 @@ func newDispatchRunCmd() *cobra.Command {
 		if !res.Localhost {
 			return fmt.Errorf("dispatch run is not supported for remote hosts")
 		}
-		if cwd == "" {
+		if targetAgent != "" && (cwd != "" || isolation != "") {
+			return fmt.Errorf("--target-agent runs in the target's workspace; it cannot be combined with --cwd or --isolation")
+		}
+		// A --target-agent run's cwd is the target's workspace, chosen by
+		// the daemon; only a plain run defaults to this directory.
+		if cwd == "" && targetAgent == "" {
 			cwd, err = os.Getwd()
 			if err != nil {
 				return err
 			}
 		}
-		cwd, err = filepath.Abs(cwd)
-		if err != nil {
-			return err
+		if cwd != "" {
+			if cwd, err = filepath.Abs(cwd); err != nil {
+				return err
+			}
 		}
 		var started consult.Started
 		if mode != "" && mode != "headless" && mode != "interactive" {
@@ -132,7 +138,13 @@ func newDispatchRunCmd() *cobra.Command {
 		} else {
 			template, prompt = args[0], args[1]
 		}
-		body := map[string]any{"prompt": prompt, "model": model, "effort": effort, "cwd": cwd, "name": name}
+		body := map[string]any{"prompt": prompt, "model": model, "effort": effort, "name": name}
+		if cwd != "" {
+			body["cwd"] = cwd
+		}
+		if targetAgent != "" {
+			body["target_agent"] = targetAgent
+		}
 		if mode != "" {
 			body["mode"] = mode
 		}
@@ -204,6 +216,7 @@ func newDispatchRunCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&notify, "notify", true, "notify the caller when the dispatch completes")
 	cmd.Flags().BoolVar(&releaseOnFinish, "release-on-finish", false, "interactive only: close the pane once a turn's result was read, keeping the run for a follow-up that reopens it (default on; --release-on-finish=false keeps the pane open)")
 	cmd.Flags().StringVar(&isolation, "isolation", "", "execution isolation (worktree)")
+	cmd.Flags().StringVar(&targetAgent, "target-agent", "", "run a read-only role in this local agent's workspace under a read grant from its template (share.readable_by); excludes --cwd and --isolation")
 	cmd.Flags().StringSliceVar(&environments, "environment", nil, "named environments to run under, layered over the template's; replaces the inherited (caller's) list, and --environment= inherits nothing")
 	cmd.Flags().StringArrayVar(&additionalMCP, "additional-mcp-server", nil, "name of an MCP server from the run account's Claude config to add to this run, on top of the template's own list (repeatable; claude with mcp: none only; a missing name is a warning)")
 	addHostFlag(cmd, &host)

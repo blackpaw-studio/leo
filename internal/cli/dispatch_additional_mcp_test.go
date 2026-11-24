@@ -20,6 +20,18 @@ import (
 // returns the JSON body it posted to /api/dispatch.
 func runDispatchCapturingBody(t *testing.T, args ...string) map[string]any {
 	t.Helper()
+	body, err := runDispatchCommand(t, true, args...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return body
+}
+
+// runDispatchCommand runs `leo dispatch run --role explore look` (with
+// --cwd <home> when withCwd) plus args against a fake daemon, returning the
+// posted body (nil when nothing was posted) and the command's error.
+func runDispatchCommand(t *testing.T, withCwd bool, args ...string) (map[string]any, error) {
+	t.Helper()
 	var postBody []byte
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -51,15 +63,20 @@ func runDispatchCapturingBody(t *testing.T, args ...string) map[string]any {
 	cfgFile, consultStdout = configPath, io.Discard
 	t.Cleanup(func() { cfgFile, consultStdout = oldCfg, oldOut })
 	cmd := newDispatchRunCmd()
-	cmd.SetArgs(append([]string{"--role", "explore", "look", "--cwd", home}, args...))
+	base := []string{"--role", "explore", "look"}
+	if withCwd {
+		base = append(base, "--cwd", home)
+	}
+	cmd.SetArgs(append(base, args...))
+	cmd.SilenceUsage, cmd.SilenceErrors = true, true
 	if err := cmd.Execute(); err != nil {
-		t.Fatal(err)
+		return nil, err
 	}
 	var body map[string]any
 	if err := json.Unmarshal(postBody, &body); err != nil {
 		t.Fatalf("body %q: %v", postBody, err)
 	}
-	return body
+	return body, nil
 }
 
 func TestDispatchRunSendsAdditionalMCPServers(t *testing.T) {

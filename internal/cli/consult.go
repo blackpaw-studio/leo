@@ -132,18 +132,26 @@ func listConsults(stateDir string, asJSON bool, out io.Writer) error {
 
 	now := time.Now()
 	w := tabwriter.NewWriter(out, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(w, "ID\tCALLER\tTEMPLATE\tMODEL\tEFFORT\tMODE\tTURNS\tSTEERED\tELAPSED\tACTIVE\tSTATUS\tINPUT\tOUTPUT\tCOST_USD\tUSAGE_TURNS\tTOOLS\tPARTIAL")
+	fmt.Fprintln(w, "ID\tCALLER\tTEMPLATE\tMODEL\tEFFORT\tMODE\tTURNS\tSTEERED\tELAPSED\tACTIVE\tSTATUS\tINPUT\tOUTPUT\tCOST_USD\tUSAGE_TURNS\tTOOLS\tPARTIAL\tTARGET")
 	for _, record := range ordered {
 		mode := record.Mode
 		if mode == "" {
 			mode = consult.ModeHeadless
 		}
-		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%d\t%t\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%t\n",
+		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%d\t%t\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%t\t%s\n",
 			record.ID, orDash(record.Caller), record.Template, record.Model, orDash(record.EffortLabel()),
 			mode, len(record.Turns), record.Steered, formatOffset(record.Elapsed(now)),
-			formatOffset(secondsDuration(record.LiveActiveSeconds(now))), displayStatus(record, now), optionalInt64(record.InputTokens), optionalInt64(record.OutputTokens), optionalFloat(record.CostUSD), optionalInt(record.UsageTurns), optionalInt(record.ToolCalls), record.UsageIncomplete)
+			formatOffset(secondsDuration(record.LiveActiveSeconds(now))), displayStatus(record, now), optionalInt64(record.InputTokens), optionalInt64(record.OutputTokens), optionalFloat(record.CostUSD), optionalInt(record.UsageTurns), optionalInt(record.ToolCalls), record.UsageIncomplete, readGrantLabel(record))
 	}
 	return w.Flush()
+}
+
+// readGrantLabel renders a run's read grant: "<agent> (grant <entry>)".
+func readGrantLabel(record consult.Record) string {
+	if record.TargetAgent == "" {
+		return "—"
+	}
+	return fmt.Sprintf("%s (grant %s)", record.TargetAgent, record.TargetGrant)
 }
 
 func optionalInt64(v *int64) string {
