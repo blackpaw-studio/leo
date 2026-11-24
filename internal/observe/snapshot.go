@@ -45,6 +45,10 @@ type Snapshot struct {
 }
 
 // SnapshotMeta is the snapshot's place in the event stream.
+type SnapshotMeta struct {
+	Seq uint64 `json:"seq"`
+}
+
 // WithoutAttentionInput returns the snapshot with every agent's permission
 // reason stripped of its input (see AgentAttention.WithoutInput); the
 // receiver is not modified.
@@ -56,10 +60,6 @@ func (s Snapshot) WithoutAttentionInput() Snapshot {
 	}
 	s.Agents = agents
 	return s
-}
-
-type SnapshotMeta struct {
-	Seq uint64 `json:"seq"`
 }
 
 // Status is an agent's lifecycle state, mirroring the supervisor's own vocabulary.
