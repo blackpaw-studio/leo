@@ -345,6 +345,16 @@ without a token for the Mac app.
 | `POST /api/v1/chat/{agent}/messages/{id}/answer` | `{values, text?}`, or `{answers}` for a [questions card](#questions-cards) | `Message`; `400` when the answer does not fit the message's `input`, `409` once settled |
 | `POST /api/v1/chat/{agent}/messages/{id}/dismiss` | | `Message`, expired as `dismissed`; `400` unless a questions card, `409` once settled |
 | `POST /api/v1/chat/{agent}/read` | `{up_to}` | |
+| `GET /api/v1/chat/asks?state=open` | | `{messages: [Message]}`: every open `ask` and `permission` message on this host, all agents, oldest first; `400` unless `state=open` |
+| `PUT /api/v1/agents/{name}/seen` | | `{agent, seen_at}`: the agent was just looked at |
+| `PUT /api/v1/agents/seen` | `{agents: [name]}` (1 to 200) | `{agent: seen_at}` for each; one bad name rejects the batch with `400` |
+| `GET /api/v1/agents/seen` | | `{agent: seen_at}` for every agent ever marked |
+
+The socket serves the seen routes at the same `/api/v1/agents` paths, like the chat routes. `seen_at` is RFC 3339,
+stamped with the daemon's clock and never moves backwards, so a stale write
+returns the stamp already held. It is the per-agent "last looked at" the apps
+share to decide which finished agents are unread (compare it with the agent's
+`attention.at`); marking chat messages read stays with `/read`. Events can arrive out of order, so a client keeps the greatest `seen_at` it has seen per agent.
 
 The agent tools use `POST /api/agent/{name}/chat/{post,ask,ask/withdraw,history}`
 (agent token); `ask/withdraw` takes `{message_id}` and answers
@@ -381,6 +391,7 @@ pinned.
 |-------|---------------------------|
 | `chat.message` | `agent`, `message` |
 | `chat.updated` | `agent`, `message` (with `closed_reason` once an ask closes), `change` (`transcript`, `state` or `answer`) |
+| `agent_seen` | `agent`, `seen_at`: published for every seen write, with the stamp now held |
 
 ### Push
 

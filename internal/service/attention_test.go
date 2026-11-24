@@ -24,7 +24,7 @@ func TestSpawnedAgentViewCarriesAttentionOnlyWhenPresent(t *testing.T) {
 	with := sv.spawnedAgentView(daemon.AgentSpawnSpec{Name: "with"}, time.Now())
 	without := sv.spawnedAgentView(daemon.AgentSpawnSpec{Name: "without"}, time.Now())
 
-	if with.Attention == nil || *with.Attention != (observe.AgentAttention{State: observe.AttentionErrored, Revision: 1}) {
+	if with.Attention == nil || with.Attention.State != observe.AttentionErrored || with.Attention.Revision != 1 || with.Attention.At.IsZero() {
 		t.Errorf("with.Attention = %+v", with.Attention)
 	}
 	if without.Attention != nil {

@@ -17,7 +17,7 @@ const testAgentToken = "test-agent-token"
 // newTokenSplitServer builds a server that knows both tokens, with the
 // Host/Origin check satisfied but no auth pre-applied — these tests exercise
 // the auth layer itself.
-func newTokenSplitServer(t *testing.T) *Server {
+func newTokenSplitServer(t *testing.T, mods ...func(*Options)) *Server {
 	t.Helper()
 	dir := t.TempDir()
 	cfgPath := filepath.Join(dir, "leo.yaml")
@@ -28,11 +28,15 @@ func newTokenSplitServer(t *testing.T) *Server {
 		t.Fatalf("mkdir state: %v", err)
 	}
 	svc := &mockAgentService{}
-	return New(cfgPath, nil, nil, nil, svc, Options{
+	opts := Options{
 		Port:       testPort,
 		APIToken:   testAPIToken,
 		AgentToken: testAgentToken,
-	})
+	}
+	for _, mod := range mods {
+		mod(&opts)
+	}
+	return New(cfgPath, nil, nil, nil, svc, opts)
 }
 
 func requestAs(t *testing.T, s *Server, method, path, token string, body string) *httptest.ResponseRecorder {

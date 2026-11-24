@@ -14,6 +14,13 @@ var oscEscapeRegexp = regexp.MustCompile(`\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)`)
 // runes. See clampText.
 func ClampDetail(s string) string { return clampText(s, MaxActionDetail) }
 
+// MaxAttentionInput is the most runes a permission reason's Input carries.
+const MaxAttentionInput = 500
+
+// ClampInput sanitises a permission reason's input to MaxAttentionInput
+// runes. See clampText.
+func ClampInput(s string) string { return clampText(s, MaxAttentionInput) }
+
 // ClampPreview sanitises a turn's final-message preview to MaxTurnPreview
 // runes. See clampText.
 func ClampPreview(s string) string { return clampText(s, MaxTurnPreview) }
@@ -23,6 +30,7 @@ func ClampPreview(s string) string { return clampText(s, MaxTurnPreview) }
 func ClampAttentionReason(r AttentionReason) AttentionReason {
 	r.Tool = ClampDetail(r.Tool)
 	r.Detail = ClampDetail(r.Detail)
+	r.Input = ClampInput(r.Input)
 	return r
 }
 

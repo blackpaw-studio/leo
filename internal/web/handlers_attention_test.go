@@ -58,7 +58,7 @@ func TestAgentHookTransitions(t *testing.T) {
 		{"prompt submit", "tok-a", "leo-a", `{"hook_event_name":"UserPromptSubmit","session_id":"sid-a"}`, observe.AttentionWorking},
 		{"stop", "tok-a", "leo-a", `{"hook_event_name":"Stop","session_id":"sid-a"}`, observe.AttentionFinished},
 		{"codex interrupt", "tok-a", "leo-a", `{"hook_event_name":"Interrupt","session_id":"sid-a"}`, observe.AttentionFinished},
-		{"stop failure", "tok-a", "leo-a", `{"hook_event_name":"StopFailure","session_id":"sid-a","error":"boom"}`, observe.AttentionFinished},
+		{"stop failure", "tok-a", "leo-a", `{"hook_event_name":"StopFailure","session_id":"sid-a","error":"boom"}`, observe.AttentionErrored},
 		{"permission prompt", "tok-a", "leo-a", `{"hook_event_name":"Notification","notification_type":"permission_prompt","session_id":"sid-a"}`, observe.AttentionNeedsInput},
 		{"elicitation", "tok-a", "leo-a", `{"hook_event_name":"Notification","notification_type":"elicitation_dialog"}`, observe.AttentionNeedsInput},
 		{"idle notification", "tok-a", "leo-a", `{"hook_event_name":"Notification","notification_type":"idle_prompt"}`, ""},
@@ -144,7 +144,7 @@ func TestAgentHookAfterUnregisterIsNoop(t *testing.T) {
 
 	postHook(t, s, "tok-a", `{"hook_event_name":"Stop","session_id":"sid-a"}`)
 
-	if att, _ := s.attention.Get("leo-a"); att != (observe.AgentAttention{State: observe.AttentionUnknown, Revision: 1}) {
+	if att, _ := s.attention.Get("leo-a"); att.State != observe.AttentionUnknown || att.Revision != 1 {
 		t.Fatalf("attention = %+v, want the stop's unknown untouched", att)
 	}
 }
@@ -192,6 +192,55 @@ func TestAgentHookStopCarriesTheLastMessageAsPreview(t *testing.T) {
 	}
 }
 
+func TestAgentHookStopFailureIsErroredWithAClampedErrorSummary(t *testing.T) {
+	long := strings.Repeat("word ", 100)
+	for _, tc := range []struct {
+		name, body, want string
+	}{
+		{"string error", `{"hook_event_name":"StopFailure","session_id":"sid-a","error":"ProviderAuthError: bad key"}`, "ProviderAuthError: bad key"},
+		{"structured error", `{"hook_event_name":"StopFailure","session_id":"sid-a","error":{"type":"rate_limit"}}`, `{"type":"rate_limit"}`},
+		{"multi-line error is one line", `{"hook_event_name":"StopFailure","session_id":"sid-a","error":"a\nb"}`, "a b"},
+		{"long error is clamped", `{"hook_event_name":"StopFailure","session_id":"sid-a","error":"` + long + `"}`, observe.ClampPreview(long)},
+		{"no error text still says it failed", `{"hook_event_name":"StopFailure","session_id":"sid-a"}`, "Turn failed"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := newHookServer(t)
+
+			postHook(t, s, "tok-a", tc.body)
+
+			att, ok := s.attention.Get("leo-a")
+			if !ok || att.State != observe.AttentionErrored || att.Preview != tc.want || !att.TurnFailed() {
+				t.Fatalf("attention = %+v, %v; want errored with summary %q", att, ok, tc.want)
+			}
+		})
+	}
+}
+
+// A failed turn is not a dead launch: the agent is alive and its own
+// session's hooks keep working, so errored from a StopFailure must not open
+// the missed-SessionStart recovery that adopts a foreign session.
+func TestAgentHookStopFailureDoesNotOpenForeignSessionAdoption(t *testing.T) {
+	s := newHookServer(t)
+	home := filepath.Dir(s.configPath)
+	if err := agentstore.Save(home, agentstore.Record{Name: "leo-a"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := agentstore.SetAttentionToken(home, "leo-a", "tok-a"); err != nil {
+		t.Fatal(err)
+	}
+	postHook(t, s, "tok-a", `{"hook_event_name":"StopFailure","session_id":"sid-a","error":"boom"}`)
+	failed, _ := s.attention.Get("leo-a")
+
+	postHook(t, s, "tok-a", `{"hook_event_name":"UserPromptSubmit","session_id":"child-sid"}`)
+
+	if got, _ := s.attention.Get("leo-a"); got != failed {
+		t.Fatalf("a child process's hook moved the failed agent: %+v -> %+v", failed, got)
+	}
+	if claimed := agentstore.ClaimedSession(home, "leo-a", "tok-a"); claimed != "" {
+		t.Fatalf("foreign session %q claimed after a failed turn", claimed)
+	}
+}
+
 func TestAgentHookForwardsTurnToObserver(t *testing.T) {
 	type observed struct {
 		agent string
@@ -233,7 +282,13 @@ func TestAgentHookRaisesNeedsInputWithReason(t *testing.T) {
 	}{
 		{"permission request names the tool and its summary",
 			`{"hook_event_name":"PermissionRequest","session_id":"sid-a","tool_name":"Bash","tool_input":{"command":"rm -rf /tmp/x"}}`,
-			&observe.AttentionReason{Kind: observe.AttentionReasonPermission, Tool: "Bash", Detail: "rm"}},
+			&observe.AttentionReason{Kind: observe.AttentionReasonPermission, Tool: "Bash", Detail: "rm", Input: "rm -rf /tmp/x"}},
+		{"a write's permission request carries the path, never the content",
+			`{"hook_event_name":"PermissionRequest","session_id":"sid-a","tool_name":"Write","tool_input":{"file_path":"/etc/x","content":"SECRET"}}`,
+			&observe.AttentionReason{Kind: observe.AttentionReasonPermission, Tool: "Write", Detail: "/etc/x", Input: "/etc/x"}},
+		{"a long command is clamped for the wire",
+			`{"hook_event_name":"PermissionRequest","session_id":"sid-a","tool_name":"Bash","tool_input":{"command":"echo ` + strings.Repeat("y", 900) + `"}}`,
+			&observe.AttentionReason{Kind: observe.AttentionReasonPermission, Tool: "Bash", Detail: "echo", Input: observe.ClampInput("echo " + strings.Repeat("y", 900))}},
 		{"elicitation names the server",
 			`{"hook_event_name":"Elicitation","session_id":"sid-a","mcp_server_name":"github"}`,
 			&observe.AttentionReason{Kind: observe.AttentionReasonElicitation, Detail: "github"}},
@@ -526,6 +581,7 @@ func TestSessionStartClearsErroredAfterRelaunch(t *testing.T) {
 		{"needs_input is kept", func(s *Server) {
 			s.attention.SetByTokenNeedsInput("tok-a", observe.AttentionReason{Kind: observe.AttentionReasonPermission})
 		}, start, observe.AttentionNeedsInput},
+		{"a failed turn is kept (the agent is alive)", func(s *Server) { s.attention.SetByTokenErrored("tok-a", "rate limited") }, start, observe.AttentionErrored},
 		{"finished is kept", func(s *Server) { s.attention.Set("leo-a", observe.AttentionFinished) }, start, observe.AttentionFinished},
 		{"a subagent's start is ignored", func(s *Server) { s.attention.Set("leo-a", observe.AttentionErrored) },
 			`{"hook_event_name":"SessionStart","source":"startup","session_id":"sid-a","agent_id":"sub"}`, observe.AttentionErrored},

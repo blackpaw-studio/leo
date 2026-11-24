@@ -74,6 +74,10 @@ type EventsOptions struct {
 	// hello carries its client_id and it receives client_tool.* events in
 	// full. Every other stream sees them redacted to ids.
 	Provider Provider
+	// HideAttentionInput strips a permission prompt's command (the attention
+	// reason's input) from agent_activity and agent_spawned frames, for a
+	// reader that may see agents' state but not their commands.
+	HideAttentionInput bool
 }
 
 // ServeEvents streams the local event source. Every connection starts with a
@@ -149,7 +153,7 @@ func ServeEvents(w http.ResponseWriter, r *http.Request, opts EventsOptions) {
 				return
 			}
 			deadline()
-			if WriteEvent(w, string(ev.Type), payloadFor(ev, opts.Provider != nil)) != nil || rc.Flush() != nil {
+			if WriteEvent(w, string(ev.Type), payloadFor(ev, opts)) != nil || rc.Flush() != nil {
 				return
 			}
 		}
@@ -159,8 +163,20 @@ func ServeEvents(w http.ResponseWriter, r *http.Request, opts EventsOptions) {
 // payloadFor is what one stream is allowed to see of ev: client-tool calls
 // carry an agent's arguments, so only provider streams get them whole. The
 // others get the id alone, which keeps their seq contiguous.
-func payloadFor(ev observe.Event, provider bool) any {
-	if provider {
+func payloadFor(ev observe.Event, opts EventsOptions) any {
+	if opts.HideAttentionInput {
+		switch p := ev.Payload.(type) {
+		case *observe.AgentActivityPayload:
+			cp := *p
+			cp.Attention = p.Attention.WithoutInput()
+			return &cp
+		case *observe.AgentSpawnedPayload:
+			cp := *p
+			cp.Agent.Attention = p.Agent.Attention.WithoutInput()
+			return &cp
+		}
+	}
+	if opts.Provider != nil {
 		return ev.Payload
 	}
 	switch p := ev.Payload.(type) {

@@ -131,10 +131,16 @@ func (s *Server) agentContext(token string, hook contextHook) string {
 // depend on the bridge (the mod may be absent or fall back to legacy). The
 // token is per launch and retired when the launch ends, so a late start from
 // the old launch resolves to nothing; only errored moves (to unknown, a
-// fresh launch's state), so a real needs_input or a finished turn is kept.
+// fresh launch's state), so a real needs_input, a finished turn or a failed
+// turn is kept.
 // A relaunch that fails never starts a session, so its errored stands.
 func (s *Server) clearErroredOnSessionStart(token string, hook contextHook) {
 	if s.attention == nil || hook.Event != "SessionStart" || hook.AgentID != "" {
+		return
+	}
+	// A failed turn's errored is a live agent's: /clear or a resume
+	// starting a session must not erase it.
+	if cur, ok := s.attention.GetByToken(token); ok && cur.TurnFailed() {
 		return
 	}
 	s.attention.SetByToken(token, observe.AttentionUnknown, observe.AttentionErrored)

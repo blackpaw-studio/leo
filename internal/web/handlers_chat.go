@@ -172,8 +172,12 @@ func (d chatDeliverer) start(ctx context.Context, name, harnessName, prompt stri
 // wrapped by wrap. GET /{seg}/{rest} serves both
 // GET <prefix>/attachments/{id} and GET <prefix>/{agent}/messages: Go's mux
 // rejects the two as overlapping patterns.
-func (s *Server) registerChatRoutes(mux *http.ServeMux, prefix string, wrap func(http.HandlerFunc) http.HandlerFunc) {
+//
+// wrapAsks wraps GET <prefix>/asks, which the Needs-you inbox reads and so
+// also admits a trusted proxy's SSO identity on TCP.
+func (s *Server) registerChatRoutes(mux *http.ServeMux, prefix string, wrap, wrapAsks func(http.HandlerFunc) http.HandlerFunc) {
 	mux.HandleFunc("GET "+prefix+"/threads", wrap(s.handleChatThreads))
+	mux.HandleFunc("GET "+prefix+"/asks", wrapAsks(s.handleChatOpenAsks))
 	mux.HandleFunc("GET "+prefix+"/{seg}/{rest}", wrap(s.handleChatGet))
 	mux.HandleFunc("POST "+prefix+"/uploads", wrap(s.handleChatUpload))
 	mux.HandleFunc("POST "+prefix+"/{agent}/messages", wrap(s.handleChatSend))
@@ -186,12 +190,14 @@ func (s *Server) registerChatRoutes(mux *http.ServeMux, prefix string, wrap func
 const chatAPIPrefix = "/api/v1/chat"
 
 // ChatHandler serves the app routes unauthenticated at the same
-// /api/v1/chat paths, for the daemon to mount on its unix socket, whose
+// /api/v1/chat paths (and the agent-seen routes under /api/v1/agents), for the daemon to mount on its unix socket, whose
 // 0600 mode is the auth. It also serves the CLI-only routes that the TCP
 // listener never registers.
 func (s *Server) ChatHandler() http.Handler {
 	mux := http.NewServeMux()
-	s.registerChatRoutes(mux, chatAPIPrefix, func(h http.HandlerFunc) http.HandlerFunc { return h })
+	noAuth := func(h http.HandlerFunc) http.HandlerFunc { return h }
+	s.registerChatRoutes(mux, chatAPIPrefix, noAuth, noAuth)
+	s.registerSeenRoutes(mux, noAuth)
 	mux.HandleFunc("POST /chat/task-failure", s.handleChatTaskFailure)
 	return mux
 }

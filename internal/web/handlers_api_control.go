@@ -69,6 +69,20 @@ func (s *Server) requireOperatorToken(h http.HandlerFunc) http.HandlerFunc {
 	}
 }
 
+// requireOperator is requireOperatorToken that also admits a trusted proxy's
+// SSO identity (Remote-User), as /api/v1/state does: the read routes the apps
+// use, which a browser behind the proxy reaches without a token. The agent
+// token and API-client tokens are still refused with 403.
+func (s *Server) requireOperator(h http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if !s.isOperator(r) {
+			writeJSON(w, http.StatusForbidden, apiResponse{Error: "operator token required"})
+			return
+		}
+		h(w, r)
+	}
+}
+
 // writeAPIControl renders a control outcome in the /api/v1 shape: the
 // transport on success, {queued: true} on any 202.
 func writeAPIControl(w http.ResponseWriter, out controlOutcome) {

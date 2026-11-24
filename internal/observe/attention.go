@@ -3,6 +3,7 @@ package observe
 import (
 	"slices"
 	"sync"
+	"time"
 )
 
 // AttentionState is an agent's semantic turn state, fed by harness hooks and
@@ -33,6 +34,35 @@ type AgentAttention struct {
 	// Outstanding explains a working state held after the turn completed
 	// (B-051); absent when nothing is outstanding.
 	Outstanding *Outstanding `json:"outstanding,omitempty"`
+	// At is the daemon-clock time of the last state change (the transition
+	// that produced this state, not a read); omitted when unknown.
+	At time.Time `json:"at,omitzero"`
+}
+
+// WithoutInput returns a with its reason's Input dropped, for a reader that
+// may not see a permission prompt's command. The receiver and its reason
+// are never modified (a stream's payload is shared by every subscriber); a
+// nil attention, or one without an input, is returned as is.
+func (a *AgentAttention) WithoutInput() *AgentAttention {
+	if a == nil || a.Reason == nil || a.Reason.Input == "" {
+		return a
+	}
+	reason := *a.Reason
+	reason.Input = ""
+	out := *a
+	out.Reason = &reason
+	return &out
+}
+
+// turnFailedFallback is the summary of a failed turn whose hook gave no
+// error text, so it stays distinguishable from a lifecycle errored.
+const turnFailedFallback = "Turn failed"
+
+// TurnFailed reports whether this errored attention is a turn that failed
+// (a StopFailure hook, which carries an error summary in Preview) as opposed
+// to a harness exit or failed relaunch, which carries none.
+func (a AgentAttention) TurnFailed() bool {
+	return a.State == AttentionErrored && a.Preview != ""
 }
 
 // AttentionReasonKind is what a needs_input agent is waiting on.
@@ -50,6 +80,11 @@ type AttentionReason struct {
 	Kind   AttentionReasonKind `json:"kind"`
 	Tool   string              `json:"tool,omitempty"`
 	Detail string              `json:"detail,omitempty"`
+	// Input is, for a permission prompt, the most useful argument of the
+	// call it asks about (the full Bash command, a file path), clamped to
+	// MaxAttentionInput; Detail keeps its one-word summary. Absent when
+	// there is none.
+	Input string `json:"input,omitempty"`
 }
 
 // AttentionStore holds every agent's attention state. Each Set is a semantic
@@ -80,6 +115,10 @@ type AttentionStore struct {
 	// previews holds the preview riding a finished transition; it lives
 	// only while the agent stays finished.
 	previews map[string]string
+	// ats holds the time of each agent's last state change; now is the
+	// daemon clock (time.Now unless SetClock replaced it).
+	ats map[string]time.Time
+	now func() time.Time
 	// dispatches is read for fresh dispatch counts whenever a turn
 	// finishes, outside mu (see dispatchCounts). dispatchGen is the newest
 	// snapshot generation applied; an older one arriving late is ignored.
@@ -114,7 +153,23 @@ func NewAttentionStore(publisher Publisher) *AttentionStore {
 		reasons: make(map[string]AttentionReason),
 
 		previews: make(map[string]string),
+		ats:      make(map[string]time.Time),
+		now:      time.Now,
 	}
+}
+
+// SetClock replaces the clock that stamps each transition's At; tests use it
+// to pin time. A nil clock restores time.Now.
+func (s *AttentionStore) SetClock(now func() time.Time) {
+	if s == nil {
+		return
+	}
+	if now == nil {
+		now = time.Now
+	}
+	s.mu.Lock()
+	s.now = now
+	s.mu.Unlock()
 }
 
 // SetActivityProvider wires the tracker whose reading rides along on every
@@ -205,12 +260,13 @@ func (s *AttentionStore) applyPreviewLocked(agent string, state AttentionState, 
 		delete(s.reasons, agent)
 	}
 	delete(s.previews, agent)
-	if state == AttentionFinished && preview != "" {
+	if (state == AttentionFinished || state == AttentionErrored) && preview != "" {
 		s.previews[agent] = ClampPreview(preview)
 	}
 	delete(s.pending, agent)
 	s.nextRevisionLocked(agent)
 	s.states[agent] = state
+	s.ats[agent] = s.now().UTC()
 	s.markDirtyLocked()
 	return s.attentionLocked(agent)
 }
@@ -222,6 +278,7 @@ func (s *AttentionStore) attentionLocked(agent string) AgentAttention {
 		att.Reason = &r
 	}
 	att.Preview = s.previews[agent]
+	att.At = s.ats[agent]
 	if o := s.bridge.of(agent); o.total() > 0 {
 		att.Outstanding = &o
 	}
@@ -309,6 +366,11 @@ func (s *AttentionStore) advanceBridge(key, launch string, state AttentionState,
 // agent currently in cur.
 func (s *AttentionStore) advanceLocked(agent string, state, cur AttentionState) (AgentAttention, bool) {
 	switch {
+	case state == AttentionFinished && cur == AttentionErrored && s.previews[agent] != "":
+		// The bridge reports the end of the turn a StopFailure hook already
+		// failed: the failure (and its summary) stands. Only a new turn
+		// (working) moves on.
+		return AgentAttention{}, false
 	case state == AttentionWorking && cur == AttentionWorking:
 		delete(s.held, agent)
 		s.bridge.clearTasks(agent)
@@ -552,6 +614,7 @@ func (s *AttentionStore) Remove(agent string) {
 	delete(s.held, agent)
 	delete(s.reasons, agent)
 	delete(s.previews, agent)
+	delete(s.ats, agent)
 	delete(s.pending, agent)
 	delete(s.lastToken, agent)
 	s.unregisterAgentLocked(agent)
@@ -615,6 +678,24 @@ func (s *AttentionStore) AgentForToken(token string) (string, bool) {
 	return name, ok
 }
 
+// GetByToken is Get for the agent token routes to; ok=false for an unknown
+// or retired token or an agent with no attention yet.
+func (s *AttentionStore) GetByToken(token string) (AgentAttention, bool) {
+	if s == nil || token == "" {
+		return AgentAttention{}, false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	agent, ok := s.tokens[token]
+	if !ok {
+		return AgentAttention{}, false
+	}
+	if _, tracked := s.states[agent]; !tracked {
+		return AgentAttention{}, false
+	}
+	return s.attentionLocked(agent), true
+}
+
 // SetByToken is Set for the agent token routes to, resolved and applied
 // atomically so an unregister (stop, exit, delete) always wins over a late
 // hook. When from is non-empty the transition applies only while the
@@ -629,6 +710,17 @@ func (s *AttentionStore) SetByToken(token string, state AttentionState, from ...
 // assistant message as the transition's preview (empty for none).
 func (s *AttentionStore) SetByTokenFinished(token, preview string) (AgentAttention, bool) {
 	return s.setByToken(token, AttentionFinished, preview, nil, false)
+}
+
+// SetByTokenErrored is SetByToken to errored for a turn that failed (a
+// StopFailure hook), carrying the error summary as the transition's preview.
+// The summary is clamped; an empty one becomes a generic "Turn failed" so the
+// failure stays distinguishable from a lifecycle errored (see TurnFailed).
+func (s *AttentionStore) SetByTokenErrored(token, summary string) (AgentAttention, bool) {
+	if ClampPreview(summary) == "" {
+		summary = turnFailedFallback
+	}
+	return s.setByToken(token, AttentionErrored, summary, nil, false)
 }
 
 // SetByTokenNeedsInput moves the agent token routes to into needs_input with
@@ -712,6 +804,7 @@ func (s *AttentionStore) Move(oldName, newName string) {
 	moveKey(s.held, oldName, newName)
 	moveKey(s.reasons, oldName, newName)
 	moveKey(s.previews, oldName, newName)
+	moveKey(s.ats, oldName, newName)
 	rev := max(s.revisions[oldName], s.revisions[newName], s.floor) + 1
 	delete(s.states, oldName)
 	s.states[newName] = state

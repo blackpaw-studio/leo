@@ -378,3 +378,67 @@ func TestStoppedAgentForgetsItsPreview(t *testing.T) {
 		t.Fatalf("body = %q, want a respawned agent not to inherit the old preview", got.Body)
 	}
 }
+
+func failedTurn(agent, summary string) observe.Event {
+	return observe.Event{
+		Type: observe.EventAgentActivity,
+		Payload: &observe.AgentActivityPayload{
+			Agent:     agent,
+			Attention: &observe.AgentAttention{State: observe.AttentionErrored, Preview: summary},
+		},
+	}
+}
+
+func TestFailedTurnPushesWithItsErrorSummaryAsTheBody(t *testing.T) {
+	n, sender, _ := startNotifier(t)
+
+	n.Publish(failedTurn("builder", "ProviderAuthError: bad key"))
+
+	got := sender.next(t)
+	if got.Kind != "errored" || got.Title != "Hit an error" || got.Body != "ProviderAuthError: bad key" {
+		t.Fatalf("alert = %+v, want the errored alert carrying the error summary", got)
+	}
+}
+
+// A failed turn used to notify as "finished"; turning errored off must not
+// silence it for someone who kept finished on, and turning both off does.
+func TestFailedTurnPushesWhenEitherErroredOrFinishedIsEnabled(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		denied []observe.AttentionState
+		want   bool
+	}{
+		{"both on", nil, true},
+		{"errored off, finished on", []observe.AttentionState{observe.AttentionErrored}, true},
+		{"finished off, errored on", []observe.AttentionState{observe.AttentionFinished}, true},
+		{"both off", []observe.AttentionState{observe.AttentionErrored, observe.AttentionFinished}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var asked [][2]string
+			n, sender, _ := startNotifier(t, WithPolicy(denyStates(&asked, tc.denied...)))
+
+			n.Publish(failedTurn("a", "boom"))
+			n.Publish(activity("sentinel", observe.AttentionNeedsInput, nil))
+
+			first := sender.next(t)
+			if tc.want && first.Agent != "a" {
+				t.Fatalf("first alert = %+v, want the failed turn's", first)
+			}
+			if !tc.want && first.Agent != "sentinel" {
+				t.Fatalf("first alert = %+v, want the failed turn suppressed", first)
+			}
+		})
+	}
+}
+
+func TestLifecycleErroredIsStillGatedOnErroredAlone(t *testing.T) {
+	var asked [][2]string
+	n, sender, _ := startNotifier(t, WithPolicy(denyStates(&asked, observe.AttentionErrored)))
+
+	n.Publish(activity("a", observe.AttentionErrored, nil)) // harness exit, errored off
+	n.Publish(activity("sentinel", observe.AttentionNeedsInput, nil))
+
+	if got := sender.next(t); got.Agent != "sentinel" {
+		t.Fatalf("first alert = %+v, want the harness-exit errored suppressed", got)
+	}
+}

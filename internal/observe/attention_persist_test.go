@@ -7,6 +7,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 )
 
 // restartedStore simulates a daemon restart: a fresh store reading what the
@@ -223,5 +224,25 @@ func TestRestorePublishesNothing(t *testing.T) {
 	case ev := <-events:
 		t.Fatalf("Restore published %+v; a restart must not re-announce (or re-push) a finished turn", ev)
 	default:
+	}
+}
+
+func TestRestoreKeepsTheFailedTurnSummaryAndTheTimeOfTheChange(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "state", "attention.json")
+	at := time.Date(2026, 11, 24, 12, 0, 0, 0, time.UTC)
+	s := persistingStore(t, path)
+	s.SetClock(func() time.Time { return at })
+	s.RegisterToken("tok", "a")
+	s.SetByTokenErrored("tok", "ProviderAuthError")
+	s.FlushPersistence()
+
+	r := restartedStore(t, path)
+	r.SetClock(func() time.Time { return at.Add(time.Hour) })
+	if !r.Restore("a", "tok") {
+		t.Fatal("Restore = false")
+	}
+	got, _ := r.Get("a")
+	if got.State != AttentionErrored || got.Preview != "ProviderAuthError" || !got.At.Equal(at) {
+		t.Fatalf("restored = %+v, want errored/ProviderAuthError at the original %v", got, at)
 	}
 }

@@ -1,6 +1,10 @@
 package chat
 
-import "github.com/blackpaw-studio/leo/internal/observe"
+import (
+	"time"
+
+	"github.com/blackpaw-studio/leo/internal/observe"
+)
 
 // Event types published on the observability bus (/api/v1/events and the
 // socket's /events).
@@ -10,6 +14,9 @@ const (
 	// EventUpdated announces a change to an existing message: transcript
 	// ready, state change, answer.
 	EventUpdated observe.EventType = "chat.updated"
+	// EventAgentSeen announces that an agent was marked seen from some app,
+	// so every other app can update its read state.
+	EventAgentSeen observe.EventType = "agent_seen"
 )
 
 // Change names what a chat.updated event changed.
@@ -32,6 +39,14 @@ type UpdatedPayload struct {
 	Agent   string  `json:"agent"`
 	Message Message `json:"message"`
 	Change  string  `json:"change"`
+}
+
+// AgentSeenPayload is the agent_seen event: the agent's last-seen stamp as
+// it now stands (server time, never earlier than a previous one).
+type AgentSeenPayload struct {
+	observe.Meta
+	Agent  string    `json:"agent"`
+	SeenAt time.Time `json:"seen_at"`
 }
 
 func messageEvent(m Message) *MessagePayload { return &MessagePayload{Agent: m.Agent, Message: m} }

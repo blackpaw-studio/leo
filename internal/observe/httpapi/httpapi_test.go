@@ -3,11 +3,14 @@ package httpapi
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/blackpaw-studio/leo/internal/observe"
 )
 
 type fakeTicker struct{ ch chan time.Time }
@@ -119,8 +122,28 @@ func TestServeEventsHelloAdvertisesFeatures(t *testing.T) {
 	<-w.flushed
 	cancel()
 	<-done
-	want := `"features":["bridge_turns","attention_reason","dispatch_tree","agent_usage","agent_control","dispatch_attach","dispatch_removed","state_seq","attach_dispatch_placement","dispatch_placement_live","agent_environments","chat.questions","machine_stats","config_api","agent_status_restoring","client_tools","agent_appearance","agent_move","agent_move_fresh_session","agent_progress","agent_shell"]`
+	want := `"features":["bridge_turns","attention_reason","dispatch_tree","agent_usage","agent_control","dispatch_attach","dispatch_removed","state_seq","attach_dispatch_placement","dispatch_placement_live","agent_environments","chat.questions","machine_stats","config_api","agent_status_restoring","client_tools","agent_appearance","agent_move","agent_move_fresh_session","agent_progress","agent_shell","agent_seen","chat.open_asks","attention.turn_failed"]`
 	if !strings.Contains(w.String(), want) {
 		t.Fatalf("hello = %q, want %s", w.String(), want)
+	}
+}
+
+func TestPayloadForHidesAttentionInputOnActivityAndSpawnedFrames(t *testing.T) {
+	att := &observe.AgentAttention{State: observe.AttentionNeedsInput, Reason: &observe.AttentionReason{Detail: "rm", Input: "rm -rf x"}}
+	activity := observe.Event{Type: observe.EventAgentActivity, Payload: &observe.AgentActivityPayload{Agent: "a", Attention: att}}
+	spawned := observe.Event{Type: observe.EventAgentSpawned, Payload: &observe.AgentSpawnedPayload{Agent: observe.Agent{Name: "a", Attention: att}}}
+
+	for _, ev := range []observe.Event{activity, spawned} {
+		hidden, _ := json.Marshal(payloadFor(ev, EventsOptions{HideAttentionInput: true}))
+		shown, _ := json.Marshal(payloadFor(ev, EventsOptions{}))
+		if strings.Contains(string(hidden), "rm -rf x") || !strings.Contains(string(hidden), `"detail":"rm"`) {
+			t.Errorf("%s hidden = %s, want detail kept and input gone", ev.Type, hidden)
+		}
+		if !strings.Contains(string(shown), "rm -rf x") {
+			t.Errorf("%s shown = %s, want the input for an allowed reader", ev.Type, shown)
+		}
+	}
+	if att.Reason.Input != "rm -rf x" {
+		t.Fatal("redaction mutated the payload shared with other subscribers")
 	}
 }

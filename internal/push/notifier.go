@@ -330,7 +330,7 @@ func (n *Notifier) observe(agent string, att observe.AgentAttention) {
 	if !ok {
 		return
 	}
-	if n.allow != nil && !n.allow(agent, string(att.State)) {
+	if !n.allowed(agent, att) {
 		return
 	}
 	a := Alert{Agent: agent, Kind: string(att.State), Title: title, Body: alertBody(att, preview), At: n.now()}
@@ -364,6 +364,19 @@ func (n *Notifier) observe(agent string, att observe.AgentAttention) {
 	n.holdLocked(agent, a, false)
 }
 
+// allowed applies the push policy to a needs-you transition. A failed turn
+// notified as "finished" before it became errored, so it stays on while
+// either switch is: turning errored off alone must not silence it.
+func (n *Notifier) allowed(agent string, att observe.AgentAttention) bool {
+	if n.allow == nil {
+		return true
+	}
+	if n.allow(agent, string(att.State)) {
+		return true
+	}
+	return att.TurnFailed() && n.allow(agent, string(observe.AttentionFinished))
+}
+
 // needsYouTitle is the human summary for a needs-you state; ok=false for
 // every other state.
 func needsYouTitle(att observe.AgentAttention) (string, bool) {
@@ -379,16 +392,20 @@ func needsYouTitle(att observe.AgentAttention) (string, bool) {
 }
 
 // alertBody is what needs attention, shown under the title: the reason's
-// detail (question text, command, path) for needs_input and errored, and the
-// turn's preview for finished. Empty means a title-only push.
+// detail (question text, command, path) for needs_input and errored, the
+// turn's preview for finished, and the error summary for a failed turn.
+// Empty means a title-only push.
 func alertBody(att observe.AgentAttention, preview string) string {
 	if att.State == observe.AttentionFinished {
 		return preview
 	}
-	if att.Reason == nil {
-		return ""
+	if att.Reason != nil {
+		return att.Reason.Detail
 	}
-	return att.Reason.Detail
+	if att.TurnFailed() {
+		return att.Preview
+	}
+	return ""
 }
 
 func needsInputTitle(r *observe.AttentionReason) string {

@@ -775,7 +775,10 @@ func New(configPath string, processes ProcessStateProvider, scheduler SchedulerP
 	// Leo Chat (docs/configuration/chat.md): the apps' routes, operator or
 	// paired-device token only — the agent token reaches its own thread
 	// through the /api/agent/{name}/chat tool routes instead.
-	s.registerChatRoutes(apiMux, chatAPIPrefix, s.requireOperatorToken)
+	s.registerChatRoutes(apiMux, chatAPIPrefix, s.requireOperatorToken, s.requireOperator)
+	// Cross-device agent read state for the apps' inbox: same tokens, and a
+	// trusted proxy's SSO identity as on /api/v1/state.
+	s.registerSeenRoutes(apiMux, s.requireOperator)
 	// Client-tools relay: the apps' routes take the operator or a paired
 	// device's token, the agents' list and call routes the agent token.
 	s.registerClientToolsRoutes(apiMux)
