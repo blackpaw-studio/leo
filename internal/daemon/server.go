@@ -20,6 +20,7 @@ import (
 	"github.com/blackpaw-studio/leo/internal/clienttools"
 	"github.com/blackpaw-studio/leo/internal/config"
 	"github.com/blackpaw-studio/leo/internal/consult"
+	"github.com/blackpaw-studio/leo/internal/credentials"
 	"github.com/blackpaw-studio/leo/internal/cron"
 	"github.com/blackpaw-studio/leo/internal/devices"
 	"github.com/blackpaw-studio/leo/internal/drain"
@@ -157,6 +158,10 @@ type Server struct {
 	// machineStats backs GET /machine and, via StartWeb, GET /api/v1/machine;
 	// nil answers 503 (see WithMachineStats).
 	machineStats MachineSampler
+
+	// credFetcher and credHome back the /credentials socket routes.
+	credFetcher *credentials.Fetcher
+	credHome    string
 
 	// control serves the agent control routes; set by StartWeb (see
 	// setControl).
@@ -301,6 +306,7 @@ func New(sockPath, configPath string, processes ProcessStateProvider, opts ...Op
 	for _, opt := range opts {
 		opt(s)
 	}
+	s.defaultCredentials()
 	// Cron fires `leo run` from the daemon's own binary (WithLeoMCP), so an
 	// isolated daemon never runs tasks through whichever leo is on PATH.
 	s.scheduler = cron.New(s.leoMCP.Executable(), configPath)
@@ -330,6 +336,10 @@ func New(sockPath, configPath string, processes ProcessStateProvider, opts ...Op
 	mux.HandleFunc("GET /machine", s.handleMachine)
 	mux.HandleFunc("GET /templates", s.handleTemplates)
 	mux.HandleFunc("GET /environments", s.handleEnvironments)
+	// Plugin credentials: socket-only on purpose, never on the web mux.
+	mux.HandleFunc("GET /credentials/accounts", s.handleCredentialAccounts)
+	mux.HandleFunc("POST /credentials/check", s.handleCredentialCheck)
+	mux.HandleFunc("POST /credentials/fetch", s.handleCredentialFetch)
 	mux.HandleFunc("POST /cron/install", s.handleCronInstall)
 	mux.HandleFunc("POST /cron/remove", s.handleCronRemove)
 	mux.HandleFunc("GET /cron/list", s.handleCronList)
