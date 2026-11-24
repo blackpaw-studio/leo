@@ -50,12 +50,15 @@ A granted run is read-only at the OS level, not just by role permissions:
 - **claude:** Leo enables Claude Code's sandbox for the run via its settings merge, with
   filesystem writes denied in the target workspace (writes allowed only to the run's own temp/
   scratch area the harness needs) and the secret denylist below denied for reads. Bash runs
-  sandboxed with no unsandboxed escape hatch.
-- **codex:** `--sandbox read-only`, no `writable_roots` grant for the target workspace.
+  sandboxed with no unsandboxed escape hatch. The run ignores the target repo's project/local
+  Claude settings (`--setting-sources user`) so its hooks and sandbox exclusions don't apply.
+- **codex:** `--sandbox read-only` (overriding the template's permission mode), no `writable_roots`
+  grant for the target workspace. Codex cannot deny reads, so the secret denylist is **not**
+  enforced on codex runs — an accepted, documented gap (Evan, 2026-11-23).
 - **opencode** (or any harness without an enforceable sandbox): the dispatch is refused with an
   error naming the harness.
 
-Built-in secret read denylist (inside the target workspace): `.env`, `.env.*`, `*.local`,
+Built-in secret read denylist (inside the target workspace; claude only): `.env`, `.env.*`, `*.local`,
 `*.pem`, `*.key`, `id_*` keys, `.netrc`, `.npmrc`, `Secrets.xcconfig`. Not configurable.
 
 ### Nesting
