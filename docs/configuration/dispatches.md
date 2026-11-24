@@ -275,10 +275,20 @@ The record keeps `target_agent`, `target_grant` (the matching entry, or
 `dispatch <id>: read grant caller=<root> target=<agent> role=<role> grant=<entry>`.
 The target agent is not notified.
 
+Leo pins the sandbox's weakening switches to `false` in the run's
+`--settings` (`filesystem.disabled`, `enableWeakerNestedSandbox`,
+`allowNestedUserNamespaces`, `enableWeakerNetworkIsolation`, and
+`network.allowAllUnixSockets` / `allowLocalBinding` / `allowAppleEvents`), so
+the run account's user-scope settings cannot turn them on.
+Run messages are confined too: a run inside a granted tree can only continue
+or reopen runs under the same grant.
+
 Accepted risks: MCP tools, hooks and mods run outside Claude Code's sandbox;
-`sandbox.excludedCommands` in the run account's user-scope settings still
-applies (lists merge, so `--settings` cannot clear it); and the codex read gap
-above.
+list-valued sandbox settings in the run account's user scope still apply
+(`excludedCommands`, `filesystem.allowWrite` / `allowRead`,
+`network.allowedDomains` / `allowUnixSockets`; lists merge across scopes, so
+`--settings` cannot clear them), as do user-scope proxy ports; and the codex
+read gap above.
 
 ## MCP tools
 

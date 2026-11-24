@@ -32,15 +32,29 @@ func readOnlySettings(ro *harness.ReadOnlySandbox) map[string]any {
 			}
 		}
 	}
+	// The weakening booleans are pinned false: they are scalars, so this
+	// --settings value beats a user-scope one (which --setting-sources user
+	// still loads). User-scope arrays (allowWrite, allowRead,
+	// excludedCommands, allowedDomains, allowUnixSockets) merge across scopes
+	// and cannot be cleared from here; that is an accepted risk.
 	return map[string]any{
 		"sandbox": map[string]any{
-			"enabled":                  true,
-			"failIfUnavailable":        true,
-			"allowUnsandboxedCommands": false,
-			"autoAllowBashIfSandboxed": true,
+			"enabled":                      true,
+			"failIfUnavailable":            true,
+			"allowUnsandboxedCommands":     false,
+			"autoAllowBashIfSandboxed":     true,
+			"enableWeakerNestedSandbox":    false,
+			"allowNestedUserNamespaces":    false,
+			"enableWeakerNetworkIsolation": false,
 			"filesystem": map[string]any{
+				"disabled":  false,
 				"denyWrite": denyWrite,
 				"denyRead":  denyRead,
+			},
+			"network": map[string]any{
+				"allowAllUnixSockets": false,
+				"allowLocalBinding":   false,
+				"allowAppleEvents":    false,
 			},
 		},
 		"permissions": map[string]any{"deny": deny},
