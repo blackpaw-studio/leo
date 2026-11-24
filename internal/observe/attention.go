@@ -351,6 +351,11 @@ func (s *AttentionStore) advanceBridge(key, launch string, state AttentionState,
 // agent currently in cur.
 func (s *AttentionStore) advanceLocked(agent string, state, cur AttentionState) (AgentAttention, bool) {
 	switch {
+	case state == AttentionFinished && cur == AttentionErrored && s.previews[agent] != "":
+		// The bridge reports the end of the turn a StopFailure hook already
+		// failed: the failure (and its summary) stands. Only a new turn
+		// (working) moves on.
+		return AgentAttention{}, false
 	case state == AttentionWorking && cur == AttentionWorking:
 		delete(s.held, agent)
 		s.bridge.clearTasks(agent)

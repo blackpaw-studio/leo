@@ -436,3 +436,84 @@ func TestErroredWithoutDetailStillSaysTheTurnFailed(t *testing.T) {
 		t.Fatalf("errored = %+v, want a fallback summary so the failure stays distinguishable", att)
 	}
 }
+
+// bridgedFailure is an agent whose launch is bound to a bridge key, so a
+// turn.complete from the bridge and a StopFailure hook can both report on it.
+func bridgedFailure(t *testing.T) (*AttentionStore, *syncRecorder) {
+	t.Helper()
+	pub := &syncRecorder{}
+	s := NewAttentionStore(pub)
+	s.RegisterToken("tok", "a")
+	s.BindBridgeKey("k", "k-launch", "a")
+	s.Set("a", AttentionWorking)
+	pub.reset()
+	return s, pub
+}
+
+func attentionStates(pub *syncRecorder) []AttentionState {
+	var out []AttentionState
+	for _, ev := range pub.snapshot() {
+		if p, ok := ev.Payload.(*AgentActivityPayload); ok && p.Attention != nil {
+			out = append(out, p.Attention.State)
+		}
+	}
+	return out
+}
+
+// StopFailure first, then the bridge's turn.complete for the same turn: the
+// failure stands, keeps its summary, and the completion publishes nothing.
+func TestBridgeTurnCompleteAfterAFailedTurnDoesNotOverwriteIt(t *testing.T) {
+	s, pub := bridgedFailure(t)
+	s.SetByTokenErrored("tok", "rate limited")
+
+	att, ok := s.CompleteBridgeTurn("k", "k-launch", 0)
+
+	if ok {
+		t.Fatalf("CompleteBridgeTurn published %+v over a failed turn", att)
+	}
+	got, _ := s.Get("a")
+	if got.State != AttentionErrored || got.Preview != "rate limited" || !got.TurnFailed() {
+		t.Fatalf("attention = %+v, want the failed turn kept with its summary", got)
+	}
+	if states := attentionStates(pub); len(states) != 1 || states[0] != AttentionErrored {
+		t.Fatalf("published %v, want exactly the one errored", states)
+	}
+}
+
+// turn.complete first, then StopFailure: errored wins the state.
+func TestStopFailureAfterTheBridgeTurnCompleteWinsTheState(t *testing.T) {
+	s, pub := bridgedFailure(t)
+	s.CompleteBridgeTurn("k", "k-launch", 0)
+
+	s.SetByTokenErrored("tok", "rate limited")
+	_, again := s.CompleteBridgeTurn("k", "k-launch", 0) // a repeated completion changes nothing
+
+	got, _ := s.Get("a")
+	if got.State != AttentionErrored || !got.TurnFailed() || again {
+		t.Fatalf("attention = %+v (repeat published: %v), want errored to win", got, again)
+	}
+	if states := attentionStates(pub); len(states) != 2 || states[0] != AttentionFinished || states[1] != AttentionErrored {
+		t.Fatalf("published %v, want finished then errored (the finished was already out)", states)
+	}
+}
+
+func TestANewBridgeTurnClearsAFailedTurn(t *testing.T) {
+	s, _ := bridgedFailure(t)
+	s.SetByTokenErrored("tok", "rate limited")
+
+	att, ok := s.BeginBridgeTurn("k", "k-launch")
+
+	if !ok || att.State != AttentionWorking || att.Preview != "" {
+		t.Fatalf("turn.start = %+v, %v; want working with the failure gone", att, ok)
+	}
+}
+
+// A harness-exit errored has no live turn behind it; it is not protected.
+func TestBridgeFinishedStillOverwritesALifecycleErrored(t *testing.T) {
+	s, _ := bridgedFailure(t)
+	s.Set("a", AttentionErrored)
+
+	if att, ok := s.CompleteBridgeTurn("k", "k-launch", 0); !ok || att.State != AttentionFinished {
+		t.Fatalf("turn.complete = %+v, %v; want finished over a lifecycle errored", att, ok)
+	}
+}
