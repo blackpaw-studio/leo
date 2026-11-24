@@ -218,3 +218,39 @@ func TestSocketServesSeenAndOpenAsksWithoutAToken(t *testing.T) {
 	// A write over the socket reaches the TCP side's apps through the bus.
 	nextEvent(t, cs.events, chat.EventAgentSeen)
 }
+
+// A trusted proxy's SSO identity (Remote-User) is operator-equivalent on
+// /api/v1/state; the inbox routes admit it too. The agent token stays out.
+func TestInboxRoutesAdmitTrustedProxySSOLikeState(t *testing.T) {
+	const proxy, outsider = "192.0.2.9", "192.0.2.50"
+	cs := newChatServer(t, func(o *Options) { o.TrustedProxies = []string{proxy} })
+	routes := []struct{ method, path, body string }{
+		{http.MethodPut, "/api/v1/agents/assistant/seen", ""},
+		{http.MethodPut, "/api/v1/agents/seen", `{"agents":["assistant"]}`},
+		{http.MethodGet, "/api/v1/agents/seen", ""},
+		{http.MethodGet, "/api/v1/chat/asks?state=open", ""},
+	}
+	state := httptest.NewRecorder()
+	cs.s.Handler().ServeHTTP(state, ssoRequest(http.MethodGet, "/api/v1/state", proxy, "", ""))
+	if state.Code != http.StatusOK {
+		t.Fatalf("precondition: SSO on /api/v1/state = %d, want 200", state.Code)
+	}
+	for _, r := range routes {
+		if got := serve(cs.s, ssoRequest(r.method, r.path, proxy, "", r.body)); got != http.StatusOK {
+			t.Errorf("SSO %s %s = %d, want 200", r.method, r.path, got)
+		}
+		if got := serve(cs.s, ssoRequest(r.method, r.path, outsider, "", r.body)); got != http.StatusUnauthorized {
+			t.Errorf("forged Remote-User %s %s = %d, want 401", r.method, r.path, got)
+		}
+	}
+	// The agent token alone, with no SSO identity, is refused on all four.
+	for _, r := range routes {
+		if w := chatRequest(t, cs.s, r.method, r.path, testAgentToken, r.body); w.Code != http.StatusForbidden {
+			t.Errorf("agent token %s %s = %d, want 403", r.method, r.path, w.Code)
+		}
+	}
+	// SSO admission is limited to these routes: other chat routes still need a token.
+	if got := serve(cs.s, ssoRequest(http.MethodGet, "/api/v1/chat/threads", proxy, "", "")); got != http.StatusForbidden {
+		t.Errorf("SSO on /chat/threads = %d, want 403 (unchanged)", got)
+	}
+}

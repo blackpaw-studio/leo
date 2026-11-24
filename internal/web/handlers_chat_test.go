@@ -49,9 +49,9 @@ type chatServer struct {
 
 // newChatServer is a token-split server (auth exercised for real) with chat
 // wired to a fake deliverer and a tiny upload cap.
-func newChatServer(t *testing.T) chatServer {
+func newChatServer(t *testing.T, mods ...func(*Options)) chatServer {
 	t.Helper()
-	s := newTokenSplitServer(t)
+	s := newTokenSplitServer(t, mods...)
 	svc := s.agentSvc.(*mockAgentService)
 	svc.records = []agent.Record{{Name: "assistant", Workspace: "/ws"}}
 	store, err := chat.OpenStore(filepath.Join(t.TempDir(), "chat.db"))

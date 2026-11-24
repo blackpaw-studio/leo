@@ -172,9 +172,12 @@ func (d chatDeliverer) start(ctx context.Context, name, harnessName, prompt stri
 // wrapped by wrap. GET /{seg}/{rest} serves both
 // GET <prefix>/attachments/{id} and GET <prefix>/{agent}/messages: Go's mux
 // rejects the two as overlapping patterns.
-func (s *Server) registerChatRoutes(mux *http.ServeMux, prefix string, wrap func(http.HandlerFunc) http.HandlerFunc) {
+//
+// wrapAsks wraps GET <prefix>/asks, which the Needs-you inbox reads and so
+// also admits a trusted proxy's SSO identity on TCP.
+func (s *Server) registerChatRoutes(mux *http.ServeMux, prefix string, wrap, wrapAsks func(http.HandlerFunc) http.HandlerFunc) {
 	mux.HandleFunc("GET "+prefix+"/threads", wrap(s.handleChatThreads))
-	mux.HandleFunc("GET "+prefix+"/asks", wrap(s.handleChatOpenAsks))
+	mux.HandleFunc("GET "+prefix+"/asks", wrapAsks(s.handleChatOpenAsks))
 	mux.HandleFunc("GET "+prefix+"/{seg}/{rest}", wrap(s.handleChatGet))
 	mux.HandleFunc("POST "+prefix+"/uploads", wrap(s.handleChatUpload))
 	mux.HandleFunc("POST "+prefix+"/{agent}/messages", wrap(s.handleChatSend))
@@ -193,7 +196,7 @@ const chatAPIPrefix = "/api/v1/chat"
 func (s *Server) ChatHandler() http.Handler {
 	mux := http.NewServeMux()
 	noAuth := func(h http.HandlerFunc) http.HandlerFunc { return h }
-	s.registerChatRoutes(mux, chatAPIPrefix, noAuth)
+	s.registerChatRoutes(mux, chatAPIPrefix, noAuth, noAuth)
 	s.registerSeenRoutes(mux, noAuth)
 	mux.HandleFunc("POST /chat/task-failure", s.handleChatTaskFailure)
 	return mux
