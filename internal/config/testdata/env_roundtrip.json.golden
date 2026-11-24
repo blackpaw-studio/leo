@@ -107,6 +107,9 @@
           "PreSend": null,
           "PostReceive": null
         }
+      },
+      "Share": {
+        "ReadableBy": null
       }
     }
   },

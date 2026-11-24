@@ -47,6 +47,7 @@ var roundTripOverrides = map[string]any{
 	"allowed_tools":        []any{"Read"},
 	"disallowed_tools":     []any{"Bash"},
 	"append_system_prompt": "be brief",
+	"readable_by":          []any{"template:reviewer", "agent:rt-a"},
 }
 
 // roundTripCompanions are values config only accepts together with another

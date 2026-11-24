@@ -155,7 +155,7 @@ func TestConfigSchemaListsEveryResource(t *testing.T) {
 		t.Errorf("template actions = %v, want add/rename/duplicate/delete", acts)
 	}
 	subs := tmpl["subsections"].([]any)
-	if len(subs) != 2 || subs[0].(map[string]any)["key"] != "permissions" || subs[1].(map[string]any)["section"] != "push_template" {
+	if len(subs) != 3 || subs[0].(map[string]any)["key"] != "permissions" || subs[1].(map[string]any)["section"] != "push_template" || subs[2].(map[string]any)["section"] != "share" {
 		t.Errorf("template subsections = %v", subs)
 	}
 	if got["web"]["restart"] != "service" || got["tasks"]["restart"] != "none" || got["defaults"]["kind"] != "singleton" {

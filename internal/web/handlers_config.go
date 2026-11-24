@@ -125,6 +125,19 @@ func (s *Server) permissionFields(perms *leotools.Permissions, cfg *config.Confi
 	return fd.Fields
 }
 
+// shareFields renders the templates.*.share sub-struct (read grants) as field
+// views for the template form, stamped like permissionFields.
+func (s *Server) shareFields(share *config.ShareConfig, cfg *config.Config, name string) []fieldView {
+	fd := s.buildForm(schema.SectionShare, share, cfg, "")
+	scope := scopeSuffix(schema.SectionTemplate, name)
+	for i := range fd.Fields {
+		fd.Fields[i].Section = schema.SectionShare
+		fd.Fields[i].Scope = scope
+		fd.Fields[i].ScopeName = name
+	}
+	return fd.Fields
+}
+
 // pushFields renders a nested push block (defaults' or a template's) as field
 // views for its parent form. scope and name stamp the fields the same way the
 // parent form's are, so element ids stay unique.

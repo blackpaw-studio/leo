@@ -35,6 +35,9 @@
               "finished": null,
               "needs_input": null
             },
+            "share": {
+              "readable_by": []
+            },
             "workspace": "/tmp/coder"
           }
         },
@@ -66,6 +69,9 @@
               "errored": null,
               "finished": null,
               "needs_input": null
+            },
+            "share": {
+              "readable_by": []
             },
             "workspace": ""
           }
