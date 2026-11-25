@@ -109,6 +109,13 @@ func isChatEvent(t observe.EventType) bool {
 	return false
 }
 
+// isOperatorOnlyEvent reports whether t is withheld from the agent token and
+// other non-operator readers: the chat events, and the agent briefs, which
+// carry what an agent is working on.
+func isOperatorOnlyEvent(t observe.EventType) bool {
+	return isChatEvent(t) || t == observe.EventAgentBrief
+}
+
 // seqSource is an eventSource that also reports its last published seq
 // (observe.Bus does).
 type seqSource interface{ Seq() uint64 }
@@ -324,6 +331,9 @@ func buildAgent(rec agent.Record, states map[string]ProcessStateInfo, views agen
 	}
 	mergeBridge(&a, views)
 	a.Tasks = views.tasks[rec.Name]
+	if cfg != nil && cfg.Brief.Enabled {
+		a.Brief = rec.Brief.Clone()
+	}
 
 	return a
 }
@@ -564,7 +574,7 @@ func (s *Server) handleAPIEvents(w http.ResponseWriter, r *http.Request) {
 	// other non-operator caller), so their events stay off its stream too:
 	// they carry other agents' asks and permission prompts.
 	if !s.seesAttentionContent(r) {
-		opts.Withhold = isChatEvent
+		opts.Withhold = isOperatorOnlyEvent
 	}
 	// A provider stream (?client_tools=1) registers a client with the relay
 	// for its length; agents' tokens pass the API auth but may not open one.

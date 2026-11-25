@@ -226,4 +226,5 @@ func mergeStored(r *Record, stored map[string]agentstore.Record) {
 	r.MovedTo = s.MovedTo
 	r.MovedAt = s.MovedAt
 	r.ManualAppearance = s.Appearance
+	r.Brief = s.Brief
 }

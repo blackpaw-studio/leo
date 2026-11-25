@@ -17,6 +17,7 @@ import (
 
 	"github.com/blackpaw-studio/leo/internal/agent"
 	"github.com/blackpaw-studio/leo/internal/bridge"
+	"github.com/blackpaw-studio/leo/internal/brief"
 	"github.com/blackpaw-studio/leo/internal/chat"
 	"github.com/blackpaw-studio/leo/internal/clienttools"
 	"github.com/blackpaw-studio/leo/internal/config"
@@ -260,6 +261,10 @@ type Server struct {
 	devices     *devices.Store
 	pairLimiter *pairLimiter
 	now         func() time.Time
+	// briefs counts each agent's turns since its brief was last written, for
+	// the staleness nudge; briefSwitch caches brief.enabled.
+	briefs      *brief.Tracker
+	briefSwitch briefSwitch
 
 	// startAttach runs a read-only tmux client in a PTY for
 	// GET /api/v1/agents/{name}/attach; attachTicker is that socket's
@@ -539,6 +544,7 @@ func New(configPath string, processes ProcessStateProvider, scheduler SchedulerP
 		devices:            opts.Devices,
 		pairLimiter:        newPairLimiter(),
 		now:                time.Now,
+		briefs:             brief.NewTracker(),
 		attachTicker:       realTicker,
 		revocationTicker:   realTicker,
 	}
@@ -707,6 +713,7 @@ func New(configPath string, processes ProcessStateProvider, scheduler SchedulerP
 	apiMux.HandleFunc("POST /api/agent/{name}/move", s.handleAPIAgentMove)
 	apiMux.HandleFunc("POST /api/agent/hook", s.handleAPIAgentHook)
 	apiMux.HandleFunc("POST /api/agent/progress", s.handleAPIAgentProgress)
+	apiMux.HandleFunc("POST /api/agent/brief", s.handleAPIAgentBrief)
 	apiMux.HandleFunc("POST /api/agent/context", s.handleAPIAgentContext)
 	apiMux.HandleFunc("POST /api/agent/permission", s.handleAPIPermission)
 	apiMux.HandleFunc("POST /api/agent/{name}/chat/post", s.handleAgentChatPost)
