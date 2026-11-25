@@ -29,6 +29,7 @@ import (
 	"github.com/blackpaw-studio/leo/internal/leomcp"
 	"github.com/blackpaw-studio/leo/internal/observe"
 	"github.com/blackpaw-studio/leo/internal/observe/httpapi"
+	"github.com/blackpaw-studio/leo/internal/peercred"
 	"github.com/blackpaw-studio/leo/internal/startup"
 	"github.com/blackpaw-studio/leo/internal/tmux"
 	"github.com/blackpaw-studio/leo/internal/web"
@@ -166,6 +167,10 @@ type Server struct {
 	// control serves the agent control routes; set by StartWeb (see
 	// setControl).
 	control atomic.Pointer[controlHolder]
+	// agentContext serves the socket's POST /api/agent/context, the route the
+	// context hooks use so the kernel can name the process that called (see
+	// setAgentContext); set by StartWeb.
+	agentContext atomic.Pointer[controlHolder]
 	// clientSink receives the API client policies a config reload rebuilds;
 	// set by StartWeb (see setClientSink), nil until the web server exists.
 	clientSink atomic.Pointer[clientSinkHolder]
@@ -198,6 +203,9 @@ type Server struct {
 	// restored agents; until then agent queries (e.g. /agents/stale) answer
 	// from a partially populated supervisor.
 	ready atomic.Bool
+
+	// briefState is the last brief.enabled this daemon announced (see syncBrief).
+	briefState atomic.Int32
 	// pid is this daemon's boot identity reported on /health.
 	pid int
 	// webListening is the web listener's bound address once it is serving,
@@ -273,6 +281,12 @@ func (s *Server) SetObservability(bus *observe.Bus, runLog *observe.RunLog, mess
 func (s *Server) SetAttention(a *observe.AttentionStore) {
 	s.observeAttention = a
 }
+
+// Cached brief.enabled states, zero meaning not yet announced.
+const (
+	briefOff int32 = iota + 1
+	briefOn
+)
 
 // SetProgress wires the agent task progress store into the local /state view
 // and, via StartWeb, the web API. Must be called before StartWeb.
@@ -422,14 +436,18 @@ func New(sockPath, configPath string, processes ProcessStateProvider, opts ...Op
 	mux.HandleFunc("PUT "+seenSocketList, s.handleChat)
 	mux.HandleFunc("PUT "+seenSocketAgent, s.handleChat)
 	mux.HandleFunc("POST "+chatTaskFailurePath, s.handleChat)
+	mux.HandleFunc("POST /api/agent/context", s.handleAgentContext)
 	mux.HandleFunc("GET /api/bridge/{agent}/stream", s.handleBridgeStream)
 	mux.HandleFunc("POST /api/bridge/{agent}/report", s.handleBridgeReport)
 
 	baseCtx, endStreams := context.WithCancel(context.Background())
 	s.endStreams = endStreams
 	s.httpServer = &http.Server{
-		Handler:      mux,
-		BaseContext:  func(net.Listener) context.Context { return baseCtx },
+		Handler:     mux,
+		BaseContext: func(net.Listener) context.Context { return baseCtx },
+		// Every request carries the process the kernel says is on the other
+		// end of its connection: what a session-binding decision rests on.
+		ConnContext:  peercred.ConnContext,
 		ReadTimeout:  30 * time.Second,
 		WriteTimeout: 30 * time.Second,
 	}
@@ -651,6 +669,7 @@ func (s *Server) StartWeb(cfg *config.Config, agentSvc web.AgentService) error {
 	}, observeOpts...)
 	stop()
 	s.setControl(s.webServer.ControlHandler())
+	s.setAgentContext(s.webServer.AgentContextHandler())
 	s.setClientSink(s.webServer)
 	s.setDrainNotifier(s.webServer.DrainNotifier())
 	s.setRunningDispatches(s.webServer.RunningDispatches)
@@ -744,12 +763,31 @@ func (s *Server) ReloadConfig() error {
 	if s.agentMgr != nil {
 		s.agentMgr.RepublishAppearance()
 	}
+	s.syncBrief(cfg.Brief.Enabled)
 	if cfg.UsesHarness("opencode") {
 		if err := leomcp.EnsureOpenCodeContext(cfg); err != nil {
 			return fmt.Errorf("refresh opencode context: %w", err)
 		}
 	}
 	return s.scheduler.Install(cfg)
+}
+
+// syncBrief hands brief.enabled to the web server's hooks and tells the event
+// stream when the switch flipped, so a running agent's MCP server can list or
+// withdraw leo_brief. The first call has nothing to compare against and
+// always publishes: a spurious event only repeats the value.
+func (s *Server) syncBrief(enabled bool) {
+	if s.webServer != nil {
+		s.webServer.SetBriefEnabled(enabled)
+	}
+	next := briefOff
+	if enabled {
+		next = briefOn
+	}
+	if s.briefState.Swap(next) == next || s.observeBus == nil {
+		return
+	}
+	s.observeBus.Publish(observe.Event{Type: observe.EventBriefConfigChanged, Payload: &observe.BriefConfigChangedPayload{Enabled: enabled}})
 }
 
 // AgentGone tells the daemon an agent is gone (stopped or deleted): its open

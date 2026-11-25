@@ -66,6 +66,12 @@ func (r *registry) startWatch() {
 		return
 	}
 	w.started = true
+	r.clientTools.onBrief = r.setBrief
+	if r.reportsBrief() {
+		r.clientTools.briefState = func(ctx context.Context) (bool, error) {
+			return r.clientTools.client.briefEnabled(ctx, r.attentionToken)
+		}
+	}
 	w.wg.Add(1)
 	go func() {
 		defer w.wg.Done()
@@ -166,7 +172,8 @@ func toolSetSignature(tools []clientToolInfo) string {
 }
 
 // streamEvents reads one SSE connection to the daemon, calling poke on hello
-// and on every client_tools.changed; every other event is ignored. It reports
+// and on every client_tools.changed, and onBrief on every
+// brief_config_changed; every other event is ignored. It reports
 // whether the stream got as far as hello, and returns when it ends or ctx does.
 func (v *clientToolsView) streamEvents(ctx context.Context, poke func()) (connected bool) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, v.client.baseURL+"/api/v1/events", nil)
@@ -186,7 +193,7 @@ func (v *clientToolsView) streamEvents(ctx context.Context, poke func()) (connec
 	}
 
 	rd := bufio.NewReader(resp.Body)
-	var event string
+	var event, data string
 	for {
 		line, err := rd.ReadString('\n')
 		if err != nil {
@@ -196,17 +203,45 @@ func (v *clientToolsView) streamEvents(ctx context.Context, poke func()) (connec
 		switch {
 		case strings.HasPrefix(line, "event:"):
 			event = strings.TrimSpace(strings.TrimPrefix(line, "event:"))
+		case strings.HasPrefix(line, "data:"):
+			data = strings.TrimSpace(strings.TrimPrefix(line, "data:"))
 		case line == "":
 			switch event {
 			case "hello":
 				connected = true
 				poke()
+				v.reconcileBrief(ctx)
 			case "client_tools.changed":
 				poke()
+			case "brief_config_changed":
+				var p struct {
+					Enabled bool `json:"enabled"`
+				}
+				if v.onBrief != nil && json.Unmarshal([]byte(data), &p) == nil {
+					v.onBrief(p.Enabled)
+				}
 			}
-			event = ""
+			event, data = "", ""
 		}
 	}
+}
+
+// reconcileBrief asks the daemon for the brief switch and applies it through
+// onBrief, which re-lists the tools if it differs from what was last told. It
+// runs inside the stream's read loop, so a flip that follows hello is applied
+// after the answer, never before it; a failed ask changes nothing (the handler
+// refuses a call that should not be made, and the next hello asks again).
+func (v *clientToolsView) reconcileBrief(ctx context.Context) {
+	if v.briefState == nil || v.onBrief == nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(ctx, clientToolListTimeout)
+	defer cancel()
+	enabled, err := v.briefState(ctx)
+	if err != nil {
+		return
+	}
+	v.onBrief(enabled)
 }
 
 // fallbackListed reports whether the fixed fallback tools are listed. The

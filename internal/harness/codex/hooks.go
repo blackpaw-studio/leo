@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -26,11 +27,27 @@ func leoHookCommand(leoBin string) string {
 	return harness.ShellCommand([]string{leoBin, "dispatch", "report"})
 }
 
+// leoContextCommand is the hook command line that asks the daemon for context
+// to add to the session (delegation policy, the agent's brief). Like the report
+// command it is byte-identical wherever it is installed, since codex trusts
+// hooks by hash.
+func leoContextCommand(leoBin string) string {
+	if leoBin == "" {
+		return "leo dispatch context"
+	}
+	return harness.ShellCommand([]string{leoBin, "dispatch", "context"})
+}
+
 // codexHookEvents are the events leo's report command is installed for.
 // PreToolUse and PostToolUse are activity only: a foreground tool sends no
 // hooks between them, so they keep a long tool call from reading stalled.
 // Codex has no PostToolUseFailure.
 var codexHookEvents = []string{"Stop", "UserPromptSubmit", "Interrupt", "SessionEnd", "PreToolUse", "PostToolUse"}
+
+// codexContextEvents are the events the context command is installed for:
+// the two codex lets a hook add context to (SessionStart, with source startup,
+// resume, clear or compact; UserPromptSubmit).
+var codexContextEvents = []string{"SessionStart", "UserPromptSubmit"}
 
 var prepareInteractiveMu sync.Mutex
 
@@ -71,7 +88,7 @@ func (Codex) PrepareInteractive(env map[string]string, _, leoBin string) error {
 	prepareInteractiveMu.Lock()
 	defer prepareInteractiveMu.Unlock()
 
-	command := leoHookCommand(leoBin)
+	command, contextCommand := leoHookCommand(leoBin), leoContextCommand(leoBin)
 	hooksPath, err := canonicalPath(filepath.Join(home, "hooks.json"))
 	if err != nil {
 		return fmt.Errorf("codex: resolving hooks path: %w", err)
@@ -85,13 +102,14 @@ func (Codex) PrepareInteractive(env map[string]string, _, leoBin string) error {
 		return err
 	}
 	mergeLeoHooks(hooks, command)
+	mergeLeoContextHooks(hooks, contextCommand)
 
 	config, err := os.ReadFile(configPath) // #nosec G304 -- CODEX_HOME config path
 	if err != nil && !os.IsNotExist(err) {
 		return fmt.Errorf("codex: reading %s: %w", configPath, err)
 	}
 	trusted := trustedHashes(string(config))
-	entries, untrusted := hookTrustEntries(hooksPath, hooks, trusted, command)
+	entries, untrusted := hookTrustEntries(hooksPath, hooks, trusted, command, contextCommand)
 	if len(untrusted) > 0 {
 		return fmt.Errorf("codex: untrusted hooks would trigger review: %s", strings.Join(untrusted, ", "))
 	}
@@ -148,30 +166,43 @@ func readHooks(path string) (map[string]any, error) {
 }
 
 func mergeLeoHooks(file map[string]any, command string) {
-	events := file["hooks"].(map[string]any)
-	for _, event := range codexHookEvents {
-		groups, _ := events[event].([]any)
+	mergeLeoHandlers(file, codexHookEvents, "report", command)
+}
+
+// mergeLeoContextHooks installs the context command for codexContextEvents,
+// after the report handlers so an event carrying both keeps a stable order.
+func mergeLeoContextHooks(file map[string]any, command string) {
+	mergeLeoHandlers(file, codexContextEvents, "context", command)
+}
+
+// mergeLeoHandlers makes command, a `leo dispatch <verb>` line, the one Leo
+// handler of that verb on each of events: stale ones (another leo path) are
+// removed, foreign handlers kept.
+func mergeLeoHandlers(file map[string]any, events []string, verb, command string) {
+	byEvent := file["hooks"].(map[string]any)
+	for _, event := range events {
+		groups, _ := byEvent[event].([]any)
 		kept := make([]any, 0, len(groups)+1)
 		for _, raw := range groups {
 			group, _ := raw.(map[string]any)
-			filtered, changed := withoutLeoHandlers(group, command)
+			filtered, changed := withoutLeoHandlers(group, verb, command)
 			if !changed {
 				kept = append(kept, raw)
 			} else if len(asSlice(filtered["hooks"])) > 0 {
 				kept = append(kept, filtered)
 			}
 		}
-		events[event] = append(kept, map[string]any{"hooks": []any{map[string]any{"type": "command", "command": command}}})
+		byEvent[event] = append(kept, map[string]any{"hooks": []any{map[string]any{"type": "command", "command": command}}})
 	}
 }
 
-func withoutLeoHandlers(group map[string]any, current string) (map[string]any, bool) {
+func withoutLeoHandlers(group map[string]any, verb, current string) (map[string]any, bool) {
 	filtered := make([]any, 0, len(asSlice(group["hooks"])))
 	changed := false
 	for _, raw := range asSlice(group["hooks"]) {
 		handler, _ := raw.(map[string]any)
 		command, _ := handler["command"].(string)
-		if handler["type"] == "command" && isLeoDispatchReportCommand(command, current) {
+		if handler["type"] == "command" && isLeoDispatchCommand(command, verb, current) {
 			changed = true
 			continue
 		}
@@ -189,8 +220,13 @@ func withoutLeoHandlers(group map[string]any, current string) (map[string]any, b
 }
 
 func isLeoDispatchReportCommand(command, current string) bool {
-	const suffix = " dispatch report"
-	if !strings.HasSuffix(command, suffix) {
+	return isLeoDispatchCommand(command, "report", current)
+}
+
+// isLeoDispatchCommand reports whether command is a `leo dispatch <verb>`
+// line: any leo binary's, or exactly current.
+func isLeoDispatchCommand(command, verb, current string) bool {
+	if !strings.HasSuffix(command, " dispatch "+verb) {
 		return false
 	}
 	// The executable may be shell-quoted (a path with a space or apostrophe),
@@ -228,7 +264,9 @@ func writeHooks(path string, hooks map[string]any) error {
 	return writeFileAtomically(path, encoded)
 }
 
-func hookTrustEntries(path string, file map[string]any, trusted map[string]string, current string) ([]string, []string) {
+// hookTrustEntries trusts every handler already trusted, or exactly one of
+// current (the commands being installed), and lists the rest as untrusted.
+func hookTrustEntries(path string, file map[string]any, trusted map[string]string, current ...string) ([]string, []string) {
 	var entries, untrusted []string
 	trustedValues := make(map[string]bool, len(trusted))
 	for _, hash := range trusted {
@@ -251,7 +289,7 @@ func hookTrustEntries(path string, file map[string]any, trusted map[string]strin
 				key := fmt.Sprintf("%s:%s:%d:%d", path, eventLabel(event), gi, hi)
 				hash := trustHash(event, matcherPtr(matcher), handler)
 				command, _ := handler["command"].(string)
-				if trusted[key] == hash || trustedValues[hash] || command == current {
+				if trusted[key] == hash || trustedValues[hash] || slices.Contains(current, command) {
 					entries = append(entries, trustEntry(key, hash))
 				} else {
 					untrusted = append(untrusted, command)

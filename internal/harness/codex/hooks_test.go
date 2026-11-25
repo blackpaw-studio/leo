@@ -243,9 +243,9 @@ func TestPrepareInteractiveConcurrent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	entries, untrusted := hookTrustEntries(filepath.Join(home, "hooks.json"), hooks, nil, "/opt/leo dispatch report")
-	if len(untrusted) != 0 || len(entries) != len(codexHookEvents) {
-		t.Fatalf("Leo entries = %d, untrusted = %v; want %d, none", len(entries), untrusted, len(codexHookEvents))
+	entries, untrusted := hookTrustEntries(filepath.Join(home, "hooks.json"), hooks, nil, "/opt/leo dispatch report", "/opt/leo dispatch context")
+	if want := len(codexHookEvents) + len(codexContextEvents); len(untrusted) != 0 || len(entries) != want {
+		t.Fatalf("Leo entries = %d, untrusted = %v; want %d, none", len(entries), untrusted, want)
 	}
 	config, err := os.ReadFile(filepath.Join(home, "config.toml"))
 	if err != nil {
@@ -442,6 +442,134 @@ func TestIsLeoDispatchReportCommandUnquotesTheExecutable(t *testing.T) {
 	} {
 		if got := isLeoDispatchReportCommand(command, "/unrelated dispatch report"); got != want {
 			t.Errorf("isLeoDispatchReportCommand(%q) = %v, want %v", command, got, want)
+		}
+	}
+}
+
+// Codex 0.167.1 payloads, observed live in the agent-brief probe: SessionStart
+// carries `source` (startup or resume; clear and compact are listed by the
+// binary), UserPromptSubmit the turn and the prompt.
+func TestContextHookPayloadKeysDocumentation(t *testing.T) {
+	for _, event := range codexContextEvents {
+		if len(codexContextPayloadKeys[event]) == 0 {
+			t.Errorf("missing live payload-key documentation for %s", event)
+		}
+	}
+}
+
+var codexContextPayloadKeys = map[string][]string{
+	"SessionStart":     {"session_id", "transcript_path", "cwd", "hook_event_name", "model", "permission_mode", "source"},
+	"UserPromptSubmit": codexHookPayloadKeys["UserPromptSubmit"],
+}
+
+func contextCommandsOf(t *testing.T, hooks map[string]any, event string) []string {
+	t.Helper()
+	var commands []string
+	for _, group := range asSlice(hooks["hooks"].(map[string]any)[event]) {
+		for _, handler := range asSlice(group.(map[string]any)["hooks"]) {
+			if command, _ := handler.(map[string]any)["command"].(string); strings.HasSuffix(command, " dispatch context") {
+				commands = append(commands, command)
+			}
+		}
+	}
+	return commands
+}
+
+func TestPrepareInteractiveInstallsTrustedContextHooks(t *testing.T) {
+	home := t.TempDir()
+	const contextCommand = "/opt/leo dispatch context"
+	const reportCommand = "/opt/leo dispatch report"
+	// Seeded so the trust keys are symlink-resolved from the first run on.
+	if err := os.WriteFile(filepath.Join(home, "hooks.json"), []byte(`{"hooks":{}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	hooksPath, err := canonicalPath(filepath.Join(home, "hooks.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	env := map[string]string{"CODEX_HOME": home}
+	if err := (Codex{}).PrepareInteractive(env, "", "/opt/leo"); err != nil {
+		t.Fatal(err)
+	}
+	hooks, err := readHooks(hooksPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, event := range []string{"SessionStart", "UserPromptSubmit"} {
+		if got := contextCommandsOf(t, hooks, event); !reflect.DeepEqual(got, []string{contextCommand}) {
+			t.Fatalf("%s context handlers = %q, want exactly %q", event, got, contextCommand)
+		}
+	}
+	if groups := hooks["hooks"].(map[string]any)["UserPromptSubmit"].([]any); !containsCommand(groups, reportCommand) {
+		t.Fatalf("UserPromptSubmit lost its report handler: %#v", groups)
+	}
+	if got := contextCommandsOf(t, hooks, "Stop"); len(got) != 0 {
+		t.Fatalf("Stop carries context handlers %q; only SessionStart and UserPromptSubmit take context", got)
+	}
+	config, err := os.ReadFile(filepath.Join(home, "config.toml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for event, wantKey := range map[string]string{
+		"SessionStart":     hooksPath + ":session_start:0:0",
+		"UserPromptSubmit": hooksPath + ":user_prompt_submit:1:0",
+	} {
+		want := trustEntry(wantKey, trustHash(event, nil, map[string]any{"type": "command", "command": contextCommand}))
+		if !strings.Contains(string(config), want) {
+			t.Fatalf("config.toml missing the %s context trust entry:\n%s\nwant\n%s", event, config, want)
+		}
+	}
+
+	firstHooks, _ := os.ReadFile(hooksPath)
+	if err := (Codex{}).PrepareInteractive(env, "", "/opt/leo"); err != nil {
+		t.Fatal(err)
+	}
+	secondHooks, _ := os.ReadFile(hooksPath)
+	secondConfig, _ := os.ReadFile(filepath.Join(home, "config.toml"))
+	if string(firstHooks) != string(secondHooks) || string(config) != string(secondConfig) {
+		t.Fatal("a second PrepareInteractive changed the hook files")
+	}
+}
+
+func TestPrepareInteractiveReplacesStaleContextHookKeepingUserHooks(t *testing.T) {
+	home := t.TempDir()
+	hooksPath := filepath.Join(home, "hooks.json")
+	if err := os.WriteFile(hooksPath, []byte(`{"hooks":{"SessionStart":[{"hooks":[{"type":"command","command":"/tmp/old/leo dispatch context"}]},{"hooks":[{"type":"command","command":"/usr/bin/user-start"}]}]}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	canonicalHooks, err := canonicalPath(hooksPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	userHash := trustHash("SessionStart", nil, map[string]any{"type": "command", "command": "/usr/bin/user-start"})
+	if err := os.WriteFile(filepath.Join(home, "config.toml"), []byte(trustEntry(canonicalHooks+":session_start:1:0", userHash)+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := (Codex{}).PrepareInteractive(map[string]string{"CODEX_HOME": home}, "", "/opt/leo"); err != nil {
+		t.Fatal(err)
+	}
+
+	hooks, err := readHooks(hooksPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	groups := hooks["hooks"].(map[string]any)["SessionStart"].([]any)
+	if len(groups) != 2 || !containsCommand(groups, "/usr/bin/user-start") || !containsCommand(groups, "/opt/leo dispatch context") || containsCommand(groups, "/tmp/old/leo dispatch context") {
+		t.Fatalf("SessionStart groups = %#v, want the user's hook plus the current context hook only", groups)
+	}
+}
+
+func TestIsLeoDispatchContextCommandMatchesOnlyLeoContext(t *testing.T) {
+	for command, want := range map[string]bool{
+		"/opt/homebrew/bin/leo dispatch context":         true,
+		"'/Users/Evan Coleman/bin/leo' dispatch context": true,
+		"leo dispatch context":                           true,
+		"/usr/local/bin/other dispatch context":          false,
+		"/opt/homebrew/bin/leo dispatch report":          false,
+	} {
+		if got := isLeoDispatchCommand(command, "context", "/unrelated dispatch context"); got != want {
+			t.Errorf("isLeoDispatchCommand(%q, context) = %v, want %v", command, got, want)
 		}
 	}
 }

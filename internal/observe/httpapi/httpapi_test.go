@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/blackpaw-studio/leo/internal/brief"
 	"github.com/blackpaw-studio/leo/internal/observe"
 )
 
@@ -122,7 +123,7 @@ func TestServeEventsHelloAdvertisesFeatures(t *testing.T) {
 	<-w.flushed
 	cancel()
 	<-done
-	want := `"features":["bridge_turns","attention_reason","dispatch_tree","agent_usage","agent_control","dispatch_attach","dispatch_removed","state_seq","attach_dispatch_placement","dispatch_placement_live","agent_environments","chat.questions","machine_stats","config_api","agent_status_restoring","client_tools","agent_appearance","agent_move","agent_move_fresh_session","agent_progress","agent_shell","agent_seen","chat.open_asks","attention.turn_failed"]`
+	want := `"features":["bridge_turns","attention_reason","dispatch_tree","agent_usage","agent_control","dispatch_attach","dispatch_removed","state_seq","attach_dispatch_placement","dispatch_placement_live","agent_environments","chat.questions","machine_stats","config_api","agent_status_restoring","client_tools","agent_appearance","agent_move","agent_move_fresh_session","agent_progress","agent_shell","agent_seen","chat.open_asks","attention.turn_failed","agent_brief"]`
 	if !strings.Contains(w.String(), want) {
 		t.Fatalf("hello = %q, want %s", w.String(), want)
 	}
@@ -145,5 +146,22 @@ func TestPayloadForHidesAttentionContentOnActivityAndSpawnedFrames(t *testing.T)
 	}
 	if att.Reason.Input != "rm -rf x" || att.Reason.Detail != "rm" {
 		t.Fatal("redaction mutated the payload shared with other subscribers")
+	}
+}
+
+// An agent_spawned frame now carries the agent's brief (a respawn or a live
+// rename announces the stored one); a reader that may not see content never
+// gets it.
+func TestPayloadForHidesTheBriefOnSpawnedFrames(t *testing.T) {
+	spawned := observe.Event{Type: observe.EventAgentSpawned, Payload: &observe.AgentSpawnedPayload{Agent: observe.Agent{Name: "a", Brief: &brief.Brief{Goal: "secret goal"}}}}
+
+	hidden, _ := json.Marshal(payloadFor(spawned, EventsOptions{HideAttentionContent: true}))
+	shown, _ := json.Marshal(payloadFor(spawned, EventsOptions{}))
+
+	if strings.Contains(string(hidden), "secret goal") || strings.Contains(string(hidden), `"brief"`) {
+		t.Errorf("hidden = %s, want no brief", hidden)
+	}
+	if !strings.Contains(string(shown), `"goal":"secret goal"`) {
+		t.Errorf("shown = %s, want the brief for an allowed reader", shown)
 	}
 }

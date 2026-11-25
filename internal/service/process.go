@@ -183,6 +183,14 @@ type ProcessSpec struct {
 	// session as LEO_ATTENTION_TOKEN ("" = launched without hooks). Runtime
 	// supervisor state, like primaryPane.
 	attentionToken string
+	// brief is whether briefs were on when this launch started, exported as
+	// LEO_BRIEF=1 so the agent's MCP server lists leo_brief from the start.
+	// Runtime supervisor state, like attentionToken.
+	brief bool
+	// socketPath is the daemon's unix socket, exported as LEO_SOCKET: the
+	// context relay and the opencode plugin call it there so the kernel names
+	// the caller. Runtime supervisor state, like attentionToken.
+	socketPath string
 	// primaryPane is the tmux-global pane ID captured at session launch or
 	// recovered during adoption. It is intentionally private: it is runtime
 	// supervisor state, not caller configuration.
@@ -756,6 +764,7 @@ func (s *Supervisor) RenameAgent(oldName, newName string) error {
 		StartedAt: startedAt,
 	}
 	renamed.Environments, renamed.EnvironmentsSource, renamed.EnvironmentError = s.environmentsViewOf(oldName)
+	renamed.Brief = s.storedBrief(oldName)
 	s.publish(observe.Event{
 		Type:    observe.EventAgentSpawned,
 		Payload: &observe.AgentSpawnedPayload{Agent: renamed},
@@ -1630,6 +1639,10 @@ func superviseProcess(ctx context.Context, tmuxPath, claudePath string, spec Pro
 
 			// launchArgs carries this launch's attention hooks; currentArgs
 			// (and the stored args behind it) never do.
+			spec.brief = sv.briefEnabled()
+			if homePath != "" {
+				spec.socketPath = daemon.SockPath(homePath)
+			}
 			launchArgs, hooked := attentionLaunchArgs(drv, handleForSpec(spec, id, homePath, tmuxPath), currentArgs, spec, name, sv.reportCmdOrDefault())
 			spec.attentionToken = ""
 			if hooked {
@@ -2297,6 +2310,17 @@ func sessionEnvArgs(tmuxPath string, spec ProcessSpec, warnOut io.Writer) []stri
 	delete(env, "LEO_ATTENTION_TOKEN")
 	if spec.attentionToken != "" {
 		env["LEO_ATTENTION_TOKEN"] = spec.attentionToken
+	}
+	// Like the token, leo's alone: config cannot switch the tool on.
+	delete(env, leomcp.EnvBrief)
+	if spec.brief {
+		env[leomcp.EnvBrief] = "1"
+	}
+	// The daemon socket is leo's alone, like the token: config cannot point a
+	// relay at some other socket.
+	delete(env, "LEO_SOCKET")
+	if spec.socketPath != "" {
+		env["LEO_SOCKET"] = spec.socketPath
 	}
 	if spec.WebPort != "" {
 		if supervisorWebPortPattern.MatchString(spec.WebPort) {

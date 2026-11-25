@@ -92,6 +92,7 @@ nav:
       - Moving Agents: configuration/agent-move.md
       - Agent Appearance: configuration/appearance.md
       - Agent Progress: configuration/agent-progress.md
+      - Agent Brief: configuration/agent-brief.md
       - Dispatches: configuration/dispatches.md
       - Delegation Profiles: configuration/delegation.md
       - Permissions: configuration/permissions.md

@@ -73,6 +73,9 @@ type apiEnvelope struct {
 	// Task is the progress route's result, which sits beside ok rather
 	// than under data.
 	Task json.RawMessage `json:"task,omitempty"`
+	// Brief is the brief route's result, beside ok like Task; null once
+	// the brief is cleared.
+	Brief json.RawMessage `json:"brief,omitempty"`
 }
 
 func (c *daemonClient) do(method, path string, body any) (json.RawMessage, error) {
@@ -127,7 +130,26 @@ func (c *daemonClient) doContextLimit(ctx context.Context, method, path string, 
 	if len(env.Data) == 0 && len(env.Task) > 0 {
 		return env.Task, nil
 	}
+	if len(env.Data) == 0 && len(env.Brief) > 0 {
+		return env.Brief, nil
+	}
 	return env.Data, nil
+}
+
+// briefEnabled asks the daemon whether briefs are on, as the launch with
+// token sees it.
+func (c *daemonClient) briefEnabled(ctx context.Context, token string) (bool, error) {
+	data, err := c.doContext(ctx, http.MethodPost, "/api/agent/brief/config", map[string]any{"token": token})
+	if err != nil {
+		return false, err
+	}
+	var reply struct {
+		Enabled bool `json:"enabled"`
+	}
+	if err := json.Unmarshal(data, &reply); err != nil {
+		return false, fmt.Errorf("decode brief config: %w", err)
+	}
+	return reply.Enabled, nil
 }
 
 // agentCommand asks the daemon to run /<verb> (clear or compact) in an

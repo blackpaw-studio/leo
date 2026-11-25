@@ -75,6 +75,9 @@ type AgentTurn struct {
 type agentHookRequest struct {
 	Token   string          `json:"token"`
 	Payload json.RawMessage `json:"payload"`
+	// A relay may still send a "pid" (older builds did): it is ignored. Who
+	// sent a request is the kernel's word on the unix socket (see
+	// peercred.VerifiedPID), never a field the sender writes.
 }
 
 // hookTransition is one hook event's attention meaning. from, when set,
@@ -182,6 +185,9 @@ func (s *Server) handleAPIAgentHook(w http.ResponseWriter, r *http.Request) {
 		s.autoCmds.Hook(req.Token, req.Payload)
 		s.feedHook(name, payload)
 		s.chatHook(name, req.Payload)
+		if payload.HookEventName == "Stop" || payload.HookEventName == "StopFailure" {
+			s.briefs.TurnCompleted(name)
+		}
 		if s.turnObserver != nil {
 			s.turnObserver(name, AgentTurn{
 				Event:       payload.HookEventName,

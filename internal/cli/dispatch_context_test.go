@@ -6,6 +6,8 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -151,4 +153,110 @@ func TestDispatchContextFailsOpenWhenTheDaemonIsDownOrSlow(t *testing.T) {
 			t.Fatalf("stdout %q stderr %q, want nothing on stdout and a stderr line", out, errOut)
 		}
 	})
+}
+
+// contextSocketDaemon answers /api/agent/context on a unix socket, recording
+// the request.
+func contextSocketDaemon(t *testing.T, reply string) (sockPath string, got *capturedReport) {
+	t.Helper()
+	got = &capturedReport{}
+	dir, err := os.MkdirTemp("", "ctx")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	sockPath = filepath.Join(dir, "d.sock")
+	ln, err := net.Listen("unix", sockPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		*got = capturedReport{path: r.URL.Path, auth: r.Header.Get("Authorization"), body: body}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, reply)
+	})}
+	go func() { _ = srv.Serve(ln) }()
+	t.Cleanup(func() { _ = srv.Close() })
+	return sockPath, got
+}
+
+// The daemon decides who may rebind a session from who the kernel says
+// connected, which only a unix socket connection can say: the relay uses the
+// socket the launch names, and sends no pid of its own to be believed.
+func TestDispatchContextCallsTheDaemonSocketWhenTheLaunchNamesOne(t *testing.T) {
+	clearReportEnv(t)
+	sock, onSocket := contextSocketDaemon(t, `{"context":"from the socket"}`)
+	tcpPort, onTCP := contextDaemon(t, http.StatusOK, `{"context":"from tcp"}`)
+	t.Setenv("LEO_ATTENTION_TOKEN", "launch-tok")
+	t.Setenv("LEO_WEB_PORT", tcpPort)
+	t.Setenv("LEO_SOCKET", sock)
+
+	out, _ := runContext(t, sessionStartInput)
+
+	if !strings.Contains(out, "from the socket") {
+		t.Fatalf("stdout = %q, want the socket daemon's context", out)
+	}
+	if onSocket.path != "/api/agent/context" || !strings.Contains(string(onSocket.body), `"token":"launch-tok"`) || !strings.Contains(string(onSocket.body), sessionStartInput) {
+		t.Fatalf("socket request = %+v", *onSocket)
+	}
+	if strings.Contains(string(onSocket.body), `"pid"`) {
+		t.Fatalf("body = %s, want no pid (the kernel says who connected)", onSocket.body)
+	}
+	if onTCP.path != "" {
+		t.Fatalf("tcp daemon was called (%+v) although the socket answered", *onTCP)
+	}
+}
+
+// With the socket unusable the relay still delivers context over TCP: the
+// daemon then cannot tell who is calling, so it only serves the session the
+// agent is already bound to.
+func TestDispatchContextFallsBackToTCPWhenTheSocketIsUnusable(t *testing.T) {
+	clearReportEnv(t)
+	tcpPort, onTCP := contextDaemon(t, http.StatusOK, `{"context":"from tcp"}`)
+	t.Setenv("LEO_ATTENTION_TOKEN", "launch-tok")
+	t.Setenv("LEO_WEB_PORT", tcpPort)
+	t.Setenv("LEO_SOCKET", filepath.Join(t.TempDir(), "gone.sock"))
+
+	out, _ := runContext(t, sessionStartInput)
+
+	if !strings.Contains(out, "from tcp") || onTCP.path != "/api/agent/context" {
+		t.Fatalf("stdout = %q, tcp request = %+v; want the TCP fallback", out, *onTCP)
+	}
+}
+
+func TestDispatchContextWorksOnTheSocketAloneWithoutAWebPort(t *testing.T) {
+	clearReportEnv(t)
+	sock, _ := contextSocketDaemon(t, `{"context":"only socket"}`)
+	t.Setenv("LEO_ATTENTION_TOKEN", "launch-tok")
+	t.Setenv("LEO_SOCKET", sock)
+
+	if out, _ := runContext(t, promptInput); !strings.Contains(out, "only socket") {
+		t.Fatalf("stdout = %q, want the socket daemon's context", out)
+	}
+}
+
+// A daemon that answers with an error is not retried elsewhere.
+func TestDispatchContextDoesNotFallBackFromADaemonThatAnswered(t *testing.T) {
+	clearReportEnv(t)
+	dir, _ := os.MkdirTemp("", "ctx")
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	sock := filepath.Join(dir, "d.sock")
+	ln, err := net.Listen("unix", sock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusInternalServerError) })}
+	go func() { _ = srv.Serve(ln) }()
+	t.Cleanup(func() { _ = srv.Close() })
+	tcpPort, onTCP := contextDaemon(t, http.StatusOK, `{"context":"from tcp"}`)
+	t.Setenv("LEO_ATTENTION_TOKEN", "launch-tok")
+	t.Setenv("LEO_WEB_PORT", tcpPort)
+	t.Setenv("LEO_SOCKET", sock)
+
+	out, errOut := runContext(t, sessionStartInput)
+
+	if out != "" || onTCP.path != "" || !strings.Contains(errOut, "500") {
+		t.Fatalf("stdout = %q, stderr = %q, tcp = %+v; want nothing printed, a logged 500 and no TCP retry", out, errOut, *onTCP)
+	}
 }

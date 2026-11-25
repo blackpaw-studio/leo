@@ -6,12 +6,14 @@ import (
 	"maps"
 	"os"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/blackpaw-studio/leo/internal/agentstore"
+	"github.com/blackpaw-studio/leo/internal/brief"
 	"github.com/blackpaw-studio/leo/internal/session"
 )
 
@@ -62,6 +64,29 @@ func TestReceiveDropsHostSpecificFields(t *testing.T) {
 	}
 	if !rec.MoveLog["studio"].Equal(receiveAt) || rec.MoveLog["laptop"].IsZero() {
 		t.Errorf("move log = %v, want studio added and laptop kept", rec.MoveLog)
+	}
+}
+
+func TestReceiveMoveCarriesTheBriefAndCopyStartsWithout(t *testing.T) {
+	b := &brief.Brief{Goal: "ship", Status: "testing", UpdatedAt: receiveAt}
+	m, _, home, _ := receiveManager(t)
+	moved := arriving(t.TempDir())
+	moved.Brief = b
+	if err := m.Receive(context.Background(), ReceiveSpec{Record: moved, From: "studio", At: receiveAt}); err != nil {
+		t.Fatal(err)
+	}
+	if got := loadRec(t, home, "leo-x").Brief; !reflect.DeepEqual(got, b) {
+		t.Fatalf("moved brief = %+v, want %+v", got, b)
+	}
+
+	cm, _, chome, _ := receiveManager(t)
+	cp := arriving(t.TempDir())
+	cp.Name, cp.SessionID, cp.Brief = "leo-x-copy", "fork-id", b
+	if err := cm.Receive(context.Background(), ReceiveSpec{Record: cp, From: "studio", At: receiveAt, Copy: true, ForkFrom: "sent-session"}); err != nil {
+		t.Fatal(err)
+	}
+	if got := loadRec(t, chome, "leo-x-copy").Brief; got != nil {
+		t.Fatalf("copy brief = %+v, want none", got)
 	}
 }
 

@@ -244,6 +244,13 @@ var configResources = []*configResource{
 		saved:  func(string) string { return "Web UI settings saved" },
 	},
 	{
+		Key: "brief", Label: "Agent briefs", Noun: "Agent briefs",
+		Section: schema.SectionBrief, Restart: restartNone,
+		locate: func(cfg *config.Config, _ string) (any, bool) { return &cfg.Brief, true },
+		put:    func(*config.Config, string, any) {},
+		saved:  func(string) string { return "Agent brief settings saved" },
+	},
+	{
 		Key: "client", Label: "Remote client", Noun: "Remote client",
 		Section: schema.SectionClient, Restart: restartNone,
 		locate: func(cfg *config.Config, _ string) (any, bool) { return &cfg.Client, true },

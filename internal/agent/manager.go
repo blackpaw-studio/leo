@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/blackpaw-studio/leo/internal/agentstore"
+	"github.com/blackpaw-studio/leo/internal/brief"
 	"github.com/blackpaw-studio/leo/internal/config"
 	"github.com/blackpaw-studio/leo/internal/git"
 	"github.com/blackpaw-studio/leo/internal/harness"
@@ -509,6 +510,10 @@ type Record struct {
 	// hand-set emoji and color. It stays off this JSON: observers read the
 	// resolved appearance on the observability wire instead.
 	ManualAppearance *agentstore.Appearance `json:"-"`
+	// Brief mirrors agentstore.Record.Brief, the agent's own summary of its
+	// work. Off this JSON like ManualAppearance: observers read it on the
+	// observability wire, where it is gated and redacted.
+	Brief *brief.Brief `json:"-"`
 }
 
 // Bridge statuses reported in Record.Bridge.
@@ -1254,6 +1259,7 @@ func (m *Manager) List() []Record {
 			MovedAt:       rec.MovedAt,
 
 			ManualAppearance: rec.Appearance,
+			Brief:            rec.Brief,
 		})
 	}
 	// Sort by name for a stable order: `out` is assembled by ranging over the
@@ -2326,6 +2332,9 @@ func (m *Manager) announceRename(cfg *config.Config, rec Record, oldName, newNam
 	agent.Status, agent.WakeOnMessage = observe.AgentDormancy("stopped", rec.WakeOnMessage)
 	agent.Environments, agent.EnvironmentsSource, agent.EnvironmentError = EnvironmentsView(cfg, newName, rec.Template, rec.Environments)
 	agent.Appearance = AgentAppearance(cfg, newName, rec.Template, rec.Environments, rec.ManualAppearance)
+	if cfg != nil && cfg.Brief.Enabled {
+		agent.Brief = rec.Brief.Clone()
+	}
 	if cfg != nil && rec.Template != "" {
 		if tmpl, ok := cfg.Templates[rec.Template]; ok {
 			agent.Model = cfg.TemplateModel(tmpl)

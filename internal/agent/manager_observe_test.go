@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/blackpaw-studio/leo/internal/agentstore"
+	"github.com/blackpaw-studio/leo/internal/brief"
 	"github.com/blackpaw-studio/leo/internal/config"
 	"github.com/blackpaw-studio/leo/internal/observe"
 )
@@ -184,10 +185,13 @@ func TestRenameStoppedAgentDoesNotAnnounceWhenPersistFails(t *testing.T) {
 		ClaudeArgs: []string{"--name", "leo-stopped"},
 	})
 	storePath := agentstore.FilePath(home)
-	if err := os.Chmod(storePath, 0o400); err != nil {
-		t.Fatalf("chmod store read-only: %v", err)
+	// agents.json is replaced by rename, so the store goes read-only by
+	// closing its directory to writes.
+	storeDir := filepath.Dir(storePath)
+	if err := os.Chmod(storeDir, 0o500); err != nil {
+		t.Fatalf("chmod store dir read-only: %v", err)
 	}
-	t.Cleanup(func() { _ = os.Chmod(storePath, 0o600) })
+	t.Cleanup(func() { _ = os.Chmod(storeDir, 0o750) })
 
 	sup := &fakeSupervisor{ephemeral: map[string]ProcessState{}} // not live
 	m := newTestManager(t, home, sup)
@@ -241,5 +245,32 @@ func TestRenameRunningAgentDoesNotDoublePublish(t *testing.T) {
 	}
 	if n := len(appearanceEvents(pub)); n != 1 {
 		t.Fatalf("expected one appearance event for the renamed agent, got %d", n)
+	}
+}
+
+// A not-live rename announces the agent afresh (agent_spawned replaces what
+// an observer knew), so the spawned view carries the brief, while briefs are on.
+func TestRenameStoppedAgentSpawnedViewCarriesTheBriefOnlyWhileOn(t *testing.T) {
+	for _, on := range []bool{true, false} {
+		home := t.TempDir()
+		_ = agentstore.Save(home, agentstore.Record{Name: "leo-stopped", Stopped: true, ClaudeArgs: []string{"--name", "leo-stopped"}})
+		if err := agentstore.SetBrief(home, "leo-stopped", &brief.Brief{Goal: "ship it"}); err != nil {
+			t.Fatal(err)
+		}
+		loader := func() (*config.Config, error) {
+			return &config.Config{HomePath: home, Brief: config.BriefConfig{Enabled: on}}, nil
+		}
+		m := New(loader, &fakeSupervisor{ephemeral: map[string]ProcessState{}}, "", "")
+		pub := &recordingObservePublisher{}
+		m.SetPublisher(pub)
+
+		if _, err := m.Rename("leo-stopped", "leo-revived"); err != nil {
+			t.Fatal(err)
+		}
+
+		spawned := pub.events[1].Payload.(*observe.AgentSpawnedPayload).Agent
+		if got := spawned.Brief != nil && spawned.Brief.Goal == "ship it"; got != on {
+			t.Errorf("enabled=%v: spawned brief = %+v", on, spawned.Brief)
+		}
 	}
 }

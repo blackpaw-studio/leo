@@ -167,6 +167,14 @@ Routes for the app (bearer auth; device or operator token):
 | `permission_timeout` | duration | No | `120s` | How long a Claude permission prompt waits for an answer in chat, at most `1h`. |
 | `question_timeout` | duration | No | `1h` | How long an `AskUserQuestion` questions card waits for an answer in chat, at most `1h`. |
 
+## `brief`
+
+[Agent briefs](agent-brief.md): a short summary each agent keeps of its current work.
+
+| Field | Type | Required | Default | Description |
+|-------|------|----------|---------|-------------|
+| `enabled` | bool | No | `false` | Tell agents to keep a brief (`leo_brief`), nudge them when it goes stale, and show it in the apps. Off: no guidance, no nudges, no tool, no briefs on the API; stored briefs are kept. Applies on the next reload, no restart. |
+
 ## `client`
 
 Remote-host definitions used by the `leo agent` CLI when `leo` is invoked as a client of a different machine. Empty on server configs.

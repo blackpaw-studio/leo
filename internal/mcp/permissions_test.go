@@ -61,7 +61,8 @@ func callTool(r *registry, name string, args map[string]any) (string, error) {
 // added in one place and not the other is a silent hole: config would reject
 // a valid deny_tools entry, or accept one that denies nothing.
 func TestRegistryNamesMatchLeotools(t *testing.T) {
-	reg := newRegistry(newDaemonClient("0", ""), "test-process", leotools.Permissions{})
+	// leo_brief is offered only to a launched agent while briefs are on.
+	reg := newRegistry(newDaemonClient("0", ""), "test-process", leotools.Permissions{}, withAttentionToken("launch-tok"), withBrief(true))
 	got := toolNames(reg)
 
 	for _, name := range got {

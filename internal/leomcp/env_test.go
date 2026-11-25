@@ -48,7 +48,7 @@ func TestDispatchChildEnvForwardsTheTemplatePermissions(t *testing.T) {
 }
 
 func TestBridgeEnvNamesAddsPermissionsOnlyWhenRestricted(t *testing.T) {
-	base := []string{EnvProcessName, EnvWebPort, EnvAPIToken, EnvDispatchID, EnvAttentionToken}
+	base := []string{EnvProcessName, EnvWebPort, EnvAPIToken, EnvDispatchID, EnvAttentionToken, EnvBrief}
 	if got := BridgeEnvNames(false); !reflect.DeepEqual(got, base) {
 		t.Fatalf("unrestricted = %v", got)
 	}
@@ -58,7 +58,7 @@ func TestBridgeEnvNamesAddsPermissionsOnlyWhenRestricted(t *testing.T) {
 }
 
 func TestWithoutReservedDropsEveryTrustedVariable(t *testing.T) {
-	in := []string{"PATH=/bin", "LEO_API_TOKEN=x", "LEO_WEB_PORT=1", "LEO_PROCESS_NAME=a", "LEO_PERMISSIONS={}", "LEO_DISPATCH_ID=d", "LEO_CONFIG=/c"}
+	in := []string{"PATH=/bin", "LEO_API_TOKEN=x", "LEO_WEB_PORT=1", "LEO_PROCESS_NAME=a", "LEO_PERMISSIONS={}", "LEO_DISPATCH_ID=d", "LEO_BRIEF=1", "LEO_CONFIG=/c"}
 	if got := WithoutReserved(in); !reflect.DeepEqual(got, []string{"PATH=/bin", "LEO_CONFIG=/c"}) {
 		t.Fatalf("slice = %v", got)
 	}

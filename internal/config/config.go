@@ -95,6 +95,7 @@ type Config struct {
 	Defaults DefaultsConfig `yaml:"defaults"`
 	Web      WebConfig      `yaml:"web,omitempty"`
 	Client   ClientConfig   `yaml:"client,omitempty"`
+	Brief    BriefConfig    `yaml:"brief,omitempty"`
 	// APIClients are external agents Leo does not supervise (e.g. an opencode
 	// container) that hold a bearer token of their own. Distinct from
 	// `client`, which configures this machine's CLI as an SSH client of a
@@ -209,6 +210,13 @@ func (h HostConfig) RemoteTmuxPath() string {
 		return h.TmuxPath
 	}
 	return DefaultRemoteTmuxPath
+}
+
+// BriefConfig is this machine's agent-brief switch: whether agents are told
+// to keep a short brief of their work (leo_brief) and apps show it. Absent
+// means off; stored briefs are kept either way.
+type BriefConfig struct {
+	Enabled bool `yaml:"enabled"`
 }
 
 type WebConfig struct {

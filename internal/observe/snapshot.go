@@ -11,6 +11,8 @@ import (
 	"encoding/json"
 	"strconv"
 	"time"
+
+	"github.com/blackpaw-studio/leo/internal/brief"
 )
 
 // SnapshotVersion is the contract version carried in every snapshot. Consumers use it to
@@ -70,6 +72,7 @@ func (a Agent) WithoutContent() Agent {
 	a.Attention = a.Attention.WithoutReasonContent()
 	a.CurrentAction = a.CurrentAction.WithoutDetail()
 	a.Tasks = withoutTaskText(a.Tasks)
+	a.Brief = nil
 	return a
 }
 
@@ -166,6 +169,11 @@ type Agent struct {
 	// Tasks are the agent's advertised tasks (FeatureAgentProgress), oldest
 	// run first; omitted when it has none.
 	Tasks []AgentTask `json:"tasks,omitempty"`
+
+	// Brief is the agent's own "where was I" summary (FeatureAgentBrief);
+	// absent when it has none, when briefs are off on this machine, and for
+	// a reader that may not see conversation-derived text (WithoutContent).
+	Brief *brief.Brief `json:"brief,omitempty"`
 }
 
 // Appearance is an agent's resolved emoji and color, each with where it came

@@ -34,13 +34,19 @@ type watchDaemon struct {
 	events   chan string // raw SSE frames to push
 	streams  int
 	lists    int
-	srv      *httptest.Server
-	client   *daemonClient
+	// briefOn is the daemon's brief switch as /api/agent/brief/config answers
+	// it, and briefStatus its status (0 means 200); briefAsks counts the asks.
+	briefOn     bool
+	briefStatus int
+	briefAsks   int
+	drop        chan struct{} // a send ends the open event stream
+	srv         *httptest.Server
+	client      *daemonClient
 }
 
 func newWatchDaemon(t *testing.T) *watchDaemon {
 	t.Helper()
-	d := &watchDaemon{revision: 3, ever: true, tools: []string{"browser_click"}, events: make(chan string, 16)}
+	d := &watchDaemon{revision: 3, ever: true, tools: []string{"browser_click"}, events: make(chan string, 16), drop: make(chan struct{}, 1)}
 	d.srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case r.URL.Path == "/api/v1/events":
@@ -57,10 +63,23 @@ func newWatchDaemon(t *testing.T) *watchDaemon {
 				case frame := <-d.events:
 					_, _ = io.WriteString(w, frame)
 					fl.Flush()
+				case <-d.drop:
+					return
 				case <-r.Context().Done():
 					return
 				}
 			}
+		case r.URL.Path == "/api/agent/brief/config":
+			d.mu.Lock()
+			d.briefAsks++
+			status, on := d.briefStatus, d.briefOn
+			d.mu.Unlock()
+			if status != 0 {
+				w.WriteHeader(status)
+				_, _ = io.WriteString(w, `{"ok":false,"error":"boom"}`)
+				return
+			}
+			_, _ = fmt.Fprintf(w, `{"ok":true,"data":{"enabled":%v}}`, on)
 		case strings.HasSuffix(r.URL.Path, "/client-tools"):
 			d.mu.Lock()
 			defer d.mu.Unlock()
@@ -116,6 +135,10 @@ func (d *watchDaemon) setRevision(rev uint64, tools ...string) {
 
 func (d *watchDaemon) pushChanged(rev uint64) {
 	d.events <- fmt.Sprintf("event: client_tools.changed\ndata: {\"seq\":9,\"revision\":%d,\"tools\":[]}\n\n", rev)
+}
+
+func (d *watchDaemon) pushBriefConfig(enabled bool) {
+	d.events <- fmt.Sprintf("event: brief_config_changed\ndata: {\"seq\":9,\"at\":\"2026-11-25T02:00:00Z\",\"enabled\":%v}\n\n", enabled)
 }
 
 // session runs the server over pipes and lets a test speak MCP to it.
@@ -502,5 +525,90 @@ func TestWatchWaitsForItsCoalescingGoroutineOnShutdown(t *testing.T) {
 	case <-done:
 	case <-time.After(5 * time.Second):
 		t.Fatal("watcher did not stop")
+	}
+}
+
+func (d *watchDaemon) setBrief(on bool, status int) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.briefOn, d.briefStatus = on, status
+}
+
+func (d *watchDaemon) waitBriefAsks(t *testing.T, n int) {
+	t.Helper()
+	d.waitFor(t, fmt.Sprintf("%d brief config asks", n), func() bool { return d.briefAsks >= n })
+}
+
+func briefWatchSession(t *testing.T, d *watchDaemon, launchedOn bool) *session {
+	t.Helper()
+	reg := newRegistry(d.client, "alfred", leotools.Permissions{}, withAttentionToken("launch-tok"), withBrief(launchedOn))
+	reg.watch.after = immediate
+	s := startSession(t, reg)
+	s.initialize("claude-code")
+	return s
+}
+
+// A toggle made while the stream was down (or before it first connected, in
+// the daemon's reload window) is not replayed: the switch is asked for on
+// every hello, and a difference re-lists the tools.
+func TestBriefSwitchMissedBeforeTheFirstConnectionIsReconciledOnHello(t *testing.T) {
+	d := newWatchDaemon(t)
+	d.setBrief(true, 0)
+	s := briefWatchSession(t, d, false) // launched while briefs were off
+
+	if m := s.recv(); m.Method != "notifications/tools/list_changed" || len(m.ID) != 0 {
+		t.Fatalf("got %+v, want list_changed once the switch was reconciled", m)
+	}
+	if names := s.listNames(); !contains(names, "leo_brief") {
+		t.Fatalf("leo_brief not offered after reconciling an on switch: %v", names)
+	}
+}
+
+func TestBriefSwitchMissedWhileDisconnectedIsReconciledOnReconnect(t *testing.T) {
+	d := newWatchDaemon(t)
+	s := briefWatchSession(t, d, false)
+	d.waitStreams(t, 1)
+	d.waitBriefAsks(t, 1)
+	s.send("ping", nil)
+	if m := s.recv(); m.Method != "" || string(m.Result) != "{}" {
+		t.Fatalf("a matching switch produced %+v before the ping reply", m)
+	}
+
+	d.setBrief(true, 0) // flipped while no stream was listening
+	d.drop <- struct{}{}
+	d.waitStreams(t, 2)
+
+	if m := s.recv(); m.Method != "notifications/tools/list_changed" {
+		t.Fatalf("got %+v, want list_changed after the reconnect", m)
+	}
+	if names := s.listNames(); !contains(names, "leo_brief") {
+		t.Fatalf("leo_brief not offered after the reconnect: %v", names)
+	}
+
+	d.setBrief(false, 0)
+	d.drop <- struct{}{}
+	d.waitStreams(t, 3)
+	if m := s.recv(); m.Method != "notifications/tools/list_changed" {
+		t.Fatalf("got %+v, want list_changed for the flip off", m)
+	}
+	if names := s.listNames(); contains(names, "leo_brief") {
+		t.Fatalf("leo_brief still offered after the flip off: %v", names)
+	}
+}
+
+// A daemon that cannot answer leaves the switch as it was: the handler
+// refusal is the backstop, and the next hello asks again.
+func TestBriefSwitchReconcileFailureLeavesTheListAlone(t *testing.T) {
+	d := newWatchDaemon(t)
+	d.setBrief(true, http.StatusInternalServerError)
+	s := briefWatchSession(t, d, false)
+	d.waitBriefAsks(t, 1)
+
+	s.send("ping", nil)
+	if m := s.recv(); m.Method != "" || string(m.Result) != "{}" {
+		t.Fatalf("a failed ask produced %+v before the ping reply", m)
+	}
+	if names := s.listNames(); contains(names, "leo_brief") {
+		t.Fatalf("leo_brief offered after a failed ask: %v", names)
 	}
 }

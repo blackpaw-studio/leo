@@ -1,18 +1,24 @@
 package web
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/blackpaw-studio/leo/internal/agentstore"
 	"github.com/blackpaw-studio/leo/internal/bridge"
 	"github.com/blackpaw-studio/leo/internal/observe"
+	"github.com/blackpaw-studio/leo/internal/peercred"
+	"github.com/blackpaw-studio/leo/internal/procown"
+	"github.com/blackpaw-studio/leo/internal/tmux"
 )
 
 // toldFileName is the told-delegation store, under the config's state dir.
@@ -98,10 +104,17 @@ func (s *Server) handleAPIAgentContext(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, apiResponse{Error: "invalid hook payload"})
 		return
 	}
-	_ = encodeContext(w, s.agentContext(req.Token, hook))
+	_ = encodeContext(w, s.agentContext(r.Context(), req.Token, hook))
 }
 
-func (s *Server) agentContext(token string, hook contextHook) string {
+// AgentContextHandler is handleAPIAgentContext without bearer auth, for the
+// daemon's unix socket: the 0600 socket is the credential, the launch token in
+// the body names the agent, and the kernel names the caller (see peercred).
+func (s *Server) AgentContextHandler() http.Handler {
+	return http.HandlerFunc(s.handleAPIAgentContext)
+}
+
+func (s *Server) agentContext(ctx context.Context, token string, hook contextHook) string {
 	s.clearErroredOnSessionStart(token, hook)
 	if s.attention == nil || hook.AgentID != "" || hook.SessionID == "" {
 		return ""
@@ -110,12 +123,92 @@ func (s *Server) agentContext(token string, hook contextHook) string {
 	if !known {
 		return ""
 	}
+	// A harness whose hooks are not per launch (codex's are home-global, and
+	// child processes inherit the token) speaks for the agent only from its
+	// own session. A new session id (a /clear, a new session) is announced by
+	// a SessionStart, and rebinds only when the kernel says the request came
+	// from the agent's own harness (over the unix socket): a child harness
+	// that inherited the token, a request over TCP, and any failure to tell
+	// are all refused.
+	sharedHooks := s.sharesHookHome(agent)
+	if sharedHooks && !s.isAgentHookSession(agent, token, hook.SessionID) {
+		if hook.Event != "SessionStart" || !s.processOwned(ctx, agent) {
+			return ""
+		}
+		s.claimSession(agent, token, hook.SessionID)
+	}
 	// Every launch claims its new session, bridged or not: without the
 	// claim a /clear's later hooks (Stop, so Leo Chat's reply capture) are
 	// dropped as another process's.
-	if hook.Event == "SessionStart" {
+	if hook.Event == "SessionStart" && !sharedHooks {
 		s.claimSession(agent, token, hook.SessionID)
 	}
+	return joinContext(s.delegationContextFor(agent, hook), s.briefContextFor(agent, hook))
+}
+
+// sharesHookHome is whether agent runs a harness whose hooks are not per
+// launch, so a hook may come from another process. False when the agent does
+// not resolve: such a hook is judged as a claude launch's.
+func (s *Server) sharesHookHome(agent string) bool {
+	if s.agentSvc == nil {
+		return false
+	}
+	harnessName, _, ok := s.agentSvc.ResolveHandle(agent)
+	return ok && harnessName != claudeHarness
+}
+
+// processOwned is whether the process the kernel says sent this request is
+// agent's own harness. A request with no kernel-verified peer (TCP, a failed
+// lookup) is nobody's.
+func (s *Server) processOwned(ctx context.Context, agent string) bool {
+	pid, ok := peercred.VerifiedPID(ctx)
+	if !ok {
+		return false
+	}
+	return s.agentOwnsProcess(ctx, agent, pid)
+}
+
+// processOwnerTimeout bounds the tmux and ps calls of one ownership check; a
+// slow host fails the check (the session is then not rebound), never the hook.
+const processOwnerTimeout = 2 * time.Second
+
+// agentOwnsProcess asks tmux for the root process of agent's pane (its primary
+// pane: the harness runs as that process) and takes one process-table
+// snapshot, then lets procown decide.
+func (s *Server) agentOwnsProcess(ctx context.Context, agent string, pid int) bool {
+	ctx, cancel := context.WithTimeout(ctx, processOwnerTimeout)
+	defer cancel()
+	pane, err := s.agentPrimaryPane(ctx, agent)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "[%s] session transition: %v\n", agent, err)
+		return false
+	}
+	out, err := s.execCommandContext(ctx, s.tmuxPath(), tmux.Args("display-message", "-p", "-t", pane, "#{pane_pid}")...).Output()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "[%s] session transition: pane pid: %v\n", agent, err)
+		return false
+	}
+	root, err := strconv.Atoi(strings.TrimSpace(string(out)))
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "[%s] session transition: pane pid %q\n", agent, out)
+		return false
+	}
+	table, err := s.execCommandContext(ctx, "ps", "-A", "-o", "pid=", "-o", "ppid=", "-o", "comm=").Output()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "[%s] session transition: ps: %v\n", agent, err)
+		return false
+	}
+	procs, err := procown.ParsePS(table)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "[%s] session transition: %v\n", agent, err)
+		return false
+	}
+	return procown.OwnsHarness(procs, root, pid)
+}
+
+// delegationContextFor is the delegation policy context: for a bridged
+// launch only, as with the mod's prompt.compose.
+func (s *Server) delegationContextFor(agent string, hook contextHook) string {
 	if s.delegationCtx == nil {
 		return ""
 	}
@@ -123,6 +216,17 @@ func (s *Server) agentContext(token string, hook contextHook) string {
 		return ""
 	}
 	return s.delegationCtx.contextFor(agent, hook)
+}
+
+// joinContext joins the non-empty context parts with a blank line.
+func joinContext(parts ...string) string {
+	var kept []string
+	for _, p := range parts {
+		if p != "" {
+			kept = append(kept, p)
+		}
+	}
+	return strings.Join(kept, "\n\n")
 }
 
 // clearErroredOnSessionStart ends the errored attention a restart left once
