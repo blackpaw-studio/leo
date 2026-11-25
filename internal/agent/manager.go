@@ -2332,6 +2332,9 @@ func (m *Manager) announceRename(cfg *config.Config, rec Record, oldName, newNam
 	agent.Status, agent.WakeOnMessage = observe.AgentDormancy("stopped", rec.WakeOnMessage)
 	agent.Environments, agent.EnvironmentsSource, agent.EnvironmentError = EnvironmentsView(cfg, newName, rec.Template, rec.Environments)
 	agent.Appearance = AgentAppearance(cfg, newName, rec.Template, rec.Environments, rec.ManualAppearance)
+	if cfg != nil && cfg.Brief.Enabled {
+		agent.Brief = rec.Brief.Clone()
+	}
 	if cfg != nil && rec.Template != "" {
 		if tmpl, ok := cfg.Templates[rec.Template]; ok {
 			agent.Model = cfg.TemplateModel(tmpl)

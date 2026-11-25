@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/blackpaw-studio/leo/internal/agentstore"
+	"github.com/blackpaw-studio/leo/internal/brief"
 	"github.com/blackpaw-studio/leo/internal/config"
 	"github.com/blackpaw-studio/leo/internal/observe"
 )
@@ -244,5 +245,32 @@ func TestRenameRunningAgentDoesNotDoublePublish(t *testing.T) {
 	}
 	if n := len(appearanceEvents(pub)); n != 1 {
 		t.Fatalf("expected one appearance event for the renamed agent, got %d", n)
+	}
+}
+
+// A not-live rename announces the agent afresh (agent_spawned replaces what
+// an observer knew), so the spawned view carries the brief, while briefs are on.
+func TestRenameStoppedAgentSpawnedViewCarriesTheBriefOnlyWhileOn(t *testing.T) {
+	for _, on := range []bool{true, false} {
+		home := t.TempDir()
+		_ = agentstore.Save(home, agentstore.Record{Name: "leo-stopped", Stopped: true, ClaudeArgs: []string{"--name", "leo-stopped"}})
+		if err := agentstore.SetBrief(home, "leo-stopped", &brief.Brief{Goal: "ship it"}); err != nil {
+			t.Fatal(err)
+		}
+		loader := func() (*config.Config, error) {
+			return &config.Config{HomePath: home, Brief: config.BriefConfig{Enabled: on}}, nil
+		}
+		m := New(loader, &fakeSupervisor{ephemeral: map[string]ProcessState{}}, "", "")
+		pub := &recordingObservePublisher{}
+		m.SetPublisher(pub)
+
+		if _, err := m.Rename("leo-stopped", "leo-revived"); err != nil {
+			t.Fatal(err)
+		}
+
+		spawned := pub.events[1].Payload.(*observe.AgentSpawnedPayload).Agent
+		if got := spawned.Brief != nil && spawned.Brief.Goal == "ship it"; got != on {
+			t.Errorf("enabled=%v: spawned brief = %+v", on, spawned.Brief)
+		}
 	}
 }
