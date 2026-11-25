@@ -95,7 +95,7 @@ func TestHeadlessCodexChildGetsLeoMCPBridgeAndEnv(t *testing.T) {
 	joined := strings.Join(args, "\x00")
 	for _, want := range []string{
 		"mcp_servers.leo.command=",
-		`mcp_servers.leo.env_vars=["LEO_PROCESS_NAME","LEO_WEB_PORT","LEO_API_TOKEN","LEO_DISPATCH_ID","LEO_ATTENTION_TOKEN"]`,
+		`mcp_servers.leo.env_vars=["LEO_PROCESS_NAME","LEO_WEB_PORT","LEO_API_TOKEN","LEO_DISPATCH_ID","LEO_ATTENTION_TOKEN","LEO_BRIEF"]`,
 		"features.multi_agent=false",
 	} {
 		if !strings.Contains(joined, want) {
