@@ -1,6 +1,10 @@
 package observe
 
-import "time"
+import (
+	"time"
+
+	"github.com/blackpaw-studio/leo/internal/brief"
+)
 
 // EventType is the SSE event name. Consumers must ignore types they do not recognize, so
 // new types can be added without breaking them.
@@ -50,6 +54,12 @@ const (
 	// EventAgentTaskChanged carries one advertised task's whole current
 	// record, or null once it is gone (FeatureAgentProgress).
 	EventAgentTaskChanged EventType = "agent_task_changed"
+	// EventAgentBrief carries an agent's whole current brief, or null once it
+	// is cleared (FeatureAgentBrief). Operator-class readers only.
+	EventAgentBrief EventType = "agent_brief"
+	// EventBriefConfigChanged reports brief.enabled flipping at a config
+	// reload (FeatureAgentBrief). Its payload carries no brief text.
+	EventBriefConfigChanged EventType = "brief_config_changed"
 )
 
 // Features are the optional capabilities this daemon's API offers,
@@ -131,11 +141,18 @@ const (
 	// errored is recoverable: the agent is alive and the next prompt clears it.
 	// An errored without a preview is a harness exit or failed relaunch.
 	FeatureAttentionTurnFailed = "attention.turn_failed"
+	// FeatureAgentBrief: agents may keep a brief (leo_brief), shown as `brief`
+	// on /state agent rows and announced by agent_brief events, switched per
+	// machine by `brief.enabled` (GET/PUT /config/brief). Advertised whether
+	// the switch is on or off; with it off the wire carries no briefs. Only
+	// operator, device and SSO readers see brief text
+	// (docs/configuration/agent-brief.md).
+	FeatureAgentBrief = "agent_brief"
 )
 
 // Features returns the hello's features list, a fresh copy each call.
 func Features() []string {
-	return []string{FeatureBridgeTurns, FeatureAttentionReason, FeatureDispatchTree, FeatureAgentUsage, FeatureAgentControl, FeatureDispatchAttach, FeatureDispatchRemoved, FeatureStateSeq, FeatureAttachDispatchPlacement, FeatureDispatchPlacementLive, FeatureAgentEnvironments, FeatureChatQuestions, FeatureMachineStats, FeatureConfigAPI, FeatureAgentStatusRestoring, FeatureClientTools, FeatureAgentAppearance, FeatureAgentMove, FeatureAgentMoveFreshSession, FeatureAgentProgress, FeatureAgentShell, FeatureAgentSeen, FeatureChatOpenAsks, FeatureAttentionTurnFailed}
+	return []string{FeatureBridgeTurns, FeatureAttentionReason, FeatureDispatchTree, FeatureAgentUsage, FeatureAgentControl, FeatureDispatchAttach, FeatureDispatchRemoved, FeatureStateSeq, FeatureAttachDispatchPlacement, FeatureDispatchPlacementLive, FeatureAgentEnvironments, FeatureChatQuestions, FeatureMachineStats, FeatureConfigAPI, FeatureAgentStatusRestoring, FeatureClientTools, FeatureAgentAppearance, FeatureAgentMove, FeatureAgentMoveFreshSession, FeatureAgentProgress, FeatureAgentShell, FeatureAgentSeen, FeatureChatOpenAsks, FeatureAttentionTurnFailed, FeatureAgentBrief}
 }
 
 // ActivityMinInterval is the most often agent_activity is published per
@@ -237,6 +254,21 @@ type AgentAppearanceChangedPayload struct {
 	Meta
 	Agent      string      `json:"agent"`
 	Appearance *Appearance `json:"appearance"`
+}
+
+// AgentBriefPayload carries one agent's whole current brief; Brief is null
+// (never absent) once cleared.
+type AgentBriefPayload struct {
+	Meta
+	Agent string       `json:"agent"`
+	Brief *brief.Brief `json:"brief"`
+}
+
+// BriefConfigChangedPayload reports the machine's brief switch after a
+// config reload changed it.
+type BriefConfigChangedPayload struct {
+	Meta
+	Enabled bool `json:"enabled"`
 }
 
 // AgentTaskChangedPayload carries one task's whole current record. Task is
