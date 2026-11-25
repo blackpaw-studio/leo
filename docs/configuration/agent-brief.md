@@ -53,6 +53,7 @@ Codex and opencode get the same guidance through their own hooks. See [Harness s
 ## API
 
 - `POST /api/agent/brief` (agent bearer): `{"token", "brief": {"goal"?, "status"?, "decisions"?, "open"?}}` → `200 {"ok": true, "brief": {...} | null}`. `400` invalid brief (unknown field, too long, too many items), `403` unknown or expired token, `404` no record, `409` briefs are off.
+- `POST /api/agent/brief/config` (agent bearer): `{"token"}` → `{"ok": true, "data": {"enabled": true}}`, `403` unknown or expired token. The agent's MCP server asks on every event-stream (re)connection, so a switch flipped while it was disconnected still re-lists `leo_brief`.
 - `GET /api/v1/state` and the daemon socket's `GET /state`: an agent row carries `brief` when the agent has one and briefs are on.
 
 ```json

@@ -723,6 +723,7 @@ func New(configPath string, processes ProcessStateProvider, scheduler SchedulerP
 	apiMux.HandleFunc("POST /api/agent/hook", s.handleAPIAgentHook)
 	apiMux.HandleFunc("POST /api/agent/progress", s.handleAPIAgentProgress)
 	apiMux.HandleFunc("POST /api/agent/brief", s.handleAPIAgentBrief)
+	apiMux.HandleFunc("POST /api/agent/brief/config", s.handleAPIAgentBriefConfig)
 	apiMux.HandleFunc("POST /api/agent/context", s.handleAPIAgentContext)
 	apiMux.HandleFunc("POST /api/agent/permission", s.handleAPIPermission)
 	apiMux.HandleFunc("POST /api/agent/{name}/chat/post", s.handleAgentChatPost)

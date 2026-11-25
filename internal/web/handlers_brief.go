@@ -121,6 +121,33 @@ func (s *Server) handleAPIAgentBrief(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(briefResponse{OK: true, Brief: stored})
 }
 
+// briefConfigRequest is the body of POST /api/agent/brief/config: the launch's
+// attention token alone.
+type briefConfigRequest struct {
+	Token string `json:"token"`
+}
+
+// handleAPIAgentBriefConfig reports whether briefs are on to a supervised
+// agent's MCP server, which asks on every event-stream (re)connection: a flip
+// it missed while disconnected would otherwise leave its tool list stale for
+// good. 403 unknown token.
+// POST /api/agent/brief/config
+func (s *Server) handleAPIAgentBriefConfig(w http.ResponseWriter, r *http.Request) {
+	var req briefConfigRequest
+	if !decodeControlBody(w, r, maxBriefBodyBytes, false, &req) {
+		return
+	}
+	if s.attention == nil {
+		writeJSON(w, http.StatusForbidden, apiResponse{Error: "unknown or expired agent token (is this running inside a Leo agent?)"})
+		return
+	}
+	if _, ok := s.attention.AgentForToken(req.Token); !ok {
+		writeJSON(w, http.StatusForbidden, apiResponse{Error: "unknown or expired agent token (is this running inside a Leo agent?)"})
+		return
+	}
+	writeJSON(w, http.StatusOK, apiResponse{OK: true, Data: map[string]bool{"enabled": s.briefEnabled()}})
+}
+
 // decodeBriefInput reads the brief object strictly: an unknown field is a
 // mistake the agent should hear about, not text silently dropped.
 func decodeBriefInput(raw json.RawMessage) (brief.Input, error) {

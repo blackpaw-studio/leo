@@ -136,6 +136,22 @@ func (c *daemonClient) doContextLimit(ctx context.Context, method, path string, 
 	return env.Data, nil
 }
 
+// briefEnabled asks the daemon whether briefs are on, as the launch with
+// token sees it.
+func (c *daemonClient) briefEnabled(ctx context.Context, token string) (bool, error) {
+	data, err := c.doContext(ctx, http.MethodPost, "/api/agent/brief/config", map[string]any{"token": token})
+	if err != nil {
+		return false, err
+	}
+	var reply struct {
+		Enabled bool `json:"enabled"`
+	}
+	if err := json.Unmarshal(data, &reply); err != nil {
+		return false, fmt.Errorf("decode brief config: %w", err)
+	}
+	return reply.Enabled, nil
+}
+
 // agentCommand asks the daemon to run /<verb> (clear or compact) in an
 // agent's claude.
 func (c *daemonClient) agentCommand(agentName, verb string) error {

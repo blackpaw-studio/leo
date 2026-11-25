@@ -242,3 +242,40 @@ func TestEventsCarryBriefsOnlyForOperatorClassReaders(t *testing.T) {
 		})
 	}
 }
+
+// An agent's MCP server asks for the current switch on every event-stream
+// (re)connection, so a flip it missed while disconnected is still seen.
+func TestBriefConfigRouteReportsTheSwitchToTheLaunch(t *testing.T) {
+	for _, on := range []bool{true, false} {
+		s, _, _ := briefServer(t, on)
+		w := requestAs(t, s, http.MethodPost, "/api/agent/brief/config", testAgentToken, `{"token":"tok-a"}`)
+		if w.Code != http.StatusOK {
+			t.Fatalf("on=%v: status = %d, body = %s", on, w.Code, w.Body)
+		}
+		var resp struct {
+			OK   bool `json:"ok"`
+			Data struct {
+				Enabled bool `json:"enabled"`
+			} `json:"data"`
+		}
+		if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil || !resp.OK || resp.Data.Enabled != on {
+			t.Fatalf("on=%v: response = %s (%v)", on, w.Body, err)
+		}
+	}
+}
+
+func TestBriefConfigRouteFollowsAReload(t *testing.T) {
+	s, _, _ := briefServer(t, false)
+	s.SetBriefEnabled(true)
+	w := requestAs(t, s, http.MethodPost, "/api/agent/brief/config", testAgentToken, `{"token":"tok-a"}`)
+	if !strings.Contains(w.Body.String(), `"enabled":true`) {
+		t.Fatalf("body = %s, want the reloaded switch", w.Body)
+	}
+}
+
+func TestBriefConfigRouteRefusesAnUnknownToken(t *testing.T) {
+	s, _, _ := briefServer(t, true)
+	if w := requestAs(t, s, http.MethodPost, "/api/agent/brief/config", testAgentToken, `{"token":"nope"}`); w.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403", w.Code)
+	}
+}

@@ -85,6 +85,11 @@ type clientToolsView struct {
 	// onBrief hears brief_config_changed events on the same event stream;
 	// set before the watch starts.
 	onBrief func(enabled bool)
+	// briefState asks the daemon for the current brief switch, on every
+	// event-stream (re)connection: a flip missed while disconnected is not
+	// replayed, so onBrief alone would leave the tool list stale. Set with
+	// onBrief; nil when this session has no brief to offer.
+	briefState func(ctx context.Context) (bool, error)
 }
 
 func newClientToolsView(client *daemonClient, agent string, perms leotools.Permissions) *clientToolsView {
