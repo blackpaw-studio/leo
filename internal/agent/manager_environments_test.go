@@ -413,11 +413,12 @@ func TestSetEnvironmentsSaveFailureRelaunchesOnTheOldEnvironment(t *testing.T) {
 	plantTranscript(t, a, rec.Workspace, "live-session")
 	store := agentstore.FilePath(home)
 	sup.onStop = func(string) {
-		if err := os.Chmod(store, 0o400); err != nil {
+		// agents.json is replaced by rename: close its directory to writes.
+		if err := os.Chmod(filepath.Dir(store), 0o500); err != nil {
 			t.Fatal(err)
 		}
 	}
-	t.Cleanup(func() { _ = os.Chmod(store, 0o600) })
+	t.Cleanup(func() { _ = os.Chmod(filepath.Dir(store), 0o750) })
 
 	_, err := envManager(cfg, sup).SetEnvironments("leo-x", []string{"acct-b"})
 	if err == nil || !strings.Contains(err.Error(), "saving") {

@@ -184,10 +184,13 @@ func TestRenameStoppedAgentDoesNotAnnounceWhenPersistFails(t *testing.T) {
 		ClaudeArgs: []string{"--name", "leo-stopped"},
 	})
 	storePath := agentstore.FilePath(home)
-	if err := os.Chmod(storePath, 0o400); err != nil {
-		t.Fatalf("chmod store read-only: %v", err)
+	// agents.json is replaced by rename, so the store goes read-only by
+	// closing its directory to writes.
+	storeDir := filepath.Dir(storePath)
+	if err := os.Chmod(storeDir, 0o500); err != nil {
+		t.Fatalf("chmod store dir read-only: %v", err)
 	}
-	t.Cleanup(func() { _ = os.Chmod(storePath, 0o600) })
+	t.Cleanup(func() { _ = os.Chmod(storeDir, 0o750) })
 
 	sup := &fakeSupervisor{ephemeral: map[string]ProcessState{}} // not live
 	m := newTestManager(t, home, sup)
