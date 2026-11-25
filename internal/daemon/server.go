@@ -198,6 +198,9 @@ type Server struct {
 	// restored agents; until then agent queries (e.g. /agents/stale) answer
 	// from a partially populated supervisor.
 	ready atomic.Bool
+
+	// briefState is the last brief.enabled this daemon announced (see syncBrief).
+	briefState atomic.Int32
 	// pid is this daemon's boot identity reported on /health.
 	pid int
 	// webListening is the web listener's bound address once it is serving,
@@ -273,6 +276,12 @@ func (s *Server) SetObservability(bus *observe.Bus, runLog *observe.RunLog, mess
 func (s *Server) SetAttention(a *observe.AttentionStore) {
 	s.observeAttention = a
 }
+
+// Cached brief.enabled states, zero meaning not yet announced.
+const (
+	briefOff int32 = iota + 1
+	briefOn
+)
 
 // SetProgress wires the agent task progress store into the local /state view
 // and, via StartWeb, the web API. Must be called before StartWeb.
@@ -744,12 +753,31 @@ func (s *Server) ReloadConfig() error {
 	if s.agentMgr != nil {
 		s.agentMgr.RepublishAppearance()
 	}
+	s.syncBrief(cfg.Brief.Enabled)
 	if cfg.UsesHarness("opencode") {
 		if err := leomcp.EnsureOpenCodeContext(cfg); err != nil {
 			return fmt.Errorf("refresh opencode context: %w", err)
 		}
 	}
 	return s.scheduler.Install(cfg)
+}
+
+// syncBrief hands brief.enabled to the web server's hooks and tells the event
+// stream when the switch flipped, so a running agent's MCP server can list or
+// withdraw leo_brief. The first call has nothing to compare against and
+// always publishes: a spurious event only repeats the value.
+func (s *Server) syncBrief(enabled bool) {
+	if s.webServer != nil {
+		s.webServer.SetBriefEnabled(enabled)
+	}
+	next := briefOff
+	if enabled {
+		next = briefOn
+	}
+	if s.briefState.Swap(next) == next || s.observeBus == nil {
+		return
+	}
+	s.observeBus.Publish(observe.Event{Type: observe.EventBriefConfigChanged, Payload: &observe.BriefConfigChangedPayload{Enabled: enabled}})
 }
 
 // AgentGone tells the daemon an agent is gone (stopped or deleted): its open
