@@ -79,8 +79,8 @@ func (s *Server) handleAPIState(w http.ResponseWriter, r *http.Request) {
 			Seq:           seq,
 			Now:           time.Now(),
 		})
-		if !s.seesAttentionInput(r) {
-			snap = snap.WithoutAttentionInput()
+		if !s.seesAttentionContent(r) {
+			snap = snap.WithoutAttentionContent()
 		}
 		return snap, nil
 	}, func(w http.ResponseWriter, status int, data any, err error) {
@@ -92,11 +92,12 @@ func (s *Server) handleAPIState(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// seesAttentionInput reports whether r may read a permission prompt's full
-// command (attention reason input): the operator, a paired device or an SSO
-// identity, as for Leo Chat's permission rows. The agent token also passes
-// the /api bearer check, as does any other caller, and neither gets it.
-func (s *Server) seesAttentionInput(r *http.Request) bool { return s.isOperator(r) }
+// seesAttentionContent reports whether r may read what an agent is asking
+// (attention reason input and detail: a permission prompt's command, an
+// AskUserQuestion's text): the operator, a paired device or an SSO identity,
+// as for Leo Chat's permission rows. The agent token also passes the /api
+// bearer check, as does any other caller, and neither gets it.
+func (s *Server) seesAttentionContent(r *http.Request) bool { return s.isOperator(r) }
 
 // isChatEvent reports whether t is one of the Leo Chat event types, whose
 // payloads the operator-only chat routes serve.
@@ -557,12 +558,12 @@ func (s *Server) handleAPIEvents(w http.ResponseWriter, r *http.Request) {
 	defer release()
 	opts := httpapi.EventsOptions{
 		Source: s.events, Heartbeat: s.sseHeartbeat, WriteTimeout: s.sseWriteTimeout, Buffer: sseSubscriberBuffer,
-		HideAttentionInput: !s.seesAttentionInput(r),
+		HideAttentionContent: !s.seesAttentionContent(r),
 	}
 	// The REST chat and agent-seen routes refuse the agent token (and any
 	// other non-operator caller), so their events stay off its stream too:
 	// they carry other agents' asks and permission prompts.
-	if !s.seesAttentionInput(r) {
+	if !s.seesAttentionContent(r) {
 		opts.Withhold = isChatEvent
 	}
 	// A provider stream (?client_tools=1) registers a client with the relay

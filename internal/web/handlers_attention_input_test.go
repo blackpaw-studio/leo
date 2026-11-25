@@ -69,8 +69,11 @@ func TestStateHidesPermissionInputFromTheAgentToken(t *testing.T) {
 			if got := strings.Contains(body, secretCommand); got != tc.wantInput {
 				t.Fatalf("command present = %v, want %v (%s)", got, tc.wantInput, body)
 			}
-			if !strings.Contains(body, `"detail":"rm"`) {
-				t.Fatalf("detail missing: it must stay for every caller (%s)", body)
+			if got := strings.Contains(body, `"detail":"rm"`); got != tc.wantInput {
+				t.Fatalf("detail present = %v, want %v: it is reason content, hidden with the input (%s)", got, tc.wantInput, body)
+			}
+			if !strings.Contains(body, `"tool":"Bash"`) || !strings.Contains(body, `"state":"needs_input"`) {
+				t.Fatalf("kind/tool/state must stay for every caller (%s)", body)
 			}
 		})
 	}
@@ -122,7 +125,10 @@ func TestEventsHidePermissionInputFromTheAgentTokenAndKeepTheRest(t *testing.T) 
 			if got := strings.Contains(data, secretCommand); got != tc.wantInput {
 				t.Fatalf("command present = %v, want %v (%s)", got, tc.wantInput, data)
 			}
-			if !strings.Contains(data, `"detail":"`+detail+`"`) || !strings.Contains(data, `"state":"needs_input"`) {
+			if got := strings.Contains(data, `"detail":"`+detail+`"`); got != tc.wantInput {
+				t.Fatalf("detail present = %v, want %v (%s)", got, tc.wantInput, data)
+			}
+			if !strings.Contains(data, `"tool":"Bash"`) || !strings.Contains(data, `"state":"needs_input"`) {
 				t.Fatalf("frame lost its other fields: %s", data)
 			}
 		})

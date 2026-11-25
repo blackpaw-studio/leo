@@ -74,10 +74,11 @@ type EventsOptions struct {
 	// hello carries its client_id and it receives client_tool.* events in
 	// full. Every other stream sees them redacted to ids.
 	Provider Provider
-	// HideAttentionInput strips a permission prompt's command (the attention
-	// reason's input) from agent_activity and agent_spawned frames, for a
-	// reader that may see agents' state but not their commands.
-	HideAttentionInput bool
+	// HideAttentionContent strips what an agent is asking (the attention
+	// reason's input and detail: a permission command, a question's text)
+	// from agent_activity and agent_spawned frames, for a reader that may see
+	// that agents need attention but not why.
+	HideAttentionContent bool
 	// Withhold, when non-nil, names event types this stream must not carry
 	// at all: they are dropped before writing, not redacted. The stream's
 	// seq then has gaps, which the wire contract already tells consumers to
@@ -172,15 +173,15 @@ func ServeEvents(w http.ResponseWriter, r *http.Request, opts EventsOptions) {
 // carry an agent's arguments, so only provider streams get them whole. The
 // others get the id alone, which keeps their seq contiguous.
 func payloadFor(ev observe.Event, opts EventsOptions) any {
-	if opts.HideAttentionInput {
+	if opts.HideAttentionContent {
 		switch p := ev.Payload.(type) {
 		case *observe.AgentActivityPayload:
 			cp := *p
-			cp.Attention = p.Attention.WithoutInput()
+			cp.Attention = p.Attention.WithoutReasonContent()
 			return &cp
 		case *observe.AgentSpawnedPayload:
 			cp := *p
-			cp.Agent.Attention = p.Agent.Attention.WithoutInput()
+			cp.Agent.Attention = p.Agent.Attention.WithoutReasonContent()
 			return &cp
 		}
 	}

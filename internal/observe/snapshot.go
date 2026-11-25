@@ -49,13 +49,13 @@ type SnapshotMeta struct {
 	Seq uint64 `json:"seq"`
 }
 
-// WithoutAttentionInput returns the snapshot with every agent's permission
-// reason stripped of its input (see AgentAttention.WithoutInput); the
+// WithoutAttentionContent returns the snapshot with every agent's permission
+// reason stripped of its input and detail (see AgentAttention.WithoutReasonContent); the
 // receiver is not modified.
-func (s Snapshot) WithoutAttentionInput() Snapshot {
+func (s Snapshot) WithoutAttentionContent() Snapshot {
 	agents := make([]Agent, len(s.Agents))
 	for i, a := range s.Agents {
-		a.Attention = a.Attention.WithoutInput()
+		a.Attention = a.Attention.WithoutReasonContent()
 		agents[i] = a
 	}
 	s.Agents = agents
