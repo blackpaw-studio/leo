@@ -182,6 +182,9 @@ func (s *Server) handleAPIAgentHook(w http.ResponseWriter, r *http.Request) {
 		s.autoCmds.Hook(req.Token, req.Payload)
 		s.feedHook(name, payload)
 		s.chatHook(name, req.Payload)
+		if payload.HookEventName == "Stop" || payload.HookEventName == "StopFailure" {
+			s.briefs.TurnCompleted(name)
+		}
 		if s.turnObserver != nil {
 			s.turnObserver(name, AgentTurn{
 				Event:       payload.HookEventName,

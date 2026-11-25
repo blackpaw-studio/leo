@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -116,6 +117,12 @@ func (s *Server) agentContext(token string, hook contextHook) string {
 	if hook.Event == "SessionStart" {
 		s.claimSession(agent, token, hook.SessionID)
 	}
+	return joinContext(s.delegationContextFor(agent, hook), s.briefContextFor(agent, hook))
+}
+
+// delegationContextFor is the delegation policy context: for a bridged
+// launch only, as with the mod's prompt.compose.
+func (s *Server) delegationContextFor(agent string, hook contextHook) string {
 	if s.delegationCtx == nil {
 		return ""
 	}
@@ -123,6 +130,17 @@ func (s *Server) agentContext(token string, hook contextHook) string {
 		return ""
 	}
 	return s.delegationCtx.contextFor(agent, hook)
+}
+
+// joinContext joins the non-empty context parts with a blank line.
+func joinContext(parts ...string) string {
+	var kept []string
+	for _, p := range parts {
+		if p != "" {
+			kept = append(kept, p)
+		}
+	}
+	return strings.Join(kept, "\n\n")
 }
 
 // clearErroredOnSessionStart ends the errored attention a restart left once

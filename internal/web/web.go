@@ -12,6 +12,7 @@ import (
 	"net/netip"
 	"os/exec"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -265,6 +266,9 @@ type Server struct {
 	// the staleness nudge; briefSwitch caches brief.enabled.
 	briefs      *brief.Tracker
 	briefSwitch briefSwitch
+	// briefCtx serves the brief half of the context hooks; built on first use.
+	briefCtxOnce sync.Once
+	briefContext *briefContext
 
 	// startAttach runs a read-only tmux client in a PTY for
 	// GET /api/v1/agents/{name}/attach; attachTicker is that socket's
