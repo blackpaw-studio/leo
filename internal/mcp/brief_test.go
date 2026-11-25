@@ -254,3 +254,18 @@ func TestListingLeoBriefReportsItToTheDaemonOnce(t *testing.T) {
 		}
 	}
 }
+
+// deny_tools can remove leo_brief from a session that has briefs on; it must
+// not claim to offer a tool that was never registered.
+func TestADeniedLeoBriefIsNeverReportedAsOffered(t *testing.T) {
+	d := briefDaemon(t, 200, briefReply)
+	reg := newRegistry(newDaemonClient(d.port(), "agent-token"), "assistant",
+		leotools.Permissions{DenyTools: []string{"leo_brief"}}, withAttentionToken("launch-tok"), withBrief(true))
+	listedNames(reg)
+	reg.setBrief(true)
+	for _, body := range offeredReports(d) {
+		if strings.Contains(body, `"offered":true`) {
+			t.Fatalf("reported %s for a denied tool", body)
+		}
+	}
+}

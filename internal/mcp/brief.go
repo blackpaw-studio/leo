@@ -108,10 +108,17 @@ func (r *registry) reportsBrief() bool {
 	return r.attentionToken != "" && r.dispatchID == ""
 }
 
+// briefOffered is whether this server is offering leo_brief right now: briefs
+// on, a session that can call it, and the tool actually registered (a
+// deny_tools entry removes it). It is what the daemon is told.
+func (r *registry) briefOffered() bool {
+	return r.briefOn.Load() && r.reportsBrief() && !r.denied[briefToolName]
+}
+
 // visibleDefs is the registered tools minus leo_brief wherever it is not
 // offered: while briefs are off, and in a server that could not call it.
 func (r *registry) visibleDefs() []toolDef {
-	if r.briefOn.Load() && r.reportsBrief() {
+	if r.briefOffered() {
 		return r.defs
 	}
 	out := make([]toolDef, 0, len(r.defs))
@@ -137,7 +144,7 @@ func (r *registry) reportBriefOffered(ctx context.Context, force bool) {
 	}
 	r.briefReportMu.Lock()
 	defer r.briefReportMu.Unlock()
-	offered := r.briefOn.Load()
+	offered := r.briefOffered()
 	if offered == r.briefReported && (!force || !offered) {
 		return
 	}

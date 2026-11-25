@@ -95,19 +95,39 @@ func TestBriefOfferedCannotBeSetForAnotherAgent(t *testing.T) {
 	if code := reportOffered(t, s, testAgentToken, `{"token":"tok-a","agent":"beta","offered":true}`); code != http.StatusOK && code != http.StatusBadRequest {
 		t.Fatalf("status %d", code)
 	}
-	if s.briefOffers.offered("beta", "tok-b") {
+	if s.briefOffers.offered("tok-b") {
 		t.Error("alpha's token set beta's capability")
 	}
-	if !s.briefOffers.offered("alpha", "tok-a") {
+	if !s.briefOffers.offered("tok-a") {
 		t.Fatal("alpha's own report did not stick")
 	}
 	if code := reportOffered(t, s, testAgentToken, `{"token":"tok-b","agent":"alpha","offered":false}`); code != http.StatusOK && code != http.StatusBadRequest {
 		t.Fatalf("status %d", code)
 	}
-	if !s.briefOffers.offered("alpha", "tok-a") {
+	if !s.briefOffers.offered("tok-a") {
 		t.Error("beta's token withdrew alpha's capability")
 	}
 	if code := reportOffered(t, s, testAgentToken, offeredBody("nope", true)); code != http.StatusForbidden {
 		t.Errorf("unknown token: status %d, want 403", code)
+	}
+}
+
+// Renaming a live agent moves its token mapping; what its MCP server offers
+// has to follow, since that server only re-reports on a reconnect or a flip.
+func TestBriefOfferedSurvivesALiveRename(t *testing.T) {
+	s, home := unreportedBriefContextServer(t, true)
+	reportOffered(t, s, "", offeredBody("tok-a", true))
+	if err := agentstore.Save(home, agentstore.Record{Name: "leo-z"}); err != nil {
+		t.Fatal(err)
+	}
+
+	s.attention.Move("leo-a", "leo-z")
+
+	if got := postContext(t, s, "tok-a", `{"hook_event_name":"SessionStart","source":"startup","session_id":"sid-r"}`); got != brief.Instruction {
+		t.Fatalf("session start after the rename = %q, want the instruction", got)
+	}
+	dueNudge(s, "leo-z")
+	if got := postContext(t, s, "tok-a", `{"hook_event_name":"UserPromptSubmit","session_id":"sid-r","prompt":"hi"}`); got != brief.NudgeText(false) {
+		t.Fatalf("prompt after the rename = %q, want the nudge", got)
 	}
 }

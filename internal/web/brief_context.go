@@ -60,7 +60,7 @@ func instructionHash() string {
 // currently offering leo_brief (it never reported, or reported it withdrawn):
 // the guidance names a tool that session does not have.
 func (s *Server) briefContextFor(agent, token string, h contextHook) string {
-	if !s.briefEnabled() || !s.briefOffers.offered(agent, token) {
+	if !s.briefEnabled() || !s.briefOffers.offered(token) {
 		return ""
 	}
 	bc := s.briefCtx()

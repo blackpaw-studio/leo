@@ -28,7 +28,7 @@ func briefContextServer(t *testing.T, on bool) (*Server, string) {
 	t.Helper()
 	s, home := unreportedBriefContextServer(t, on)
 	if on {
-		s.briefOffers.set("leo-a", "tok-a", true)
+		s.briefOffers.set("tok-a", true)
 	}
 	return s, home
 }
@@ -172,7 +172,7 @@ func TestBriefContextJoinsWithDelegationContext(t *testing.T) {
 	_ = os.WriteFile(s.configPath, append(raw, "\nbrief:\n  enabled: true\n"...), 0o600)
 	home, _ := s.homePath()
 	_ = agentstore.Save(home, agentstore.Record{Name: "leo-a"})
-	s.briefOffers.set("leo-a", "tok-a", true)
+	s.briefOffers.set("tok-a", true)
 
 	got := startCtx(t, s, "startup", "sid-a")
 
@@ -187,7 +187,7 @@ func TestBriefContextJoinsWithDelegationContext(t *testing.T) {
 func TestBriefContextIgnoresAForeignSessionOfAHomeGlobalHarness(t *testing.T) {
 	s, home := briefContextServer(t, true)
 	saveLaunchedRecord(t, home, "leo-b", "tok-b")
-	s.briefOffers.set("leo-b", "tok-b", true)
+	s.briefOffers.set("tok-b", true)
 	svc := s.agentSvc.(*mockAgentService)
 	svc.handles["leo-b"] = resolvedHandle{harnessName: "codex", handle: harness.SessionHandle{Name: "leo-b", IDs: staticIDs("sid-b")}}
 
@@ -214,7 +214,7 @@ func TestBriefContextIgnoresAForeignSessionOfAHomeGlobalHarness(t *testing.T) {
 func TestBriefContextTellsACodexAgentBeforeItsSessionIDIsKnown(t *testing.T) {
 	s, home := briefContextServer(t, true)
 	saveLaunchedRecord(t, home, "leo-b", "tok-b")
-	s.briefOffers.set("leo-b", "tok-b", true)
+	s.briefOffers.set("tok-b", true)
 	if got := postContext(t, s, "tok-b", `{"hook_event_name":"SessionStart","source":"startup","session_id":"first"}`); got != brief.Instruction {
 		t.Errorf("first start = %q, want the instruction", got)
 	}
@@ -265,7 +265,7 @@ func codexBriefServer(t *testing.T) (*Server, string) {
 	t.Helper()
 	s, home := briefContextServer(t, true)
 	saveLaunchedRecord(t, home, "leo-b", "tok-b")
-	s.briefOffers.set("leo-b", "tok-b", true)
+	s.briefOffers.set("tok-b", true)
 	if err := agentstore.SetBrief(home, "leo-b", &brief.Brief{Goal: "ship it", UpdatedAt: time.Now()}); err != nil {
 		t.Fatal(err)
 	}

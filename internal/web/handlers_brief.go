@@ -174,7 +174,7 @@ func (s *Server) handleAPIAgentBriefOffered(w http.ResponseWriter, r *http.Reque
 		writeJSON(w, http.StatusForbidden, apiResponse{Error: "unknown or expired agent token (is this running inside a Leo agent?)"})
 		return
 	}
-	s.briefOffers.set(name, req.Token, req.Offered)
+	s.briefOffers.set(req.Token, req.Offered)
 	log.Printf("[%s] brief: MCP server reports leo_brief offered=%v", name, req.Offered)
 	writeJSON(w, http.StatusOK, apiResponse{OK: true})
 }
