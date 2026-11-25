@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
 
 	"github.com/blackpaw-studio/leo/internal/brief"
@@ -28,6 +29,7 @@ func withBrief(on bool) registryOption {
 // the handler refuses while they are off, for a harness that listed it
 // earlier and never re-lists.
 func (r *registry) registerBrief(client *daemonClient, schema func(map[string]any, ...string) map[string]any) {
+	r.briefClient = client
 	line := map[string]any{"type": "string", "maxLength": brief.MaxLineRunes}
 	list := map[string]any{"type": "array", "maxItems": brief.MaxItems, "items": line}
 	r.addContext(toolDef{
@@ -121,16 +123,52 @@ func (r *registry) visibleDefs() []toolDef {
 	return out
 }
 
-// setBrief records the daemon's brief switch and, when it changed and the
-// session can be told, notifies the harness to re-list its tools.
+// reportBriefOffered tells the daemon whether this server currently offers
+// leo_brief, which gates the brief guidance the agent's hooks receive: the
+// guidance names the tool, so it must reach only a session that has it. A
+// server that never reports (an old binary) is never sent guidance.
+//
+// It reports on a change from what the daemon was last told, and with force
+// again while the tool is offered, because a restarted daemon has forgotten.
+// A failed report changes nothing, so the next call retries.
+func (r *registry) reportBriefOffered(ctx context.Context, force bool) {
+	if !r.reportsBrief() || r.briefClient == nil {
+		return
+	}
+	r.briefReportMu.Lock()
+	defer r.briefReportMu.Unlock()
+	offered := r.briefOn.Load()
+	if offered == r.briefReported && (!force || !offered) {
+		return
+	}
+	ctx, cancel := context.WithTimeout(ctx, clientToolListTimeout)
+	defer cancel()
+	if err := r.briefClient.briefOffered(ctx, r.attentionToken, offered); err != nil {
+		log.Printf("mcp: reporting leo_brief offered=%v to the daemon: %v", offered, err)
+		return
+	}
+	log.Printf("mcp: reported leo_brief offered=%v to the daemon", offered)
+	r.briefReported = offered
+}
+
+// setBrief records the daemon's brief switch, reports what that means for the
+// tool list, and, when the switch changed and the session can be told,
+// notifies the harness to re-list its tools. The report goes first so the
+// daemon already knows when the harness re-lists.
 func (r *registry) setBrief(enabled bool) {
-	if r.briefOn.Swap(enabled) == enabled || !r.reportsBrief() {
+	changed := r.briefOn.Swap(enabled) != enabled
+	if !r.reportsBrief() {
+		return
+	}
+	r.reportBriefOffered(context.Background(), true)
+	if !changed {
 		return
 	}
 	r.watch.mu.Lock()
 	notify := r.watch.notify
 	r.watch.mu.Unlock()
 	if notify != nil {
+		log.Printf("mcp: sending tools/list_changed (brief switch now %v)", enabled)
 		notify(listChangedMethod)
 	}
 }

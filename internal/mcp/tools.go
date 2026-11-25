@@ -99,6 +99,12 @@ type registry struct {
 	// briefOn is whether briefs are on for this machine: leo_brief is
 	// listed only while it holds (see visibleDefs).
 	briefOn atomic.Bool
+	// briefClient reports to the daemon what this server offers. briefReported
+	// is what the daemon was last told (false until a report succeeds: the
+	// daemon reads silence as "not offered"), serialized by briefReportMu.
+	briefClient   *daemonClient
+	briefReportMu sync.Mutex
+	briefReported bool
 }
 
 // registryOption adjusts a registry before its tools are registered.
@@ -967,6 +973,7 @@ func (r *registry) skip(name string) bool {
 // or, for one that does not, the fixed fallback tools once any app has ever
 // registered.
 func (r *registry) list() []toolDef {
+	r.reportBriefOffered(context.Background(), false)
 	defs := r.visibleDefs()
 	if r.clientTools == nil {
 		return defs

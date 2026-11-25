@@ -63,6 +63,7 @@ A harness that shares hooks or environment across processes (codex, opencode) ca
 ## API
 
 - `POST /api/agent/brief` (agent bearer): `{"token", "brief": {"goal"?, "status"?, "decisions"?, "open"?}}` → `200 {"ok": true, "brief": {...} | null}`. `400` invalid brief (unknown field, too long, too many items), `403` unknown or expired token, `404` no record, `409` briefs are off.
+- `POST /api/agent/brief/offered` (agent bearer): `{"token", "offered"}` → `{"ok": true}`, `403` unknown or expired token. The agent's MCP server reports whether it currently offers `leo_brief` when it lists or flips the tool, and again on every event-stream (re)connection. The daemon files the report under the agent the token names (there is no agent field), per launch. The brief guidance (instruction, restored brief, staleness nudge) goes only to a session whose server reported `offered: true` while `brief.enabled` is on, so a session without the tool, such as one launched by a `leo` binary that predates briefs, is never told to use it. The state is in memory; a restarted daemon relearns it from the reconnecting servers.
 - `POST /api/agent/brief/config` (agent bearer): `{"token"}` → `{"ok": true, "data": {"enabled": true}}`, `403` unknown or expired token. The agent's MCP server asks on every event-stream (re)connection, so a switch flipped while it was disconnected still re-lists `leo_brief`.
 - `GET /api/v1/state` and the daemon socket's `GET /state`: an agent row carries `brief` when the agent has one and briefs are on.
 

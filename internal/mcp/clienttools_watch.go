@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
 	"sort"
 	"strings"
@@ -75,7 +76,10 @@ func (r *registry) startWatch() {
 	w.wg.Add(1)
 	go func() {
 		defer w.wg.Done()
-		r.clientTools.watch(w.ctx, w.wg, w.timer, func() { w.notify(listChangedMethod) })
+		r.clientTools.watch(w.ctx, w.wg, w.timer, func() {
+			log.Printf("mcp: sending tools/list_changed (client tools changed)")
+			w.notify(listChangedMethod)
+		})
 	}()
 }
 

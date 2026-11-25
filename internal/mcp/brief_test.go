@@ -16,6 +16,9 @@ func briefDaemon(t *testing.T, status int, reply string) *fakeDaemon {
 		if method == "POST" && path == "/api/agent/brief" {
 			return status, reply
 		}
+		if method == "POST" && path == "/api/agent/brief/offered" {
+			return 200, `{"ok":true}`
+		}
 		return 404, `{"ok":false,"error":"unexpected"}`
 	})
 	t.Cleanup(d.close)
@@ -211,5 +214,43 @@ func TestListChangedWhenTheBriefSwitchFlips(t *testing.T) {
 	s.send("ping", nil)
 	if m := s.recv(); m.Method != "" || string(m.Result) != "{}" {
 		t.Fatalf("unexpected message before the ping reply: %+v", m)
+	}
+}
+
+func offeredReports(d *fakeDaemon) []string {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	var out []string
+	for _, c := range d.calls {
+		if c.Path == "/api/agent/brief/offered" {
+			out = append(out, c.Body)
+		}
+	}
+	return out
+}
+
+// Listing leo_brief tells the daemon the session has it, once, which covers a
+// harness that never watches for list changes. A session that does not list it
+// (briefs off, or a dispatch subagent) reports nothing, and the daemon treats
+// silence as "not offered".
+func TestListingLeoBriefReportsItToTheDaemonOnce(t *testing.T) {
+	d := briefDaemon(t, 200, briefReply)
+	r := briefRegistry(d, true)
+	listedNames(r)
+	listedNames(r)
+	got := offeredReports(d)
+	if len(got) != 1 || !strings.Contains(got[0], `"offered":true`) || !strings.Contains(got[0], `"token":"launch-tok"`) {
+		t.Fatalf("reports = %v, want one offered=true under the launch token", got)
+	}
+
+	for name, mk := range map[string]func(*fakeDaemon) *registry{
+		"briefs off": func(d *fakeDaemon) *registry { return briefRegistry(d, false) },
+		"dispatch":   func(d *fakeDaemon) *registry { return briefRegistry(d, true, withDispatchID("d-1")) },
+	} {
+		quiet := briefDaemon(t, 200, briefReply)
+		listedNames(mk(quiet))
+		if got := offeredReports(quiet); len(got) != 0 {
+			t.Errorf("%s reported %v", name, got)
+		}
 	}
 }

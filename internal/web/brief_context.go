@@ -56,9 +56,11 @@ func instructionHash() string {
 // compact or resume. UserPromptSubmit carries the instruction only when this
 // session has not heard its current text (briefs switched on mid-session, or
 // the text changed), plus the staleness nudge when one is due. Everything is
-// silent while briefs are off.
-func (s *Server) briefContextFor(agent string, h contextHook) string {
-	if !s.briefEnabled() {
+// silent while briefs are off, and for a launch whose MCP server is not
+// currently offering leo_brief (it never reported, or reported it withdrawn):
+// the guidance names a tool that session does not have.
+func (s *Server) briefContextFor(agent, token string, h contextHook) string {
+	if !s.briefEnabled() || !s.briefOffers.offered(agent, token) {
 		return ""
 	}
 	bc := s.briefCtx()

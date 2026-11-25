@@ -22,8 +22,20 @@ import (
 )
 
 // briefContextServer is a hook server (agent leo-a, launch token tok-a)
-// with a stored record and, when on, brief.enabled set in leo.yaml.
+// with a stored record and, when on, brief.enabled set in leo.yaml and the
+// agent's MCP server offering leo_brief.
 func briefContextServer(t *testing.T, on bool) (*Server, string) {
+	t.Helper()
+	s, home := unreportedBriefContextServer(t, on)
+	if on {
+		s.briefOffers.set("leo-a", "tok-a", true)
+	}
+	return s, home
+}
+
+// unreportedBriefContextServer is briefContextServer whose agent's MCP server
+// has not reported what it offers.
+func unreportedBriefContextServer(t *testing.T, on bool) (*Server, string) {
 	t.Helper()
 	s := newHookServer(t)
 	if on {
@@ -160,6 +172,7 @@ func TestBriefContextJoinsWithDelegationContext(t *testing.T) {
 	_ = os.WriteFile(s.configPath, append(raw, "\nbrief:\n  enabled: true\n"...), 0o600)
 	home, _ := s.homePath()
 	_ = agentstore.Save(home, agentstore.Record{Name: "leo-a"})
+	s.briefOffers.set("leo-a", "tok-a", true)
 
 	got := startCtx(t, s, "startup", "sid-a")
 
@@ -174,6 +187,7 @@ func TestBriefContextJoinsWithDelegationContext(t *testing.T) {
 func TestBriefContextIgnoresAForeignSessionOfAHomeGlobalHarness(t *testing.T) {
 	s, home := briefContextServer(t, true)
 	saveLaunchedRecord(t, home, "leo-b", "tok-b")
+	s.briefOffers.set("leo-b", "tok-b", true)
 	svc := s.agentSvc.(*mockAgentService)
 	svc.handles["leo-b"] = resolvedHandle{harnessName: "codex", handle: harness.SessionHandle{Name: "leo-b", IDs: staticIDs("sid-b")}}
 
@@ -200,6 +214,7 @@ func TestBriefContextIgnoresAForeignSessionOfAHomeGlobalHarness(t *testing.T) {
 func TestBriefContextTellsACodexAgentBeforeItsSessionIDIsKnown(t *testing.T) {
 	s, home := briefContextServer(t, true)
 	saveLaunchedRecord(t, home, "leo-b", "tok-b")
+	s.briefOffers.set("leo-b", "tok-b", true)
 	if got := postContext(t, s, "tok-b", `{"hook_event_name":"SessionStart","source":"startup","session_id":"first"}`); got != brief.Instruction {
 		t.Errorf("first start = %q, want the instruction", got)
 	}
@@ -250,6 +265,7 @@ func codexBriefServer(t *testing.T) (*Server, string) {
 	t.Helper()
 	s, home := briefContextServer(t, true)
 	saveLaunchedRecord(t, home, "leo-b", "tok-b")
+	s.briefOffers.set("leo-b", "tok-b", true)
 	if err := agentstore.SetBrief(home, "leo-b", &brief.Brief{Goal: "ship it", UpdatedAt: time.Now()}); err != nil {
 		t.Fatal(err)
 	}

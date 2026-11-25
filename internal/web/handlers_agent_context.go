@@ -143,7 +143,7 @@ func (s *Server) agentContext(ctx context.Context, token string, hook contextHoo
 	if hook.Event == "SessionStart" && !sharedHooks {
 		s.claimSession(agent, token, hook.SessionID)
 	}
-	return joinContext(s.delegationContextFor(agent, hook), s.briefContextFor(agent, hook))
+	return joinContext(s.delegationContextFor(agent, hook), s.briefContextFor(agent, token, hook))
 }
 
 // sharesHookHome is whether agent runs a harness whose hooks are not per
