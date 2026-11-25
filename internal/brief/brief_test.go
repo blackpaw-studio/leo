@@ -64,7 +64,7 @@ func TestNormalizeCountsRunesNotBytes(t *testing.T) {
 }
 
 func TestNormalizeStripsControlCharsAndFlattensNewlines(t *testing.T) {
-	got, err := Normalize(Input{Goal: "a\nb\r\nc\td\x00e\x1b[31mf‮g"}, fixedNow)
+	got, err := Normalize(Input{Goal: "a\nb\r\nc\td\x00e\x1b[31mf\u202eg"}, fixedNow)
 	if err != nil {
 		t.Fatal(err)
 	}
