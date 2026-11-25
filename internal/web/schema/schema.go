@@ -44,6 +44,8 @@ const (
 	SectionClientHost Section = "client_host"
 	SectionWeb        Section = "web"
 	SectionClient     Section = "client"
+	// SectionBrief is the top-level brief block: the per-machine agent-brief switch.
+	SectionBrief Section = "brief"
 	// SectionPermissions is the nested templates.*.permissions struct. It is
 	// rendered as an extra field group inside the template form rather than
 	// as a page of its own — see handleTemplateEditPage.
@@ -82,7 +84,7 @@ func AllSections() []Section {
 		SectionDefaults, SectionTask, SectionTemplate,
 		SectionClientHost, SectionWeb,
 		SectionClient, SectionPermissions, SectionPushDefaults, SectionPushTemplate,
-		SectionShare, SectionDispatchViewer, SectionEnvironment,
+		SectionShare, SectionDispatchViewer, SectionEnvironment, SectionBrief,
 	}
 }
 
@@ -111,6 +113,8 @@ func StructFor(s Section) reflect.Type {
 		return reflect.TypeOf(config.DispatchViewerConfig{})
 	case SectionEnvironment:
 		return reflect.TypeOf(EnvironmentEntry{})
+	case SectionBrief:
+		return reflect.TypeOf(config.BriefConfig{})
 	}
 	panic("schema: unknown section " + string(s))
 }

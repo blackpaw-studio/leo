@@ -1322,6 +1322,30 @@
             {
               "advanced": false,
               "constraints": {},
+              "default": false,
+              "group": "General",
+              "help": "Agents keep a short summary of their work. Uses a few tokens when it changes.",
+              "key": "enabled",
+              "label": "Agent briefs",
+              "restart": "none",
+              "type": "bool",
+              "warning": ""
+            }
+          ],
+          "harness_options": false,
+          "key": "brief",
+          "kind": "singleton",
+          "label": "Agent briefs",
+          "restart": "none",
+          "section": "brief",
+          "subsections": []
+        },
+        {
+          "actions": [],
+          "fields": [
+            {
+              "advanced": false,
+              "constraints": {},
               "default": null,
               "group": "General",
               "help": "default remote host for leo agent commands",

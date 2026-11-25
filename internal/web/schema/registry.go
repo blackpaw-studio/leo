@@ -238,6 +238,11 @@ var registry = map[Section][]Field{
 			Help: "origins `leo pair` advertises to phones, e.g. https://leo.example.com; empty = LAN addresses"},
 	},
 
+	SectionBrief: {
+		{Key: "enabled", Label: "Agent briefs", Group: "General", Default: false,
+			Help: "Agents keep a short summary of their work. Uses a few tokens when it changes."},
+	},
+
 	SectionClient: {
 		{Key: "default_host", Label: "Default host", Group: "General", Help: "default remote host for leo agent commands"},
 	},

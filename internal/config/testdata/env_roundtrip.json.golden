@@ -40,6 +40,9 @@
     "DefaultHost": "",
     "Hosts": null
   },
+  "Brief": {
+    "Enabled": false
+  },
   "APIClients": null,
   "Tasks": {
     "nightly": {
