@@ -1,7 +1,7 @@
 // Drives the leo turn plugin through one scripted opencode scenario (argv
 // [3]) with a fake fetch and client. A turn scenario prints every hook POST it
 // made as a JSON array. A context scenario (a `steps` list) prints
-// {posts, contexts, parts, timeouts}: the hook POSTs, the requests to
+// {posts, contexts, parts, timeouts, rejected}: the hook POSTs, the requests to
 // /api/agent/context, and the parts each chat.message ended with, after the
 // plugin's injection. Context requests go to a real HTTP server on a unix
 // socket the harness binds and names in LEO_SOCKET, as the daemon's launch
@@ -132,6 +132,9 @@ if (contextScenario && transport === "missing-socket") process.env.LEO_SOCKET = 
 
 const mod = await import(pathToFileURL(process.argv[2]).href)
 const parts = []
+const rejected = []
+const savedIDs = new Set()
+let messageCount = 0
 for (const plugin of Object.values(mod).filter((v) => typeof v === "function")) {
   const hooks = await plugin({ client, directory: "/tmp/ws", worktree: "/tmp/ws" })
   for (const step of contextScenario?.steps ?? []) {
@@ -139,8 +142,22 @@ for (const plugin of Object.values(mod).filter((v) => typeof v === "function")) 
       await hooks.event?.({ event: { type: step.event, properties: { sessionID: step.sessionID } } })
       continue
     }
-    const output = { message: {}, parts: [{ type: "text", text: step.message }] }
-    await hooks["chat.message"]?.({ sessionID: step.sessionID }, output)
+    // opencode gives the message an id before the hook runs, and refuses to
+    // save any part the hook added without its own id (prt_ + 26 chars),
+    // sessionID and messageID: a part that lacks them kills the turn.
+    const messageID = `msg_${String(++messageCount).padStart(12, "0")}ABCDEFGHIJKLMN`
+    const output = { message: { id: messageID }, parts: [{ type: "text", text: step.message }] }
+    const input = { sessionID: step.sessionID }
+    await hooks["chat.message"]?.(input, output)
+    output.parts.slice(1).forEach((part) => {
+      const missing = []
+      if (!/^prt_[0-9a-f]{12}[0-9A-Za-z]{14}$/.test(part.id ?? "")) missing.push("id")
+      if (part.sessionID !== input.sessionID) missing.push("sessionID")
+      if (part.messageID !== messageID) missing.push("messageID")
+      if (missing.length) rejected.push({ message: messageCount - 1, missing })
+      else if (savedIDs.has(part.id)) rejected.push({ message: messageCount - 1, missing: ["unique id"] })
+      else savedIDs.add(part.id)
+    })
     parts.push(output.parts)
   }
   if (contextScenario) continue
@@ -158,4 +175,4 @@ if (socketServer) {
   socketServer.close()
   rmSync(socketDir, { recursive: true, force: true })
 }
-process.stdout.write(JSON.stringify(contextScenario ? { posts, contexts, parts, timeouts } : posts))
+process.stdout.write(JSON.stringify(contextScenario ? { posts, contexts, parts, timeouts, rejected } : posts))

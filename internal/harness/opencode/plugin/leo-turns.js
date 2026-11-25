@@ -5,6 +5,7 @@
 // StopFailure (with the error) when the turn failed. Installed by leo
 // through OPENCODE_CONFIG_CONTENT; inert unless leo launched this process as
 // a supervised agent.
+import { randomBytes } from "node:crypto"
 import http from "node:http"
 
 export const LeoTurns = async ({ client }) => {
@@ -125,9 +126,31 @@ export const LeoTurns = async ({ client }) => {
   const started = new Set()
   const compacted = new Set()
 
+  // opencode's own part id shape (Identifier.ascending): "prt_", the time in
+  // ms times 4096 plus a counter as 12 hex digits, then 14 random base62
+  // characters. opencode refuses to save a part without an id, so the parts
+  // this plugin adds must carry one; ids from one process only ever rise.
+  const base62 = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
+  let lastMs = 0
+  let counter = 0
+  const partID = () => {
+    const now = Date.now()
+    if (now !== lastMs) {
+      lastMs = now
+      counter = 0
+    }
+    counter++
+    const time = (BigInt(now) * 0x1000n + BigInt(counter)).toString(16).padStart(12, "0").slice(-12)
+    const random = Array.from(randomBytes(14), (b) => base62[b % 62]).join("")
+    return `prt_${time}${random}`
+  }
+
   // The context for one message, as one synthetic text part (what the model
   // sees as part of the user's turn, never shown as their words), or none.
-  const contextFor = async (id, prompt) => {
+  // The part is complete as opencode saves it: its own id and the session and
+  // message it belongs to.
+  const contextFor = async (input, output, prompt) => {
+    const id = input.sessionID
     // One budget for the whole message, as for the one hook command claude
     // runs: a dead daemon delays a message by at most this long, however
     // many requests (SessionStart, then UserPromptSubmit) it needs.
@@ -139,7 +162,8 @@ export const LeoTurns = async ({ client }) => {
     if (source) told.push(await askContext({ hook_event_name: "SessionStart", source, session_id: id }, signal))
     told.push(await askContext({ hook_event_name: "UserPromptSubmit", session_id: id, prompt }, signal))
     const added = told.filter(Boolean).join("\n\n")
-    return added ? { type: "text", synthetic: true, text: added } : undefined
+    if (!added || !output.message?.id) return undefined
+    return { id: partID(), sessionID: id, messageID: output.message.id, type: "text", synthetic: true, text: added }
   }
 
   // Sessions whose turn already reported its end through session.error;
@@ -150,7 +174,7 @@ export const LeoTurns = async ({ client }) => {
     "chat.message": async (input, output) => {
       reported.delete(input.sessionID)
       const prompt = text(output.parts)
-      const context = await contextFor(input.sessionID, prompt)
+      const context = await contextFor(input, output, prompt)
       if (context) output.parts.push(context)
       await report({ hook_event_name: "UserPromptSubmit", session_id: input.sessionID, prompt })
     },

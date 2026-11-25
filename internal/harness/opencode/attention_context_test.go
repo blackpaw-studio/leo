@@ -23,7 +23,11 @@ type pluginContextRun struct {
 	Posts    []pluginRequest `json:"posts"`
 	Contexts []pluginRequest `json:"contexts"`
 	Timeouts []int           `json:"timeouts"` // the deadlines asked for on context requests
-	Parts    [][]struct {
+	Rejected []struct {
+		Message int      `json:"message"`
+		Missing []string `json:"missing"`
+	} `json:"rejected"` // injected parts opencode would refuse to save
+	Parts [][]struct {
 		Type      string `json:"type"`
 		Text      string `json:"text"`
 		Synthetic bool   `json:"synthetic"`
@@ -208,5 +212,17 @@ func TestOpencodeTurnPluginStartsOneDeadlinePerMessage(t *testing.T) {
 	run := runContextScenario(t, "ctx-startup-then-prompts")
 	if want := []int{3000, 3000}; !reflect.DeepEqual(run.Timeouts, want) {
 		t.Errorf("deadlines = %v, want one per message (%v)", run.Timeouts, want)
+	}
+}
+
+// opencode saves every part a chat.message hook adds, and refuses (failing the
+// whole turn) one without its own id, sessionID and messageID.
+func TestOpencodeTurnPluginInjectedPartsCarryTheKeysOpencodeSaves(t *testing.T) {
+	run := runContextScenario(t, "ctx-startup-then-prompts")
+	if run.injected(t, 0) == "" || run.injected(t, 1) == "" {
+		t.Fatal("nothing injected, so nothing to check")
+	}
+	if len(run.Rejected) != 0 {
+		t.Fatalf("opencode would refuse the injected parts: %+v", run.Rejected)
 	}
 }
