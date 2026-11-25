@@ -39,22 +39,31 @@ type AgentAttention struct {
 	At time.Time `json:"at,omitzero"`
 }
 
-// WithoutReasonContent returns a with its reason's Input and Detail dropped,
-// for a reader that may not see what an agent is asking: a permission
-// prompt's command, an AskUserQuestion's text. The reason's Kind and Tool,
-// the state and the timestamps stay, so the reader still sees that the agent
-// needs attention. The receiver and its reason are never modified (a
-// stream's payload is shared by every subscriber); a nil attention, or one
-// without reason content, is returned as is.
+// WithoutReasonContent returns a with everything the agent said or asked
+// dropped, for a reader that may not see another agent's conversation: the
+// reason's Input and Detail (a permission prompt's command, an
+// AskUserQuestion's text) and the Preview (the finished turn's final message,
+// or a failed turn's error). Kind and Tool, the state, revision, Outstanding
+// and the timestamps stay, so the reader still sees that the agent needs
+// attention. The receiver and its reason are never modified (a stream's
+// payload is shared by every subscriber); a nil attention, or one without
+// such content, is returned as is.
 func (a *AgentAttention) WithoutReasonContent() *AgentAttention {
-	if a == nil || a.Reason == nil || (a.Reason.Input == "" && a.Reason.Detail == "") {
+	if a == nil {
+		return nil
+	}
+	hasReason := a.Reason != nil && (a.Reason.Input != "" || a.Reason.Detail != "")
+	if !hasReason && a.Preview == "" {
 		return a
 	}
-	reason := *a.Reason
-	reason.Input = ""
-	reason.Detail = ""
 	out := *a
-	out.Reason = &reason
+	out.Preview = ""
+	if hasReason {
+		reason := *a.Reason
+		reason.Input = ""
+		reason.Detail = ""
+		out.Reason = &reason
+	}
 	return &out
 }
 

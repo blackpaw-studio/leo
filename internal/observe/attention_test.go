@@ -547,3 +547,37 @@ func TestSnapshotWithoutAttentionContentLeavesTheOriginalIntact(t *testing.T) {
 		t.Fatalf("out = %+v, in = %+v", out.Agents, in.Agents)
 	}
 }
+
+func TestWithoutReasonContentDropsPreviewButKeepsStateAndOutstanding(t *testing.T) {
+	in := &AgentAttention{State: AttentionErrored, Revision: 2, Preview: "boom: secret", Outstanding: &Outstanding{Subagents: 1}}
+
+	out := in.WithoutReasonContent()
+
+	if out.Preview != "" || out.State != AttentionErrored || out.Revision != 2 || out.Outstanding == nil || out.Outstanding.Subagents != 1 {
+		t.Fatalf("out = %+v, want only the preview dropped", out)
+	}
+	if in.Preview != "boom: secret" {
+		t.Fatal("redaction mutated the shared attention")
+	}
+}
+
+func TestAgentWithoutContentDropsConversationTextAndNeverMutates(t *testing.T) {
+	in := Agent{
+		Name:          "a",
+		Attention:     &AgentAttention{State: AttentionFinished, Preview: "final"},
+		CurrentAction: &Action{Kind: ActionKindTool, Detail: "Bash rm"},
+		Tasks:         []AgentTask{{ID: "t", Title: "title", Status: "status", Mode: TaskDeterminate}},
+	}
+
+	out := in.WithoutContent()
+
+	if out.Attention.Preview != "" || out.CurrentAction.Detail != "" || out.CurrentAction.Kind != ActionKindTool {
+		t.Fatalf("out = %+v / %+v", out.Attention, out.CurrentAction)
+	}
+	if got := out.Tasks[0]; got.Title != "" || got.Status != "" || got.ID != "t" || got.Mode != TaskDeterminate {
+		t.Fatalf("task = %+v, want text dropped and the rest kept", got)
+	}
+	if in.Attention.Preview != "final" || in.CurrentAction.Detail != "Bash rm" || in.Tasks[0].Title != "title" || in.Tasks[0].Status != "status" {
+		t.Fatal("redaction mutated the original agent")
+	}
+}

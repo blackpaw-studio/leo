@@ -74,10 +74,12 @@ type EventsOptions struct {
 	// hello carries its client_id and it receives client_tool.* events in
 	// full. Every other stream sees them redacted to ids.
 	Provider Provider
-	// HideAttentionContent strips what an agent is asking (the attention
-	// reason's input and detail: a permission command, a question's text)
-	// from agent_activity and agent_spawned frames, for a reader that may see
-	// that agents need attention but not why.
+	// HideAttentionContent strips the text derived from an agent's
+	// conversation from its frames, for a reader that may see that agents
+	// need attention or are busy but not what they said or are doing:
+	// agent_activity and agent_spawned (attention reason input and detail,
+	// attention preview, current action detail, task title and status),
+	// agent_turn_completed (preview) and agent_task_changed (title, status).
 	HideAttentionContent bool
 	// Withhold, when non-nil, names event types this stream must not carry
 	// at all: they are dropped before writing, not redacted. The stream's
@@ -176,12 +178,17 @@ func payloadFor(ev observe.Event, opts EventsOptions) any {
 	if opts.HideAttentionContent {
 		switch p := ev.Payload.(type) {
 		case *observe.AgentActivityPayload:
-			cp := *p
-			cp.Attention = p.Attention.WithoutReasonContent()
+			cp := p.WithoutContent()
 			return &cp
 		case *observe.AgentSpawnedPayload:
 			cp := *p
-			cp.Agent.Attention = p.Agent.Attention.WithoutReasonContent()
+			cp.Agent = p.Agent.WithoutContent()
+			return &cp
+		case *observe.AgentTurnCompletedPayload:
+			cp := p.WithoutContent()
+			return &cp
+		case *observe.AgentTaskChangedPayload:
+			cp := p.WithoutContent()
 			return &cp
 		}
 	}
