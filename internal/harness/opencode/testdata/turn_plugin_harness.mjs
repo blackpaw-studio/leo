@@ -1,10 +1,29 @@
 // Drives the leo turn plugin through one scripted opencode scenario (argv
-// [3]) with a fake fetch and client, then prints every POST it made as JSON.
+// [3]) with a fake fetch and client. A turn scenario prints every hook POST it
+// made as a JSON array. A context scenario (a `steps` list) prints
+// {posts, contexts, parts}: the hook POSTs, the POSTs to /api/agent/context,
+// and the parts each chat.message ended with, after the plugin's injection.
 import { pathToFileURL } from "node:url"
 
 const posts = []
+const contexts = []
+let contextMode = "reply"
+// What the fake daemon answers a context request with: it names the event and
+// source it was asked about, so the parts show which relay produced them.
+const contextReply = (payload) => {
+  if (contextMode === "empty") return ""
+  const source = payload.source ? "/" + payload.source : ""
+  return "ctx:" + payload.hook_event_name + source
+}
 globalThis.fetch = async (url, init) => {
-  posts.push({ url: String(url), headers: init.headers, body: JSON.parse(init.body) })
+  const request = { url: String(url), headers: init.headers, body: JSON.parse(init.body) }
+  if (request.url.endsWith("/api/agent/context")) {
+    contexts.push(request)
+    if (contextMode === "down") throw new Error("daemon down")
+    if (contextMode === "error") return { ok: false, status: 500 }
+    return { ok: true, status: 200, json: async () => ({ context: contextReply(request.body.payload) }) }
+  }
+  posts.push(request)
   return { ok: true, status: 200 }
 }
 
@@ -34,12 +53,36 @@ const scenarios = {
     events: [{ type: "session.idle" }],
   },
 }
-const scenario = scenarios[process.argv[3] ?? "turn"]
+// Context scenarios: steps are chat messages and session events, in order.
+const message = (sessionID, text = "hello") => ({ message: text, sessionID })
+const event = (type, sessionID) => ({ event: type, sessionID })
+const contextScenarios = {
+  "ctx-startup-then-prompts": { steps: [message("ses_1"), message("ses_1")] },
+  "ctx-compaction": { steps: [message("ses_1"), event("session.compacted", "ses_1"), message("ses_1"), message("ses_1")] },
+  "ctx-two-sessions": { steps: [message("ses_1"), message("ses_2")] },
+  "ctx-empty": { mode: "empty", steps: [message("ses_1")] },
+  "ctx-daemon-down": { mode: "down", steps: [message("ses_1")] },
+  "ctx-daemon-error": { mode: "error", steps: [message("ses_1")] },
+}
+const contextScenario = contextScenarios[process.argv[3]]
+contextMode = contextScenario?.mode ?? "reply"
+const scenario = contextScenario ? { messages: [], events: [] } : scenarios[process.argv[3] ?? "turn"]
 const client = { session: { messages: async ({ path }) => ({ data: path.id === "ses_1" ? scenario.messages : [] }) } }
 
 const mod = await import(pathToFileURL(process.argv[2]).href)
+const parts = []
 for (const plugin of Object.values(mod).filter((v) => typeof v === "function")) {
   const hooks = await plugin({ client, directory: "/tmp/ws", worktree: "/tmp/ws" })
+  for (const step of contextScenario?.steps ?? []) {
+    if (step.event) {
+      await hooks.event?.({ event: { type: step.event, properties: { sessionID: step.sessionID } } })
+      continue
+    }
+    const output = { message: {}, parts: [{ type: "text", text: step.message }] }
+    await hooks["chat.message"]?.({ sessionID: step.sessionID }, output)
+    parts.push(output.parts)
+  }
+  if (contextScenario) continue
   await hooks["chat.message"]?.(
     { sessionID: "ses_1" },
     { message: {}, parts: [{ type: "text", text: "reply OK" }, { type: "file", url: "x" }, { type: "text", text: "please" }, { type: "text", text: "<system>", synthetic: true }] },
@@ -48,4 +91,4 @@ for (const plugin of Object.values(mod).filter((v) => typeof v === "function")) 
     await hooks.event?.({ event: { type, properties: error ? { sessionID: "ses_1", error } : { sessionID: "ses_1" } } })
   }
 }
-process.stdout.write(JSON.stringify(posts))
+process.stdout.write(JSON.stringify(contextScenario ? { posts, contexts, parts } : posts))

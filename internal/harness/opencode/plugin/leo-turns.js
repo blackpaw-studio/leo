@@ -60,6 +60,49 @@ export const LeoTurns = async ({ client }) => {
     return { hook_event_name: "StopFailure", session_id: id, error: describe(last.error) }
   }
 
+  // What the daemon wants this session told (the agent's delegation policy
+  // and brief): the same relay `leo dispatch context` makes for claude and
+  // codex, asked here with a hook payload that opencode has no hook for.
+  // Bounded like that command, so a dead daemon delays a message by at most
+  // this long, and "" for any failure: the message then goes unchanged.
+  const contextUrl = `http://127.0.0.1:${port}/api/agent/context`
+  const contextTimeoutMs = 3000
+  const askContext = async (payload) => {
+    try {
+      const res = await fetch(contextUrl, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ token, payload }),
+        signal: AbortSignal.timeout(contextTimeoutMs),
+      })
+      if (!res.ok) return ""
+      const reply = await res.json()
+      return typeof reply?.context === "string" ? reply.context : ""
+    } catch {
+      return ""
+    }
+  }
+
+  // Sessions already told their SessionStart, and those compacted since
+  // their last message. opencode has no startup/resume distinction and no
+  // compaction hook that can add context, so both are synthesized from the
+  // session's first message here and the session.compacted event below.
+  const started = new Set()
+  const compacted = new Set()
+
+  // The context for one message, as one synthetic text part (what the model
+  // sees as part of the user's turn, never shown as their words), or none.
+  const contextFor = async (id, prompt) => {
+    const source = started.has(id) ? (compacted.has(id) ? "compact" : "") : "startup"
+    started.add(id)
+    compacted.delete(id)
+    const told = []
+    if (source) told.push(await askContext({ hook_event_name: "SessionStart", source, session_id: id }))
+    told.push(await askContext({ hook_event_name: "UserPromptSubmit", session_id: id, prompt }))
+    const added = told.filter(Boolean).join("\n\n")
+    return added ? { type: "text", synthetic: true, text: added } : undefined
+  }
+
   // Sessions whose turn already reported its end through session.error;
   // the session.idle that follows must not report it again.
   const reported = new Set()
@@ -67,11 +110,16 @@ export const LeoTurns = async ({ client }) => {
   return {
     "chat.message": async (input, output) => {
       reported.delete(input.sessionID)
-      await report({ hook_event_name: "UserPromptSubmit", session_id: input.sessionID, prompt: text(output.parts) })
+      const prompt = text(output.parts)
+      const context = await contextFor(input.sessionID, prompt)
+      if (context) output.parts.push(context)
+      await report({ hook_event_name: "UserPromptSubmit", session_id: input.sessionID, prompt })
     },
     event: async ({ event }) => {
       const id = event.properties?.sessionID ?? ""
-      if (event.type === "session.error") {
+      if (event.type === "session.compacted") {
+        if (id) compacted.add(id)
+      } else if (event.type === "session.error") {
         // A session-less error is not this turn's; the turn's own failure
         // also lands on its assistant message, seen at session.idle.
         const error = event.properties?.error

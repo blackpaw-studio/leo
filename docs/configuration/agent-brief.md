@@ -40,15 +40,15 @@ Leo tells a Claude agent through its context hooks (the same `leo dispatch conte
 
 The hooks cost a read of the agent's record only when a stored brief is restored or a nudge is due.
 
-Opencode and Codex: the tool works. See [Harness support](#harness-support) for what guidance each gets.
+Codex and opencode get the same guidance through their own hooks. See [Harness support](#harness-support).
 
 ### Harness support
 
 | Harness | `leo_brief` | Instruction, restore, nudge |
 |---|---|---|
 | claude | yes | yes |
-| codex | yes (listed from the launch env; a Codex session never re-lists, so a switch flipped mid-session takes a relaunch and the tool refuses in the meantime) | not yet |
-| opencode | yes | not yet |
+| codex | yes (listed from the launch env; a Codex session never re-lists, so a switch flipped mid-session takes a relaunch and the tool refuses in the meantime) | yes: leo installs `leo dispatch context` as trusted SessionStart and UserPromptSubmit hooks in the agent's `CODEX_HOME`. Hooks there are home-global, so a session that is not the agent's own is ignored. |
+| opencode | yes | yes: the `leo-turns` plugin asks the daemon before a session's first message (SessionStart, startup), after a compaction (SessionStart, compact) and on every message (UserPromptSubmit), and appends the answer to the message as a synthetic text part. opencode cannot tell startup from resume; the session's earlier injections are already in its history. |
 
 ## API
 
