@@ -111,13 +111,31 @@ func (s *Server) agentContext(token string, hook contextHook) string {
 	if !known {
 		return ""
 	}
+	// A harness whose hooks are not per launch (codex's are home-global, and
+	// child processes inherit the token) is told, and claims, only for the
+	// session that is the agent's: a foreign one is some other process's.
+	sharedHooks := s.sharesHookHome(agent)
+	if sharedHooks && !s.isAgentHookSession(agent, token, hook.SessionID) {
+		return ""
+	}
 	// Every launch claims its new session, bridged or not: without the
 	// claim a /clear's later hooks (Stop, so Leo Chat's reply capture) are
 	// dropped as another process's.
-	if hook.Event == "SessionStart" {
+	if hook.Event == "SessionStart" && !sharedHooks {
 		s.claimSession(agent, token, hook.SessionID)
 	}
 	return joinContext(s.delegationContextFor(agent, hook), s.briefContextFor(agent, hook))
+}
+
+// sharesHookHome is whether agent runs a harness whose hooks are not per
+// launch, so a hook may come from another process. False when the agent does
+// not resolve: such a hook is judged as a claude launch's.
+func (s *Server) sharesHookHome(agent string) bool {
+	if s.agentSvc == nil {
+		return false
+	}
+	harnessName, _, ok := s.agentSvc.ResolveHandle(agent)
+	return ok && harnessName != claudeHarness
 }
 
 // delegationContextFor is the delegation policy context: for a bridged

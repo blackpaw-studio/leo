@@ -8,6 +8,7 @@ import (
 
 	"github.com/blackpaw-studio/leo/internal/agentstore"
 	"github.com/blackpaw-studio/leo/internal/brief"
+	"github.com/blackpaw-studio/leo/internal/harness"
 )
 
 // briefContextServer is a hook server (agent leo-a, launch token tok-a)
@@ -142,5 +143,46 @@ func TestBriefContextJoinsWithDelegationContext(t *testing.T) {
 
 	if !strings.HasPrefix(got, "SECTION v1") || !strings.HasSuffix(got, brief.Instruction) {
 		t.Fatalf("context = %q, want delegation then brief", got)
+	}
+}
+
+// Codex hooks are home-global and child harness processes inherit the agent's
+// token, so a SessionStart from some other process's session must neither get
+// the agent's brief context nor be adopted as the agent's session.
+func TestBriefContextIgnoresAForeignSessionOfAHomeGlobalHarness(t *testing.T) {
+	s, home := briefContextServer(t, true)
+	if err := agentstore.Save(home, agentstore.Record{Name: "leo-b"}); err != nil {
+		t.Fatal(err)
+	}
+	svc := s.agentSvc.(*mockAgentService)
+	svc.handles["leo-b"] = resolvedHandle{harnessName: "codex", handle: harness.SessionHandle{Name: "leo-b", IDs: staticIDs("sid-b")}}
+
+	foreign := postContext(t, s, "tok-b", `{"hook_event_name":"SessionStart","source":"startup","session_id":"child-sid"}`)
+	if foreign != "" {
+		t.Errorf("a foreign session was told %q, want nothing", foreign)
+	}
+	if got := agentstore.ClaimedSession(home, "leo-b", "tok-b"); got != "" {
+		t.Errorf("a foreign session was claimed as the agent's: %q", got)
+	}
+	if own := postContext(t, s, "tok-b", `{"hook_event_name":"SessionStart","source":"startup","session_id":"sid-b"}`); own != brief.Instruction {
+		t.Errorf("the agent's own session was told %q, want the instruction", own)
+	}
+	if own := postContext(t, s, "tok-b", `{"hook_event_name":"UserPromptSubmit","session_id":"sid-b","prompt":"hi"}`); own != "" {
+		t.Errorf("a told session's prompt = %q, want nothing", own)
+	}
+	if foreign := postContext(t, s, "tok-b", `{"hook_event_name":"UserPromptSubmit","session_id":"child-sid","prompt":"hi"}`); foreign != "" {
+		t.Errorf("a foreign session's prompt = %q, want nothing", foreign)
+	}
+}
+
+// Codex discovers its session id only after the first turn, so a start with no
+// known id is the agent's own.
+func TestBriefContextTellsACodexAgentBeforeItsSessionIDIsKnown(t *testing.T) {
+	s, home := briefContextServer(t, true)
+	if err := agentstore.Save(home, agentstore.Record{Name: "leo-b"}); err != nil {
+		t.Fatal(err)
+	}
+	if got := postContext(t, s, "tok-b", `{"hook_event_name":"SessionStart","source":"startup","session_id":"first"}`); got != brief.Instruction {
+		t.Errorf("first start = %q, want the instruction", got)
 	}
 }
