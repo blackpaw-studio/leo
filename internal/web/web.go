@@ -266,6 +266,8 @@ type Server struct {
 	// the staleness nudge; briefSwitch caches brief.enabled.
 	briefs      *brief.Tracker
 	briefSwitch briefSwitch
+	// briefOffers is whether each agent's MCP server offers leo_brief.
+	briefOffers briefOffers
 	// briefCtx serves the brief half of the context hooks; built on first use.
 	briefCtxOnce sync.Once
 	briefContext *briefContext
@@ -719,6 +721,7 @@ func New(configPath string, processes ProcessStateProvider, scheduler SchedulerP
 	apiMux.HandleFunc("POST /api/agent/progress", s.handleAPIAgentProgress)
 	apiMux.HandleFunc("POST /api/agent/brief", s.handleAPIAgentBrief)
 	apiMux.HandleFunc("POST /api/agent/brief/config", s.handleAPIAgentBriefConfig)
+	apiMux.HandleFunc("POST /api/agent/brief/offered", s.handleAPIAgentBriefOffered)
 	apiMux.HandleFunc("POST /api/agent/context", s.handleAPIAgentContext)
 	apiMux.HandleFunc("POST /api/agent/permission", s.handleAPIPermission)
 	apiMux.HandleFunc("POST /api/agent/{name}/chat/post", s.handleAgentChatPost)

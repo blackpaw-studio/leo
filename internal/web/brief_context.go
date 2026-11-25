@@ -56,8 +56,13 @@ func instructionHash() string {
 // compact or resume. UserPromptSubmit carries the instruction only when this
 // session has not heard its current text (briefs switched on mid-session, or
 // the text changed), plus the staleness nudge when one is due. Everything is
-// silent while briefs are off.
-func (s *Server) briefContextFor(agent string, h contextHook) string {
+// silent while briefs are off, and for a launch whose MCP server is not
+// currently offering leo_brief (it never reported, or reported it withdrawn):
+// the guidance names a tool that session does not have. A SessionStart that
+// would restore the stored brief but arrives before the report (the usual
+// order: the hook fires before the MCP server is up) leaves the restore
+// pending, and the launch's next prompt delivers it once the tool is offered.
+func (s *Server) briefContextFor(agent, token string, h contextHook) string {
 	if !s.briefEnabled() {
 		return ""
 	}
@@ -65,11 +70,28 @@ func (s *Server) briefContextFor(agent string, h contextHook) string {
 	if bc == nil {
 		return ""
 	}
+	if !s.briefOffers.offered(token) {
+		if h.Event == "SessionStart" {
+			s.briefOffers.setPending(token, restoreSource(h.Source))
+		}
+		return ""
+	}
 	switch h.Event {
 	case "SessionStart":
+		s.briefOffers.setPending(token, "") // delivered below, nothing left waiting
 		return bc.sessionStart(agent, h)
 	case "UserPromptSubmit":
-		return bc.prompt(s, agent, h)
+		return bc.prompt(s, agent, token, h)
+	}
+	return ""
+}
+
+// restoreSource is the SessionStart source whose stored brief is restored, or
+// "" for a source that restores nothing.
+func restoreSource(source string) string {
+	switch source {
+	case "clear", "compact", "resume":
+		return source
 	}
 	return ""
 }
@@ -77,16 +99,26 @@ func (s *Server) briefContextFor(agent string, h contextHook) string {
 func (b *briefContext) sessionStart(agent string, h contextHook) string {
 	b.markTold(agent, h.SessionID)
 	parts := []string{brief.Instruction}
-	switch h.Source {
-	case "clear", "compact", "resume":
-		if stored := agentstore.BriefOf(b.home, agent); stored != nil && !stored.IsZero() {
-			parts = append(parts, brief.Restored(stored.Clamped(), h.Source))
-		}
+	if restored := b.restored(agent, restoreSource(h.Source)); restored != "" {
+		parts = append(parts, restored)
 	}
 	return strings.Join(parts, "\n\n")
 }
 
-func (b *briefContext) prompt(s *Server, agent string, h contextHook) string {
+// restored is the stored brief as restored after a SessionStart of source, ""
+// when there is none to restore.
+func (b *briefContext) restored(agent, source string) string {
+	if source == "" {
+		return ""
+	}
+	stored := agentstore.BriefOf(b.home, agent)
+	if stored == nil || stored.IsZero() {
+		return ""
+	}
+	return brief.Restored(stored.Clamped(), source)
+}
+
+func (b *briefContext) prompt(s *Server, agent, token string, h contextHook) string {
 	var parts []string
 	b.mu.Lock()
 	told, wasTold := b.told.Get(agent, h.SessionID)
@@ -97,6 +129,11 @@ func (b *briefContext) prompt(s *Server, agent string, h contextHook) string {
 		b.recordTold(agent, h.SessionID) // keep a live session's entry from ageing out
 	}
 	b.mu.Unlock()
+	if source, ok := s.briefOffers.takePending(token); ok {
+		if restored := b.restored(agent, source); restored != "" {
+			parts = append(parts, restored)
+		}
+	}
 	if s.briefs.Nudge(agent) {
 		parts = append(parts, brief.NudgeText(agentstore.BriefOf(b.home, agent) != nil))
 	}

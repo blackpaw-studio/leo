@@ -152,6 +152,13 @@ func (c *daemonClient) briefEnabled(ctx context.Context, token string) (bool, er
 	return reply.Enabled, nil
 }
 
+// briefOffered tells the daemon whether this launch's MCP server offers
+// leo_brief. The daemon files it under the agent the token names.
+func (c *daemonClient) briefOffered(ctx context.Context, token string, offered bool) error {
+	_, err := c.doContext(ctx, http.MethodPost, "/api/agent/brief/offered", map[string]any{"token": token, "offered": offered})
+	return err
+}
+
 // agentCommand asks the daemon to run /<verb> (clear or compact) in an
 // agent's claude.
 func (c *daemonClient) agentCommand(agentName, verb string) error {

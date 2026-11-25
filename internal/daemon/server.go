@@ -784,9 +784,14 @@ func (s *Server) syncBrief(enabled bool) {
 	if enabled {
 		next = briefOn
 	}
-	if s.briefState.Swap(next) == next || s.observeBus == nil {
+	if s.briefState.Swap(next) == next {
 		return
 	}
+	if s.observeBus == nil {
+		fmt.Fprintf(os.Stderr, "brief: switch is now %v; no event bus to announce it\n", enabled)
+		return
+	}
+	fmt.Fprintf(os.Stderr, "brief: switch is now %v; announcing brief_config_changed\n", enabled)
 	s.observeBus.Publish(observe.Event{Type: observe.EventBriefConfigChanged, Payload: &observe.BriefConfigChangedPayload{Enabled: enabled}})
 }
 

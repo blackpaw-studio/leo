@@ -148,6 +148,42 @@ func (s *Server) handleAPIAgentBriefConfig(w http.ResponseWriter, r *http.Reques
 	writeJSON(w, http.StatusOK, apiResponse{OK: true, Data: map[string]bool{"enabled": s.briefEnabled()}})
 }
 
+// briefOfferedRequest is the body of POST /api/agent/brief/offered: the
+// launch's attention token and whether its MCP server offers leo_brief now.
+// It has no agent field: the agent is whoever the token resolves to.
+type briefOfferedRequest struct {
+	Token   string `json:"token"`
+	Offered bool   `json:"offered"`
+}
+
+// handleAPIAgentBriefOffered records whether the calling launch's MCP server
+// offers leo_brief, which gates the brief guidance its hooks receive (see
+// briefOffers). The agent is the token's own, so no launch can set another
+// agent's state. 403 unknown token.
+// POST /api/agent/brief/offered
+func (s *Server) handleAPIAgentBriefOffered(w http.ResponseWriter, r *http.Request) {
+	var req briefOfferedRequest
+	if !decodeControlBody(w, r, maxBriefBodyBytes, false, &req) {
+		return
+	}
+	name, ok := "", false
+	if s.attention != nil {
+		name, ok = s.attention.AgentForToken(req.Token)
+	}
+	if !ok {
+		writeJSON(w, http.StatusForbidden, apiResponse{Error: "unknown or expired agent token (is this running inside a Leo agent?)"})
+		return
+	}
+	s.briefOffers.set(req.Token, req.Offered)
+	// Retired tokens never report again; forget theirs while we are here.
+	s.briefOffers.prune(func(token string) bool {
+		_, live := s.attention.AgentForToken(token)
+		return live
+	})
+	log.Printf("[%s] brief: MCP server reports leo_brief offered=%v", name, req.Offered)
+	writeJSON(w, http.StatusOK, apiResponse{OK: true})
+}
+
 // decodeBriefInput reads the brief object strictly: an unknown field is a
 // mistake the agent should hear about, not text silently dropped.
 func decodeBriefInput(raw json.RawMessage) (brief.Input, error) {

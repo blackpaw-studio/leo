@@ -39,6 +39,10 @@ type watchDaemon struct {
 	briefOn     bool
 	briefStatus int
 	briefAsks   int
+	// offers are the /api/agent/brief/offered reports, in order; offerStatus
+	// is the status the route answers (0 means 200).
+	offers      []offerReport
+	offerStatus int
 	drop        chan struct{} // a send ends the open event stream
 	srv         *httptest.Server
 	client      *daemonClient
@@ -80,6 +84,21 @@ func newWatchDaemon(t *testing.T) *watchDaemon {
 				return
 			}
 			_, _ = fmt.Fprintf(w, `{"ok":true,"data":{"enabled":%v}}`, on)
+		case r.URL.Path == "/api/agent/brief/offered":
+			var body offerReport
+			_ = json.NewDecoder(r.Body).Decode(&body)
+			d.mu.Lock()
+			status := d.offerStatus
+			if status == 0 {
+				d.offers = append(d.offers, body)
+			}
+			d.mu.Unlock()
+			if status != 0 {
+				w.WriteHeader(status)
+				_, _ = io.WriteString(w, `{"ok":false,"error":"boom"}`)
+				return
+			}
+			_, _ = io.WriteString(w, `{"ok":true}`)
 		case strings.HasSuffix(r.URL.Path, "/client-tools"):
 			d.mu.Lock()
 			defer d.mu.Unlock()
@@ -528,6 +547,19 @@ func TestWatchWaitsForItsCoalescingGoroutineOnShutdown(t *testing.T) {
 	}
 }
 
+// offerReport is the body an MCP server reports what it offers with.
+type offerReport struct {
+	Token   string `json:"token"`
+	Offered bool   `json:"offered"`
+}
+
+// reports is a copy of the offered reports so far.
+func (d *watchDaemon) reports() []offerReport {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return append([]offerReport(nil), d.offers...)
+}
+
 func (d *watchDaemon) setBrief(on bool, status int) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
@@ -611,4 +643,53 @@ func TestBriefSwitchReconcileFailureLeavesTheListAlone(t *testing.T) {
 	if names := s.listNames(); contains(names, "leo_brief") {
 		t.Fatalf("leo_brief offered after a failed ask: %v", names)
 	}
+}
+
+// The daemon injects brief guidance only for a session whose MCP server says it
+// offers leo_brief. That report must reach the daemon before the harness is
+// told to re-list, so the first prompt after a flip already has the tool.
+func TestBriefFlipIsReportedToTheDaemonBeforeTheHarnessRelists(t *testing.T) {
+	d := newWatchDaemon(t)
+	s := briefWatchSession(t, d, false)
+	d.waitStreams(t, 1)
+	d.waitBriefAsks(t, 1)
+	for _, r := range d.reports() {
+		if r.Offered {
+			t.Fatalf("reported %v while briefs were off", r)
+		}
+	}
+
+	d.setBrief(true, 0)
+	d.pushBriefConfig(true)
+	if m := s.recv(); m.Method != "notifications/tools/list_changed" {
+		t.Fatalf("got %+v, want list_changed", m)
+	}
+	if got := d.reports(); len(got) == 0 || got[len(got)-1] != (offerReport{Token: "launch-tok", Offered: true}) {
+		t.Fatalf("reports at list_changed = %v, want offered=true last, under the launch token", got)
+	}
+
+	d.setBrief(false, 0)
+	d.pushBriefConfig(false)
+	if m := s.recv(); m.Method != "notifications/tools/list_changed" {
+		t.Fatalf("got %+v, want list_changed for the flip off", m)
+	}
+	if got := d.reports(); len(got) < 2 || got[len(got)-1].Offered {
+		t.Fatalf("reports after the flip off = %v, want offered=false last", got)
+	}
+}
+
+// A daemon that restarts forgets what each session offers, so every
+// (re)connection reports again while the tool is on.
+func TestBriefOfferedIsReportedAgainOnReconnect(t *testing.T) {
+	d := newWatchDaemon(t)
+	d.setBrief(true, 0)
+	s := briefWatchSession(t, d, true) // launched with briefs on
+	d.waitStreams(t, 1)
+	d.waitFor(t, "the first report", func() bool { return len(d.offers) >= 1 })
+	s.send("ping", nil)
+	_ = s.recv()
+
+	d.drop <- struct{}{}
+	d.waitStreams(t, 2)
+	d.waitFor(t, "a report after the reconnect", func() bool { return len(d.offers) >= 2 })
 }
