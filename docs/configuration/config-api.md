@@ -64,6 +64,7 @@ must be restarted), `service` (the daemon must restart) or `none`.
 | `defaults` | singleton | |
 | `web` | singleton | |
 | `client` | singleton | |
+| `brief` | singleton | |
 | `templates` | collection | add, rename, duplicate, delete |
 | `tasks` | collection | add, delete |
 | `environments` | collection | add, rename, delete |

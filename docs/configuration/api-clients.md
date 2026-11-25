@@ -181,6 +181,10 @@ nothing until its first turn. `incarnation.tokens` counts the rollout's token
 deltas stamped since the agent's current process started. `/new` typed inside
 codex leaves the stored id on the old rollout until leo next stores one.
 
+## Agent brief
+
+With `brief.enabled` set, an agent's `/api/v1/state` row carries `brief` (`goal`, `status`, `decisions`, `open`, `updated_at`) and `/api/v1/events` carries `agent_brief` events. **Neither is visible to an API-client or agent token**: the field is cleared from their rows and `agent_brief` is withheld from their streams, as for the other conversation-derived text below. See [Agent Brief](agent-brief.md).
+
 ## Agent attention and held work
 
 A `needs_input` attention's `reason` is `{kind, tool?, detail?, input?}`. For `kind: "permission"`, `detail` stays the one-word summary (a Bash command's first word) and `input` is the most useful argument of the call: the full Bash command, a file tool's path, a search's pattern and where it looks, or a fetched URL without credentials, query or fragment. `Write` and `Edit` give their path only, never the content. `input` is escape-stripped, control characters folded to spaces, clamped to 500 characters, and omitted when there is none. It carries what a Leo Chat permission row already shows. Callers on the shared agent token (and API-client tokens) get `reason` with only `kind` and `tool` (neither `detail` nor `input`, since `detail` carries an AskUserQuestion's text), and no `attention.preview`, `current_action.detail`, task `title` or `status`, or `agent_turn_completed.preview`, on `/api/v1/state` and `/api/v1/events` (the state and kind of each agent stay); the operator token, a paired device, an SSO identity and the unix socket get it.
