@@ -70,6 +70,7 @@ func OwnsHarness(procs map[int]Proc, root, pid int) bool {
 		return false
 	}
 	own := baseName(procs[rootHarness].Comm)
+	// Trust boundary: the agent's own process tree under its pane-root harness; a nested harness is the first harness above its own relay, so it is refused.
 	cur := pid
 	for depth := 0; depth <= maxDepth; depth++ {
 		p, ok := procs[cur]
