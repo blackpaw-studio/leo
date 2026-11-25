@@ -1,12 +1,14 @@
 package web
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -14,6 +16,8 @@ import (
 	"github.com/blackpaw-studio/leo/internal/agentstore"
 	"github.com/blackpaw-studio/leo/internal/bridge"
 	"github.com/blackpaw-studio/leo/internal/observe"
+	"github.com/blackpaw-studio/leo/internal/procown"
+	"github.com/blackpaw-studio/leo/internal/tmux"
 )
 
 // toldFileName is the told-delegation store, under the config's state dir.
@@ -99,10 +103,10 @@ func (s *Server) handleAPIAgentContext(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, apiResponse{Error: "invalid hook payload"})
 		return
 	}
-	_ = encodeContext(w, s.agentContext(req.Token, hook))
+	_ = encodeContext(w, s.agentContext(r.Context(), req.Token, req.PID, hook))
 }
 
-func (s *Server) agentContext(token string, hook contextHook) string {
+func (s *Server) agentContext(ctx context.Context, token string, pid int, hook contextHook) string {
 	s.clearErroredOnSessionStart(token, hook)
 	if s.attention == nil || hook.AgentID != "" || hook.SessionID == "" {
 		return ""
@@ -112,11 +116,16 @@ func (s *Server) agentContext(token string, hook contextHook) string {
 		return ""
 	}
 	// A harness whose hooks are not per launch (codex's are home-global, and
-	// child processes inherit the token) is told, and claims, only for the
-	// session that is the agent's: a foreign one is some other process's.
+	// child processes inherit the token) speaks for the agent only from its
+	// own session. A new session id (a /clear, a new session) is announced by
+	// a SessionStart, and rebinds only when it comes from the agent's own
+	// harness process: a child harness that inherited the token is refused.
 	sharedHooks := s.sharesHookHome(agent)
 	if sharedHooks && !s.isAgentHookSession(agent, token, hook.SessionID) {
-		return ""
+		if hook.Event != "SessionStart" || !s.processOwned(ctx, agent, pid) {
+			return ""
+		}
+		s.claimSession(agent, token, hook.SessionID)
 	}
 	// Every launch claims its new session, bridged or not: without the
 	// claim a /clear's later hooks (Stop, so Leo Chat's reply capture) are
@@ -136,6 +145,55 @@ func (s *Server) sharesHookHome(agent string) bool {
 	}
 	harnessName, _, ok := s.agentSvc.ResolveHandle(agent)
 	return ok && harnessName != claudeHarness
+}
+
+// processOwned is whether pid is agent's own harness process.
+func (s *Server) processOwned(ctx context.Context, agent string, pid int) bool {
+	if pid <= 0 {
+		return false
+	}
+	if s.ownsProcess != nil {
+		return s.ownsProcess(ctx, agent, pid)
+	}
+	return s.agentOwnsProcess(ctx, agent, pid)
+}
+
+// processOwnerTimeout bounds the tmux and ps calls of one ownership check; a
+// slow host fails the check (the session is then not rebound), never the hook.
+const processOwnerTimeout = 2 * time.Second
+
+// agentOwnsProcess asks tmux for the root process of agent's pane (its primary
+// pane: the harness runs as that process) and takes one process-table
+// snapshot, then lets procown decide.
+func (s *Server) agentOwnsProcess(ctx context.Context, agent string, pid int) bool {
+	ctx, cancel := context.WithTimeout(ctx, processOwnerTimeout)
+	defer cancel()
+	pane, err := s.agentPrimaryPane(ctx, agent)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "[%s] session transition: %v\n", agent, err)
+		return false
+	}
+	out, err := s.execCommandContext(ctx, s.tmuxPath(), tmux.Args("display-message", "-p", "-t", pane, "#{pane_pid}")...).Output()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "[%s] session transition: pane pid: %v\n", agent, err)
+		return false
+	}
+	root, err := strconv.Atoi(strings.TrimSpace(string(out)))
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "[%s] session transition: pane pid %q\n", agent, out)
+		return false
+	}
+	table, err := s.execCommandContext(ctx, "ps", "-A", "-o", "pid=", "-o", "ppid=", "-o", "comm=").Output()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "[%s] session transition: ps: %v\n", agent, err)
+		return false
+	}
+	procs, err := procown.ParsePS(table)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "[%s] session transition: %v\n", agent, err)
+		return false
+	}
+	return procown.OwnsHarness(procs, root, pid)
 }
 
 // delegationContextFor is the delegation policy context: for a bridged

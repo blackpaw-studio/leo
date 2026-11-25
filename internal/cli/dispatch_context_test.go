@@ -2,10 +2,12 @@ package cli
 
 import (
 	"bytes"
+	"encoding/json"
 	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -151,4 +153,25 @@ func TestDispatchContextFailsOpenWhenTheDaemonIsDownOrSlow(t *testing.T) {
 			t.Fatalf("stdout %q stderr %q, want nothing on stdout and a stderr line", out, errOut)
 		}
 	})
+}
+
+// The daemon authenticates a session transition against the process that
+// reported it, so the relay says which process that is.
+func TestDispatchContextReportsItsOwnPID(t *testing.T) {
+	clearReportEnv(t)
+	port, got := contextDaemon(t, http.StatusOK, `{"context":""}`)
+	t.Setenv("LEO_ATTENTION_TOKEN", "launch-tok")
+	t.Setenv("LEO_WEB_PORT", port)
+
+	runContext(t, sessionStartInput)
+
+	var body struct {
+		PID int `json:"pid"`
+	}
+	if err := json.Unmarshal(got.body, &body); err != nil {
+		t.Fatalf("body %s: %v", got.body, err)
+	}
+	if body.PID != os.Getpid() {
+		t.Fatalf("pid = %d, want this process's %d (body %s)", body.PID, os.Getpid(), got.body)
+	}
 }

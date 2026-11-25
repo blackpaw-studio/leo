@@ -83,7 +83,9 @@ func requestAgentContext(ctx context.Context, stdin io.Reader, token, port strin
 	if !contextHookEvents[hook.Event] {
 		return "", "", nil
 	}
-	body, err := json.Marshal(map[string]any{"token": token, "payload": json.RawMessage(payload)})
+	// The pid lets the daemon tell the agent's own harness from a child
+	// harness that inherited the token (it judges a session transition by it).
+	body, err := json.Marshal(map[string]any{"token": token, "pid": os.Getpid(), "payload": json.RawMessage(payload)})
 	if err != nil {
 		return "", "", err
 	}
