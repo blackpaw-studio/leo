@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -99,33 +100,18 @@ func requestAgentContext(ctx context.Context, stdin io.Reader, token, port, sock
 	ctx, cancel := context.WithTimeout(ctx, contextHookTimeout)
 	defer cancel()
 
-	var resp *http.Response
 	if sock != "" {
-		resp, err = postContext(ctx, &http.Client{Transport: unixTransport(sock)}, "http://daemon/api/agent/context", body, false)
-		if err != nil && port == "" {
-			return "", "", err
+		text, err = postContext(ctx, &http.Client{Transport: unixTransport(sock)}, "http://daemon/api/agent/context", body, false)
+		var unreachable *unreachableError
+		if !errors.As(err, &unreachable) || port == "" {
+			return hook.Event, text, err
 		}
 	}
-	if resp == nil {
-		if port == "" {
-			return "", "", fmt.Errorf("no daemon to ask")
-		}
-		resp, err = postContext(ctx, &http.Client{}, fmt.Sprintf("http://127.0.0.1:%s/api/agent/context", port), body, true)
-		if err != nil {
-			return "", "", err
-		}
+	if port == "" {
+		return "", "", fmt.Errorf("no daemon to ask")
 	}
-	defer resp.Body.Close()
-	if resp.StatusCode < 200 || resp.StatusCode > 299 {
-		return "", "", fmt.Errorf("context request returned status %d", resp.StatusCode)
-	}
-	var reply struct {
-		Context string `json:"context"`
-	}
-	if err := json.NewDecoder(io.LimitReader(resp.Body, maxHookContextBytes)).Decode(&reply); err != nil {
-		return "", "", fmt.Errorf("decoding context reply: %w", err)
-	}
-	return hook.Event, reply.Context, nil
+	text, err = postContext(ctx, &http.Client{}, fmt.Sprintf("http://127.0.0.1:%s/api/agent/context", port), body, true)
+	return hook.Event, text, err
 }
 
 // unixTransport dials every request to the unix socket at path.
@@ -135,18 +121,40 @@ func unixTransport(path string) *http.Transport {
 	}}
 }
 
-// postContext POSTs body to url; bearer adds the agent API token (the TCP API
-// requires it, the 0600 socket does not).
-func postContext(ctx context.Context, client *http.Client, url string, body []byte, bearer bool) (*http.Response, error) {
+// unreachableError is a request that never got an answer (the dial or the
+// round trip failed), as opposed to a daemon that answered with an error.
+type unreachableError struct{ err error }
+
+func (e *unreachableError) Error() string { return e.err.Error() }
+func (e *unreachableError) Unwrap() error { return e.err }
+
+// postContext POSTs body to url and returns the context the daemon replied
+// with; bearer adds the agent API token (the TCP API requires it, the 0600
+// socket does not). Only a request that got no answer is an unreachableError.
+func postContext(ctx context.Context, client *http.Client, url string, body []byte, bearer bool) (string, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
 	if err != nil {
-		return nil, err
+		return "", err
 	}
 	req.Header.Set("Content-Type", "application/json")
 	if token := os.Getenv("LEO_API_TOKEN"); bearer && token != "" {
 		req.Header.Set("Authorization", "Bearer "+token)
 	}
-	return client.Do(req)
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", &unreachableError{err}
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode < 200 || resp.StatusCode > 299 {
+		return "", fmt.Errorf("context request returned status %d", resp.StatusCode)
+	}
+	var reply struct {
+		Context string `json:"context"`
+	}
+	if err := json.NewDecoder(io.LimitReader(resp.Body, maxHookContextBytes)).Decode(&reply); err != nil {
+		return "", fmt.Errorf("decoding context reply: %w", err)
+	}
+	return reply.Context, nil
 }
 
 // maxHookContextBytes bounds the daemon's reply, as claude bounds the

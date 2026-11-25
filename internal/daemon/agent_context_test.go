@@ -17,12 +17,14 @@ import (
 // delegated socket routes do.
 func TestSocketAgentContextRouteDelegatesToTheWebServer(t *testing.T) {
 	s := New(tmpSockPath(t, "d.sock"), "", nil)
-	req := func() *http.Response {
+	status := func() int {
 		w := httptest.NewRecorder()
 		s.Handler().ServeHTTP(w, httptest.NewRequest("POST", "/api/agent/context", strings.NewReader(`{"token":"t"}`)))
-		return w.Result()
+		res := w.Result()
+		defer func() { _ = res.Body.Close() }()
+		return res.StatusCode
 	}
-	if got := req().StatusCode; got != http.StatusServiceUnavailable {
+	if got := status(); got != http.StatusServiceUnavailable {
 		t.Fatalf("before StartWeb: status = %d, want 503", got)
 	}
 
@@ -33,7 +35,7 @@ func TestSocketAgentContextRouteDelegatesToTheWebServer(t *testing.T) {
 		gotBody = string(b[:n])
 		_, _ = w.Write([]byte(`{"context":"x"}`))
 	}))
-	if got := req().StatusCode; got != http.StatusOK || gotBody != `{"token":"t"}` {
+	if got := status(); got != http.StatusOK || gotBody != `{"token":"t"}` {
 		t.Fatalf("after StartWeb: status = %d, delegated body %q", got, gotBody)
 	}
 }
@@ -58,7 +60,7 @@ func TestSocketRequestsCarryTheKernelVerifiedPeerPID(t *testing.T) {
 	if err != nil {
 		t.Fatalf("POST: %v", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if !gotOK || gotPID != os.Getpid() {
 		t.Fatalf("peer = %d, %v; want this process %d (the body claimed pid 1)", gotPID, gotOK, os.Getpid())

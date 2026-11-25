@@ -9,6 +9,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"net"
 )
 
@@ -37,7 +38,13 @@ func PID(conn net.Conn) (int, error) {
 	}
 	var pid int
 	var lookupErr error
-	if err := raw.Control(func(fd uintptr) { pid, lookupErr = peerPID(int(fd)) }); err != nil {
+	if err := raw.Control(func(fd uintptr) {
+		if fd > math.MaxInt32 {
+			lookupErr = fmt.Errorf("descriptor %d out of range", fd)
+			return
+		}
+		pid, lookupErr = peerPID(int(fd))
+	}); err != nil {
 		return 0, fmt.Errorf("peercred: %w", err)
 	}
 	if lookupErr != nil {

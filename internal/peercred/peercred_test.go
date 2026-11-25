@@ -20,15 +20,21 @@ const helperEnv = "PEERCRED_TEST_DIAL"
 // so the listener sees a peer that is a different process.
 func TestMain(m *testing.M) {
 	if path := os.Getenv(helperEnv); path != "" {
-		conn, err := net.Dial("unix", path)
-		if err != nil {
-			os.Exit(2)
-		}
-		defer conn.Close()
-		time.Sleep(time.Minute)
-		os.Exit(0)
+		os.Exit(dialAndHold(path))
 	}
 	os.Exit(testenv.Main(m))
+}
+
+// dialAndHold connects to the socket at path and keeps the connection open,
+// returning the child's exit code.
+func dialAndHold(path string) int {
+	conn, err := net.Dial("unix", path)
+	if err != nil {
+		return 2
+	}
+	defer func() { _ = conn.Close() }()
+	time.Sleep(time.Minute)
+	return 0
 }
 
 func listen(t *testing.T) (net.Listener, string) {
@@ -62,7 +68,7 @@ func TestPIDIsTheDialingProcess(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 
 	pid, err := PID(conn)
 	if err != nil {
@@ -78,11 +84,11 @@ func TestPIDOfAConnectionThatIsNotAUnixSocketFailsClosed(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer ln.Close()
+	defer func() { _ = ln.Close() }()
 	go func() {
 		c, err := net.Dial("tcp", ln.Addr().String())
 		if err == nil {
-			defer c.Close()
+			defer func() { _ = c.Close() }()
 			time.Sleep(time.Second)
 		}
 	}()
@@ -90,7 +96,7 @@ func TestPIDOfAConnectionThatIsNotAUnixSocketFailsClosed(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 
 	if pid, err := PID(conn); err == nil || pid != 0 {
 		t.Fatalf("PID over tcp = %d, %v; want 0 and an error", pid, err)
@@ -102,7 +108,7 @@ func TestConnContextRecordsThePeerOfAUnixConnectionOnly(t *testing.T) {
 	go func() {
 		c, err := net.Dial("unix", path)
 		if err == nil {
-			defer c.Close()
+			defer func() { _ = c.Close() }()
 			time.Sleep(time.Second)
 		}
 	}()
@@ -110,7 +116,7 @@ func TestConnContextRecordsThePeerOfAUnixConnectionOnly(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 
 	ctx := ConnContext(context.Background(), conn)
 
