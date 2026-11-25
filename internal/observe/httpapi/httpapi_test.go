@@ -128,22 +128,22 @@ func TestServeEventsHelloAdvertisesFeatures(t *testing.T) {
 	}
 }
 
-func TestPayloadForHidesAttentionInputOnActivityAndSpawnedFrames(t *testing.T) {
-	att := &observe.AgentAttention{State: observe.AttentionNeedsInput, Reason: &observe.AttentionReason{Detail: "rm", Input: "rm -rf x"}}
+func TestPayloadForHidesAttentionContentOnActivityAndSpawnedFrames(t *testing.T) {
+	att := &observe.AgentAttention{State: observe.AttentionNeedsInput, Reason: &observe.AttentionReason{Tool: "Bash", Detail: "rm", Input: "rm -rf x"}}
 	activity := observe.Event{Type: observe.EventAgentActivity, Payload: &observe.AgentActivityPayload{Agent: "a", Attention: att}}
 	spawned := observe.Event{Type: observe.EventAgentSpawned, Payload: &observe.AgentSpawnedPayload{Agent: observe.Agent{Name: "a", Attention: att}}}
 
 	for _, ev := range []observe.Event{activity, spawned} {
-		hidden, _ := json.Marshal(payloadFor(ev, EventsOptions{HideAttentionInput: true}))
+		hidden, _ := json.Marshal(payloadFor(ev, EventsOptions{HideAttentionContent: true}))
 		shown, _ := json.Marshal(payloadFor(ev, EventsOptions{}))
-		if strings.Contains(string(hidden), "rm -rf x") || !strings.Contains(string(hidden), `"detail":"rm"`) {
-			t.Errorf("%s hidden = %s, want detail kept and input gone", ev.Type, hidden)
+		if strings.Contains(string(hidden), "rm -rf x") || strings.Contains(string(hidden), `"detail"`) || !strings.Contains(string(hidden), `"tool":"Bash"`) {
+			t.Errorf("%s hidden = %s, want input and detail gone, tool kept", ev.Type, hidden)
 		}
-		if !strings.Contains(string(shown), "rm -rf x") {
-			t.Errorf("%s shown = %s, want the input for an allowed reader", ev.Type, shown)
+		if !strings.Contains(string(shown), "rm -rf x") || !strings.Contains(string(shown), `"detail":"rm"`) {
+			t.Errorf("%s shown = %s, want input and detail for an allowed reader", ev.Type, shown)
 		}
 	}
-	if att.Reason.Input != "rm -rf x" {
+	if att.Reason.Input != "rm -rf x" || att.Reason.Detail != "rm" {
 		t.Fatal("redaction mutated the payload shared with other subscribers")
 	}
 }

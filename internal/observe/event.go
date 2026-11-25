@@ -260,6 +260,24 @@ type AgentActivityPayload struct {
 	Attention *AgentAttention `json:"attention,omitempty"`
 }
 
+// WithoutContent returns the payload with its conversation-derived text
+// removed (see Agent.WithoutContent); the receiver is not modified.
+func (p AgentActivityPayload) WithoutContent() AgentActivityPayload {
+	p.CurrentAction = p.CurrentAction.WithoutDetail()
+	p.Attention = p.Attention.WithoutReasonContent()
+	return p
+}
+
+// WithoutContent returns the payload with the task's title and status
+// removed; the receiver is not modified.
+func (p AgentTaskChangedPayload) WithoutContent() AgentTaskChangedPayload {
+	if p.Task != nil {
+		t := p.Task.WithoutText()
+		p.Task = &t
+	}
+	return p
+}
+
 // AgentStoppedPayload announces an agent leaving supervision.
 type AgentStoppedPayload struct {
 	Meta
@@ -330,6 +348,13 @@ type AgentTurnCompletedPayload struct {
 	Tokens    TurnTokens    `json:"tokens"`
 	CostUSD   *float64      `json:"cost_usd,omitempty"`
 	Context   *ContextUsage `json:"context,omitempty"`
+}
+
+// WithoutContent returns the payload without the turn's final message; the
+// receiver is not modified.
+func (p AgentTurnCompletedPayload) WithoutContent() AgentTurnCompletedPayload {
+	p.Preview = ""
+	return p
 }
 
 // AgentSessionEndedPayload announces a Claude session ending. Reason is the

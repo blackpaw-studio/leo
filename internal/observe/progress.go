@@ -102,6 +102,26 @@ type AgentTask struct {
 	Revision uint64 `json:"revision"`
 }
 
+// WithoutText returns t with the agent-written Title and Status dropped.
+func (t AgentTask) WithoutText() AgentTask {
+	t.Title = ""
+	t.Status = ""
+	return t
+}
+
+// withoutTaskText returns tasks with their text dropped, as a new slice (nil
+// stays nil); the argument is not modified.
+func withoutTaskText(tasks []AgentTask) []AgentTask {
+	if tasks == nil {
+		return nil
+	}
+	out := make([]AgentTask, len(tasks))
+	for i, t := range tasks {
+		out[i] = t.WithoutText()
+	}
+	return out
+}
+
 // TaskUpdate is one agent report: an upsert where omitted fields keep their
 // value. It is also the request body of POST /api/agent/progress (minus the
 // token). Run it through Normalize before use.

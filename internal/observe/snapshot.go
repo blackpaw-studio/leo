@@ -49,17 +49,28 @@ type SnapshotMeta struct {
 	Seq uint64 `json:"seq"`
 }
 
-// WithoutAttentionInput returns the snapshot with every agent's permission
-// reason stripped of its input (see AgentAttention.WithoutInput); the
-// receiver is not modified.
-func (s Snapshot) WithoutAttentionInput() Snapshot {
+// WithoutAttentionContent returns the snapshot with every agent's
+// conversation-derived text removed (see Agent.WithoutContent); the receiver
+// is not modified.
+func (s Snapshot) WithoutAttentionContent() Snapshot {
 	agents := make([]Agent, len(s.Agents))
 	for i, a := range s.Agents {
-		a.Attention = a.Attention.WithoutInput()
-		agents[i] = a
+		agents[i] = a.WithoutContent()
 	}
 	s.Agents = agents
 	return s
+}
+
+// WithoutContent returns a with the free text derived from its conversation
+// removed, for a reader that may see that the agent needs attention or is
+// busy but not what it said or is doing: the attention reason's input and
+// detail and the attention preview, the current action's detail, and its
+// tasks' title and status. The receiver is not modified.
+func (a Agent) WithoutContent() Agent {
+	a.Attention = a.Attention.WithoutReasonContent()
+	a.CurrentAction = a.CurrentAction.WithoutDetail()
+	a.Tasks = withoutTaskText(a.Tasks)
+	return a
 }
 
 // Status is an agent's lifecycle state, mirroring the supervisor's own vocabulary.
@@ -377,6 +388,17 @@ const (
 type Action struct {
 	Kind   ActionKind `json:"kind"`
 	Detail string     `json:"detail"`
+}
+
+// WithoutDetail returns a with its Detail dropped (Kind stays); the receiver
+// is not modified, and nil stays nil.
+func (a *Action) WithoutDetail() *Action {
+	if a == nil || a.Detail == "" {
+		return a
+	}
+	out := *a
+	out.Detail = ""
+	return &out
 }
 
 // MaxActionDetail is the character budget for Action.Detail after sanitizing.

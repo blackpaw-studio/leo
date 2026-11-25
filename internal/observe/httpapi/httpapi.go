@@ -74,10 +74,18 @@ type EventsOptions struct {
 	// hello carries its client_id and it receives client_tool.* events in
 	// full. Every other stream sees them redacted to ids.
 	Provider Provider
-	// HideAttentionInput strips a permission prompt's command (the attention
-	// reason's input) from agent_activity and agent_spawned frames, for a
-	// reader that may see agents' state but not their commands.
-	HideAttentionInput bool
+	// HideAttentionContent strips the text derived from an agent's
+	// conversation from its frames, for a reader that may see that agents
+	// need attention or are busy but not what they said or are doing:
+	// agent_activity and agent_spawned (attention reason input and detail,
+	// attention preview, current action detail, task title and status),
+	// agent_turn_completed (preview) and agent_task_changed (title, status).
+	HideAttentionContent bool
+	// Withhold, when non-nil, names event types this stream must not carry
+	// at all: they are dropped before writing, not redacted. The stream's
+	// seq then has gaps, which the wire contract already tells consumers to
+	// handle by refetching the snapshot.
+	Withhold func(observe.EventType) bool
 }
 
 // ServeEvents streams the local event source. Every connection starts with a
@@ -152,6 +160,9 @@ func ServeEvents(w http.ResponseWriter, r *http.Request, opts EventsOptions) {
 			if !ok {
 				return
 			}
+			if opts.Withhold != nil && opts.Withhold(ev.Type) {
+				continue
+			}
 			deadline()
 			if WriteEvent(w, string(ev.Type), payloadFor(ev, opts)) != nil || rc.Flush() != nil {
 				return
@@ -164,15 +175,20 @@ func ServeEvents(w http.ResponseWriter, r *http.Request, opts EventsOptions) {
 // carry an agent's arguments, so only provider streams get them whole. The
 // others get the id alone, which keeps their seq contiguous.
 func payloadFor(ev observe.Event, opts EventsOptions) any {
-	if opts.HideAttentionInput {
+	if opts.HideAttentionContent {
 		switch p := ev.Payload.(type) {
 		case *observe.AgentActivityPayload:
-			cp := *p
-			cp.Attention = p.Attention.WithoutInput()
+			cp := p.WithoutContent()
 			return &cp
 		case *observe.AgentSpawnedPayload:
 			cp := *p
-			cp.Agent.Attention = p.Agent.Attention.WithoutInput()
+			cp.Agent = p.Agent.WithoutContent()
+			return &cp
+		case *observe.AgentTurnCompletedPayload:
+			cp := p.WithoutContent()
+			return &cp
+		case *observe.AgentTaskChangedPayload:
+			cp := p.WithoutContent()
 			return &cp
 		}
 	}

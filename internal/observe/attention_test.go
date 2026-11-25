@@ -518,32 +518,66 @@ func TestBridgeFinishedStillOverwritesALifecycleErrored(t *testing.T) {
 	}
 }
 
-func TestWithoutInputDropsOnlyTheInputAndNeverMutates(t *testing.T) {
+func TestWithoutReasonContentDropsOnlyTheInputAndNeverMutates(t *testing.T) {
 	in := &AgentAttention{State: AttentionNeedsInput, Revision: 3, Reason: &AttentionReason{Kind: AttentionReasonPermission, Tool: "Bash", Detail: "rm", Input: "rm -rf x"}}
 
-	out := in.WithoutInput()
+	out := in.WithoutReasonContent()
 
-	if out.Reason.Input != "" || out.Reason.Detail != "rm" || out.Reason.Tool != "Bash" || out.Revision != 3 {
-		t.Fatalf("out = %+v / %+v, want only the input dropped", out, out.Reason)
+	if out.Reason.Input != "" || out.Reason.Detail != "" || out.Reason.Kind != AttentionReasonPermission || out.Reason.Tool != "Bash" || out.Revision != 3 || out.State != AttentionNeedsInput {
+		t.Fatalf("out = %+v / %+v, want input and detail dropped, the rest kept", out, out.Reason)
 	}
-	if in.Reason.Input != "rm -rf x" {
-		t.Fatal("WithoutInput mutated the shared attention")
+	if in.Reason.Input != "rm -rf x" || in.Reason.Detail != "rm" {
+		t.Fatal("WithoutReasonContent mutated the shared attention")
 	}
-	if (*AgentAttention)(nil).WithoutInput() != nil {
+	if (*AgentAttention)(nil).WithoutReasonContent() != nil {
 		t.Fatal("nil attention must stay nil")
 	}
 	plain := &AgentAttention{State: AttentionFinished}
-	if plain.WithoutInput() != plain {
-		t.Fatal("an attention without an input should be returned as is")
+	if plain.WithoutReasonContent() != plain {
+		t.Fatal("an attention without an input with no reason should be returned as is")
 	}
 }
 
-func TestSnapshotWithoutAttentionInputLeavesTheOriginalIntact(t *testing.T) {
-	in := Snapshot{Agents: []Agent{{Name: "a", Attention: &AgentAttention{Reason: &AttentionReason{Input: "secret"}}}, {Name: "b"}}}
+func TestSnapshotWithoutAttentionContentLeavesTheOriginalIntact(t *testing.T) {
+	in := Snapshot{Agents: []Agent{{Name: "a", Attention: &AgentAttention{Reason: &AttentionReason{Input: "secret", Detail: "asked"}}}, {Name: "b"}}}
 
-	out := in.WithoutAttentionInput()
+	out := in.WithoutAttentionContent()
 
-	if out.Agents[0].Attention.Reason.Input != "" || in.Agents[0].Attention.Reason.Input != "secret" || out.Agents[1].Attention != nil {
+	if out.Agents[0].Attention.Reason.Input != "" || out.Agents[0].Attention.Reason.Detail != "" || in.Agents[0].Attention.Reason.Input != "secret" || in.Agents[0].Attention.Reason.Detail != "asked" || out.Agents[1].Attention != nil {
 		t.Fatalf("out = %+v, in = %+v", out.Agents, in.Agents)
+	}
+}
+
+func TestWithoutReasonContentDropsPreviewButKeepsStateAndOutstanding(t *testing.T) {
+	in := &AgentAttention{State: AttentionErrored, Revision: 2, Preview: "boom: secret", Outstanding: &Outstanding{Subagents: 1}}
+
+	out := in.WithoutReasonContent()
+
+	if out.Preview != "" || out.State != AttentionErrored || out.Revision != 2 || out.Outstanding == nil || out.Outstanding.Subagents != 1 {
+		t.Fatalf("out = %+v, want only the preview dropped", out)
+	}
+	if in.Preview != "boom: secret" {
+		t.Fatal("redaction mutated the shared attention")
+	}
+}
+
+func TestAgentWithoutContentDropsConversationTextAndNeverMutates(t *testing.T) {
+	in := Agent{
+		Name:          "a",
+		Attention:     &AgentAttention{State: AttentionFinished, Preview: "final"},
+		CurrentAction: &Action{Kind: ActionKindTool, Detail: "Bash rm"},
+		Tasks:         []AgentTask{{ID: "t", Title: "title", Status: "status", Mode: TaskDeterminate}},
+	}
+
+	out := in.WithoutContent()
+
+	if out.Attention.Preview != "" || out.CurrentAction.Detail != "" || out.CurrentAction.Kind != ActionKindTool {
+		t.Fatalf("out = %+v / %+v", out.Attention, out.CurrentAction)
+	}
+	if got := out.Tasks[0]; got.Title != "" || got.Status != "" || got.ID != "t" || got.Mode != TaskDeterminate {
+		t.Fatalf("task = %+v, want text dropped and the rest kept", got)
+	}
+	if in.Attention.Preview != "final" || in.CurrentAction.Detail != "Bash rm" || in.Tasks[0].Title != "title" || in.Tasks[0].Status != "status" {
+		t.Fatal("redaction mutated the original agent")
 	}
 }
