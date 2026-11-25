@@ -319,7 +319,7 @@ func TestResolveTemplateLaunchCodexFillsLeoMCPBridge(t *testing.T) {
 	if !strings.Contains(joined, "mcp_servers.leo.command=\"leo\"") {
 		t.Errorf("Args() = %v, want the leo MCP bridge config", args)
 	}
-	if !strings.Contains(joined, `mcp_servers.leo.env_vars=["LEO_PROCESS_NAME","LEO_WEB_PORT","LEO_API_TOKEN","LEO_DISPATCH_ID","LEO_ATTENTION_TOKEN"]`) {
+	if !strings.Contains(joined, `mcp_servers.leo.env_vars=["LEO_PROCESS_NAME","LEO_WEB_PORT","LEO_API_TOKEN","LEO_DISPATCH_ID","LEO_ATTENTION_TOKEN","LEO_BRIEF"]`) {
 		t.Errorf("Args() = %v, want LEO_DISPATCH_ID forwarded to the leo MCP server", args)
 	}
 }
