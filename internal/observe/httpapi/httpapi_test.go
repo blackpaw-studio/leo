@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/blackpaw-studio/leo/internal/brief"
 	"github.com/blackpaw-studio/leo/internal/observe"
 )
 
@@ -145,5 +146,22 @@ func TestPayloadForHidesAttentionContentOnActivityAndSpawnedFrames(t *testing.T)
 	}
 	if att.Reason.Input != "rm -rf x" || att.Reason.Detail != "rm" {
 		t.Fatal("redaction mutated the payload shared with other subscribers")
+	}
+}
+
+// An agent_spawned frame now carries the agent's brief (a respawn or a live
+// rename announces the stored one); a reader that may not see content never
+// gets it.
+func TestPayloadForHidesTheBriefOnSpawnedFrames(t *testing.T) {
+	spawned := observe.Event{Type: observe.EventAgentSpawned, Payload: &observe.AgentSpawnedPayload{Agent: observe.Agent{Name: "a", Brief: &brief.Brief{Goal: "secret goal"}}}}
+
+	hidden, _ := json.Marshal(payloadFor(spawned, EventsOptions{HideAttentionContent: true}))
+	shown, _ := json.Marshal(payloadFor(spawned, EventsOptions{}))
+
+	if strings.Contains(string(hidden), "secret goal") || strings.Contains(string(hidden), `"brief"`) {
+		t.Errorf("hidden = %s, want no brief", hidden)
+	}
+	if !strings.Contains(string(shown), `"goal":"secret goal"`) {
+		t.Errorf("shown = %s, want the brief for an allowed reader", shown)
 	}
 }

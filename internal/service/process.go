@@ -760,6 +760,7 @@ func (s *Supervisor) RenameAgent(oldName, newName string) error {
 		StartedAt: startedAt,
 	}
 	renamed.Environments, renamed.EnvironmentsSource, renamed.EnvironmentError = s.environmentsViewOf(oldName)
+	renamed.Brief = s.storedBrief(oldName)
 	s.publish(observe.Event{
 		Type:    observe.EventAgentSpawned,
 		Payload: &observe.AgentSpawnedPayload{Agent: renamed},

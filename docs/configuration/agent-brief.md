@@ -47,8 +47,8 @@ Codex and opencode get the same guidance through their own hooks. See [Harness s
 | Harness | `leo_brief` | Instruction, restore, nudge |
 |---|---|---|
 | claude | yes | yes |
-| codex | yes (listed from the launch env; a Codex session never re-lists, so a switch flipped mid-session takes a relaunch and the tool refuses in the meantime) | yes: leo installs `leo dispatch context` as trusted SessionStart and UserPromptSubmit hooks in the agent's `CODEX_HOME`. Hooks there are home-global, so a session that is not the agent's own is ignored. |
-| opencode | yes | yes: the `leo-turns` plugin asks the daemon before a session's first message (SessionStart, startup), after a compaction (SessionStart, compact) and on every message (UserPromptSubmit), and appends the answer to the message as a synthetic text part. opencode cannot tell startup from resume; the session's earlier injections are already in its history. |
+| codex | yes (listed from the launch env; a Codex session never re-lists, so a switch flipped mid-session takes a relaunch and the tool refuses in the meantime) | yes: leo installs `leo dispatch context` as trusted SessionStart and UserPromptSubmit hooks in the agent's `CODEX_HOME`. Hooks there are home-global, and a child harness an agent starts inherits its launch token, so a session other than the agent's own is ignored. A new session id (a `/clear`) rebinds only from a SessionStart sent by the agent's own harness process: the relay sends its pid, and the daemon matches it against the root process of the agent's tmux pane (looking through leo and shells). |
+| opencode | yes | yes: the `leo-turns` plugin asks the daemon before a session's first message (SessionStart, startup), after a compaction (SessionStart, compact) and on every message (UserPromptSubmit), and appends the answer to the message as a synthetic text part. The three requests of one message share a single 3 s budget, and the plugin sends its process id so a new session rebinds only from the agent's own opencode process. opencode cannot tell startup from resume; the session's earlier injections are already in its history. |
 
 ## API
 
@@ -69,7 +69,7 @@ Codex and opencode get the same guidance through their own hooks. See [Harness s
 {"type": "brief_config_changed", "seq": 89, "at": "…", "enabled": false}
 ```
 
-  `agent_brief` carries the whole brief, or `brief: null` once cleared. `brief_config_changed` fires when a config reload flips `brief.enabled`; it carries no brief text. An agent's own MCP server listens for it to list or withdraw `leo_brief`.
+  `agent_brief` carries the whole brief, or `brief: null` once cleared. `agent_spawned` carries the stored brief too, when an agent is respawned or renamed while running, so a stream consumer does not lose it. `brief_config_changed` fires when a config reload flips `brief.enabled`; it carries no brief text. An agent's own MCP server listens for it to list or withdraw `leo_brief`.
 - `hello.features` advertises `agent_brief` whether the switch is on or off, so a client can show its setting; with it off the wire carries no briefs.
 
 ### Who can read it

@@ -254,6 +254,7 @@ func (s *Supervisor) spawnedAgentView(spec daemon.AgentSpawnSpec, spawnedAt time
 			a.Model = cfg.TemplateModel(tmpl)
 		}
 	}
+	a.Brief = s.storedBrief(spec.Name)
 	a.Environments, a.EnvironmentsSource, a.EnvironmentError = agent.EnvironmentsView(cfg, spec.Name, a.Template, override)
 	a.Appearance = agent.AgentAppearance(cfg, spec.Name, a.Template, override, manual)
 
