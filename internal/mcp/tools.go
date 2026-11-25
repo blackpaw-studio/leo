@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/blackpaw-studio/leo/internal/consult"
@@ -95,6 +96,9 @@ type registry struct {
 	fallbackSampled, fallbackOn bool
 	// watch is the list_changed machinery runWith attaches to a session.
 	watch clientToolsWatch
+	// briefOn is whether briefs are on for this machine: leo_brief is
+	// listed only while it holds (see visibleDefs).
+	briefOn atomic.Bool
 }
 
 // registryOption adjusts a registry before its tools are registered.
@@ -601,6 +605,7 @@ func newRegistry(client *daemonClient, processName string, perms leotools.Permis
 
 	r.registerChat(client, processName, objectSchema)
 	r.registerProgress(client, objectSchema)
+	r.registerBrief(client, objectSchema)
 
 	r.addContext(toolDef{Name: "leo_delegation", Description: "Show active delegation routing.", InputSchema: emptyArgs}, func(ctx context.Context, _ map[string]any) (string, error) { return client.delegationStatus(ctx) })
 
@@ -962,16 +967,17 @@ func (r *registry) skip(name string) bool {
 // or, for one that does not, the fixed fallback tools once any app has ever
 // registered.
 func (r *registry) list() []toolDef {
+	defs := r.visibleDefs()
 	if r.clientTools == nil {
-		return r.defs
+		return defs
 	}
 	switch {
 	case r.isNativeClient():
-		return append(append([]toolDef(nil), r.defs...), r.clientTools.defs(context.Background())...)
+		return append(append([]toolDef(nil), defs...), r.clientTools.defs(context.Background())...)
 	case r.fallbackListed(context.Background()):
-		return append(append([]toolDef(nil), r.defs...), r.fallbackDefs()...)
+		return append(append([]toolDef(nil), defs...), r.fallbackDefs()...)
 	}
-	return r.defs
+	return defs
 }
 
 // setClientName records the MCP client's name (initialize clientInfo.name)

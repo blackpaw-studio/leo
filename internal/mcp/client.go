@@ -73,6 +73,9 @@ type apiEnvelope struct {
 	// Task is the progress route's result, which sits beside ok rather
 	// than under data.
 	Task json.RawMessage `json:"task,omitempty"`
+	// Brief is the brief route's result, beside ok like Task; null once
+	// the brief is cleared.
+	Brief json.RawMessage `json:"brief,omitempty"`
 }
 
 func (c *daemonClient) do(method, path string, body any) (json.RawMessage, error) {
@@ -126,6 +129,9 @@ func (c *daemonClient) doContextLimit(ctx context.Context, method, path string, 
 	}
 	if len(env.Data) == 0 && len(env.Task) > 0 {
 		return env.Task, nil
+	}
+	if len(env.Data) == 0 && len(env.Brief) > 0 {
+		return env.Brief, nil
 	}
 	return env.Data, nil
 }

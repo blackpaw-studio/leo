@@ -118,6 +118,10 @@ func (d *watchDaemon) pushChanged(rev uint64) {
 	d.events <- fmt.Sprintf("event: client_tools.changed\ndata: {\"seq\":9,\"revision\":%d,\"tools\":[]}\n\n", rev)
 }
 
+func (d *watchDaemon) pushBriefConfig(enabled bool) {
+	d.events <- fmt.Sprintf("event: brief_config_changed\ndata: {\"seq\":9,\"at\":\"2026-11-25T02:00:00Z\",\"enabled\":%v}\n\n", enabled)
+}
+
 // session runs the server over pipes and lets a test speak MCP to it.
 type session struct {
 	t      *testing.T

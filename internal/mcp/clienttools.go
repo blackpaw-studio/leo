@@ -81,6 +81,10 @@ type clientToolsView struct {
 	// measured against.
 	listed    bool
 	listedSig string
+
+	// onBrief hears brief_config_changed events on the same event stream;
+	// set before the watch starts.
+	onBrief func(enabled bool)
 }
 
 func newClientToolsView(client *daemonClient, agent string, perms leotools.Permissions) *clientToolsView {

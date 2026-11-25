@@ -66,6 +66,7 @@ func (r *registry) startWatch() {
 		return
 	}
 	w.started = true
+	r.clientTools.onBrief = r.setBrief
 	w.wg.Add(1)
 	go func() {
 		defer w.wg.Done()
@@ -166,7 +167,8 @@ func toolSetSignature(tools []clientToolInfo) string {
 }
 
 // streamEvents reads one SSE connection to the daemon, calling poke on hello
-// and on every client_tools.changed; every other event is ignored. It reports
+// and on every client_tools.changed, and onBrief on every
+// brief_config_changed; every other event is ignored. It reports
 // whether the stream got as far as hello, and returns when it ends or ctx does.
 func (v *clientToolsView) streamEvents(ctx context.Context, poke func()) (connected bool) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, v.client.baseURL+"/api/v1/events", nil)
@@ -186,7 +188,7 @@ func (v *clientToolsView) streamEvents(ctx context.Context, poke func()) (connec
 	}
 
 	rd := bufio.NewReader(resp.Body)
-	var event string
+	var event, data string
 	for {
 		line, err := rd.ReadString('\n')
 		if err != nil {
@@ -196,6 +198,8 @@ func (v *clientToolsView) streamEvents(ctx context.Context, poke func()) (connec
 		switch {
 		case strings.HasPrefix(line, "event:"):
 			event = strings.TrimSpace(strings.TrimPrefix(line, "event:"))
+		case strings.HasPrefix(line, "data:"):
+			data = strings.TrimSpace(strings.TrimPrefix(line, "data:"))
 		case line == "":
 			switch event {
 			case "hello":
@@ -203,8 +207,15 @@ func (v *clientToolsView) streamEvents(ctx context.Context, poke func()) (connec
 				poke()
 			case "client_tools.changed":
 				poke()
+			case "brief_config_changed":
+				var p struct {
+					Enabled bool `json:"enabled"`
+				}
+				if v.onBrief != nil && json.Unmarshal([]byte(data), &p) == nil {
+					v.onBrief(p.Enabled)
+				}
 			}
-			event = ""
+			event, data = "", ""
 		}
 	}
 }

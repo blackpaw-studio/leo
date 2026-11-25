@@ -84,7 +84,7 @@ func registryFromEnv() *registry {
 	}
 
 	fmt.Fprintln(os.Stderr, "leo mcp-server: full mode (daemon listener available)")
-	return newRegistry(newDaemonClient(port, token), processName, perms, withDispatchID(os.Getenv("LEO_DISPATCH_ID")), withTaskRun(os.Getenv("LEO_TASK"), os.Getenv("LEO_RUN_ID")), withAttentionToken(os.Getenv("LEO_ATTENTION_TOKEN")))
+	return newRegistry(newDaemonClient(port, token), processName, perms, withDispatchID(os.Getenv("LEO_DISPATCH_ID")), withTaskRun(os.Getenv("LEO_TASK"), os.Getenv("LEO_RUN_ID")), withAttentionToken(os.Getenv("LEO_ATTENTION_TOKEN")), withBrief(os.Getenv("LEO_BRIEF") == "1"))
 }
 
 func runWith(in io.Reader, out io.Writer, reg *registry) error {
