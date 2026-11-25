@@ -84,6 +84,22 @@ wait_http() {
   fail "web port never answered 200 (last code: ${code:-none})"
 }
 
+# logs_contain <container> <string> [tries] reports whether the container's logs hold
+# the fixed string. The logs are captured first: `docker logs | grep -q` under
+# pipefail fails with SIGPIPE (141) when grep exits on its match before docker
+# has written the rest, a false negative on a line that is there. The optional
+# third argument is how many times to look (half a second apart) for a line
+# the log driver may not have flushed yet; absence checks look once.
+logs_contain() {
+  local c=$1 needle=$2 tries=${3:-1} i logs
+  for ((i = 0; i < tries; i++)); do
+    ((i == 0)) || sleep 0.5
+    logs=$(docker logs "$c" 2>&1 || true)
+    grep -qF -- "$needle" <<<"$logs" && return 0
+  done
+  return 1
+}
+
 # No installer piped into a shell anywhere in the image build.
 if grep -nE '(curl|wget)[^#]*\|[[:space:]]*([A-Za-z_]+=[^[:space:]]+[[:space:]]+)*(sudo[[:space:]]+)?(ba)?sh([[:space:]]|$)' "$ROOT/docker/Dockerfile"; then
   fail "Dockerfile pipes a download into a shell; pin the artifact and verify its sha256"
@@ -120,7 +136,7 @@ exec_a grep -qx 'check_for_update_on_startup = false' /home/leo/.codex/config.to
 
 [[ $(exec_a head -1 /home/leo/init-marker) == "config=yes socket=absent" ]] \
   || fail "init.d must run after config seeding and before the daemon socket exists"
-docker logs "$PREFIX-a" 2>&1 | grep -q '20-skipped.txt' || fail "non-executable init.d file not named in logs"
+logs_contain "$PREFIX-a" '20-skipped.txt' 10 || fail "non-executable init.d file not named in logs"
 
 code=$(curl -s -o /dev/null -w '%{http_code}' -H 'Host: foo:8370' "http://127.0.0.1:$(host_port "$PREFIX-a")/login")
 [[ $code == 200 ]] || fail "Host: foo (from LEO_ALLOWED_HOSTS) got $code"
@@ -144,7 +160,7 @@ wait_http "$PREFIX-a" localhost:8370
 [[ $(exec_a sh -c 'wc -l < /home/leo/init-marker') -eq 2 ]] || fail "init.d did not run again after restart"
 [[ $(approved_count "$KEY_TAIL") == 1 ]] || fail "API key approval is not idempotent across restarts"
 [[ $(approved_count preexisting) == 1 ]] || fail "existing customApiKeyResponses.approved entry was removed"
-if docker logs "$PREFIX-a" 2>&1 | grep -qF "$API_KEY"; then fail "ANTHROPIC_API_KEY leaked into container logs"; fi
+if logs_contain "$PREFIX-a" "$API_KEY"; then fail "ANTHROPIC_API_KEY leaked into container logs"; fi
 log "phase A ok"
 
 # ---------------------------------------------------------------- phase B
@@ -200,7 +216,7 @@ exec_c sh -c "echo '{\"sentinel\": true}' > /home/leo/.codex/auth.json"
 docker restart "$PREFIX-c" >/dev/null
 wait_http "$PREFIX-c" localhost:8370
 [[ $(exec_c cat /home/leo/.codex/auth.json) == '{"sentinel": true}' ]] || fail "existing codex credentials were overwritten on restart"
-if docker logs "$PREFIX-c" 2>&1 | grep -qF smoke-openai; then fail "OPENAI_API_KEY leaked into container logs"; fi
+if logs_contain "$PREFIX-c" smoke-openai; then fail "OPENAI_API_KEY leaked into container logs"; fi
 log "phase C ok"
 
 # ---------------------------------------------------------------- phase D
