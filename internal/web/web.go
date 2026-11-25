@@ -133,11 +133,6 @@ type Server struct {
 	// ConfigService).
 	execCommandContext func(context.Context, string, ...string) *exec.Cmd
 
-	// ownsProcess reports whether pid is the harness process of agent: the
-	// authentication of a session transition a home-global harness announces
-	// (see agentContext). Nil means the real check, agentOwnsProcess.
-	ownsProcess func(ctx context.Context, agent string, pid int) bool
-
 	// secretResolver resolves client.hosts.<h>.api_token references for
 	// GET /api/remote-host/{host}; nil uses this machine's secret stores.
 	// hostname names this machine when a host sets no api_client; nil uses

@@ -49,35 +49,71 @@ func ParsePS(out []byte) (map[int]Proc, error) {
 	return procs, nil
 }
 
-// OwnsHarness reports whether pid, a process that reported a hook, belongs to
-// the harness running as root, the agent's tmux pane process. A hook command
-// runs as leo, often through a shell, so those are looked through; the
-// process found is the harness that fired the hook, and it is the agent's own
-// only when it is root itself, or a direct child of root when root is a
-// wrapper shell. A child harness a tool started is some other process even
-// when its parent is the harness (a shell that exec'd it), so only root
-// itself counts when the pane runs the harness directly.
+// OwnsHarness reports whether pid, the process the kernel says sent a relay,
+// belongs to the harness running as root, the agent's tmux pane process. From
+// pid it walks up (pid included: an opencode plugin runs inside its harness)
+// to the first process that is a harness, and the relay is the agent's own
+// only if that is root's harness. A harness the agent started is the first
+// harness above its own relay, whatever launched it, so it is refused; so is
+// any chain with no harness in it, and any process missing from the table.
+//
+// A harness is claude, codex, opencode, or the binary root itself runs (an
+// agent whose harness is none of those is still told apart from one it starts
+// of the same kind). When the pane runs a wrapper shell, root's harness is the
+// recognised harness directly under it.
 func OwnsHarness(procs map[int]Proc, root, pid int) bool {
 	if root <= 0 || pid <= 0 {
 		return false
 	}
+	rootHarness, ok := harnessOf(procs, root)
+	if !ok {
+		return false
+	}
+	own := baseName(procs[rootHarness].Comm)
 	cur := pid
 	for depth := 0; depth <= maxDepth; depth++ {
 		p, ok := procs[cur]
 		if !ok {
 			return false
 		}
-		if !transparent(p.Comm) {
-			return cur == root || (p.PPID == root && isShell(procs[root].Comm))
+		if isHarness(p.Comm, own) {
+			return cur == rootHarness
 		}
 		cur = p.PPID
 	}
 	return false
 }
 
-// transparent is a process a hook command runs through: a shell, or leo.
-func transparent(comm string) bool {
-	return isShell(comm) || baseName(comm) == "leo"
+// harnessOf is the process that is the harness of the pane running as root:
+// root itself, or, under a wrapper shell, the one recognised harness it runs.
+func harnessOf(procs map[int]Proc, root int) (int, bool) {
+	r, ok := procs[root]
+	if !ok {
+		return 0, false
+	}
+	if !isShell(r.Comm) {
+		return root, true
+	}
+	found := 0
+	for pid, p := range procs {
+		if p.PPID == root && isHarness(p.Comm, "") {
+			if found != 0 {
+				return 0, false // ambiguous: fail closed
+			}
+			found = pid
+		}
+	}
+	return found, found != 0
+}
+
+// isHarness is whether comm names a harness: one leo supervises, or own.
+func isHarness(comm, own string) bool {
+	name := baseName(comm)
+	switch name {
+	case "claude", "codex", "opencode":
+		return true
+	}
+	return own != "" && name == own
 }
 
 func isShell(comm string) bool {

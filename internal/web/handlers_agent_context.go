@@ -16,6 +16,7 @@ import (
 	"github.com/blackpaw-studio/leo/internal/agentstore"
 	"github.com/blackpaw-studio/leo/internal/bridge"
 	"github.com/blackpaw-studio/leo/internal/observe"
+	"github.com/blackpaw-studio/leo/internal/peercred"
 	"github.com/blackpaw-studio/leo/internal/procown"
 	"github.com/blackpaw-studio/leo/internal/tmux"
 )
@@ -103,10 +104,17 @@ func (s *Server) handleAPIAgentContext(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, apiResponse{Error: "invalid hook payload"})
 		return
 	}
-	_ = encodeContext(w, s.agentContext(r.Context(), req.Token, req.PID, hook))
+	_ = encodeContext(w, s.agentContext(r.Context(), req.Token, hook))
 }
 
-func (s *Server) agentContext(ctx context.Context, token string, pid int, hook contextHook) string {
+// AgentContextHandler is handleAPIAgentContext without bearer auth, for the
+// daemon's unix socket: the 0600 socket is the credential, the launch token in
+// the body names the agent, and the kernel names the caller (see peercred).
+func (s *Server) AgentContextHandler() http.Handler {
+	return http.HandlerFunc(s.handleAPIAgentContext)
+}
+
+func (s *Server) agentContext(ctx context.Context, token string, hook contextHook) string {
 	s.clearErroredOnSessionStart(token, hook)
 	if s.attention == nil || hook.AgentID != "" || hook.SessionID == "" {
 		return ""
@@ -118,11 +126,13 @@ func (s *Server) agentContext(ctx context.Context, token string, pid int, hook c
 	// A harness whose hooks are not per launch (codex's are home-global, and
 	// child processes inherit the token) speaks for the agent only from its
 	// own session. A new session id (a /clear, a new session) is announced by
-	// a SessionStart, and rebinds only when it comes from the agent's own
-	// harness process: a child harness that inherited the token is refused.
+	// a SessionStart, and rebinds only when the kernel says the request came
+	// from the agent's own harness (over the unix socket): a child harness
+	// that inherited the token, a request over TCP, and any failure to tell
+	// are all refused.
 	sharedHooks := s.sharesHookHome(agent)
 	if sharedHooks && !s.isAgentHookSession(agent, token, hook.SessionID) {
-		if hook.Event != "SessionStart" || !s.processOwned(ctx, agent, pid) {
+		if hook.Event != "SessionStart" || !s.processOwned(ctx, agent) {
 			return ""
 		}
 		s.claimSession(agent, token, hook.SessionID)
@@ -147,13 +157,13 @@ func (s *Server) sharesHookHome(agent string) bool {
 	return ok && harnessName != claudeHarness
 }
 
-// processOwned is whether pid is agent's own harness process.
-func (s *Server) processOwned(ctx context.Context, agent string, pid int) bool {
-	if pid <= 0 {
+// processOwned is whether the process the kernel says sent this request is
+// agent's own harness. A request with no kernel-verified peer (TCP, a failed
+// lookup) is nobody's.
+func (s *Server) processOwned(ctx context.Context, agent string) bool {
+	pid, ok := peercred.VerifiedPID(ctx)
+	if !ok {
 		return false
-	}
-	if s.ownsProcess != nil {
-		return s.ownsProcess(ctx, agent, pid)
 	}
 	return s.agentOwnsProcess(ctx, agent, pid)
 }

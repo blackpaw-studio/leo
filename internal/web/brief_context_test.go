@@ -3,6 +3,7 @@ package web
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -17,6 +18,7 @@ import (
 	"github.com/blackpaw-studio/leo/internal/brief"
 	"github.com/blackpaw-studio/leo/internal/harness"
 	"github.com/blackpaw-studio/leo/internal/observe"
+	"github.com/blackpaw-studio/leo/internal/peercred"
 )
 
 // briefContextServer is a hook server (agent leo-a, launch token tok-a)
@@ -203,13 +205,22 @@ func TestBriefContextTellsACodexAgentBeforeItsSessionIDIsKnown(t *testing.T) {
 	}
 }
 
-// postContextPID is postContext with the reporting process's pid, which the
-// relay sends alongside the hook payload.
-func postContextPID(t *testing.T, s *Server, token string, pid int, payload string) string {
+// relayPeer is how a context request arrives: over the unix socket, with the
+// process the kernel says connected (peer), or over TCP (nil). bodyPID is what
+// the request body claims, which the daemon must ignore.
+type relayPeer struct {
+	peer    *peercred.Peer
+	bodyPID int
+}
+
+func postContextVia(t *testing.T, s *Server, token string, via relayPeer, payload string) string {
 	t.Helper()
-	body := `{"token":"` + token + `","pid":` + strconv.Itoa(pid) + `,"payload":` + payload + `}`
+	body := `{"token":"` + token + `","pid":` + strconv.Itoa(via.bodyPID) + `,"payload":` + payload + `}`
 	req := httptest.NewRequest(http.MethodPost, "/api/agent/context", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
+	if via.peer != nil {
+		req = req.WithContext(peercred.WithPeer(req.Context(), *via.peer))
+	}
 	w := httptest.NewRecorder()
 	s.httpServer.Handler.ServeHTTP(w, req)
 	if w.Code != http.StatusOK {
@@ -222,9 +233,19 @@ func postContextPID(t *testing.T, s *Server, token string, pid int, payload stri
 	return resp.Context
 }
 
+// onSocket is a relay whose kernel-reported peer process is pid.
+func onSocket(pid int) relayPeer { return relayPeer{peer: &peercred.Peer{PID: pid}} }
+
+// The pane of leo-b runs codex as pid 100. Under it: a hook relay (200, via sh
+// 150), and a nested codex a tool started (160 via sh 155) with its own relay
+// (210).
+const codexPaneTable = "  100     1 /opt/bin/codex\n" +
+	"  150   100 /bin/sh\n  200   150 /usr/local/bin/leo\n" +
+	"  155   100 /bin/sh\n  160   155 /opt/bin/codex\n  210   160 /usr/local/bin/leo\n"
+
 // codexBriefServer is a brief-enabled server whose codex agent leo-b is bound
-// to session sid-b, with a stored brief; pid 4242 is leo-b's own harness
-// process and any other pid is not.
+// to session sid-b, with a stored brief, and whose tmux and ps answer as
+// codexPaneTable.
 func codexBriefServer(t *testing.T) (*Server, string) {
 	t.Helper()
 	s, home := briefContextServer(t, true)
@@ -233,17 +254,28 @@ func codexBriefServer(t *testing.T) (*Server, string) {
 		t.Fatal(err)
 	}
 	s.agentSvc.(*mockAgentService).handles["leo-b"] = resolvedHandle{harnessName: "codex", handle: harness.SessionHandle{Name: "leo-b", IDs: staticIDs("sid-b")}}
-	s.ownsProcess = func(_ context.Context, agent string, pid int) bool { return agent == "leo-b" && pid == 4242 }
+	s.execCommandContext = func(_ context.Context, name string, args ...string) *exec.Cmd {
+		switch {
+		case slices.Contains(args, "show-options"):
+			return exec.Command("printf", "%%7\n")
+		case slices.Contains(args, "display-message"):
+			return exec.Command("printf", "100\n")
+		case name == "ps":
+			return exec.Command("printf", "%s", codexPaneTable)
+		}
+		return exec.Command("false")
+	}
 	return s, home
 }
 
-// A /clear in a codex agent starts a new session id. The agent's own harness
-// process announces it, so the daemon rebinds: the brief is restored, nudges
-// and the later turn hooks keep working against the new session.
-func TestBriefContextRebindsAHomeGlobalAgentOnAClearFromItsOwnProcess(t *testing.T) {
+// A /clear in a codex agent starts a new session id. The relay of the agent's
+// own harness announces it (the kernel says so), so the daemon rebinds: the
+// brief is restored, nudges and the later turn hooks keep working against the
+// new session.
+func TestBriefContextRebindsAHomeGlobalAgentOnAClearFromItsOwnHarness(t *testing.T) {
 	s, home := codexBriefServer(t)
 
-	got := postContextPID(t, s, "tok-b", 4242, `{"hook_event_name":"SessionStart","source":"clear","session_id":"sid-b2"}`)
+	got := postContextVia(t, s, "tok-b", onSocket(200), `{"hook_event_name":"SessionStart","source":"clear","session_id":"sid-b2"}`)
 
 	if !strings.HasPrefix(got, brief.Instruction) || !strings.Contains(got, "goal: ship it") {
 		t.Fatalf("clear = %q, want the instruction and the restored brief", got)
@@ -254,7 +286,7 @@ func TestBriefContextRebindsAHomeGlobalAgentOnAClearFromItsOwnProcess(t *testing
 	for i := 0; i < brief.NudgeEveryTurns; i++ {
 		s.briefs.TurnCompleted("leo-b")
 	}
-	if nudge := postContextPID(t, s, "tok-b", 4242, `{"hook_event_name":"UserPromptSubmit","session_id":"sid-b2","prompt":"hi"}`); nudge == "" {
+	if nudge := postContextVia(t, s, "tok-b", onSocket(200), `{"hook_event_name":"UserPromptSubmit","session_id":"sid-b2","prompt":"hi"}`); nudge == "" {
 		t.Error("the new session's prompt got no nudge, want one after 10 turns")
 	}
 	if code := postHook(t, s, "tok-b", `{"hook_event_name":"Stop","session_id":"sid-b2"}`); code < 200 || code > 299 {
@@ -265,29 +297,47 @@ func TestBriefContextRebindsAHomeGlobalAgentOnAClearFromItsOwnProcess(t *testing
 	}
 }
 
-// A child harness process inherits the agent's token and fires the same
-// hooks. Its session is not the agent's, whatever it announces.
-func TestBriefContextRefusesAChildProcessesSessionTransition(t *testing.T) {
-	for name, pid := range map[string]int{"another process": 9999, "no pid reported": 0} {
+// A child harness inherits the agent's token and fires the same hooks. Its
+// session is not the agent's, whatever it announces and whatever pid its body
+// claims: only the kernel's word about who connected counts.
+func TestBriefContextRefusesASessionTransitionFromANestedHarness(t *testing.T) {
+	for name, via := range map[string]relayPeer{
+		"the nested harness's relay":                 {peer: &peercred.Peer{PID: 210}},
+		"the same relay claiming its parent's pid":   {peer: &peercred.Peer{PID: 210}, bodyPID: 100},
+		"the same relay claiming the hook's pid":     {peer: &peercred.Peer{PID: 210}, bodyPID: 200},
+		"a process that is not in the pane at all":   {peer: &peercred.Peer{PID: 9999}, bodyPID: 200},
+		"a lookup the kernel could not answer":       {peer: &peercred.Peer{Err: errors.New("no peer")}, bodyPID: 200},
+		"a request over tcp claiming the real pid":   {bodyPID: 200},
+		"a request over tcp claiming the root's pid": {bodyPID: 100},
+	} {
 		t.Run(name, func(t *testing.T) {
 			s, home := codexBriefServer(t)
 
-			got := postContextPID(t, s, "tok-b", pid, `{"hook_event_name":"SessionStart","source":"clear","session_id":"child-sid"}`)
+			got := postContextVia(t, s, "tok-b", via, `{"hook_event_name":"SessionStart","source":"clear","session_id":"child-sid"}`)
 
 			if got != "" {
-				t.Errorf("a child's session start was told %q, want nothing", got)
+				t.Errorf("a refused session start was told %q, want nothing", got)
 			}
 			if claimed := agentstore.ClaimedSession(home, "leo-b", "tok-b"); claimed != "" {
-				t.Errorf("a child's session was claimed: %q", claimed)
+				t.Errorf("a refused session was claimed: %q", claimed)
 			}
-			if prompt := postContextPID(t, s, "tok-b", pid, `{"hook_event_name":"UserPromptSubmit","session_id":"child-sid","prompt":"hi"}`); prompt != "" {
-				t.Errorf("a child's prompt was told %q, want nothing", prompt)
+			if prompt := postContextVia(t, s, "tok-b", via, `{"hook_event_name":"UserPromptSubmit","session_id":"child-sid","prompt":"hi"}`); prompt != "" {
+				t.Errorf("a refused session's prompt was told %q, want nothing", prompt)
 			}
 			postHook(t, s, "tok-b", `{"hook_event_name":"Stop","session_id":"child-sid"}`)
 			if att, ok := s.attention.Get("leo-b"); ok && att.State == observe.AttentionFinished {
-				t.Errorf("a child's Stop finished the agent's turn: %+v", att)
+				t.Errorf("a refused session's Stop finished the agent's turn: %+v", att)
 			}
 		})
+	}
+}
+
+// Context for the session the agent is already bound to needs no identity:
+// it may arrive over tcp, or with no peer.
+func TestBriefContextStillTellsTheBoundSessionOverTCP(t *testing.T) {
+	s, _ := codexBriefServer(t)
+	if got := postContextVia(t, s, "tok-b", relayPeer{}, `{"hook_event_name":"SessionStart","source":"startup","session_id":"sid-b"}`); got != brief.Instruction {
+		t.Fatalf("bound session over tcp = %q, want the instruction", got)
 	}
 }
 
@@ -295,7 +345,7 @@ func TestBriefContextRefusesAChildProcessesSessionTransition(t *testing.T) {
 // agent was never bound to is not rebound, even from its own process.
 func TestBriefContextOnlyASessionStartRebinds(t *testing.T) {
 	s, home := codexBriefServer(t)
-	if got := postContextPID(t, s, "tok-b", 4242, `{"hook_event_name":"UserPromptSubmit","session_id":"sid-b2","prompt":"hi"}`); got != "" {
+	if got := postContextVia(t, s, "tok-b", onSocket(200), `{"hook_event_name":"UserPromptSubmit","session_id":"sid-b2","prompt":"hi"}`); got != "" {
 		t.Errorf("a prompt from an unbound session was told %q", got)
 	}
 	if claimed := agentstore.ClaimedSession(home, "leo-b", "tok-b"); claimed != "" {

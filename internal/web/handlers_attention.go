@@ -75,10 +75,9 @@ type AgentTurn struct {
 type agentHookRequest struct {
 	Token   string          `json:"token"`
 	Payload json.RawMessage `json:"payload"`
-	// PID is the reporting process (leo, or the harness's plugin) on a context
-	// relay: what a session transition is authenticated against. 0 when the
-	// reporter does not send it.
-	PID int `json:"pid,omitempty"`
+	// A relay may still send a "pid" (older builds did): it is ignored. Who
+	// sent a request is the kernel's word on the unix socket (see
+	// peercred.VerifiedPID), never a field the sender writes.
 }
 
 // hookTransition is one hook event's attention meaning. from, when set,

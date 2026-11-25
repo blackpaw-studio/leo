@@ -187,6 +187,10 @@ type ProcessSpec struct {
 	// LEO_BRIEF=1 so the agent's MCP server lists leo_brief from the start.
 	// Runtime supervisor state, like attentionToken.
 	brief bool
+	// socketPath is the daemon's unix socket, exported as LEO_SOCKET: the
+	// context relay and the opencode plugin call it there so the kernel names
+	// the caller. Runtime supervisor state, like attentionToken.
+	socketPath string
 	// primaryPane is the tmux-global pane ID captured at session launch or
 	// recovered during adoption. It is intentionally private: it is runtime
 	// supervisor state, not caller configuration.
@@ -1636,6 +1640,9 @@ func superviseProcess(ctx context.Context, tmuxPath, claudePath string, spec Pro
 			// launchArgs carries this launch's attention hooks; currentArgs
 			// (and the stored args behind it) never do.
 			spec.brief = sv.briefEnabled()
+			if homePath != "" {
+				spec.socketPath = daemon.SockPath(homePath)
+			}
 			launchArgs, hooked := attentionLaunchArgs(drv, handleForSpec(spec, id, homePath, tmuxPath), currentArgs, spec, name, sv.reportCmdOrDefault())
 			spec.attentionToken = ""
 			if hooked {
@@ -2308,6 +2315,12 @@ func sessionEnvArgs(tmuxPath string, spec ProcessSpec, warnOut io.Writer) []stri
 	delete(env, leomcp.EnvBrief)
 	if spec.brief {
 		env[leomcp.EnvBrief] = "1"
+	}
+	// The daemon socket is leo's alone, like the token: config cannot point a
+	// relay at some other socket.
+	delete(env, "LEO_SOCKET")
+	if spec.socketPath != "" {
+		env["LEO_SOCKET"] = spec.socketPath
 	}
 	if spec.WebPort != "" {
 		if supervisorWebPortPattern.MatchString(spec.WebPort) {

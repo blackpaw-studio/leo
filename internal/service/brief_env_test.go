@@ -126,3 +126,23 @@ func TestRenameAgentAnnouncesTheStoredBrief(t *testing.T) {
 		}
 	}
 }
+
+// The context relay and the opencode plugin reach the daemon's unix socket, so
+// the kernel can name them, through the path the launch hands them.
+func TestSessionEnvArgsCarriesTheDaemonSocketPath(t *testing.T) {
+	with := strings.Join(sessionEnvArgs("/tmux", ProcessSpec{Name: "leo-a", Kind: harness.KindAgent, socketPath: "/home/state/leo.sock"}, nil), " ")
+	without := strings.Join(sessionEnvArgs("/tmux", ProcessSpec{Name: "leo-a", Kind: harness.KindAgent}, nil), " ")
+	if !strings.Contains(with, "-e LEO_SOCKET=/home/state/leo.sock") {
+		t.Errorf("env = %s, want LEO_SOCKET", with)
+	}
+	if strings.Contains(without, "LEO_SOCKET") {
+		t.Errorf("env without a socket = %s, want no LEO_SOCKET", without)
+	}
+}
+
+func TestSessionEnvArgsIgnoresSpecEnvSocketVar(t *testing.T) {
+	args := strings.Join(sessionEnvArgs("/tmux", ProcessSpec{Name: "leo-a", Kind: harness.KindAgent, Env: map[string]string{"LEO_SOCKET": "/evil.sock"}, socketPath: "/home/state/leo.sock"}, nil), " ")
+	if strings.Contains(args, "/evil.sock") || !strings.Contains(args, "LEO_SOCKET=/home/state/leo.sock") {
+		t.Errorf("env = %s, want leo's own socket as the only source", args)
+	}
+}
