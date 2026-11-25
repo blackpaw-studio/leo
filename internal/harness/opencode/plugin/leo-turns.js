@@ -62,18 +62,20 @@ export const LeoTurns = async ({ client }) => {
 
   // What the daemon wants this session told (the agent's delegation policy
   // and brief): the same relay `leo dispatch context` makes for claude and
-  // codex, asked here with a hook payload that opencode has no hook for.
-  // Bounded like that command, so a dead daemon delays a message by at most
-  // this long, and "" for any failure: the message then goes unchanged.
+  // codex, asked here with a hook payload that opencode has no hook for. The
+  // pid is this process, the harness: the daemon judges a new session by
+  // whether the process announcing it is the agent's own. "" for any failure
+  // or once `signal` has run out: the message then goes unchanged.
   const contextUrl = `http://127.0.0.1:${port}/api/agent/context`
   const contextTimeoutMs = 3000
-  const askContext = async (payload) => {
+  const askContext = async (payload, signal) => {
+    if (signal.aborted) return ""
     try {
       const res = await fetch(contextUrl, {
         method: "POST",
         headers,
-        body: JSON.stringify({ token, payload }),
-        signal: AbortSignal.timeout(contextTimeoutMs),
+        body: JSON.stringify({ token, pid: process.pid, payload }),
+        signal,
       })
       if (!res.ok) return ""
       const reply = await res.json()
@@ -93,12 +95,16 @@ export const LeoTurns = async ({ client }) => {
   // The context for one message, as one synthetic text part (what the model
   // sees as part of the user's turn, never shown as their words), or none.
   const contextFor = async (id, prompt) => {
+    // One budget for the whole message, as for the one hook command claude
+    // runs: a dead daemon delays a message by at most this long, however
+    // many requests (SessionStart, then UserPromptSubmit) it needs.
+    const signal = AbortSignal.timeout(contextTimeoutMs)
     const source = started.has(id) ? (compacted.has(id) ? "compact" : "") : "startup"
     started.add(id)
     compacted.delete(id)
     const told = []
-    if (source) told.push(await askContext({ hook_event_name: "SessionStart", source, session_id: id }))
-    told.push(await askContext({ hook_event_name: "UserPromptSubmit", session_id: id, prompt }))
+    if (source) told.push(await askContext({ hook_event_name: "SessionStart", source, session_id: id }, signal))
+    told.push(await askContext({ hook_event_name: "UserPromptSubmit", session_id: id, prompt }, signal))
     const added = told.filter(Boolean).join("\n\n")
     return added ? { type: "text", synthetic: true, text: added } : undefined
   }

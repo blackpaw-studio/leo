@@ -12,6 +12,7 @@ type pluginRequest struct {
 	Headers map[string]string `json:"headers"`
 	Body    struct {
 		Token   string            `json:"token"`
+		PID     int               `json:"pid"`
 		Payload map[string]string `json:"payload"`
 	} `json:"body"`
 }
@@ -19,6 +20,8 @@ type pluginRequest struct {
 type pluginContextRun struct {
 	Posts    []pluginRequest `json:"posts"`
 	Contexts []pluginRequest `json:"contexts"`
+	Timeouts []int           `json:"timeouts"` // the deadlines asked for on context requests
+	PID      int             `json:"pid"`      // the harness's own process id
 	Parts    [][]struct {
 		Type      string `json:"type"`
 		Text      string `json:"text"`
@@ -139,5 +142,45 @@ func TestOpencodeTurnPluginAddsNothingWithoutContext(t *testing.T) {
 				t.Errorf("posts = %+v, want the UserPromptSubmit hook still reported", run.Posts)
 			}
 		})
+	}
+}
+
+// The daemon judges a session transition by the process that reported it, and
+// the plugin runs inside the harness process.
+func TestOpencodeTurnPluginReportsItsProcessWithEveryContextRequest(t *testing.T) {
+	run := runContextScenario(t, "ctx-startup-then-prompts")
+	if run.PID == 0 || len(run.Contexts) == 0 {
+		t.Fatalf("pid %d, %d context requests", run.PID, len(run.Contexts))
+	}
+	for i, c := range run.Contexts {
+		if c.Body.PID != run.PID {
+			t.Errorf("request %d pid = %d, want the plugin process's %d", i, c.Body.PID, run.PID)
+		}
+	}
+}
+
+// One message waits at most one deadline for the daemon, however many
+// requests it makes: a message that needs a SessionStart and a
+// UserPromptSubmit shares one 3 s budget instead of owing two.
+func TestOpencodeTurnPluginSharesOneDeadlinePerMessage(t *testing.T) {
+	run := runContextScenario(t, "ctx-daemon-slow")
+	if want := []int{3000}; !reflect.DeepEqual(run.Timeouts, want) {
+		t.Errorf("deadlines asked for = %v, want exactly %v for the one message", run.Timeouts, want)
+	}
+	if got := run.asked(); !reflect.DeepEqual(got, []string{"SessionStart/startup/ses_1"}) {
+		t.Errorf("asked %q, want only the SessionStart: its timeout used the message's budget, so no second request", got)
+	}
+	if got := run.injected(t, 0); got != "" {
+		t.Errorf("injected %q from a daemon that never answered", got)
+	}
+	if len(run.Posts) != 1 {
+		t.Errorf("posted %d hooks, want the turn still reported", len(run.Posts))
+	}
+}
+
+func TestOpencodeTurnPluginStartsOneDeadlinePerMessage(t *testing.T) {
+	run := runContextScenario(t, "ctx-startup-then-prompts")
+	if want := []int{3000, 3000}; !reflect.DeepEqual(run.Timeouts, want) {
+		t.Errorf("deadlines = %v, want one per message (%v)", run.Timeouts, want)
 	}
 }

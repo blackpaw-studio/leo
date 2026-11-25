@@ -1,13 +1,28 @@
 // Drives the leo turn plugin through one scripted opencode scenario (argv
 // [3]) with a fake fetch and client. A turn scenario prints every hook POST it
 // made as a JSON array. A context scenario (a `steps` list) prints
-// {posts, contexts, parts}: the hook POSTs, the POSTs to /api/agent/context,
+// {posts, contexts, parts, timeouts, pid}: the hook POSTs, the POSTs to /api/agent/context,
 // and the parts each chat.message ended with, after the plugin's injection.
 import { pathToFileURL } from "node:url"
 
 const posts = []
 const contexts = []
 let contextMode = "reply"
+
+// Deadlines the plugin asked for on context requests (3000 ms each). The
+// slow-daemon scenario shortens them so a hung request ends in milliseconds,
+// but the value the plugin asked for is what is recorded.
+const contextDeadlineMs = 3000
+const timeouts = []
+// AbortSignal.timeout timers do not keep node alive, and a hung request must
+// still be allowed to end by its deadline.
+const keepAlive = setInterval(() => {}, 5)
+const realTimeout = AbortSignal.timeout.bind(AbortSignal)
+AbortSignal.timeout = (ms) => {
+  if (ms !== contextDeadlineMs) return realTimeout(ms)
+  timeouts.push(ms)
+  return realTimeout(25)
+}
 // What the fake daemon answers a context request with: it names the event and
 // source it was asked about, so the parts show which relay produced them.
 const contextReply = (payload) => {
@@ -20,6 +35,10 @@ globalThis.fetch = async (url, init) => {
   if (request.url.endsWith("/api/agent/context")) {
     contexts.push(request)
     if (contextMode === "down") throw new Error("daemon down")
+    if (contextMode === "slow") {
+      // A daemon that never answers: the request ends only when its deadline passes.
+      return new Promise((_, reject) => init.signal.addEventListener("abort", () => reject(init.signal.reason)))
+    }
     if (contextMode === "error") return { ok: false, status: 500 }
     return { ok: true, status: 200, json: async () => ({ context: contextReply(request.body.payload) }) }
   }
@@ -63,6 +82,7 @@ const contextScenarios = {
   "ctx-empty": { mode: "empty", steps: [message("ses_1")] },
   "ctx-daemon-down": { mode: "down", steps: [message("ses_1")] },
   "ctx-daemon-error": { mode: "error", steps: [message("ses_1")] },
+  "ctx-daemon-slow": { mode: "slow", steps: [message("ses_1")] },
 }
 const contextScenario = contextScenarios[process.argv[3]]
 contextMode = contextScenario?.mode ?? "reply"
@@ -91,4 +111,5 @@ for (const plugin of Object.values(mod).filter((v) => typeof v === "function")) 
     await hooks.event?.({ event: { type, properties: error ? { sessionID: "ses_1", error } : { sessionID: "ses_1" } } })
   }
 }
-process.stdout.write(JSON.stringify(contextScenario ? { posts, contexts, parts } : posts))
+clearInterval(keepAlive)
+process.stdout.write(JSON.stringify(contextScenario ? { posts, contexts, parts, timeouts, pid: process.pid } : posts))
