@@ -3,6 +3,7 @@ package web
 import (
 	"encoding/json"
 	"net/http"
+	"strings"
 	"testing"
 
 	"github.com/blackpaw-studio/leo/internal/agentstore"
@@ -129,5 +130,60 @@ func TestBriefOfferedSurvivesALiveRename(t *testing.T) {
 	dueNudge(s, "leo-z")
 	if got := postContext(t, s, "tok-a", `{"hook_event_name":"UserPromptSubmit","session_id":"sid-r","prompt":"hi"}`); got != brief.NudgeText(false) {
 		t.Fatalf("prompt after the rename = %q, want the nudge", got)
+	}
+}
+
+// SessionStart (resume, clear, compact) usually fires before the MCP server has
+// reported, so the restore has to wait for the report instead of being lost.
+func TestBriefRestoreWaitsForTheReportAfterAResume(t *testing.T) {
+	for _, source := range []string{"resume", "clear", "compact"} {
+		t.Run(source, func(t *testing.T) {
+			s, home := unreportedBriefContextServer(t, true)
+			_ = agentstore.SetBrief(home, "leo-a", &brief.Brief{Goal: "kept"})
+			if got := startCtx(t, s, source, "sid-r"); got != "" {
+				t.Fatalf("session start before the report = %q, want nothing", got)
+			}
+			reportOffered(t, s, "", offeredBody("tok-a", true))
+			got := promptCtx(t, s, "sid-r")
+			if !strings.HasPrefix(got, brief.Instruction) || !strings.Contains(got, "goal: kept") || !strings.Contains(got, "after "+source) {
+				t.Fatalf("first prompt after the report = %q, want the instruction and the stored brief", got)
+			}
+			if got := promptCtx(t, s, "sid-r"); got != "" {
+				t.Errorf("second prompt = %q, want the restore delivered once", got)
+			}
+		})
+	}
+}
+
+func TestBriefPendingRestoreIsDroppedByANotOfferedReportOrANewSessionStart(t *testing.T) {
+	cases := map[string]func(t *testing.T, s *Server){
+		"not offered report": func(t *testing.T, s *Server) { reportOffered(t, s, "", offeredBody("tok-a", false)) },
+		"new session start":  func(t *testing.T, s *Server) { startCtx(t, s, "startup", "sid-new") },
+	}
+	for name, interrupt := range cases {
+		t.Run(name, func(t *testing.T) {
+			s, home := unreportedBriefContextServer(t, true)
+			_ = agentstore.SetBrief(home, "leo-a", &brief.Brief{Goal: "kept"})
+			startCtx(t, s, "resume", "sid-r")
+			interrupt(t, s)
+			reportOffered(t, s, "", offeredBody("tok-a", true))
+			if got := promptCtx(t, s, "sid-n"); got != brief.Instruction {
+				t.Fatalf("prompt = %q, want the instruction without the dropped restore", got)
+			}
+		})
+	}
+}
+
+// A retired token's entries go with it, so they do not pile up.
+func TestBriefOfferedEntriesAreDroppedWhenATokenIsRetired(t *testing.T) {
+	s, home := unreportedBriefContextServer(t, true)
+	_ = agentstore.SetBrief(home, "leo-a", &brief.Brief{Goal: "kept"})
+	startCtx(t, s, "resume", "sid-r")
+	reportOffered(t, s, "", offeredBody("tok-a", true))
+	s.attention.UnregisterToken("tok-a")
+	s.attention.RegisterToken("tok-b2", "leo-b")
+	reportOffered(t, s, "", offeredBody("tok-b2", true))
+	if s.briefOffers.offered("tok-a") || s.briefOffers.hasState("tok-a") {
+		t.Error("a retired token's state was kept")
 	}
 }

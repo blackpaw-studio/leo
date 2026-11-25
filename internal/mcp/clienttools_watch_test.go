@@ -653,8 +653,10 @@ func TestBriefFlipIsReportedToTheDaemonBeforeTheHarnessRelists(t *testing.T) {
 	s := briefWatchSession(t, d, false)
 	d.waitStreams(t, 1)
 	d.waitBriefAsks(t, 1)
-	if got := d.reports(); len(got) != 0 {
-		t.Fatalf("reported %v while briefs were off and never offered", got)
+	for _, r := range d.reports() {
+		if r.Offered {
+			t.Fatalf("reported %v while briefs were off", r)
+		}
 	}
 
 	d.setBrief(true, 0)
@@ -662,8 +664,8 @@ func TestBriefFlipIsReportedToTheDaemonBeforeTheHarnessRelists(t *testing.T) {
 	if m := s.recv(); m.Method != "notifications/tools/list_changed" {
 		t.Fatalf("got %+v, want list_changed", m)
 	}
-	if got := d.reports(); len(got) != 1 || got[0] != (offerReport{Token: "launch-tok", Offered: true}) {
-		t.Fatalf("reports at list_changed = %v, want one offered=true under the launch token", got)
+	if got := d.reports(); len(got) == 0 || got[len(got)-1] != (offerReport{Token: "launch-tok", Offered: true}) {
+		t.Fatalf("reports at list_changed = %v, want offered=true last, under the launch token", got)
 	}
 
 	d.setBrief(false, 0)
@@ -671,7 +673,7 @@ func TestBriefFlipIsReportedToTheDaemonBeforeTheHarnessRelists(t *testing.T) {
 	if m := s.recv(); m.Method != "notifications/tools/list_changed" {
 		t.Fatalf("got %+v, want list_changed for the flip off", m)
 	}
-	if got := d.reports(); len(got) != 2 || got[1].Offered {
+	if got := d.reports(); len(got) < 2 || got[len(got)-1].Offered {
 		t.Fatalf("reports after the flip off = %v, want offered=false last", got)
 	}
 }

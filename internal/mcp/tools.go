@@ -100,11 +100,13 @@ type registry struct {
 	// listed only while it holds (see visibleDefs).
 	briefOn atomic.Bool
 	// briefClient reports to the daemon what this server offers. briefReported
-	// is what the daemon was last told (false until a report succeeds: the
-	// daemon reads silence as "not offered"), serialized by briefReportMu.
+	// is what the daemon was last told and briefSent whether this process has
+	// reported at all (its first report is always sent), serialized by
+	// briefReportMu.
 	briefClient   *daemonClient
 	briefReportMu sync.Mutex
 	briefReported bool
+	briefSent     bool
 }
 
 // registryOption adjusts a registry before its tools are registered.

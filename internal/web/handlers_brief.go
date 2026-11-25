@@ -175,6 +175,11 @@ func (s *Server) handleAPIAgentBriefOffered(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	s.briefOffers.set(req.Token, req.Offered)
+	// Retired tokens never report again; forget theirs while we are here.
+	s.briefOffers.prune(func(token string) bool {
+		_, live := s.attention.AgentForToken(token)
+		return live
+	})
 	log.Printf("[%s] brief: MCP server reports leo_brief offered=%v", name, req.Offered)
 	writeJSON(w, http.StatusOK, apiResponse{OK: true})
 }

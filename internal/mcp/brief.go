@@ -135,9 +135,12 @@ func (r *registry) visibleDefs() []toolDef {
 // guidance names the tool, so it must reach only a session that has it. A
 // server that never reports (an old binary) is never sent guidance.
 //
-// It reports on a change from what the daemon was last told, and with force
-// again while the tool is offered, because a restarted daemon has forgotten.
-// A failed report changes nothing, so the next call retries.
+// The first report of each server process is always sent, offered or not: a
+// replacement process shares the launch token with the one it replaces, so the
+// daemon may hold that process's "offered" and must hear this one's answer.
+// After that it reports on a change from what the daemon was last told, and
+// with force again while the tool is offered, because a restarted daemon has
+// forgotten. A failed report changes nothing, so the next call retries.
 func (r *registry) reportBriefOffered(ctx context.Context, force bool) {
 	if !r.reportsBrief() || r.briefClient == nil {
 		return
@@ -145,7 +148,7 @@ func (r *registry) reportBriefOffered(ctx context.Context, force bool) {
 	r.briefReportMu.Lock()
 	defer r.briefReportMu.Unlock()
 	offered := r.briefOffered()
-	if offered == r.briefReported && (!force || !offered) {
+	if r.briefSent && offered == r.briefReported && (!force || !offered) {
 		return
 	}
 	ctx, cancel := context.WithTimeout(ctx, clientToolListTimeout)
@@ -155,7 +158,7 @@ func (r *registry) reportBriefOffered(ctx context.Context, force bool) {
 		return
 	}
 	log.Printf("mcp: reported leo_brief offered=%v to the daemon", offered)
-	r.briefReported = offered
+	r.briefReported, r.briefSent = offered, true
 }
 
 // setBrief records the daemon's brief switch, reports what that means for the

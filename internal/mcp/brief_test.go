@@ -249,8 +249,10 @@ func TestListingLeoBriefReportsItToTheDaemonOnce(t *testing.T) {
 	} {
 		quiet := briefDaemon(t, 200, briefReply)
 		listedNames(mk(quiet))
-		if got := offeredReports(quiet); len(got) != 0 {
-			t.Errorf("%s reported %v", name, got)
+		for _, body := range offeredReports(quiet) {
+			if strings.Contains(body, `"offered":true`) {
+				t.Errorf("%s reported %v", name, body)
+			}
 		}
 	}
 }
@@ -267,5 +269,22 @@ func TestADeniedLeoBriefIsNeverReportedAsOffered(t *testing.T) {
 		if strings.Contains(body, `"offered":true`) {
 			t.Fatalf("reported %s for a denied tool", body)
 		}
+	}
+}
+
+// A replacement MCP server process shares the launch token with the one it
+// replaces. Its first report is always sent, even a "not offered" that matches
+// what a fresh server assumes, or the daemon keeps the old server's "offered".
+func TestAReplacementServerAlwaysSendsItsFirstReport(t *testing.T) {
+	d := briefDaemon(t, 200, briefReply)
+	listedNames(briefRegistry(d, true)) // the old server: offers the tool
+
+	denied := newRegistry(newDaemonClient(d.port(), "agent-token"), "assistant",
+		leotools.Permissions{DenyTools: []string{"leo_brief"}}, withAttentionToken("launch-tok"), withBrief(true))
+	listedNames(denied)
+
+	got := offeredReports(d)
+	if len(got) != 2 || !strings.Contains(got[0], `"offered":true`) || !strings.Contains(got[1], `"offered":false`) {
+		t.Fatalf("reports = %v, want true from the old server then false from the replacement", got)
 	}
 }
