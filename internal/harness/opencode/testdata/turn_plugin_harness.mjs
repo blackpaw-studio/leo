@@ -1,8 +1,16 @@
 // Drives the leo turn plugin through one scripted opencode scenario (argv
 // [3]) with a fake fetch and client. A turn scenario prints every hook POST it
 // made as a JSON array. A context scenario (a `steps` list) prints
-// {posts, contexts, parts, timeouts, pid}: the hook POSTs, the POSTs to /api/agent/context,
-// and the parts each chat.message ended with, after the plugin's injection.
+// {posts, contexts, parts, timeouts}: the hook POSTs, the requests to
+// /api/agent/context, and the parts each chat.message ended with, after the
+// plugin's injection. Context requests go to a real HTTP server on a unix
+// socket the harness binds and names in LEO_SOCKET, as the daemon's launch
+// does (transport "socket"); "tcp" leaves LEO_SOCKET unset and "missing-socket"
+// names a socket nobody listens on, so the plugin falls back to the fake fetch.
+import http from "node:http"
+import { mkdtempSync, rmSync } from "node:fs"
+import { tmpdir } from "node:os"
+import { join } from "node:path"
 import { pathToFileURL } from "node:url"
 
 const posts = []
@@ -10,7 +18,7 @@ const contexts = []
 let contextMode = "reply"
 
 // Deadlines the plugin asked for on context requests (3000 ms each). The
-// slow-daemon scenario shortens them so a hung request ends in milliseconds,
+// slow-daemon scenario alone shortens them so a hung request ends in milliseconds,
 // but the value the plugin asked for is what is recorded.
 const contextDeadlineMs = 3000
 const timeouts = []
@@ -21,7 +29,7 @@ const realTimeout = AbortSignal.timeout.bind(AbortSignal)
 AbortSignal.timeout = (ms) => {
   if (ms !== contextDeadlineMs) return realTimeout(ms)
   timeouts.push(ms)
-  return realTimeout(25)
+  return realTimeout(contextMode === "slow" ? 25 : ms)
 }
 // What the fake daemon answers a context request with: it names the event and
 // source it was asked about, so the parts show which relay produced them.
@@ -30,8 +38,34 @@ const contextReply = (payload) => {
   const source = payload.source ? "/" + payload.source : ""
   return "ctx:" + payload.hook_event_name + source
 }
+// The daemon's socket: a real server, so the plugin's own http.request runs.
+let socketServer
+let socketDir
+const startSocketServer = async () => {
+  socketDir = mkdtempSync(join(tmpdir(), "lt-"))
+  const path = join(socketDir, "d.sock")
+  socketServer = http.createServer((req, res) => {
+    let raw = ""
+    req.on("data", (chunk) => (raw += chunk))
+    req.on("end", () => {
+      const body = JSON.parse(raw)
+      contexts.push({ via: "socket", path: req.url, method: req.method, headers: req.headers, body })
+      if (contextMode === "down") return req.socket.destroy()
+      if (contextMode === "slow") return // never answers: the request ends by its deadline
+      if (contextMode === "error") {
+        res.statusCode = 500
+        return res.end()
+      }
+      res.setHeader("Content-Type", "application/json")
+      res.end(JSON.stringify({ context: contextReply(body.payload) }))
+    })
+  })
+  await new Promise((resolve) => socketServer.listen(path, resolve))
+  return path
+}
+
 globalThis.fetch = async (url, init) => {
-  const request = { url: String(url), headers: init.headers, body: JSON.parse(init.body) }
+  const request = { via: "tcp", url: String(url), headers: init.headers, body: JSON.parse(init.body) }
   if (request.url.endsWith("/api/agent/context")) {
     contexts.push(request)
     if (contextMode === "down") throw new Error("daemon down")
@@ -76,6 +110,8 @@ const scenarios = {
 const message = (sessionID, text = "hello") => ({ message: text, sessionID })
 const event = (type, sessionID) => ({ event: type, sessionID })
 const contextScenarios = {
+  "ctx-tcp-only": { transport: "tcp", steps: [message("ses_1")] },
+  "ctx-socket-missing": { transport: "missing-socket", steps: [message("ses_1")] },
   "ctx-startup-then-prompts": { steps: [message("ses_1"), message("ses_1")] },
   "ctx-compaction": { steps: [message("ses_1"), event("session.compacted", "ses_1"), message("ses_1"), message("ses_1")] },
   "ctx-two-sessions": { steps: [message("ses_1"), message("ses_2")] },
@@ -88,6 +124,11 @@ const contextScenario = contextScenarios[process.argv[3]]
 contextMode = contextScenario?.mode ?? "reply"
 const scenario = contextScenario ? { messages: [], events: [] } : scenarios[process.argv[3] ?? "turn"]
 const client = { session: { messages: async ({ path }) => ({ data: path.id === "ses_1" ? scenario.messages : [] }) } }
+
+const transport = contextScenario?.transport ?? "socket"
+delete process.env.LEO_SOCKET
+if (contextScenario && transport === "socket") process.env.LEO_SOCKET = await startSocketServer()
+if (contextScenario && transport === "missing-socket") process.env.LEO_SOCKET = join(tmpdir(), "lt-nobody-listens.sock")
 
 const mod = await import(pathToFileURL(process.argv[2]).href)
 const parts = []
@@ -112,4 +153,9 @@ for (const plugin of Object.values(mod).filter((v) => typeof v === "function")) 
   }
 }
 clearInterval(keepAlive)
-process.stdout.write(JSON.stringify(contextScenario ? { posts, contexts, parts, timeouts, pid: process.pid } : posts))
+if (socketServer) {
+  socketServer.closeAllConnections()
+  socketServer.close()
+  rmSync(socketDir, { recursive: true, force: true })
+}
+process.stdout.write(JSON.stringify(contextScenario ? { posts, contexts, parts, timeouts } : posts))

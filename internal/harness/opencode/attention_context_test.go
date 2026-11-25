@@ -8,11 +8,13 @@ import (
 )
 
 type pluginRequest struct {
-	URL     string            `json:"url"`
+	Via     string            `json:"via"`  // "socket" (the daemon's unix socket) or "tcp"
+	Path    string            `json:"path"` // socket requests
+	URL     string            `json:"url"`  // tcp requests
 	Headers map[string]string `json:"headers"`
 	Body    struct {
 		Token   string            `json:"token"`
-		PID     int               `json:"pid"`
+		PID     *int              `json:"pid"` // must never be sent: the daemon trusts only the kernel's peer pid
 		Payload map[string]string `json:"payload"`
 	} `json:"body"`
 }
@@ -21,7 +23,6 @@ type pluginContextRun struct {
 	Posts    []pluginRequest `json:"posts"`
 	Contexts []pluginRequest `json:"contexts"`
 	Timeouts []int           `json:"timeouts"` // the deadlines asked for on context requests
-	PID      int             `json:"pid"`      // the harness's own process id
 	Parts    [][]struct {
 		Type      string `json:"type"`
 		Text      string `json:"text"`
@@ -79,8 +80,8 @@ func TestOpencodeTurnPluginInjectsContextFromTheDaemon(t *testing.T) {
 		t.Fatalf("asked %q, want %q", got, wantAsked)
 	}
 	for i, c := range run.Contexts {
-		if c.URL != "http://127.0.0.1:8399/api/agent/context" || c.Headers["Authorization"] != "Bearer api-1" || c.Body.Token != "tok-1" {
-			t.Errorf("request %d routed to %s auth=%q token=%q", i, c.URL, c.Headers["Authorization"], c.Body.Token)
+		if c.Via != "socket" || c.Path != "/api/agent/context" || c.Body.Token != "tok-1" {
+			t.Errorf("request %d via %s path %q token=%q, want the daemon socket", i, c.Via, c.Path, c.Body.Token)
 		}
 	}
 	if got, want := run.injected(t, 0), "ctx:SessionStart/startup\n\nctx:UserPromptSubmit"; got != want {
@@ -145,17 +146,42 @@ func TestOpencodeTurnPluginAddsNothingWithoutContext(t *testing.T) {
 	}
 }
 
-// The daemon judges a session transition by the process that reported it, and
-// the plugin runs inside the harness process.
-func TestOpencodeTurnPluginReportsItsProcessWithEveryContextRequest(t *testing.T) {
+// The daemon decides whether a session may rebind from the process the kernel
+// says connected, which only a unix-socket connection reveals: the plugin
+// sends its context requests over LEO_SOCKET and claims no pid of its own.
+func TestOpencodeTurnPluginAsksForContextOverTheSocketWithoutAPid(t *testing.T) {
 	run := runContextScenario(t, "ctx-startup-then-prompts")
-	if run.PID == 0 || len(run.Contexts) == 0 {
-		t.Fatalf("pid %d, %d context requests", run.PID, len(run.Contexts))
+	if len(run.Contexts) == 0 {
+		t.Fatal("no context requests")
 	}
 	for i, c := range run.Contexts {
-		if c.Body.PID != run.PID {
-			t.Errorf("request %d pid = %d, want the plugin process's %d", i, c.Body.PID, run.PID)
+		if c.Via != "socket" {
+			t.Errorf("request %d went over %s, want the unix socket", i, c.Via)
 		}
+		if c.Body.PID != nil {
+			t.Errorf("request %d claimed pid %d, want none", i, *c.Body.PID)
+		}
+	}
+}
+
+// With no socket to reach (not named, or nobody listening) the plugin still
+// asks over TCP, where the daemon serves only a session already bound.
+func TestOpencodeTurnPluginFallsBackToTCPWithoutAReachableSocket(t *testing.T) {
+	for _, scenario := range []string{"ctx-tcp-only", "ctx-socket-missing"} {
+		t.Run(scenario, func(t *testing.T) {
+			run := runContextScenario(t, scenario)
+			if got, want := run.asked(), []string{"SessionStart/startup/ses_1", "UserPromptSubmit//ses_1"}; !reflect.DeepEqual(got, want) {
+				t.Fatalf("asked %q, want %q", got, want)
+			}
+			for i, c := range run.Contexts {
+				if c.Via != "tcp" || c.URL != "http://127.0.0.1:8399/api/agent/context" || c.Headers["Authorization"] != "Bearer api-1" || c.Body.PID != nil {
+					t.Errorf("request %d = %+v, want a pid-less authenticated TCP request", i, c)
+				}
+			}
+			if got := run.injected(t, 0); got == "" {
+				t.Error("nothing injected over the TCP fallback")
+			}
+		})
 	}
 }
 

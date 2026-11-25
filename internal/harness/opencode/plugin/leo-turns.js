@@ -5,6 +5,8 @@
 // StopFailure (with the error) when the turn failed. Installed by leo
 // through OPENCODE_CONFIG_CONTENT; inert unless leo launched this process as
 // a supervised agent.
+import http from "node:http"
+
 export const LeoTurns = async ({ client }) => {
   const token = process.env.LEO_ATTENTION_TOKEN
   const port = process.env.LEO_WEB_PORT
@@ -62,23 +64,54 @@ export const LeoTurns = async ({ client }) => {
 
   // What the daemon wants this session told (the agent's delegation policy
   // and brief): the same relay `leo dispatch context` makes for claude and
-  // codex, asked here with a hook payload that opencode has no hook for. The
-  // pid is this process, the harness: the daemon judges a new session by
-  // whether the process announcing it is the agent's own. "" for any failure
-  // or once `signal` has run out: the message then goes unchanged.
+  // codex, asked here with a hook payload that opencode has no hook for.
+  //
+  // The request goes to the daemon's unix socket (LEO_SOCKET) so the kernel
+  // tells the daemon which process connected: that, never anything in the
+  // body, is what lets a session rebind to this harness. Only when the socket
+  // cannot be reached does it go over TCP, where the daemon serves just the
+  // session already bound. "" for any failure or once `signal` has run out:
+  // the message then goes unchanged.
   const contextUrl = `http://127.0.0.1:${port}/api/agent/context`
+  const socketPath = process.env.LEO_SOCKET
   const contextTimeoutMs = 3000
+
+  // One POST over the unix socket. Resolves with the response, or rejects on
+  // any connection failure.
+  const postOverSocket = (body, signal) =>
+    new Promise((resolve, reject) => {
+      const req = http.request(
+        { socketPath, path: "/api/agent/context", method: "POST", headers, signal },
+        (res) => {
+          const chunks = []
+          res.on("data", (chunk) => chunks.push(chunk))
+          res.on("end", () => resolve({ ok: res.statusCode >= 200 && res.statusCode < 300, text: Buffer.concat(chunks).toString("utf8") }))
+          res.on("error", reject)
+        },
+      )
+      req.on("error", reject)
+      req.end(body)
+    })
+
+  const postOverTCP = async (body, signal) => {
+    const res = await fetch(contextUrl, { method: "POST", headers, body, signal })
+    return { ok: res.ok, text: res.ok ? JSON.stringify(await res.json()) : "" }
+  }
+
   const askContext = async (payload, signal) => {
     if (signal.aborted) return ""
+    const body = JSON.stringify({ token, payload })
     try {
-      const res = await fetch(contextUrl, {
-        method: "POST",
-        headers,
-        body: JSON.stringify({ token, pid: process.pid, payload }),
-        signal,
-      })
+      let res
+      try {
+        if (!socketPath) throw new Error("no socket")
+        res = await postOverSocket(body, signal)
+      } catch {
+        if (signal.aborted) return ""
+        res = await postOverTCP(body, signal)
+      }
       if (!res.ok) return ""
-      const reply = await res.json()
+      const reply = JSON.parse(res.text)
       return typeof reply?.context === "string" ? reply.context : ""
     } catch {
       return ""
