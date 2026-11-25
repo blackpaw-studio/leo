@@ -14,6 +14,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/blackpaw-studio/leo/internal/brief"
 	"github.com/blackpaw-studio/leo/internal/secretenv"
 )
 
@@ -237,6 +238,13 @@ type Record struct {
 	// so a respawn that builds a fresh record never wipes it.
 	Appearance *Appearance `json:"appearance,omitempty"`
 
+	// Brief is the agent's own "where was I" summary (leo_brief), nil when it
+	// has none. SetBrief is its only writer and Save keeps the stored value,
+	// so a respawn that builds a fresh record never wipes it. It follows the
+	// record (Rename carries it, Remove drops it) and moves with the agent
+	// (Portable); a copy starts without one.
+	Brief *brief.Brief `json:"brief,omitempty"`
+
 	// MovedTo marks a record whose agent now lives on another host: the
 	// client.hosts key it was moved to, or, on a destination whose receive
 	// failed, the source's hostname. A moved record is always Stopped with
@@ -289,6 +297,7 @@ func (r Record) Portable() Record {
 		a := *r.Appearance
 		out.Appearance = &a
 	}
+	out.Brief = r.Brief.Clone()
 	return out
 }
 
@@ -345,6 +354,7 @@ func Save(homePath string, record Record) error {
 	record.OpeningAckedID = stored.OpeningAckedID
 	record.OpeningQueuedLaunch, record.OpeningQueuedID = stored.OpeningQueuedLaunch, stored.OpeningQueuedID
 	record.Appearance = stored.Appearance
+	record.Brief = stored.Brief
 	record.MovePending = stored.MovePending
 	records[record.Name] = record
 	return write(path, records)
@@ -544,17 +554,36 @@ func write(path string, records map[string]Record) error {
 	if err != nil {
 		return fmt.Errorf("marshaling agent records: %w", err)
 	}
-	if err := os.WriteFile(path, data, 0600); err != nil {
+	return replaceFile(path, data)
+}
+
+// renameFile is os.Rename, replaceable so a test can fail the final step.
+var renameFile = os.Rename
+
+// replaceFile writes data to path through a same-directory temp file (mode
+// 0600, enforced on every save: records can embed LEO_API_TOKEN) and a
+// rename, so a crash or a full disk mid-write leaves the previous
+// agents.json intact rather than a truncated one.
+func replaceFile(path string, data []byte) error {
+	tmp, err := os.CreateTemp(filepath.Dir(path), ".agents-*.tmp") // created 0600
+	if err != nil {
 		return err
 	}
-	// os.WriteFile's perm argument is only applied when the file is created;
-	// an already-existing agents.json (e.g. written before this hardening, or
-	// by any other looser-permission path) keeps its prior mode across the
-	// write above. Records now persist OPENCODE_CONFIG_CONTENT, which can
-	// embed LEO_API_TOKEN, so explicitly enforce 0600 on every save rather
-	// than trusting create-time permissions.
-	if err := os.Chmod(path, 0600); err != nil {
+	defer os.Remove(tmp.Name()) //nolint:errcheck // gone after a successful rename
+	if err := tmp.Chmod(0600); err != nil {
+		tmp.Close()
 		return fmt.Errorf("enforcing agents.json permissions: %w", err)
 	}
-	return nil
+	if _, err := tmp.Write(data); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Sync(); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	return renameFile(tmp.Name(), path)
 }

@@ -7,6 +7,7 @@ package brief
 import (
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 	"unicode"
@@ -38,6 +39,16 @@ type Input struct {
 	Status    string   `json:"status"`
 	Decisions []string `json:"decisions"`
 	Open      []string `json:"open"`
+}
+
+// Clone is a deep copy of b, nil for nil.
+func (b *Brief) Clone() *Brief {
+	if b == nil {
+		return nil
+	}
+	c := *b
+	c.Decisions, c.Open = slices.Clone(b.Decisions), slices.Clone(b.Open)
+	return &c
 }
 
 // IsZero reports a cleared brief: no text anywhere.

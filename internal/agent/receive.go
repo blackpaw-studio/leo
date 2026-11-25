@@ -122,9 +122,10 @@ func (m *Manager) Receive(_ context.Context, spec ReceiveSpec) error {
 	if err := agentstore.Save(cfg.HomePath, rec); err != nil {
 		return fmt.Errorf("saving %q: %w", name, err)
 	}
-	// Save keeps the stored appearance; the arriving one replaces it.
+	// Save keeps the stored appearance and brief; the arriving ones replace them.
 	if err := agentstore.Update(cfg.HomePath, name, func(r agentstore.Record) agentstore.Record {
 		r.Appearance = rec.Appearance
+		r.Brief = rec.Brief
 		return r
 	}); err != nil {
 		return fmt.Errorf("saving %q: %w", name, err)
@@ -162,6 +163,7 @@ func arrivedRecord(spec ReceiveSpec) agentstore.Record {
 		// other conversations or moves.
 		rec.MoveLog = nil
 		rec.SessionsByTemplate = nil
+		rec.Brief = nil
 		rec.ForkFromSession = spec.ForkFrom
 	} else {
 		rec.MoveLog = withMoveLog(rec.MoveLog, spec.From, at)
